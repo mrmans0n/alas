@@ -1,31 +1,78 @@
-:root { color-scheme: dark; font-family: -apple-system, system-ui, sans-serif; }
+/* Colors mirror the app's default "cool-slate" theme tokens (oklch, natively
+   supported on iOS). Keep these in sync with Alas/Resources/Themes/cool-slate.json. */
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, system-ui, sans-serif;
+  --bg-0: oklch(0.22 0.018 220);
+  --bg-1: oklch(0.245 0.018 220);
+  --bg-2: oklch(0.275 0.020 220);
+  --bg-3: oklch(0.305 0.022 220);
+  --bg-4: oklch(0.345 0.024 220);
+  --fg: oklch(0.94 0.012 220);
+  --fg-muted: oklch(0.78 0.014 220);
+  --fg-dim: oklch(0.62 0.014 220);
+  --fg-faint: oklch(0.50 0.014 220);
+  --accent: oklch(0.74 0.11 195);
+  --line: oklch(0.32 0.020 220 / 0.6);
+  --line-soft: oklch(0.32 0.020 220 / 0.35);
+  --add: oklch(0.78 0.14 155);
+  --del: oklch(0.72 0.16 25);
+}
 * { box-sizing: border-box; }
-body { margin: 0; background: #14151a; color: #e7e7ea; }
-#bar { padding: env(safe-area-inset-top) 12px 8px; background: #1c1d24; font-size: 13px; color: #9aa; }
-#ver { color: #556; }
-.view { padding: 12px; }
-/* !important so .hidden beats `.sheet { display: flex }`, which is defined later
-   (equal specificity → source order would otherwise win and keep sheets visible). */
-.hidden { display: none !important; }
-#session-list { padding: 0; margin: 0; }
-/* Rows are real <button>s so iOS Safari fires taps reliably. */
-.session-row { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 16px 12px; border: none; border-bottom: 1px solid #2a2b33; background: #14151a; color: #e7e7ea; font-size: 16px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: rgba(123,205,255,.25); }
-.session-row:active { background: #1c1d24; }
-.session-row .status { color: #7bd; font-size: 12px; }
-#messages > div { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; line-height: 1.4; }
-.m-user { background: #243; } .m-agent { background: #222530; } .m-thought { background: #1a1b22; color: #99a; font-style: italic; }
-.m-toolCall, .m-fileEdit, .m-plan { background: #1d2733; font-family: ui-monospace, monospace; font-size: 12px; }
-.m-systemNotice { color: #c97; font-size: 12px; }
-#back { background: none; border: none; color: #7bd; font-size: 16px; padding: 8px 0; }
-.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; }
-.sheet-card { background: #20212a; width: 100%; padding: 20px 16px calc(20px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; }
-.sheet-card button { display: block; width: 100%; padding: 14px; margin: 8px 0; border: none; border-radius: 10px; font-size: 16px; }
-.btn-allow { background: #2a7; color: #021; } .btn-deny { background: #a33; color: #fee; }
-.sheet-close { background: #2a2b36; color: #c5c5cc; }
-.sheet-title { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: #e7e7ea; }
-.question-block { margin-bottom: 18px; }
-.question-prompt { margin: 0 0 8px; font-size: 14px; color: #c5c5cc; }
-.option-btn { display: block; width: 100%; padding: 12px 14px; margin: 6px 0; border: 1.5px solid #3a3b46; border-radius: 10px; background: #2a2b36; color: #e7e7ea; font-size: 15px; text-align: left; cursor: pointer; transition: border-color .15s, background .15s; }
-.option-btn.is-selected { border-color: #7bd; background: #1b2d3f; color: #c9e8ff; }
-.btn-submit { background: #2a7; color: #021; font-weight: 600; }
-.btn-submit:disabled { background: #2a3b30; color: #4a6a54; cursor: not-allowed; opacity: .6; }
+body { margin: 0; color: var(--fg); background: linear-gradient(180deg, var(--bg-1), var(--bg-0)) fixed; -webkit-font-smoothing: antialiased; }
+
+#bar { position: sticky; top: 0; z-index: 5; padding: calc(env(safe-area-inset-top) + 6px) 14px 8px; background: color-mix(in oklab, var(--bg-1), transparent 6%); backdrop-filter: blur(8px); font-size: 13px; color: var(--fg-faint); border-bottom: 0.5px solid var(--line-soft); }
+#ver { opacity: .55; }
+.view { padding: 6px 12px 28px; }
+.hidden { display: none !important; }   /* !important: beats .sheet's later display:flex */
+
+/* Sessions list */
+h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
+#session-list { list-style: none; padding: 0; margin: 0; }
+.session-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; padding: 15px 10px; border: none; border-bottom: 0.5px solid var(--line-soft); background: none; color: var(--fg); font: inherit; font-size: 15px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.session-row:active { background: var(--bg-2); }
+.session-row .status { color: var(--accent); font-size: 11px; flex-shrink: 0; }
+#back { background: none; border: none; color: var(--accent); font-size: 15px; padding: 6px 2px 10px; cursor: pointer; }
+
+/* Transcript */
+#messages { display: flex; flex-direction: column; }
+.msg { margin: 5px 0; line-height: 1.5; font-size: 15px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.m-agent { align-self: stretch; color: var(--fg); padding: 1px 2px; }
+.m-user { align-self: flex-end; max-width: 82%; padding: 9px 13px; color: var(--fg); background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 32%, transparent), color-mix(in oklab, var(--accent) 20%, transparent)); border: 0.5px solid color-mix(in oklab, var(--accent) 50%, transparent); border-radius: 13px 13px 4px 13px; box-shadow: 0 2px 8px rgba(0,0,0,.2); }
+.m-systemNotice { align-self: center; color: var(--fg-faint); font-size: 12.5px; text-align: center; padding: 4px; }
+
+/* Thinking — collapsed by default, left accent rule */
+.m-thought { align-self: stretch; border-left: 1.5px solid var(--bg-4); padding-left: 11px; margin: 6px 0; }
+.m-thought > summary { list-style: none; cursor: pointer; color: var(--fg-faint); font-size: 11px; padding: 3px 0; }
+.m-thought > summary::-webkit-details-marker { display: none; }
+.m-thought > summary::before { content: "•••  "; }
+.m-thought[open] > summary::before { content: "×  "; }
+.m-thought .thought-body { color: var(--fg-dim); font-style: italic; font-size: 13px; line-height: 1.5; padding: 4px 0 2px; }
+
+/* Tool call / structured card — collapsed by default */
+.m-tool { align-self: stretch; background: color-mix(in oklab, var(--bg-1) 60%, transparent); border: 0.5px solid var(--line); border-radius: 8px; margin: 5px 0; overflow: hidden; }
+.m-tool[open] { border-color: var(--bg-4); }
+.m-tool > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.m-tool > summary::-webkit-details-marker { display: none; }
+.tool-verb { flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--accent); }
+.tool-name { color: var(--fg-muted); font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-preview { flex: 1; min-width: 0; color: var(--fg-faint); font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-status { flex-shrink: 0; margin-left: auto; font-size: 12px; font-weight: 700; }
+.tool-status.ok { color: var(--add); } .tool-status.err { color: var(--del); } .tool-status.run { color: var(--fg-faint); }
+.tool-chev { flex-shrink: 0; color: var(--fg-faint); font-size: 11px; transition: transform .15s; }
+.m-tool[open] .tool-chev { transform: rotate(180deg); }
+.tool-body { margin: 0; padding: 9px 11px; border-top: 0.5px solid var(--line-soft); background: color-mix(in oklab, var(--bg-0) 55%, transparent); font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45; color: var(--fg-muted); white-space: pre; overflow-x: auto; max-height: 46vh; overflow-y: auto; }
+
+/* Bottom sheets (permission / question) */
+.sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 10; }
+.sheet-card { background: var(--bg-2); width: 100%; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); border-radius: 16px 16px 0 0; border-top: 0.5px solid var(--line); }
+.sheet-card button { display: block; width: 100%; padding: 13px; margin: 7px 0; border: none; border-radius: 10px; font-size: 16px; cursor: pointer; }
+.btn-allow { background: var(--add); color: var(--bg-0); } .btn-deny { background: var(--del); color: var(--fg); }
+.sheet-close { background: var(--bg-4); color: var(--fg-muted); }
+.sheet-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--fg); }
+.question-block { margin-bottom: 16px; }
+.question-prompt { margin: 0 0 8px; font-size: 14px; color: var(--fg-muted); }
+.option-btn { display: block; width: 100%; padding: 12px 14px; margin: 6px 0; border: 1px solid var(--bg-4); border-radius: 10px; background: var(--bg-1); color: var(--fg); font-size: 15px; text-align: left; cursor: pointer; }
+.option-btn.is-selected { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 18%, transparent); }
+.btn-submit { background: var(--accent); color: var(--bg-0); font-weight: 600; }
+.btn-submit:disabled { background: var(--bg-3); color: var(--fg-faint); cursor: not-allowed; opacity: .7; }

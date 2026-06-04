@@ -1,4 +1,4 @@
-const APP_BUILD = "v7";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v8";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
@@ -112,16 +112,58 @@ function renderMessages() {
   // Preserve the user's scroll position unless they're already at the bottom.
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   box.innerHTML = "";
-  for (const m of messages.values()) {
-    const div = document.createElement("div");
-    const kind = /^[a-zA-Z][a-zA-Z0-9]*$/.test(m.kind) ? m.kind : "unknown";
-    div.className = "m-" + kind;
-    div.textContent = m.text != null ? m.text : (m.json != null ? prettyStructured(m) : "");
-    box.appendChild(div);
-  }
+  for (const m of messages.values()) box.appendChild(renderMessage(m));
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
-function prettyStructured(m) { try { return m.kind + ": " + JSON.stringify(JSON.parse(m.json)).slice(0, 400); } catch { return m.kind; } }
+
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function jparse(s) { try { return JSON.parse(s); } catch { return null; } }
+function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+const TOOL_VERB = { read: "Read", search: "Searched", execute: "Ran", run: "Ran", edit: "Edit" };
+const TOOL_STATUS = { completed: ["✓", "ok"], failed: ["✕", "err"], in_progress: ["•", "run"], pending: ["•", "run"], canceled: ["■", "run"], cancelled: ["■", "run"] };
+
+// Mirrors the native ACP pane: plain agent prose, accent user bubbles, a
+// collapsed "Thinking…" row, and collapsed tool/structured cards.
+function renderMessage(m) {
+  if (m.kind === "user" || m.kind === "agent" || m.kind === "systemNotice")
+    return el("div", "msg m-" + m.kind, m.text || "");
+  if (m.kind === "thought") {
+    const d = el("details", "msg m-thought");
+    d.append(el("summary", null, "Thinking…"), el("div", "thought-body", m.text || ""));
+    return d;
+  }
+  if (m.kind === "toolCall") return toolCard(jparse(m.json) || {});
+  if (m.kind === "fileEdit") { const o = jparse(m.json) || {}; return structCard("Edit", o.path || o.title || "file", o.diff || o.content || m.json || ""); }
+  if (m.kind === "plan") return structCard("Plan", "", planText(jparse(m.json)) || m.json || "");
+  return el("div", "msg m-agent", m.text || "");
+}
+
+function toolCard(tc) {
+  const verb = TOOL_VERB[tc.kind] || (tc.kind ? cap(tc.kind) : "Tool");
+  const name = tc.title || (tc.locations && tc.locations[0]) || "";
+  const card = structCard(verb, name && name.toLowerCase() !== verb.toLowerCase() ? name : "",
+                          (typeof tc.content === "string" && tc.content) ? tc.content : "No output.", tc.preview);
+  const [ch, scls] = TOOL_STATUS[tc.status] || [tc.status || "", "run"];
+  card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", el("span", "tool-status " + scls, ch));
+  return card;
+}
+
+function structCard(verb, name, body, preview) {
+  const d = el("details", "msg m-tool");
+  const sum = el("summary");
+  sum.append(el("span", "tool-verb", verb));
+  sum.append(el("span", "tool-name", name || ""));
+  sum.append(el("span", "tool-preview", preview || ""));
+  sum.append(el("span", "tool-chev", "⌄"));
+  d.append(sum, el("pre", "tool-body", body || ""));
+  return d;
+}
+
+function planText(o) {
+  if (Array.isArray(o)) return o.map(it => "• " + (it.content || it.title || JSON.stringify(it)) + (it.status ? "  (" + it.status + ")" : "")).join("\n");
+  return o ? JSON.stringify(o, null, 2) : "";
+}
 
 let permState = null;
 function showPermission(sessionId, payload) {
