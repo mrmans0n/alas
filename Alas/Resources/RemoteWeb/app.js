@@ -1,11 +1,14 @@
-const APP_BUILD = "v5";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v6";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
 let reconnectDelay = 1500;
 const maxReconnectDelay = 30000;
+let dismissedQuestionReq = null;   // requestId the user closed; suppress re-shows
+let lastMsgDbg = "";               // diagnostic: last server message, shown in the bar
 
 function setStatus(s) { $("status").textContent = s; }
+function setBar() { const e = $("ver"); if (e) e.textContent = " · " + APP_BUILD + (lastMsgDbg ? " · " + lastMsgDbg : ""); }
 
 async function ensureToken() {
   // A freshly-scanned QR (?code present) always re-pairs, REPLACING any stored
@@ -52,6 +55,12 @@ async function connect() {
 function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); }
 
 function handle(msg) {
+  lastMsgDbg = msg.type === "questionRequest" ? ("Q#" + msg.payload.requestId + " n=" + (msg.payload.questions || []).length)
+             : msg.type === "permissionRequest" ? ("P:" + (msg.payload.toolName || ""))
+             : msg.type === "transcriptSnapshot" ? ("snap " + msg.messages.length + " st=" + msg.streamingState)
+             : msg.type === "transcriptDelta" ? ("delta " + msg.upserts.length + " st=" + msg.streamingState)
+             : msg.type;
+  setBar();
   switch (msg.type) {
     case "sessionList": renderSessions(msg.sessions); break;
     case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) renderMessages(); break;
@@ -144,6 +153,7 @@ let questionSelections = new Map();
 function showQuestion(sessionId, payload) {
   const questions = payload.questions || [];
   if (questions.length === 0) { hideQuestion(); return; }   // nothing to answer — don't show a trapping empty sheet
+  if (payload.requestId === dismissedQuestionReq) { hideQuestion(); return; }   // user already closed this one
   questionState = { sessionId, requestId: payload.requestId };
   questionSelections = new Map();
 
@@ -227,13 +237,18 @@ function hideQuestion() {
   questionSelections = new Map();
 }
 
+function dismissQuestion() {
+  if (questionState) dismissedQuestionReq = questionState.requestId;   // and keep it dismissed across re-sends
+  hideQuestion();
+}
 $("question-submit").onclick = submitQuestion;
-// Explicit Close + backdrop tap — a sheet can always be dismissed, never trap.
-$("question-close").onclick = hideQuestion;
+// Explicit Close + backdrop tap — a sheet can always be dismissed, and a closed
+// question stays closed even if the server keeps re-sending it.
+$("question-close").onclick = dismissQuestion;
 $("perm-close").onclick = hidePermission;
-$("question").onclick = (e) => { if (e.target.id === "question") hideQuestion(); };
+$("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion(); };
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 
 $("back").onclick = showSessions;
-$("ver").textContent = " · " + APP_BUILD;
+setBar();
 connect();
