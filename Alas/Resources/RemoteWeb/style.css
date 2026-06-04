@@ -5,7 +5,9 @@ body { margin: 0; background: #14151a; color: #e7e7ea; }
 .view { padding: 12px; }
 .hidden { display: none; }
 #session-list { list-style: none; padding: 0; margin: 0; }
-#session-list li { padding: 14px 12px; border-bottom: 1px solid #2a2b33; display: flex; justify-content: space-between; }
+/* cursor:pointer is required for iOS Safari to fire click on a non-button <li>. */
+#session-list li { padding: 14px 12px; border-bottom: 1px solid #2a2b33; display: flex; justify-content: space-between; cursor: pointer; -webkit-tap-highlight-color: rgba(123,205,255,.25); }
+#session-list li:active { background: #1c1d24; }
 #session-list li .status { color: #7bd; font-size: 12px; }
 #messages > div { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; line-height: 1.4; }
 .m-user { background: #243; } .m-agent { background: #222530; } .m-thought { background: #1a1b22; color: #99a; font-style: italic; }
