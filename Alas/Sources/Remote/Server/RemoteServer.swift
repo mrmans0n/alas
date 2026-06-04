@@ -21,6 +21,10 @@ final class RemoteServer {
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
     private(set) var port: UInt16?
+    /// Invoked on the main actor when the bound port changes — set when the
+    /// listener becomes ready, nil when it fails/cancels. Lets observers (the
+    /// Settings pane via AppState) react, since `port` itself isn't observable.
+    var onPortChange: ((UInt16?) -> Void)?
 
     init(pairing: RemotePairingService, assets: RemoteWebAssets, provider: RemoteSessionsProvider) {
         self.pairing = pairing
@@ -39,9 +43,9 @@ final class RemoteServer {
             switch state {
             case .ready:
                 let assigned = listener.port?.rawValue
-                Task { @MainActor in self?.port = assigned }
+                Task { @MainActor in self?.port = assigned; self?.onPortChange?(assigned) }
             case .failed, .cancelled:
-                Task { @MainActor in self?.port = nil }
+                Task { @MainActor in self?.port = nil; self?.onPortChange?(nil) }
             default:
                 break
             }

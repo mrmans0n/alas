@@ -1,7 +1,9 @@
 import Foundation
 import CryptoKit
+import Observation
 
 @MainActor
+@Observable
 final class RemotePairingService {
     private struct PendingCode { let code: String; let expiresAt: Date }
     private let store: RemoteDeviceStore

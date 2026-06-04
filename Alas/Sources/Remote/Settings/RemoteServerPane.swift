@@ -36,7 +36,7 @@ struct RemoteServerPane: View {
                         }
                     }
 
-                    if state.config.remote.enabled, let port = state.remoteServer?.port {
+                    if state.config.remote.enabled, let port = state.remotePort {
                         SettingsRow(name: "Address", desc: "Reachable at this address on your LAN/tailnet.") {
                             Text(Self.reachableURL(port: port))
                                 .font(.system(size: 12.5, design: .monospaced))
@@ -91,6 +91,9 @@ struct RemoteServerPane: View {
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
         }
+        .onChange(of: state.config.remote.enabled) { _, enabled in
+            if !enabled { pairingCode = nil }   // don't show a stale code after re-enabling
+        }
     }
 
     private static func reachableURL(port: UInt16) -> String {
@@ -102,6 +105,7 @@ struct RemoteServerPane: View {
 /// nearest-neighbor so the small generated bitmap stays crisp.
 struct QRView: View {
     let text: String
+    private static let context = CIContext()
 
     var body: some View {
         if let image = Self.makeImage(from: text) {
@@ -123,7 +127,6 @@ struct QRView: View {
         let scale: CGFloat = 12
         let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
 
-        let context = CIContext()
         guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))
     }

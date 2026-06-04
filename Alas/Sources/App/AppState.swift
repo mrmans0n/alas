@@ -61,10 +61,14 @@ final class AppState {
     /// by `syncRemoteServer()`.
     @ObservationIgnored
     private(set) var remoteServer: RemoteServer?
-    /// Last bind/start failure, surfaced by the Settings pane (Task 10). Nil
-    /// when the server is running or intentionally stopped.
-    @ObservationIgnored
+    /// Last bind/start failure, surfaced by the Settings pane. Nil when the
+    /// server is running or intentionally stopped. Observable so the pane
+    /// reacts when a bind fails.
     private(set) var lastRemoteError: String?
+    /// The server's bound port once the listener is ready, else nil. Observable
+    /// so the pane reveals the address/QR as soon as the server comes up (the
+    /// listener binds asynchronously, so the value arrives after `start`).
+    private(set) var remotePort: UInt16?
 
     /// Starts or stops the remote server to match `config.remote`. Idempotent;
     /// call at launch and after toggling the config. A bind failure is captured
@@ -77,17 +81,20 @@ final class AppState {
                 .appendingPathComponent("RemoteWeb")
             let assets = RemoteWebAssets(root: root)
             let server = RemoteServer(pairing: remotePairing, assets: assets, provider: self)
+            server.onPortChange = { [weak self] p in self?.remotePort = p }
             do {
                 try server.start(port: config.remote.port)
                 remoteServer = server
                 lastRemoteError = nil
             } catch {
                 remoteServer = nil
+                remotePort = nil
                 lastRemoteError = error.localizedDescription
             }
         } else {
             remoteServer?.stop()
             remoteServer = nil
+            remotePort = nil
             lastRemoteError = nil
         }
     }
