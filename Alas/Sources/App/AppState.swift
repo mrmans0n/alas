@@ -3040,7 +3040,10 @@ final class AppState {
 
         if case .acpSession(let tabState) = tabs.activeTab(forWorktree: worktree.id),
            let session = manager.placeholderSession(id: tabState.sessionId),
+           session.agentId == agentID,
            session.hydrationState == .ready,
+           session.transcript.messages.isEmpty,
+           session.queue.isEmpty,
            session.composerDraft.isEmpty {
             manager.persistComposerDraft(
                 ACPComposerDraft(segments: [.text(initialPrompt)]),

@@ -103,6 +103,65 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(restoredSession.composerDraft == persistedDraft)
     }
 
+    @Test func handoffOpensNewACPChatWhenActiveSessionHasTranscriptHistory() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let existing = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let existingSession = try #require(manager.placeholderSession(id: existing.sessionId))
+        existingSession.recordUserPrompt(text: "Previous prompt", attachments: [])
+
+        state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
+
+        let tabs = acpTabs(in: state)
+        #expect(tabs.count == 2)
+        #expect(sessionFor(tab: existing, in: state)?.transcript.messages.count == 1)
+        let newTab = try #require(tabs.last)
+        #expect(newTab.id != existing.id)
+        #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
+    }
+
+    @Test func handoffOpensNewACPChatWhenActiveSessionHasQueuedPrompt() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let existing = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let existingSession = try #require(manager.placeholderSession(id: existing.sessionId))
+        existingSession.enqueue(blocks: [.text("Queued prompt")])
+
+        state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
+
+        let tabs = acpTabs(in: state)
+        #expect(tabs.count == 2)
+        #expect(sessionFor(tab: existing, in: state)?.queue.count == 1)
+        let newTab = try #require(tabs.last)
+        #expect(newTab.id != existing.id)
+        #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
+    }
+
+    @Test func handoffOpensNewACPChatWhenActiveSessionUsesDifferentAgent() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "other-agent")
+        let existing = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+
+        state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
+
+        let tabs = acpTabs(in: state)
+        #expect(tabs.count == 2)
+        #expect(sessionFor(tab: existing, in: state)?.composerDraft == .empty)
+        let newTab = try #require(tabs.last)
+        #expect(newTab.id != existing.id)
+        let newSession = try #require(sessionFor(tab: newTab, in: state))
+        #expect(newSession.agentId == "test-agent")
+        #expect(newSession.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
+    }
+
     @Test func handoffOpensNewACPChatWhenNoActiveACPChatExists() throws {
         let state = makeState()
 
@@ -150,8 +209,20 @@ struct ReviewLoopHandoffRoutingTests {
                     isEnabled: true,
                     builtinLogoAssetName: nil
                 ),
+                AgentDefinition(
+                    id: "other-agent",
+                    displayName: "Other Agent",
+                    binary: "other-agent",
+                    binaryOverride: nil,
+                    promptModeArgs: [],
+                    bypassPermissionsFlag: nil,
+                    extraTerminalArgs: nil,
+                    isBuiltin: false,
+                    isEnabled: true,
+                    builtinLogoAssetName: nil
+                ),
             ],
-            installedIds: ["test-agent"]
+            installedIds: ["test-agent", "other-agent"]
         )
         return state
     }
