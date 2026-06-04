@@ -4,7 +4,9 @@ body { margin: 0; background: #14151a; color: #e7e7ea; }
 #bar { padding: env(safe-area-inset-top) 12px 8px; background: #1c1d24; font-size: 13px; color: #9aa; }
 #ver { color: #556; }
 .view { padding: 12px; }
-.hidden { display: none; }
+/* !important so .hidden beats `.sheet { display: flex }`, which is defined later
+   (equal specificity → source order would otherwise win and keep sheets visible). */
+.hidden { display: none !important; }
 #session-list { padding: 0; margin: 0; }
 /* Rows are real <button>s so iOS Safari fires taps reliably. */
 .session-row { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 16px 12px; border: none; border-bottom: 1px solid #2a2b33; background: #14151a; color: #e7e7ea; font-size: 16px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: rgba(123,205,255,.25); }

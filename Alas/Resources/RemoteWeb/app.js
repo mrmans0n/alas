@@ -1,4 +1,4 @@
-const APP_BUILD = "v6";   // visible in the top bar to confirm the phone has fresh JS
+const APP_BUILD = "v7";   // visible in the top bar to confirm the phone has fresh JS
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
