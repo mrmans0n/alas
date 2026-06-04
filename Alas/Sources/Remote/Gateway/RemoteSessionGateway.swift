@@ -69,7 +69,11 @@ final class RemoteSessionGateway {
                 send(.promptRejected(sessionId: id))
                 return
             }
-            provider.sendPrompt(for: id, text: trimmed)
+            // We're the writer, but the manager can still refuse (e.g. the
+            // session needs auth) — surface that as a rejection too.
+            if !provider.sendPrompt(for: id, text: trimmed) {
+                send(.promptRejected(sessionId: id))
+            }
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }
             provider.stop(for: id)

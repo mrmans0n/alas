@@ -11,6 +11,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var writers: Set<String> = []
     var tookOver: [String] = []
     var prompts: [(id: String, text: String)] = []
+    var sendPromptAccepts = true   // simulate the manager refusing a submit (e.g. needs auth)
     var stopped: [String] = []
     func sessionSummaries() -> [RemoteSessionSummary] { summaries }
     func session(for id: String) -> ACPSession? { sessions[id] }
@@ -26,7 +27,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         writers.insert(id)
     }
 
-    func sendPrompt(for id: String, text: String) { prompts.append((id, text)) }
+    func sendPrompt(for id: String, text: String) -> Bool {
+        prompts.append((id, text))
+        return sendPromptAccepts
+    }
     func stop(for id: String) { stopped.append(id) }
 }
 
@@ -357,12 +361,19 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer
         #expect(provider.prompts.isEmpty)
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
-        // When we ARE the writer the prompt routes and no rejection is sent.
+        // When we ARE the writer and the manager accepts, the prompt routes
+        // and no rejection is sent.
         sent.removeAll()
         provider.writers.insert("s1")
         await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
         #expect(provider.prompts.map(\.text) == ["hi"])
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
+        // Writer, but the manager refuses the submit (e.g. needs auth) — the
+        // client must still be told so it can restore the text.
+        sent.removeAll()
+        provider.sendPromptAccepts = false
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "later"))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
     @Test func stopRoutesOnlyWhenWriter() async {

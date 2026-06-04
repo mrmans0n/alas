@@ -11,6 +11,8 @@ protocol RemoteSessionsProvider: AnyObject {
     func answerQuestion(for id: String, _ response: ACPQuestionResponse)
     func isWriter(for id: String) -> Bool
     func takeOver(for id: String)
-    func sendPrompt(for id: String, text: String)
+    /// Returns whether the prompt was accepted; the gateway emits
+    /// `promptRejected` when it is not so the client can restore the text.
+    func sendPrompt(for id: String, text: String) -> Bool
     func stop(for id: String)
 }
