@@ -58,6 +58,51 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
     }
 
+    @Test func handoffOpensNewACPChatWhenActiveComposerHasWhitespaceOnlyText() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let existing = try #require(acpTabs(in: state).first)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let existingSession = try #require(manager.placeholderSession(id: existing.sessionId))
+        let whitespaceDraft = ACPComposerDraft(segments: [.text(" \n\t")])
+        manager.persistComposerDraft(whitespaceDraft, for: existingSession)
+
+        state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
+
+        let tabs = acpTabs(in: state)
+        #expect(tabs.count == 2)
+        #expect(sessionFor(tab: existing, in: state)?.composerDraft == whitespaceDraft)
+        let newTab = try #require(tabs.last)
+        #expect(newTab.id != existing.id)
+        #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
+    }
+
+    @Test func handoffOpensNewACPChatWhenActiveRestoredSessionHasNotHydrated() async throws {
+        let state = makeState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        let restoredSessionId = "restored-\(UUID().uuidString)"
+        let persistedDraft = ACPComposerDraft(segments: [.text("Persisted draft")])
+        try seedPersistedSession(id: restoredSessionId, worktreeId: worktreeId, draft: persistedDraft)
+        let existing = ACPSessionTabState(sessionId: restoredSessionId, title: "Restored")
+        state.tabs.append(acpSession: existing, to: worktreeId)
+
+        state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
+
+        let tabs = acpTabs(in: state)
+        #expect(tabs.count == 2)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let restoredSession = try #require(manager.placeholderSession(id: restoredSessionId))
+        #expect(restoredSession.hydrationState == .loading)
+        let newTab = try #require(tabs.last)
+        #expect(newTab.id != existing.id)
+        #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
+
+        await manager.hydrateIfNeeded(id: restoredSessionId)
+        #expect(restoredSession.composerDraft == persistedDraft)
+    }
+
     @Test func handoffOpensNewACPChatWhenNoActiveACPChatExists() throws {
         let state = makeState()
 
@@ -124,5 +169,28 @@ struct ReviewLoopHandoffRoutingTests {
     private func sessionFor(tab: ACPSessionTabState, in state: AppState) -> ACPSession? {
         guard let worktreeId = state.selectedWorktreeId else { return nil }
         return state.acpManager(forWorktreeId: worktreeId)?.placeholderSession(id: tab.sessionId)
+    }
+
+    private func seedPersistedSession(id: String, worktreeId: String, draft: ACPComposerDraft) throws {
+        let storeURL = Paths.acpSessionsDB(forWorktreeId: worktreeId)
+        try? FileManager.default.removeItem(at: storeURL)
+        try FileManager.default.createDirectory(
+            at: storeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let store = try ACPSessionStore(path: storeURL.path)
+        try store.upsertSession(.init(
+            id: id,
+            agentId: "test-agent",
+            title: "Restored",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        try store.upsertComposerDraft(sessionId: id, draft: draft, updatedAt: 1)
     }
 }
