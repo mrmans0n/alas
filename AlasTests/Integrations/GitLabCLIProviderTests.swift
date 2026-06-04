@@ -480,6 +480,72 @@ struct GitLabCLIProviderTests {
         }
     }
 
+    @Test func failedCheckEvidenceUsesFailedPipelineJobs() async throws {
+        let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
+        let request = Self.makeRequest(checks: checks)
+
+        let evidence = try await GitLabCLIProvider().failedCheckEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(evidence.map(\.title) == ["test", "lint"])
+        #expect(evidence.allSatisfy { $0.status == .failed })
+    }
+
+    @Test func checkEvidenceDetailLoadsGitLabTraceForJobID() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "failed assertion\n", stderr: ""),
+        ])
+        let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
+        let request = Self.makeRequest(checks: checks)
+        let item = try #require(try await GitLabCLIProvider(runner: runner).failedCheckEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        ).first)
+
+        let detail = try await GitLabCLIProvider(runner: runner).checkEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(detail.body.contains("failed assertion"))
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: ["ci", "trace", "102", "-R", "platform/mobile/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func feedbackEvidenceDetailUsesDiscussionBody() async throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.discussionsOutput,
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
+        )
+        let request = Self.makeRequest(threads: threads)
+        let item = try #require(try await GitLabCLIProvider().feedbackEvidence(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        ).first)
+
+        let detail = try await GitLabCLIProvider().feedbackEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(detail.body.contains("Please"))
+        #expect(detail.item.status == .actionable)
+    }
+
     @Test func currentReviewRequestUsesExpectedMRListCommand() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
@@ -1023,6 +1089,26 @@ struct GitLabCLIProviderTests {
     )
 
     private static let cwd = URL(fileURLWithPath: "/tmp/alas")
+
+    private static func makeRequest(
+        checks: [ReviewCheck] = [],
+        threads: [ReviewThreadSummary] = []
+    ) -> ReviewRequest {
+        ReviewRequest(
+            remote: Self.remote,
+            number: 42,
+            title: "Add GitLab provider",
+            url: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/gitlab-provider",
+            baseRefName: "main",
+            reviewDecision: .unknown,
+            mergeState: .unknown,
+            checks: checks,
+            threads: threads
+        )
+    }
 
     private static let mrListOutput = """
     [
