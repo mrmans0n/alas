@@ -148,8 +148,14 @@ struct RemoteProtocolTests {
     }
 
     @Test func snapshotCarriesCanDrive() throws {
-        let snap = RemoteServerMessage.transcriptSnapshot(sessionId: "s1", streamingState: "idle", canDrive: false, messages: [])
+        let snap = RemoteServerMessage.transcriptSnapshot(sessionId: "s1", streamingState: "idle", canDrive: true, messages: [])
         let data = try JSONEncoder().encode(snap)
         #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == snap)
+    }
+
+    @Test func clientDriveVerbsRoundTrip() throws {
+        #expect(try roundTrip(RemoteClientMessage.takeOver(sessionId: "s1")) == .takeOver(sessionId: "s1"))
+        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello")) == .sendPrompt(sessionId: "s1", text: "hello"))
+        #expect(try roundTrip(RemoteClientMessage.stop(sessionId: "s1")) == .stop(sessionId: "s1"))
     }
 }
