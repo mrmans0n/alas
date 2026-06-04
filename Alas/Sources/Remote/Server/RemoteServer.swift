@@ -26,6 +26,9 @@ final class RemoteServer {
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
     private(set) var port: UInt16?
+    /// Set once we've already retried on an OS-assigned port after a fixed-port
+    /// bind failure, so we don't loop.
+    private var didFallback = false
     /// Invoked on the main actor when the bound port changes — set when the
     /// listener becomes ready, nil when it fails/cancels. Lets observers (the
     /// Settings pane via AppState) react, since `port` itself isn't observable.
@@ -37,9 +40,13 @@ final class RemoteServer {
         self.provider = provider
     }
 
-    /// Starts listening on the given port (0 = OS-assigned). Throws if bind fails.
+    /// Starts listening on the given port (0 = OS-assigned). A non-zero port that
+    /// is already in use surfaces asynchronously as `.failed`; we then retry once
+    /// on an OS-assigned port so the server still starts (the Address/QR use the
+    /// actual bound port, so pairing still works). Throws only on invalid params.
     func start(port desired: UInt16 = 0) throws {
         stop()
+        if desired != 0 { didFallback = false }
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         let endpointPort: NWEndpoint.Port = desired == 0 ? .any : (NWEndpoint.Port(rawValue: desired) ?? .any)
@@ -49,7 +56,17 @@ final class RemoteServer {
             case .ready:
                 let assigned = listener.port?.rawValue
                 Task { @MainActor in self?.port = assigned; self?.onPortChange?(assigned) }
-            case .failed, .cancelled:
+            case .failed:
+                Task { @MainActor in
+                    guard let self else { return }
+                    if desired != 0 && !self.didFallback {
+                        self.didFallback = true
+                        try? self.start(port: 0)   // preferred port taken — fall back to OS-assigned
+                    } else {
+                        self.port = nil; self.onPortChange?(nil)
+                    }
+                }
+            case .cancelled:
                 Task { @MainActor in self?.port = nil; self?.onPortChange?(nil) }
             default:
                 break
