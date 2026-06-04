@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-04
+
+### ✨ Features
+
+- Add Cursor ACP question prompt support (#467).
+- Add Quit and Terminate Sessions commands (#468).
+- Add the `harden` conventional commit chip on the Changes tab (#469).
+- Add Cursor-specific ACP chip presentations and fast dropdowns (#470).
+- Auto-send transcript context when restoring ACP sessions (#471).
+
+### 🐛 Fixes
+
+- Improve draft PR review request panes (#472).
+- Route review feedback handoffs to an existing empty ACP chat when available (#473).
+
+### 📚 Docs
+
+- Clarify terminal support in the README.
+
 ## [0.6.0] - 2026-06-04
 
 ### ✨ Features
