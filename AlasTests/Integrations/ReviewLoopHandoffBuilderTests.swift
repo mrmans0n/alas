@@ -149,6 +149,63 @@ struct ReviewLoopHandoffBuilderTests {
         #expect(prompt.contains("State: Provider unavailable"))
     }
 
+    @Test func selectedEvidencePromptIncludesEvidenceBody() {
+        let request = Self.makeReviewRequest()
+        let item = ReviewEvidenceItem(
+            id: "ci:test",
+            section: .ci,
+            title: "Tests",
+            subtitle: "CI",
+            status: .failed,
+            providerURL: URL(string: "https://github.com/run")
+        )
+        let detail = ReviewEvidenceDetail(
+            item: item,
+            body: "Assertion failed in Tests.swift",
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+
+        let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
+            snapshot: Self.makeSnapshot(request: request),
+            detail: detail
+        )
+
+        #expect(prompt.contains("GitHub PR: https://github.com/mrmans0n/alas/pull/428"))
+        #expect(prompt.contains("Evidence section: CI"))
+        #expect(prompt.contains("Assertion failed in Tests.swift"))
+        #expect(prompt.contains("Do not merge or post remote comments."))
+    }
+
+    @Test func selectedEvidencePromptPreservesSafetyInstructionWhenEvidenceIsLong() {
+        let request = Self.makeReviewRequest()
+        let detail = ReviewEvidenceDetail(
+            item: ReviewEvidenceItem(
+                id: "ci:test",
+                section: .ci,
+                title: "Tests",
+                subtitle: "CI",
+                status: .failed,
+                providerURL: URL(string: "https://github.com/run")
+            ),
+            body: String(repeating: "failure details\n", count: 1_000),
+            filePath: nil,
+            line: nil,
+            isTruncated: false
+        )
+
+        let prompt = ReviewLoopHandoffBuilder.buildSelectedEvidencePrompt(
+            snapshot: Self.makeSnapshot(request: request),
+            detail: detail
+        )
+
+        #expect(prompt.count <= 4_500)
+        #expect(prompt.contains("[Evidence context truncated by Alas.]"))
+        #expect(prompt.contains("Do not merge or post remote comments."))
+        #expect(prompt.hasSuffix("Do not merge or post remote comments."))
+    }
+
     @Test func longReviewPromptIsTruncated() {
         let title = String(repeating: "Review note ", count: 1_000)
         let request = Self.makeReviewRequest(
