@@ -49,11 +49,11 @@ private struct ACPSessionView: View {
     let worktree: Worktree
     let manager: ACPSessionManager
     @ObservedObject var session: ACPSession
-    /// Observed so the body re-evaluates when `pendingPermission`
-    /// arrives — `scopeKey(for:)` reads through this and the value
-    /// is passed down to `ACPMessageList`; otherwise the message
-    /// list gets a stale `""` scope and persisted allow/reject_always
-    /// decisions land under the wrong key.
+    /// Observed so the body re-evaluates when pending user action arrives.
+    /// `scopeKey(for:)` reads the permission value through this and passes
+    /// it down to `ACPMessageList`; otherwise the message list gets a stale
+    /// `""` scope and persisted allow/reject_always decisions land under the
+    /// wrong key.
     @ObservedObject var transcript: ACPTranscript
     @State private var updateState: AdapterUpdateState?
     @State private var dismissedLatest: String?
@@ -142,6 +142,7 @@ private struct ACPSessionView: View {
     private func handleEscape() {
         guard session.transcript.streamingState == .streaming || session.transcript.streamingState == .sending
               || session.transcript.streamingState == .awaitingPermission
+              || session.transcript.streamingState == .awaitingInput
         else { return }
         Task {
             if let runner = manager.runners[sessionId] {
@@ -229,6 +230,9 @@ private struct ACPSessionView: View {
                                 // pending permission request.
                                 policy: manager.runners[sessionId]?.policy,
                                 scopeKey: scopeKey(for: session.transcript.pendingPermission),
+                                onQuestionResponse: { response in
+                                    manager.runners[sessionId]?.answerQuestion(response)
+                                },
                                 onQueueEdit: isMirror ? { _ in } : { item in
                                     // Pull the queued prompt back into the composer
                                     // for editing — appended after any text the user

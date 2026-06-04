@@ -16,7 +16,7 @@ struct ACPComposerPlaceholderTests {
     @Test("busy + sendOnEnter advertises ⏎ as queue and ⌥⏎ as steer")
     func busyDefault() {
         let queueText = "Queue a follow-up… (⌥⏎ to steer)"
-        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission] {
+        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission, .awaitingInput] {
             #expect(ACPInputField.placeholder(for: state, sendOnEnter: true) == queueText)
         }
     }
@@ -24,7 +24,7 @@ struct ACPComposerPlaceholderTests {
     @Test("busy + inverted mapping advertises ⏎ as steer and ⌥⏎ as queue")
     func busyInverted() {
         let steerText = "Steer the agent… (⌥⏎ to queue)"
-        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission] {
+        for state in [ACPSession.StreamingState.sending, .streaming, .awaitingPermission, .awaitingInput] {
             #expect(ACPInputField.placeholder(for: state, sendOnEnter: false) == steerText)
         }
     }

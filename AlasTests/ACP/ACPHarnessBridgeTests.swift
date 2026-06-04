@@ -47,6 +47,18 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"]?.state == .permissionRequest)
     }
 
+    @Test("streamingState .awaitingInput writes .awaitingInput")
+    func awaitingInputMapsToAwaitingInput() async {
+        let harness = makeHarness()
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "cursor-agent", worktreeId: "wt", title: "t")
+        bridge.observe(session: session)
+        session.transcript.streamingState = .awaitingInput
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.state == .awaitingInput)
+        #expect(harness.activityBySession["s1"]?.agent == .cursor)
+    }
+
     @Test("streamingState .idle removes the entry")
     func idleClearsEntry() async {
         let harness = makeHarness()

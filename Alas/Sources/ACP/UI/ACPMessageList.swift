@@ -7,6 +7,7 @@ struct ACPMessageList: View {
     let onOpenDiff: (String) -> Void
     let policy: ACPPermissionPolicy?
     let scopeKey: String
+    let onQuestionResponse: (ACPQuestionResponse) -> Void
     /// Callbacks invoked by the pending bubbles + header. The host wires
     /// these to the runner.
     let onQueueEdit: (QueuedPrompt) -> Void
@@ -61,6 +62,7 @@ struct ACPMessageList: View {
         hasher.combine(transcript.messages.count)
         hasher.combine(session.queue.count)
         hasher.combine(session.queue.first?.status)
+        hasher.combine(transcript.pendingQuestion?.id)
         // Streaming chunks mutate the buffer in place without re-publishing
         // the transcript array; the tick gives the body a reason to re-eval
         // so this signature changes and the tail-scroll fires per chunk.
@@ -113,6 +115,10 @@ struct ACPMessageList: View {
                         if transcript.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
                                 .id("__pending_perm__")
+                        }
+                        if transcript.pendingQuestion != nil {
+                            ACPQuestionPrompt(session: session, onRespond: onQuestionResponse)
+                                .id("__pending_question__")
                         }
                         if transcript.streamingState == .streaming {
                             StreamingCaret().frame(width: 8, height: 14)

@@ -41,8 +41,11 @@ final class ACPSessionRunner {
     private let onPersist: (() -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
+    private var questionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
+    private var pendingQuestionContinuation: CheckedContinuation<ACPQuestionResponse, Never>?
+    private var pendingQuestionPreviousStreamingState: ACPSession.StreamingState?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -149,6 +152,16 @@ final class ACPSessionRunner {
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(scopeKey: scopeKey, options: params.options, params: params)
                 self.connection.client.respondToPermission(id: id, response: response)
+            }
+        }
+
+        questionsTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await request in self.connection.client.questionRequests {
+                let response = await self.awaitQuestionResponse(request)
+                if Task.isCancelled { return }
+                self.connection.client.respondToQuestion(id: request.id, response: response)
+                self.flushQueueIfIdle()
             }
         }
 
@@ -269,14 +282,45 @@ final class ACPSessionRunner {
     func stop() {
         updatesTask?.cancel()
         permissionsTask?.cancel()
+        questionsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
+        resolvePendingQuestion(.init(outcome: .cancelled), restorePreviousState: false)
         // Kill agent-spawned subprocesses now. ACPSessionManager keeps
         // the ACPSession cached after detach, so the session's deinit-
         // time killAll() won't fire on tab close — without this an
         // active `npm test`/`sleep`/server outlives the agent.
         session.terminalHost.killAll()
         onPersist?()
+    }
+
+    private func awaitQuestionResponse(_ request: ACPQuestionRequest) async -> ACPQuestionResponse {
+        pendingQuestionPreviousStreamingState = session.transcript.streamingState
+        session.transcript.streamingState = .awaitingInput
+        session.transcript.pendingQuestion = .init(id: request.id, params: request.params)
+        return await withCheckedContinuation { continuation in
+            pendingQuestionContinuation = continuation
+        }
+    }
+
+    func answerQuestion(_ response: ACPQuestionResponse) {
+        resolvePendingQuestion(response)
+    }
+
+    private func resolvePendingQuestion(
+        _ response: ACPQuestionResponse,
+        restorePreviousState: Bool = true
+    ) {
+        guard let continuation = pendingQuestionContinuation else { return }
+        pendingQuestionContinuation = nil
+        session.transcript.pendingQuestion = nil
+        if session.transcript.streamingState == .awaitingInput {
+            session.transcript.streamingState = restorePreviousState
+                ? pendingQuestionPreviousStreamingState ?? .idle
+                : .idle
+        }
+        pendingQuestionPreviousStreamingState = nil
+        continuation.resume(returning: response)
     }
 
     private func handleTerminalRequest(_ req: ACPTerminalRequest) {
@@ -505,6 +549,7 @@ final class ACPSessionRunner {
                 }
             }
             policy.userCancelled()
+            resolvePendingQuestion(.init(outcome: .cancelled))
             let changedIndices = session.cancelInFlightToolCalls()
             session.terminalHost.killAll()
             if holdsLeaseForWrite() {
@@ -748,11 +793,11 @@ extension ACPSessionRunner {
     }
 
     /// Drain the queue head if the runner is still live, setup is not
-    /// blocked on auth, transcript state is `.idle`, the head is `.pending`,
-    /// and the head has no `lastError`. Marks the head `.sending`, persists,
-    /// and dispatches `sendNow` with the head's id so success can pop the
-    /// right item and failure can flag the right item without disturbing
-    /// the rest of the queue.
+    /// blocked on auth, no prompt owns the transport, transcript state is
+    /// `.idle`, the head is `.pending`, and the head has no `lastError`.
+    /// Marks the head `.sending`, persists, and dispatches `sendNow` with the
+    /// head's id so success can pop the right item and failure can flag the
+    /// right item without disturbing the rest of the queue.
     ///
     /// Chained drain is implicit: sendNow's completion sets state to
     /// `.idle` and calls back here.
@@ -760,6 +805,7 @@ extension ACPSessionRunner {
         guard holdsLeaseForWrite() else { return }
         guard !steerInProgress,
               session.agentState == .ready,
+              activePromptID == nil,
               session.transcript.streamingState == .idle,
               let head = session.queue.first,
               head.status == .pending,

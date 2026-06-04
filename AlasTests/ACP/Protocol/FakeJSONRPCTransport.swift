@@ -7,6 +7,7 @@ import Foundation
 final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable {
     private let cont: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
+    private(set) var sentFrames: [Data] = []
 
     init() {
         var c: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
@@ -19,7 +20,7 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
     }
 
     func send(_ data: Data) throws {
-        // Discard outbound bytes in tests (we only care about inbound dispatch).
+        sentFrames.append(data)
     }
 
     func terminate() {

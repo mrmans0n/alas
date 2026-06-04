@@ -6,6 +6,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
     private var asyncScripts: [String: (ACPRequest) async throws -> Data] = [:]
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let updateCountLock = NSLock()
@@ -19,6 +20,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         return _yieldedUpdateCount
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let questionRequests: AsyncStream<ACPQuestionRequest>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
 
@@ -31,6 +33,9 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         var p: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { p = $0 }
         self.permsCont = p
+        var q: AsyncStream<ACPQuestionRequest>.Continuation!
+        self.questionRequests = AsyncStream { q = $0 }
+        self.questionsCont = q
         var f: AsyncStream<ACPFileRequest>.Continuation!
         self.fileRequests = AsyncStream { f = $0 }
         self.filesCont = f
@@ -64,12 +69,19 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         updatesCont.yield(update)
     }
     func emitPermission(id: JSONRPCID, params: ACPPermissionRequestParams) { permsCont.yield((id, params)) }
+    func emitQuestion(id: JSONRPCID, params: ACPQuestionRequestParams) {
+        questionsCont.yield(.init(id: id, params: params))
+    }
     func emitFile(_ req: ACPFileRequest) { filesCont.yield(req) }
     func emitTerminal(_ req: ACPTerminalRequest) { terminalsCont.yield(req) }
 
     var permissionResponses: [JSONRPCID: ACPPermissionResponse] = [:]
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
         permissionResponses[id] = response
+    }
+    var questionResponses: [JSONRPCID: ACPQuestionResponse] = [:]
+    func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {
+        questionResponses[id] = response
     }
     var fileResponses: [JSONRPCID: Result<Data, JSONRPCError>] = [:]
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
@@ -91,6 +103,7 @@ final class ACPMockClient: ACPClient, @unchecked Sendable {
         shutdownCount += 1
         updatesCont.finish()
         permsCont.finish()
+        questionsCont.finish()
         filesCont.finish()
         terminalsCont.finish()
     }

@@ -39,7 +39,7 @@ func composerAction(
     switch streamingState {
     case .idle:
         return hasText ? .send : .hidden
-    case .sending, .streaming, .awaitingPermission:
+    case .sending, .streaming, .awaitingPermission, .awaitingInput:
         return hasText ? .queue(menu: [.steer, .stop]) : .stop
     }
 }

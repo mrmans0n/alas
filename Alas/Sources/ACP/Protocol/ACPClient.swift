@@ -47,6 +47,11 @@ protocol ACPClient: AnyObject {
     /// call `respondToPermission(id:decision:)` exactly once per emitted request.
     var permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { get }
 
+    /// Ask-user question requests from agent-specific ACP extensions. The
+    /// client owner must call `respondToQuestion(id:response:)` exactly once
+    /// per emitted request.
+    var questionRequests: AsyncStream<ACPQuestionRequest> { get }
+
     /// Filesystem requests (`fs/read_text_file`, `fs/write_text_file`).
     var fileRequests: AsyncStream<ACPFileRequest> { get }
 
@@ -55,6 +60,7 @@ protocol ACPClient: AnyObject {
     var terminalRequests: AsyncStream<ACPTerminalRequest> { get }
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
+    func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse)
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
 

@@ -86,6 +86,8 @@ final class ACPHarnessBridge {
             harness.setExternalActivity(sessionId: session.id, agent: agent, state: .busy)
         case .awaitingPermission:
             harness.setExternalActivity(sessionId: session.id, agent: agent, state: .permissionRequest)
+        case .awaitingInput:
+            harness.setExternalActivity(sessionId: session.id, agent: agent, state: .awaitingInput)
         }
     }
 

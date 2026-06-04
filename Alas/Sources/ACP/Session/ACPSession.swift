@@ -146,7 +146,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case ready
         case failed(String)
     }
-    enum StreamingState: Equatable { case idle, sending, streaming, awaitingPermission }
+    enum StreamingState: Equatable { case idle, sending, streaming, awaitingPermission, awaitingInput }
     enum SetupState: Equatable {
         case checking
         case ready
@@ -156,6 +156,10 @@ final class ACPSession: ObservableObject, Identifiable {
     struct PendingPermission: Identifiable, Equatable {
         let id: JSONRPCID
         let params: ACPPermissionRequestParams
+    }
+    struct PendingQuestion: Identifiable, Equatable {
+        let id: JSONRPCID
+        let params: ACPQuestionRequestParams
     }
 
     init(id: ID, agentId: String, worktreeId: String, title: String,

@@ -4,6 +4,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
+    private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
@@ -15,6 +16,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         return _yieldedUpdateCount
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
+    let questionRequests: AsyncStream<ACPQuestionRequest>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
     let incomingStderr: AsyncStream<Data>
@@ -46,6 +48,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.permissionRequests = AsyncStream { pC = $0 }
         self.permsCont = pC
 
+        var qC: AsyncStream<ACPQuestionRequest>.Continuation!
+        self.questionRequests = AsyncStream { qC = $0 }
+        self.questionsCont = qC
+
         var fC: AsyncStream<ACPFileRequest>.Continuation!
         self.fileRequests = AsyncStream { fC = $0 }
         self.filesCont = fC
@@ -71,6 +77,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { pC = $0 }
         self.permsCont = pC
+
+        var qC: AsyncStream<ACPQuestionRequest>.Continuation!
+        self.questionRequests = AsyncStream { qC = $0 }
+        self.questionsCont = qC
 
         var fC: AsyncStream<ACPFileRequest>.Continuation!
         self.fileRequests = AsyncStream { fC = $0 }
@@ -114,6 +124,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             for (_, cont) in snapshot { cont.resume(throwing: ACPClientError.notRunning) }
             updatesCont.finish()
             permsCont.finish()
+            questionsCont.finish()
             filesCont.finish()
             terminalsCont.finish()
             stderrCont.finish()
@@ -157,6 +168,9 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         case "session/request_permission":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data),
                let id = env.id, let p = env.params { permsCont.yield((id, p)) }
+        case "cursor/ask_question":
+            if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPQuestionRequestParams>.self, from: data),
+               let id = env.id, let p = env.params { questionsCont.yield(.init(id: id, params: p)) }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),
                let id = env.id, let p = env.params { filesCont.yield(.read(id: id, params: p)) }
@@ -238,6 +252,18 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     }
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let body = try JSONEncoder().encode(response)
+                try self.respond(id: id, body: body)
+            } catch {
+                // Best-effort; caller side has no error path for this.
+            }
+        }
+    }
+
+    func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {
         Task { [weak self] in
             guard let self else { return }
             do {

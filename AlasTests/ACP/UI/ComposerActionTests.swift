@@ -93,7 +93,7 @@ struct ComposerActionTests {
     }
 
     private var busyStates: [ACPSession.StreamingState] {
-        [.sending, .streaming, .awaitingPermission]
+        [.sending, .streaming, .awaitingPermission, .awaitingInput]
     }
 
     private var agentStates: [ACPSession.AgentState] {
