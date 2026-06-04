@@ -30,6 +30,11 @@ struct ReviewEvidenceTabView: View {
         return activeSnapshot
     }
 
+    private var canSendToAgent: Bool {
+        let agentID = appState.config.changes.aiToolId
+        return agentID != "none" && appState.agent(id: agentID) != nil
+    }
+
     private var loadKey: String {
         let head = snapshot?.local.headSHA ?? "no-head"
         let providerState = "\(snapshot?.providerAvailable == true):\(snapshot?.providerAuthenticated == true)"
@@ -299,6 +304,7 @@ struct ReviewEvidenceTabView: View {
             AlasButton(title: "Send to Agent", icon: "sparkle", style: .primary) {
                 appState.openReviewEvidenceHandoff(snapshot: snapshot, detail: detail)
             }
+            .disabled(!canSendToAgent)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
