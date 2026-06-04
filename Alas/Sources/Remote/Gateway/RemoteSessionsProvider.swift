@@ -9,4 +9,8 @@ protocol RemoteSessionsProvider: AnyObject {
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async
     func answerQuestion(for id: String, _ response: ACPQuestionResponse)
+    func isWriter(for id: String) -> Bool
+    func takeOver(for id: String)
+    func sendPrompt(for id: String, text: String)
+    func stop(for id: String)
 }

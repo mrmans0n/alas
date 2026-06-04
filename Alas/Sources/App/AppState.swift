@@ -3259,4 +3259,30 @@ extension AppState: RemoteSessionsProvider {
             return
         }
     }
+
+    func isWriter(for id: String) -> Bool {
+        for mgr in acpManagers.values where mgr.isWriter(for: id) { return true }
+        return false
+    }
+
+    func takeOver(for id: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.takeOver(sessionId: id)
+            return
+        }
+    }
+
+    func sendPrompt(for id: String, text: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.sendPrompt(for: id, text: text)
+            return
+        }
+    }
+
+    func stop(for id: String) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.interrupt(for: id)
+            return
+        }
+    }
 }

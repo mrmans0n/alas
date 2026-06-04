@@ -8,6 +8,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
     var lastQuestionResponse: (id: String, response: ACPQuestionResponse)?
+    var writers: Set<String> = []
+    var tookOver: [String] = []
+    var prompts: [(id: String, text: String)] = []
+    var stopped: [String] = []
     func sessionSummaries() -> [RemoteSessionSummary] { summaries }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
@@ -15,6 +19,15 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
         lastQuestionResponse = (id, response)
     }
+
+    func isWriter(for id: String) -> Bool { writers.contains(id) }
+    func takeOver(for id: String) {
+        tookOver.append(id)
+        writers.insert(id)
+    }
+
+    func sendPrompt(for id: String, text: String) { prompts.append((id, text)) }
+    func stop(for id: String) { stopped.append(id) }
 }
 
 #if DEBUG
@@ -281,5 +294,47 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 250_000_000)
         #expect(!sent.contains { if case .transcriptDelta = $0 { return true }
         return false })
+    }
+
+    @Test func takeOverRoutesToProvider() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.takeOver(sessionId: "s1"))
+        #expect(provider.tookOver == ["s1"])
+    }
+
+    @Test func sendPromptRoutesOnlyWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer → ignored
+        #expect(provider.prompts.isEmpty)
+        provider.writers.insert("s1")
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
+        #expect(provider.prompts.map(\.text) == ["hi"])
+    }
+
+    @Test func stopRoutesOnlyWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped.isEmpty)
+        provider.writers.insert("s1")
+        await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped == ["s1"])
+    }
+
+    @Test func snapshotCarriesCanDrive() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hello")
+        provider.sessions["s1"] = s
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        let drive = sent.compactMap { msg -> Bool? in
+            if case .transcriptSnapshot(_, _, let canDrive, _) = msg { return canDrive }
+            return nil
+        }.first
+        #expect(drive == true)
     }
 }
