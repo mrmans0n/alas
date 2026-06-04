@@ -338,7 +338,7 @@ struct ACPComposer: View {
 
     private func thinkingChip(_ spec: ChipSpec) -> some View {
         chip(spec: spec,
-             label: chipLabel(prefix: "Thinking", spec: spec),
+             label: iconChipLabel(icon: "🧠", spec: spec, fallback: "Thinking"),
              placeholder: "Thinking",
              accent: theme.color("warn"))
     }
@@ -353,10 +353,43 @@ struct ACPComposer: View {
     }
 
     private func parameterChip(_ parameter: ACPParameterChip) -> some View {
-        chip(spec: parameter.spec,
-             label: chipLabel(prefix: parameter.label, spec: parameter.spec),
-             placeholder: parameter.label,
-             accent: theme.color("fg-muted"))
+        switch parameter.presentation {
+        case .cursorContextWindow:
+            chip(spec: parameter.spec,
+                 label: iconChipLabel(icon: "🪟", spec: parameter.spec, fallback: parameter.label),
+                 placeholder: parameter.label,
+                 accent: cursorContextAccent)
+        case .cursorFast:
+            chip(spec: parameter.spec,
+                 label: iconChipLabel(icon: "🚀", spec: parameter.spec, fallback: parameter.label),
+                 placeholder: parameter.label,
+                 accent: cursorFastAccent)
+        case .standard:
+            chip(spec: parameter.spec,
+                 label: chipLabel(prefix: parameter.label, spec: parameter.spec),
+                 placeholder: parameter.label,
+                 accent: theme.color("fg-muted"))
+        }
+    }
+
+    private var cursorContextAccent: Color {
+        Color(.sRGB, red: 0.28, green: 0.72, blue: 0.88, opacity: 1)
+    }
+
+    private var cursorFastAccent: Color {
+        Color(.sRGB, red: 0.48, green: 0.82, blue: 0.42, opacity: 1)
+    }
+
+    private func iconChipLabel(icon: String, spec: ChipSpec, fallback: String) -> String {
+        "\(icon) \(selectedName(spec: spec, fallback: fallback))"
+    }
+
+    private func selectedName(spec: ChipSpec, fallback: String) -> String {
+        if let id = spec.currentId,
+           let item = spec.options.first(where: { $0.id == id }) {
+            return item.name
+        }
+        return spec.currentId ?? fallback
     }
 
     private func chip(spec: ChipSpec,

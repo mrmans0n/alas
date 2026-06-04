@@ -15,7 +15,14 @@ struct ACPChipState: Equatable {
 struct ACPParameterChip: Identifiable, Equatable {
     let id: String
     let label: String
+    let presentation: ACPParameterChipPresentation
     let spec: ChipSpec
+}
+
+enum ACPParameterChipPresentation: Equatable {
+    case standard
+    case cursorContextWindow
+    case cursorFast
 }
 
 /// A single chip's data, plus a tag remembering where it came from so the
@@ -80,6 +87,7 @@ extension ACPChipState {
             configOptionId(from: thinking),
         ].compactMap { $0 })
         let parameters = parameterChips(from: configOptions,
+                                        agentId: agentId,
                                         excluding: consumedConfigIds)
         var result = ACPChipState(models: models, mode: mode,
                                   thinking: thinking, parameters: parameters,
@@ -167,6 +175,7 @@ extension ACPChipState {
 
     private static func parameterChips(
         from options: [ACPConfigOption],
+        agentId: String,
         excluding consumedIds: Set<String>
     ) -> [ACPParameterChip] {
         options.compactMap { opt in
@@ -179,6 +188,7 @@ extension ACPChipState {
             return ACPParameterChip(
                 id: opt.id,
                 label: opt.name.isEmpty ? opt.id.capitalized : opt.name,
+                presentation: presentation(for: opt, agentId: agentId),
                 spec: ChipSpec(
                     source: .configOption(id: opt.id),
                     options: opt.options.map {
@@ -186,6 +196,23 @@ extension ACPChipState {
                     },
                     currentId: opt.currentValue))
         }
+    }
+
+    private static func presentation(
+        for option: ACPConfigOption,
+        agentId: String
+    ) -> ACPParameterChipPresentation {
+        guard agentId == "cursor-agent" else { return .standard }
+
+        let id = option.id.lowercased()
+        let name = option.name.lowercased()
+        if id == "context" || id == "context_window" || name == "context window" {
+            return .cursorContextWindow
+        }
+        if id == "fast" || name == "fast" {
+            return .cursorFast
+        }
+        return .standard
     }
 
     private static func configOptionId(from spec: ChipSpec?) -> String? {
