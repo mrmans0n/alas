@@ -131,6 +131,8 @@ final class RemoteSessionGateway {
     // MARK: attachment materialization
 
     private static let maxAttachmentsBytes = 10_000_000
+    /// Max images per prompt — parity with the native composer's limit.
+    static let maxAttachmentCount = 10
 
     /// Decode wire attachments to files under acp-attachments/. Returns nil if the
     /// batch violates the size cap or any entry isn't a real image (caller rejects
@@ -143,6 +145,9 @@ final class RemoteSessionGateway {
     /// leave earlier files orphaned; a mid-batch write failure rolls back what
     /// it wrote.
     private func materialize(_ wire: [RemoteAttachment], for sessionId: String) -> [ACPMessage.Attachment]? {
+        // Cap the count before decoding/writing (parity with the native composer's
+        // maxImagesPerMessage) so one prompt can't spray thousands of tiny files.
+        guard wire.count <= Self.maxAttachmentCount else { return nil }
         var decoded: [(data: Data, mimeType: String, name: String?)] = []
         var total = 0
         for a in wire {

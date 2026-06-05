@@ -502,6 +502,21 @@ struct RemoteSessionGatewayTests {
         #expect((wire.text ?? "").isEmpty == false)
     }
 
+    @Test func tooManyAttachmentsRejected() async {
+        // Count cap (parity with ACPComposer.maxImagesPerMessage) — a single
+        // prompt can't write an unbounded number of tiny files.
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let many = (0..<(RemoteSessionGateway.maxAttachmentCount + 1)).map { _ in
+            RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")
+        }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.writtenAttachmentURLs.isEmpty)   // rejected before any write
+    }
+
     @Test func renamedNonImageWithImageMimeRejected() async {
         // Client claims image/png but the bytes aren't a real image — the byte
         // sniff must reject it rather than trusting the MIME, and write no file.
