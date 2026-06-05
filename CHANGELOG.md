@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-05
+
+### ✨ Features
+
+- Add phone composer parity for model, mode, auto-run, image attachments, and auto-takeover (#479).
+- Allow ACP sessions to be driven from the phone, including take over, send, and stop actions (#476).
+- Let the ACP `@` mention picker select directories (#478).
+- Add a GitHub/GitLab review evidence inspector tab (#475).
+- Watch ACP sessions and answer prompts from the phone remote control (#474).
+
+### 🐛 Fixes
+
+- Stabilize queued-message actions and add force-send support in the ACP pane (#481).
+- Use a cleaner config gear icon on the phone client (#480).
+
+### 🏗️ Internal
+
+- Add the `polish` conventional commit verb (#477).
+
 ## [0.6.1] - 2026-06-04
 
 ### ✨ Features
