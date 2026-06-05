@@ -3,11 +3,12 @@ import SwiftUI
 
 /// A single queued-item bubble, rendered below the transcript. Right-
 /// aligned (same as the user message bubble) but with a dashed border,
-/// reduced opacity, and a "Queued" pill. Hover reveals edit / remove
-/// affordances. Items in `.sending` lose those affordances and gain a
-/// spinner-edged border.
+/// reduced opacity, and a "Queued" pill. Hover reveals send / edit / remove
+/// affordances without changing their reserved layout. Items in `.sending`
+/// lose those affordances and gain a spinner-edged border.
 struct ACPQueuedBubble: View {
     let item: QueuedPrompt
+    let onForceSend: () -> Void
     let onEdit: () -> Void
     let onRemove: () -> Void
     let onRetry: () -> Void
@@ -19,22 +20,25 @@ struct ACPQueuedBubble: View {
         HStack(alignment: .top, spacing: 6) {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
-                HStack(spacing: 6) {
-                    if item.status == .sending {
-                        ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
+                HStack(alignment: .center, spacing: 6) {
+                    HStack(spacing: 6) {
+                        if item.status == .sending {
+                            ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
+                        }
+                        Text(item.status == .sending ? "Sending" : "Queued")
+                            .font(.system(size: 9, weight: .semibold))
+                            .tracking(0.4)
+                            .textCase(.uppercase)
+                            .foregroundStyle(theme.color("fg-faint"))
+                        if let err = item.lastError {
+                            Text("· \(err)")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(theme.color("del"))
+                                .lineLimit(1)
+                        }
                     }
-                    Text(item.status == .sending ? "Sending" : "Queued")
-                        .font(.system(size: 9, weight: .semibold))
-                        .tracking(0.4)
-                        .textCase(.uppercase)
-                        .foregroundStyle(theme.color("fg-faint"))
-                    if let err = item.lastError {
-                        Text("· \(err)")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(theme.color("del"))
-                            .lineLimit(1)
-                    }
-                    if isHovering, item.status == .pending {
+                    .lineLimit(1)
+                    if item.status == .pending {
                         actionsRow
                     }
                 }
@@ -89,42 +93,87 @@ struct ACPQueuedBubble: View {
 
     private var actionsRow: some View {
         HStack(spacing: 4) {
-            if item.lastError != nil {
-                Button(action: onRetry) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(theme.color("warn"))
-                }
-                .buttonStyle(.plain)
-                .help("Retry")
-            }
-            Button(action: onEdit) {
-                Image(systemName: "pencil")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-muted"))
-            }
-            .buttonStyle(.plain)
-            .help("Edit")
-            Button(action: onRemove) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(theme.color("fg-muted"))
-            }
-            .buttonStyle(.plain)
-            .help("Remove from queue")
+            actionButton(
+                systemName: "paperplane.fill",
+                foreground: theme.color("accent"),
+                help: "Send now",
+                action: onForceSend
+            )
+            actionButton(
+                systemName: "arrow.clockwise",
+                foreground: theme.color("warn"),
+                help: "Retry",
+                action: onRetry
+            )
+            .opacity(item.lastError == nil ? 0 : 1)
+            .allowsHitTesting(item.lastError != nil)
+            .accessibilityHidden(item.lastError == nil)
+            actionButton(
+                systemName: "pencil",
+                foreground: theme.color("fg-muted"),
+                help: "Edit",
+                action: onEdit
+            )
+            actionButton(
+                systemName: "xmark",
+                foreground: theme.color("fg-muted"),
+                help: "Remove from queue",
+                action: onRemove
+            )
         }
+        .frame(width: ACPQueuedBubbleActionMetrics.reservedWidth, alignment: .trailing)
+        .opacity(actionsVisible ? 1 : 0)
+        .allowsHitTesting(actionsVisible)
+        .accessibilityHidden(!actionsVisible)
     }
 
+    private var actionsVisible: Bool {
+        isHovering && item.status == .pending
+    }
+
+    private func actionButton(
+        systemName: String,
+        foreground: Color,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(foreground)
+                .frame(
+                    width: ACPQueuedBubbleActionMetrics.buttonSize,
+                    height: ACPQueuedBubbleActionMetrics.buttonSize
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+enum ACPQueuedBubbleActionMetrics {
+    static let buttonSize: CGFloat = 16
+    static let buttonSpacing: CGFloat = 4
+    static let reservedButtonSlots = 4
+
+    static var reservedWidth: CGFloat {
+        CGFloat(reservedButtonSlots) * buttonSize
+            + CGFloat(reservedButtonSlots - 1) * buttonSpacing
+    }
+}
+
+private extension ACPQueuedBubble {
     /// Staged file URLs for the queued prompt's image blocks, so an image-only
     /// queued item still shows a thumbnail (its text preview is empty).
-    private var imageURLs: [URL] {
+    var imageURLs: [URL] {
         item.blocks.compactMap { block in
             if case .image(_, let uri, _) = block, let uri { return URL(string: uri) }
             return nil
         }
     }
 
-    private static func textPreview(of blocks: [ACPContentBlock]) -> String {
+    static func textPreview(of blocks: [ACPContentBlock]) -> String {
         blocks.compactMap { b -> String? in
             if case .text(let s) = b { return s }
             return nil

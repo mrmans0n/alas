@@ -55,6 +55,139 @@ struct ACPSessionQueueAPITests {
         #expect(s.queue[0].blocks == [.text("a")])
     }
 
+    @Test("forceQueueItem promotes a pending tail item to the head")
+    func forceQueueItemPromotesPendingTail() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        s.enqueue(blocks: [.text("b")])
+        let id = s.queue[1].id
+
+        #expect(s.forceQueueItem(id: id))
+        #expect(s.queue.map { $0.blocks } == [[.text("b")], [.text("a")]])
+        #expect(s.queue[0].status == .pending)
+    }
+
+    @Test("forceQueueItem clears a previous queue error")
+    func forceQueueItemClearsError() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+        s.queue[0].lastError = "network"
+        let id = s.queue[0].id
+
+        #expect(s.forceQueueItem(id: id))
+        #expect(s.queue[0].id == id)
+        #expect(s.queue[0].lastError == nil)
+        #expect(s.queue[0].status == .pending)
+    }
+
+    @Test("forceQueueItem refuses a .sending item")
+    func forceQueueItemRefusesSending() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("in-flight")])
+        s.enqueue(blocks: [.text("next")])
+        s.markQueueHeadSending()
+        let id = s.queue[0].id
+
+        #expect(!s.forceQueueItem(id: id))
+        #expect(s.queue.map { $0.blocks } == [[.text("in-flight")], [.text("next")]])
+        #expect(s.queue[0].status == .sending)
+    }
+
+    @Test("forceQueueItem inserts after a .sending head")
+    func forceQueueItemInsertsAfterSendingHead() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("in-flight")])
+        s.enqueue(blocks: [.text("a")])
+        s.enqueue(blocks: [.text("b")])
+        s.markQueueHeadSending()
+        let id = s.queue[2].id
+
+        #expect(s.forceQueueItem(id: id))
+        #expect(s.queue.map { $0.blocks } == [[.text("in-flight")], [.text("b")], [.text("a")]])
+        #expect(s.queue[0].status == .sending)
+        #expect(s.queue[1].status == .pending)
+    }
+
+    @Test("setQueueHeadError keeps a forced item ahead of a failed in-flight head")
+    func setQueueHeadErrorKeepsForcedItemAheadOfFailedHead() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("in-flight")])
+        s.enqueue(blocks: [.text("a")])
+        s.enqueue(blocks: [.text("forced")])
+        s.markQueueHeadSending()
+        let id = s.queue[2].id
+
+        #expect(s.forceQueueItem(id: id))
+        s.setQueueHeadError("network")
+
+        #expect(s.queue.map { $0.blocks } == [[.text("forced")], [.text("in-flight")], [.text("a")]])
+        #expect(s.queue[0].lastError == nil)
+        #expect(s.queue[1].lastError == "network")
+        #expect(s.queue[1].status == .pending)
+    }
+
+    @Test("setQueueHeadError leaves failed head first when the forced item was removed")
+    func setQueueHeadErrorFallsBackWhenForcedItemRemoved() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("in-flight")])
+        s.enqueue(blocks: [.text("a")])
+        s.enqueue(blocks: [.text("forced")])
+        s.markQueueHeadSending()
+        let id = s.queue[2].id
+
+        #expect(s.forceQueueItem(id: id))
+        s.removeFromQueue(id: id)
+        s.setQueueHeadError("network")
+
+        #expect(s.queue.map { $0.blocks } == [[.text("in-flight")], [.text("a")]])
+        #expect(s.queue[0].lastError == "network")
+    }
+
+    @Test("forceQueueItem resets recorded failed prompts it bypasses")
+    func forceQueueItemResetsBypassedRecordedFailures() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("failed")])
+        s.enqueue(blocks: [.text("clean")])
+        s.enqueue(blocks: [.text("forced")])
+        s.queue[0].lastError = "network"
+        s.queue[0].transcriptRecorded = true
+        s.queue[1].transcriptRecorded = true
+        let id = s.queue[2].id
+
+        #expect(s.forceQueueItem(id: id))
+        #expect(s.queue.map { $0.blocks } == [[.text("forced")], [.text("failed")], [.text("clean")]])
+        #expect(s.queue[1].lastError == "network")
+        #expect(s.queue[1].transcriptRecorded == false)
+        #expect(s.queue[2].transcriptRecorded == true)
+    }
+
+    @Test("forceQueueItem keeps sending head recorded when bypassing failed pending prompt")
+    func forceQueueItemKeepsSendingHeadRecorded() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("in-flight")])
+        s.enqueue(blocks: [.text("failed")])
+        s.enqueue(blocks: [.text("forced")])
+        s.markQueueHeadSending()
+        s.queue[0].transcriptRecorded = true
+        s.queue[1].lastError = "network"
+        s.queue[1].transcriptRecorded = true
+        let id = s.queue[2].id
+
+        #expect(s.forceQueueItem(id: id))
+        #expect(s.queue.map { $0.blocks } == [[.text("in-flight")], [.text("forced")], [.text("failed")]])
+        #expect(s.queue[0].transcriptRecorded == true)
+        #expect(s.queue[2].transcriptRecorded == false)
+    }
+
+    @Test("forceQueueItem returns false for an unknown id")
+    func forceQueueItemUnknown() {
+        let s = mkSession()
+        s.enqueue(blocks: [.text("a")])
+
+        #expect(!s.forceQueueItem(id: UUID()))
+        #expect(s.queue.map { $0.blocks } == [[.text("a")]])
+    }
+
     @Test("clearPendingQueue() removes all .pending items but leaves .sending head")
     func clearPendingKeepsSending() {
         let s = mkSession()

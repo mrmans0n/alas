@@ -11,6 +11,7 @@ struct ACPMessageList: View {
     /// Callbacks invoked by the pending bubbles + header. The host wires
     /// these to the runner.
     let onQueueEdit: (QueuedPrompt) -> Void
+    let onQueueForceSend: (UUID) -> Void
     let onQueueRemove: (UUID) -> Void
     let onQueueRetry: (UUID) -> Void
     let onQueueReorder: (Int, Int) -> Void
@@ -134,6 +135,7 @@ struct ACPMessageList: View {
                             if item.status != .sending {
                                 ACPQueuedBubble(
                                     item: item,
+                                    onForceSend: { onQueueForceSend(item.id) },
                                     onEdit: { onQueueEdit(item) },
                                     onRemove: { onQueueRemove(item.id) },
                                     onRetry: { onQueueRetry(item.id) }
