@@ -11,8 +11,13 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var writers: Set<String> = []
     var tookOver: [String] = []
     var prompts: [(id: String, text: String)] = []
+    var lastAttachments: [ACPMessage.Attachment] = []
     var sendPromptAccepts = true   // simulate the manager refusing a submit (e.g. needs auth)
     var stopped: [String] = []
+    var models: [(id: String, model: String)] = []
+    var modes: [(id: String, mode: String)] = []
+    var autoRuns: [(id: String, enabled: Bool)] = []
+    var configs: [String: RemoteSessionConfig] = [:]
     func sessionSummaries() -> [RemoteSessionSummary] { summaries }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
@@ -27,12 +32,34 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         writers.insert(id)
     }
 
-    func sendPrompt(for id: String, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+    var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         let accepted = writers.contains(id) && sendPromptAccepts
-        if accepted { prompts.append((id, text)) }
-        onResult(accepted)
+        if accepted {
+            prompts.append((id, text))
+            lastAttachments = attachments
+        }
+        if sendPromptResultIsAsync {
+            Task { @MainActor in onResult(accepted) }
+        } else {
+            onResult(accepted)
+        }
     }
+
+    var writtenAttachmentURLs: [URL] = []
+    func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL? {
+        let ext = mimeType == "image/png" ? "png" : (mimeType == "image/jpeg" ? "jpg" : "img")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).\(ext)")
+        do { try data.write(to: url) } catch { return nil }
+        writtenAttachmentURLs.append(url)
+        return url
+    }
+
     func stop(for id: String) { stopped.append(id) }
+    func setModel(for id: String, modelId: String) { models.append((id, modelId)) }
+    func setMode(for id: String, modeId: String) { modes.append((id, modeId)) }
+    func setAutoRun(for id: String, enabled: Bool) { autoRuns.append((id, enabled)) }
+    func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
 }
 
 #if DEBUG
@@ -336,10 +363,10 @@ struct RemoteSessionGatewayTests {
     @Test func sendPromptRoutesOnlyWhenWriter() async {
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer → ignored
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [])) // not writer → ignored
         #expect(provider.prompts.isEmpty)
         provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: []))
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
@@ -347,9 +374,9 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         provider.writers.insert("s1")
         let gw = RemoteSessionGateway(provider: provider) { _ in }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ")) // blank → ignored
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "   \n  ", attachments: [])) // blank → ignored
         #expect(provider.prompts.isEmpty)
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ")) // trimmed before forwarding
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "  hi  ", attachments: [])) // trimmed before forwarding
         #expect(provider.prompts.map(\.text) == ["hi"])
     }
 
@@ -359,21 +386,21 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi")) // not writer
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: [])) // not writer
         #expect(provider.prompts.isEmpty)
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
         // When we ARE the writer and the manager accepts, the prompt routes
         // and no rejection is sent.
         sent.removeAll()
         provider.writers.insert("s1")
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi"))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "hi", attachments: []))
         #expect(provider.prompts.map(\.text) == ["hi"])
         #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
         // Writer, but the manager refuses the submit (e.g. needs auth) — the
         // client must still be told so it can restore the text.
         sent.removeAll()
         provider.sendPromptAccepts = false
-        await gw.handle(.sendPrompt(sessionId: "s1", text: "later"))
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "later", attachments: []))
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
@@ -400,5 +427,153 @@ struct RemoteSessionGatewayTests {
             return nil
         }.first
         #expect(drive == true)
+    }
+
+    @Test func configVerbsRouteOnlyWhenWriter() async {
+        let provider = FakeSessionsProvider()
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))   // not writer
+        await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
+        #expect(provider.models.isEmpty && provider.autoRuns.isEmpty)
+        provider.writers.insert("s1")
+        await gw.handle(.setModel(sessionId: "s1", modelId: "opus"))
+        await gw.handle(.setMode(sessionId: "s1", modeId: "ask"))
+        await gw.handle(.setAutoRun(sessionId: "s1", enabled: true))
+        #expect(provider.models.map(\.model) == ["opus"])
+        #expect(provider.modes.map(\.mode) == ["ask"])
+        #expect(provider.autoRuns.map(\.enabled) == [true])
+    }
+
+    @Test func subscribeEmitsSessionConfig() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        provider.sessions["s1"] = s
+        provider.configs["s1"] = .init(sessionId: "s1", models: [.init(id: "opus", name: "Opus")],
+            modes: [], currentModel: "opus", currentMode: nil, autoRunEnabled: false, acceptsImages: true)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
+    }
+
+    @Test func sessionConfigChangeEmitsUpdate() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithAgentText("hi")
+        s.availableModels = [.init(id: "opus", name: "Opus", description: nil)]
+        provider.sessions["s1"] = s
+        provider.configs["s1"] = .init(sessionId: "s1", models: [], modes: [], currentModel: nil,
+            currentMode: nil, autoRunEnabled: false, acceptsImages: false)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        s.currentModel = "opus"                    // mutate config
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(sent.contains { if case .sessionConfig = $0 { return true } else { return false } })
+    }
+
+    @Test func oversizeAttachmentRejected() async {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let big = String(repeating: "A", count: 14_000_000)   // ~10.5MB decoded > cap
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: nil, mimeType: "image/png", dataBase64: big)]))
+        #expect(provider.lastAttachments.isEmpty)
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+    }
+
+    @Test func nonImageAttachmentRejected() async {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "f.txt", mimeType: "text/plain", dataBase64: "AAAA")]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+    }
+
+    @Test func imageOnlyUserMessageRendersPlaceholder() {
+        // An image-only prompt (empty text) must not serialize to a blank bubble.
+        let msg = ACPMessage.user(id: UUID(), text: "",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")])
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+        #expect(wire.kind == "user")
+        #expect(wire.text?.contains("shot.png") == true)
+        #expect((wire.text ?? "").isEmpty == false)
+    }
+
+    @Test func tooManyAttachmentsRejected() async {
+        // Count cap (parity with ACPComposer.maxImagesPerMessage) — a single
+        // prompt can't write an unbounded number of tiny files.
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        let many = (0..<(RemoteSessionGateway.maxAttachmentCount + 1)).map { _ in
+            RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")
+        }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: many))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.writtenAttachmentURLs.isEmpty)   // rejected before any write
+    }
+
+    @Test func renamedNonImageWithImageMimeRejected() async {
+        // Client claims image/png but the bytes aren't a real image — the byte
+        // sniff must reject it rather than trusting the MIME, and write no file.
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "x", attachments: [.init(name: "evil.png", mimeType: "image/png", dataBase64: "AAAAAAAAAAA=")]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(provider.writtenAttachmentURLs.isEmpty)
+    }
+
+    @Test func validImageAttachmentSends() async {
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        #expect(provider.lastAttachments.count == 1)
+        #expect(!sent.contains { if case .promptRejected = $0 { return true } else { return false } })
+    }
+
+    @Test func refusedSendDiscardsAttachmentFiles() async {
+        // Writer at gateway time, but the manager refuses the submit (e.g. a
+        // takeover landed mid-flight / needs auth). The files we wrote during
+        // materialize must be cleaned up rather than orphaned on disk.
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        provider.sendPromptAccepts = false
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(!provider.writtenAttachmentURLs.isEmpty)
+        for url in provider.writtenAttachmentURLs {
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    @Test func lateFailureKeepsAttachmentFiles() async throws {
+        // A LATE (async) delivery failure means sendNow already recorded the
+        // user message referencing these file URIs — the gateway must NOT
+        // delete them (only synchronous refusals, never recorded, are cleaned).
+        let provider = FakeSessionsProvider()
+        provider.writers.insert("s1")
+        provider.sendPromptAccepts = false
+        provider.sendPromptResultIsAsync = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.sendPrompt(sessionId: "s1", text: "look", attachments: [.init(name: "a.png", mimeType: "image/png", dataBase64: "iVBORw0KGgo=")]))
+        try await Task.sleep(nanoseconds: 30_000_000)   // let the async onResult land
+        #expect(sent.contains(.promptRejected(sessionId: "s1")))
+        #expect(!provider.writtenAttachmentURLs.isEmpty)
+        for url in provider.writtenAttachmentURLs {
+            #expect(FileManager.default.fileExists(atPath: url.path))   // kept
+        }
+        // cleanup
+        for url in provider.writtenAttachmentURLs { try? FileManager.default.removeItem(at: url) }
     }
 }

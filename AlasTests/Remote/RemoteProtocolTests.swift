@@ -134,7 +134,7 @@ struct RemoteProtocolTests {
     @Test func clientMessageDecodesSendPrompt() throws {
         let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hello"}"#.data(using: .utf8)!
         let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)
-        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello"))
+        #expect(msg == .sendPrompt(sessionId: "s1", text: "hello", attachments: []))
     }
 
     @Test func clientMessageDecodesTakeOverAndStop() throws {
@@ -160,7 +160,53 @@ struct RemoteProtocolTests {
 
     @Test func clientDriveVerbsRoundTrip() throws {
         #expect(try roundTrip(RemoteClientMessage.takeOver(sessionId: "s1")) == .takeOver(sessionId: "s1"))
-        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello")) == .sendPrompt(sessionId: "s1", text: "hello"))
+        #expect(try roundTrip(RemoteClientMessage.sendPrompt(sessionId: "s1", text: "hello", attachments: [])) == .sendPrompt(sessionId: "s1", text: "hello", attachments: []))
         #expect(try roundTrip(RemoteClientMessage.stop(sessionId: "s1")) == .stop(sessionId: "s1"))
+    }
+
+    @Test func sessionConfigRoundTrips() throws {
+        let cfg = RemoteServerMessage.sessionConfig(.init(
+            sessionId: "s1",
+            models: [.init(id: "opus", name: "Opus"), .init(id: "sonnet", name: "Sonnet")],
+            modes: [.init(id: "ask", name: "Ask")],
+            currentModel: "opus", currentMode: "ask",
+            autoRunEnabled: true, acceptsImages: true))
+        #expect(try roundTrip(cfg) == cfg)
+    }
+
+    @Test func clientConfigVerbsDecode() throws {
+        let setModel = try JSONDecoder().decode(RemoteClientMessage.self,
+            from: Data(#"{"type":"setModel","sessionId":"s1","modelId":"opus"}"#.utf8))
+        #expect(setModel == .setModel(sessionId: "s1", modelId: "opus"))
+        let setMode = try JSONDecoder().decode(RemoteClientMessage.self,
+            from: Data(#"{"type":"setMode","sessionId":"s1","modeId":"ask"}"#.utf8))
+        #expect(setMode == .setMode(sessionId: "s1", modeId: "ask"))
+        let setAuto = try JSONDecoder().decode(RemoteClientMessage.self,
+            from: Data(#"{"type":"setAutoRun","sessionId":"s1","enabled":true}"#.utf8))
+        #expect(setAuto == .setAutoRun(sessionId: "s1", enabled: true))
+    }
+
+    @Test func clientConfigVerbsRoundTrip() throws {
+        // Guards against an encoder-side modelId/modeId key mixup.
+        #expect(try roundTrip(RemoteClientMessage.setModel(sessionId: "s1", modelId: "opus")) == .setModel(sessionId: "s1", modelId: "opus"))
+        #expect(try roundTrip(RemoteClientMessage.setMode(sessionId: "s1", modeId: "ask")) == .setMode(sessionId: "s1", modeId: "ask"))
+        #expect(try roundTrip(RemoteClientMessage.setAutoRun(sessionId: "s1", enabled: true)) == .setAutoRun(sessionId: "s1", enabled: true))
+    }
+
+    @Test func sessionConfigRoundTripsWithNilCurrent() throws {
+        // currentModel/currentMode nil → encodeIfPresent omits the keys; decode must still round-trip.
+        let cfg = RemoteServerMessage.sessionConfig(.init(
+            sessionId: "s1", models: [], modes: [],
+            currentModel: nil, currentMode: nil,
+            autoRunEnabled: false, acceptsImages: false))
+        #expect(try roundTrip(cfg) == cfg)
+    }
+
+    @Test func sendPromptWithAttachmentsRoundTrips() throws {
+        let msg = RemoteClientMessage.sendPrompt(
+            sessionId: "s1",
+            text: "look",
+            attachments: [RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "AAAA")])
+        #expect(try roundTrip(msg) == msg)
     }
 }

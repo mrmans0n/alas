@@ -1,5 +1,26 @@
 import Foundation
 
+struct RemoteModelInfo: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+}
+
+struct RemoteAttachment: Codable, Equatable, Sendable {
+    let name: String?
+    let mimeType: String
+    let dataBase64: String
+}
+
+struct RemoteSessionConfig: Codable, Equatable, Sendable {
+    let sessionId: String
+    let models: [RemoteModelInfo]
+    let modes: [RemoteModelInfo]
+    let currentModel: String?
+    let currentMode: String?
+    let autoRunEnabled: Bool
+    let acceptsImages: Bool
+}
+
 /// Client → server. `type` discriminates.
 enum RemoteClientMessage: Equatable, Sendable {
     case listSessions
@@ -8,12 +29,15 @@ enum RemoteClientMessage: Equatable, Sendable {
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
     case questionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer])
     case takeOver(sessionId: String)
-    case sendPrompt(sessionId: String, text: String)
+    case sendPrompt(sessionId: String, text: String, attachments: [RemoteAttachment])
     case stop(sessionId: String)
+    case setModel(sessionId: String, modelId: String)
+    case setMode(sessionId: String, modeId: String)
+    case setAutoRun(sessionId: String, enabled: Bool)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, attachments, modelId, modeId, enabled }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -37,9 +61,16 @@ extension RemoteClientMessage: Codable {
         case "sendPrompt":
             self = .sendPrompt(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
-                text: try c.decode(String.self, forKey: .text))
+                text: try c.decode(String.self, forKey: .text),
+                attachments: try c.decodeIfPresent([RemoteAttachment].self, forKey: .attachments) ?? [])
         case "stop":
             self = .stop(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "setModel":
+            self = .setModel(sessionId: try c.decode(String.self, forKey: .sessionId), modelId: try c.decode(String.self, forKey: .modelId))
+        case "setMode":
+            self = .setMode(sessionId: try c.decode(String.self, forKey: .sessionId), modeId: try c.decode(String.self, forKey: .modeId))
+        case "setAutoRun":
+            self = .setAutoRun(sessionId: try c.decode(String.self, forKey: .sessionId), enabled: try c.decode(Bool.self, forKey: .enabled))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -67,13 +98,26 @@ extension RemoteClientMessage: Codable {
         case .takeOver(let s):
             try c.encode("takeOver", forKey: .type)
             try c.encode(s, forKey: .sessionId)
-        case .sendPrompt(let s, let t):
+        case .sendPrompt(let s, let t, let a):
             try c.encode("sendPrompt", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(t, forKey: .text)
+            try c.encode(a, forKey: .attachments)
         case .stop(let s):
             try c.encode("stop", forKey: .type)
             try c.encode(s, forKey: .sessionId)
+        case .setModel(let id, let m):
+            try c.encode("setModel", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(m, forKey: .modelId)
+        case .setMode(let id, let m):
+            try c.encode("setMode", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(m, forKey: .modeId)
+        case .setAutoRun(let id, let e):
+            try c.encode("setAutoRun", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(e, forKey: .enabled)
         }
     }
 }
@@ -92,12 +136,14 @@ enum RemoteServerMessage: Equatable, Sendable {
     /// the prompt was empty), so the client should restore the user's text
     /// instead of silently losing it.
     case promptRejected(sessionId: String)
+    case sessionConfig(RemoteSessionConfig)
     case error(message: String)
 }
 
 extension RemoteServerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, sessions, sessionId, streamingState, canDrive, messages, upserts, payload, requestId, message
+        case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages
     }
 
     init(from decoder: Decoder) throws {
@@ -134,6 +180,15 @@ extension RemoteServerMessage: Codable {
                 requestId: try c.decode(Int.self, forKey: .requestId))
         case "sessionClosed": self = .sessionClosed(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "sessionConfig":
+            self = .sessionConfig(RemoteSessionConfig(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                models: try c.decode([RemoteModelInfo].self, forKey: .models),
+                modes: try c.decode([RemoteModelInfo].self, forKey: .modes),
+                currentModel: try c.decodeIfPresent(String.self, forKey: .currentModel),
+                currentMode: try c.decodeIfPresent(String.self, forKey: .currentMode),
+                autoRunEnabled: try c.decode(Bool.self, forKey: .autoRunEnabled),
+                acceptsImages: try c.decode(Bool.self, forKey: .acceptsImages)))
         case "error": self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
@@ -177,6 +232,15 @@ extension RemoteServerMessage: Codable {
         try c.encode(id, forKey: .sessionId)
         case .promptRejected(let id): try c.encode("promptRejected", forKey: .type)
         try c.encode(id, forKey: .sessionId)
+        case .sessionConfig(let cfg):
+            try c.encode("sessionConfig", forKey: .type)
+            try c.encode(cfg.sessionId, forKey: .sessionId)
+            try c.encode(cfg.models, forKey: .models)
+            try c.encode(cfg.modes, forKey: .modes)
+            try c.encodeIfPresent(cfg.currentModel, forKey: .currentModel)
+            try c.encodeIfPresent(cfg.currentMode, forKey: .currentMode)
+            try c.encode(cfg.autoRunEnabled, forKey: .autoRunEnabled)
+            try c.encode(cfg.acceptsImages, forKey: .acceptsImages)
         case .error(let m): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
         }

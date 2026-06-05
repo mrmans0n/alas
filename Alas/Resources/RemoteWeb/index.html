@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=22" />
+  <link rel="stylesheet" href="/style.css?v=25" />
 </head>
 <body>
   <header id="bar">
@@ -17,15 +17,25 @@
     <section id="transcript" class="view hidden">
       <div id="messages"></div>
       <div id="drivebar">
-        <button id="takeover" class="hidden">Take over to drive</button>
+        <button id="takeover" class="hidden">Take over</button>
         <div id="composer" class="hidden">
-          <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
-          <button id="send" aria-label="Send">
-            <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
-          <button id="stop" class="hidden" aria-label="Stop">
-            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.6" fill="currentColor"/></svg>
-          </button>
+          <div id="chips" class="hidden"></div>
+          <div id="composer-row">
+            <button id="attach" class="hidden" aria-label="Attach image">
+              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.6 1.6 0 0 1-2.3-2.3l7.8-7.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <textarea id="prompt" rows="1" placeholder="Message…"></textarea>
+            <button id="config" aria-label="Configure session">
+              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.7 7.7 0 0 0-1.7-1l-.4-2.5h-3.8l-.4 2.5a7.7 7.7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.7 7.7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.7 7.7 0 0 0 1.7 1l.4 2.5h3.8l.4-2.5a7.7 7.7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="send" aria-label="Send">
+              <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+            <button id="stop" class="hidden" aria-label="Stop">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.6" fill="currentColor"/></svg>
+            </button>
+          </div>
+          <input id="file" type="file" accept="image/*" multiple hidden />
         </div>
       </div>
     </section>
@@ -45,6 +55,23 @@
       <button id="question-close" class="sheet-close">Close</button>
     </div>
   </div>
+  <div id="cfg" class="sheet hidden">
+    <div class="sheet-card">
+      <div id="cfg-model-section">
+        <p class="sheet-title">Model</p>
+        <div id="cfg-models"></div>
+      </div>
+      <div id="cfg-mode-section">
+        <p class="sheet-title">Mode</p>
+        <div id="cfg-modes"></div>
+      </div>
+      <label id="cfg-autorun-row">
+        <span>Auto-run tools</span>
+        <input id="cfg-autorun" type="checkbox" />
+      </label>
+      <button id="cfg-close" class="sheet-close">Close</button>
+    </div>
+  </div>
   <div id="gate" class="hidden">
     <div class="gate-card">
       <div class="gate-icon" id="gate-icon">⚠</div>
@@ -53,8 +80,8 @@
       <button id="gate-retry" class="hidden">Try again</button>
     </div>
   </div>
-  <script src="/marked.min.js?v=22"></script>
-  <script src="/purify.min.js?v=22"></script>
-  <script src="/app.js?v=22"></script>
+  <script src="/marked.min.js?v=25"></script>
+  <script src="/purify.min.js?v=25"></script>
+  <script src="/app.js?v=25"></script>
 </body>
 </html>

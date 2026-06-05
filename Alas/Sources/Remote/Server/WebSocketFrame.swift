@@ -4,13 +4,15 @@ struct WebSocketFrame: Equatable {
     enum Opcode: UInt8 { case continuation = 0x0, text = 0x1, binary = 0x2, close = 0x8, ping = 0x9, pong = 0xA }
     let opcode: Opcode
     let payload: Data
+    /// FIN bit: false means more continuation frames follow (a fragmented
+    /// message, RFC 6455 §5.4); callers must reassemble before decoding.
+    let fin: Bool
 
     /// Hard cap on a single inbound frame's declared payload length. Larger
     /// frames are rejected rather than buffered, bounding memory and closing
-    /// off a trivial "declare a huge length" denial-of-service. The remote
-    /// protocol's messages (transcript deltas, decisions) are small, so 10 MB
-    /// sits comfortably above any legitimate frame.
-    static let maxPayloadLength = 10_000_000
+    /// off a trivial "declare a huge length" denial-of-service.
+    /// ~16 MB: fits a ~10 MB image base64-encoded (~13.3 MB) plus JSON overhead.
+    static let maxPayloadLength = 16_000_000
 
     /// Server→client frames are never masked (RFC 6455 §5.1).
     static func encode(opcode: Opcode, payload: Data) -> Data {
@@ -78,6 +80,51 @@ struct WebSocketFrame: Equatable {
         var payload = [UInt8](bytes[idx..<idx + len])
         if masked { for i in 0..<payload.count { payload[i] ^= mask[i % 4] } }
         buffer.removeFirst(idx + len)
-        return WebSocketFrame(opcode: opcode, payload: Data(payload))
+        return WebSocketFrame(opcode: opcode, payload: Data(payload), fin: (bytes[0] & 0x80) != 0)
+    }
+}
+
+/// Reassembles fragmented WebSocket data messages (RFC 6455 §5.4). Feed every
+/// decoded `.text`/`.binary`/`.continuation` frame; the caller handles control
+/// frames (ping/close/pong) separately and must NOT pass them here.
+struct WebSocketReassembler {
+    enum Outcome: Equatable {
+        case message(Data)   // a complete (possibly reassembled) message
+        case incomplete      // buffering; awaiting more continuation frames
+        case violation       // malformed sequence — caller should close
+    }
+
+    private var fragmentOpcode: WebSocketFrame.Opcode?
+    private var buffer = Data()
+    private let maxBytes: Int
+
+    init(maxBytes: Int = WebSocketFrame.maxPayloadLength) { self.maxBytes = maxBytes }
+
+    mutating func accept(_ frame: WebSocketFrame) -> Outcome {
+        switch frame.opcode {
+        case .text, .binary:
+            // A new data message must not begin while one is still fragmenting.
+            guard fragmentOpcode == nil else { return .violation }
+            if frame.fin { return .message(frame.payload) }
+            fragmentOpcode = frame.opcode
+            buffer = frame.payload
+            return buffer.count <= maxBytes ? .incomplete : reset(.violation)
+        case .continuation:
+            guard fragmentOpcode != nil else { return .violation }   // continuation without a start
+            buffer.append(frame.payload)
+            guard buffer.count <= maxBytes else { return reset(.violation) }
+            guard frame.fin else { return .incomplete }
+            let message = buffer
+            _ = reset(.incomplete)
+            return .message(message)
+        case .close, .ping, .pong:
+            return .violation   // control frames must not be routed here
+        }
+    }
+
+    private mutating func reset(_ outcome: Outcome) -> Outcome {
+        fragmentOpcode = nil
+        buffer = Data()
+        return outcome
     }
 }

@@ -73,12 +73,12 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, onResult: @escaping @MainActor (Bool) -> Void) {
+    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
         guard isWriter(for: id) else {
             onResult(false)
             return
         }
-        let accepted = submit(sessionId: id, text: text, attachments: [], intent: .auto,
+        let accepted = submit(sessionId: id, text: text, attachments: attachments, intent: .auto,
                               onCompleted: { ok in onResult(ok) })
         if !accepted { onResult(false) }   // submit refused synchronously; onCompleted won't fire
     }
@@ -88,6 +88,46 @@ final class ACPSessionManager: ObservableObject {
     func interrupt(for id: ACPSession.ID) {
         guard isWriter(for: id), let runner = runners[id] else { return }
         Task { await runner.userCancel() }
+    }
+
+    /// Pending model/mode to apply once a runner registers (the writer took over
+    /// but `attach` is still in flight). Keyed by session id. Applied in `attach`.
+    var pendingModel: [ACPSession.ID: String] = [:]
+    var pendingMode: [ACPSession.ID: String] = [:]
+
+    /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
+    func setAutoRun(for id: ACPSession.ID, enabled: Bool) {
+        guard isWriter(for: id), let session = sessions[id] else { return }
+        session.autoRunEnabled = enabled
+        persist(session)
+    }
+
+    /// Select the agent model. Optimistically updates + persists, then issues the
+    /// agent RPC on the live runner — or records it pending until `attach`
+    /// registers one (post-takeover window). Writer-gated.
+    func setModel(for id: ACPSession.ID, modelId: String) {
+        guard isWriter(for: id), let session = sessions[id] else { return }
+        session.currentModel = modelId
+        persist(session)
+        guard let runner = runners[id] else {
+            pendingModel[id] = modelId
+            return
+        }
+        let remoteId = session.remoteSessionId ?? id
+        Task { try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId) }
+    }
+
+    /// Select the agent mode. Same semantics as `setModel`.
+    func setMode(for id: ACPSession.ID, modeId: String) {
+        guard isWriter(for: id), let session = sessions[id] else { return }
+        session.currentMode = modeId
+        persist(session)
+        guard let runner = runners[id] else {
+            pendingMode[id] = modeId
+            return
+        }
+        let remoteId = session.remoteSessionId ?? id
+        Task { try? await runner.connection.setMode(sessionId: remoteId, modeId: modeId) }
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
@@ -486,6 +526,8 @@ final class ACPSessionManager: ObservableObject {
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
         planSidebarVisibility.removeValue(forKey: id)
+        pendingModel.removeValue(forKey: id)
+        pendingMode.removeValue(forKey: id)
     }
 
     func deleteSession(id: ACPSession.ID) {
@@ -496,6 +538,8 @@ final class ACPSessionManager: ObservableObject {
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
         planSidebarVisibility.removeValue(forKey: id)
+        pendingModel.removeValue(forKey: id)
+        pendingMode.removeValue(forKey: id)
         try? store.deleteSession(id: id)
         refreshRecent()
     }
@@ -983,6 +1027,10 @@ extension ACPSessionManager {
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         _ownedLeases.remove(sessionId)
+        // We no longer own the lease — drop any not-yet-applied config so it
+        // can't fire against a session another instance now drives.
+        pendingModel.removeValue(forKey: sessionId)
+        pendingMode.removeValue(forKey: sessionId)
         if let runner = runners.removeValue(forKey: sessionId) {
             runner.invalidateActivePrompt()
             runner.stop()
@@ -1409,6 +1457,24 @@ extension ACPSessionManager {
                 sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
             } else {
                 runner.flushQueueIfIdle()
+            }
+            // Drain a pending model/mode picked during the post-takeover window.
+            // The load result just above overwrote `currentModel`/`currentMode`
+            // with the agent's restored values, so reapply + persist the user's
+            // choice before firing the RPC — `session/set_model` returns nothing
+            // and not every agent emits a follow-up update, so the local config
+            // and stored row would otherwise drift off the agent's actual state.
+            if let m = pendingModel.removeValue(forKey: sessionId) {
+                session.currentModel = m
+                persist(session)
+                let remoteId = session.remoteSessionId ?? sessionId
+                Task { try? await runner.connection.setModel(sessionId: remoteId, modelId: m) }
+            }
+            if let m = pendingMode.removeValue(forKey: sessionId) {
+                session.currentMode = m
+                persist(session)
+                let remoteId = session.remoteSessionId ?? sessionId
+                Task { try? await runner.connection.setMode(sessionId: remoteId, modeId: m) }
             }
             stderrTask.cancel()
         } catch {
