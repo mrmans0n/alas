@@ -407,11 +407,19 @@ final class ACPSession: ObservableObject, Identifiable {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return false }
         guard queue[idx].status == .pending else { return false }
 
+        let protectedPrefixCount = (queue.first?.status == .sending) ? 1 : 0
+        for bypassedIndex in protectedPrefixCount ..< idx {
+            if queue[bypassedIndex].status == .pending,
+               queue[bypassedIndex].lastError != nil {
+                queue[bypassedIndex].transcriptRecorded = false
+            }
+        }
+
         var item = queue.remove(at: idx)
         item.status = .pending
         item.lastError = nil
 
-        let insertAt = (queue.first?.status == .sending) ? 1 : 0
+        let insertAt = protectedPrefixCount
         queue.insert(item, at: min(insertAt, queue.count))
         return true
     }
