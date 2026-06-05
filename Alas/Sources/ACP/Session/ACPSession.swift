@@ -81,6 +81,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// persisted session fields instead.
     @Published var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
 
+    /// Runtime-only marker for a forced queue item parked behind the current
+    /// `.sending` head. If that head fails, it moves behind this item so the
+    /// explicit force-send remains next.
+    private var forceSendAfterSendingHeadId: UUID?
+
     var imageInputSupported: Bool { promptCapabilities.image }
     var embeddedContextSupported: Bool { promptCapabilities.embeddedContext }
 
@@ -369,6 +374,9 @@ final class ACPSession: ObservableObject, Identifiable {
     func removeFromQueue(id: UUID) {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return }
         if queue[idx].status == .sending { return }
+        if forceSendAfterSendingHeadId == id {
+            forceSendAfterSendingHeadId = nil
+        }
         queue.remove(at: idx)
     }
 
@@ -382,6 +390,9 @@ final class ACPSession: ObservableObject, Identifiable {
     func takeForEditing(id: UUID) -> ACPComposerDraft? {
         guard let idx = queue.firstIndex(where: { $0.id == id }) else { return nil }
         guard queue[idx].status == .pending else { return nil }
+        if forceSendAfterSendingHeadId == id {
+            forceSendAfterSendingHeadId = nil
+        }
         let item = queue.remove(at: idx)
         return item.restorableDraft
     }
@@ -421,6 +432,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
         let insertAt = protectedPrefixCount
         queue.insert(item, at: min(insertAt, queue.count))
+        forceSendAfterSendingHeadId = protectedPrefixCount == 1 ? item.id : nil
         return true
     }
 
@@ -446,6 +458,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func clearPendingQueue() -> [QueuedPrompt] {
         let snapshot = queue.filter { $0.status == .pending }
         queue.removeAll { $0.status == .pending }
+        forceSendAfterSendingHeadId = nil
         return snapshot
     }
 
@@ -484,7 +497,11 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func popQueueHead() -> QueuedPrompt? {
         guard !queue.isEmpty, queue[0].status == .sending else { return nil }
-        return queue.removeFirst()
+        let item = queue.removeFirst()
+        if forceSendAfterSendingHeadId == item.id {
+            forceSendAfterSendingHeadId = nil
+        }
+        return item
     }
 
     /// Roll the `.sending` head back to `.pending` with an error message.
@@ -492,8 +509,17 @@ final class ACPSession: ObservableObject, Identifiable {
     /// the user sees "Retry" on the bubble.
     func setQueueHeadError(_ message: String) {
         guard !queue.isEmpty else { return }
-        queue[0].status = .pending
-        queue[0].lastError = message
+        var item = queue.removeFirst()
+        item.status = .pending
+        item.lastError = message
+
+        if let forcedId = forceSendAfterSendingHeadId,
+           let forcedIndex = queue.firstIndex(where: { $0.id == forcedId }) {
+            queue.insert(item, at: min(forcedIndex + 1, queue.count))
+        } else {
+            queue.insert(item, at: 0)
+        }
+        forceSendAfterSendingHeadId = nil
     }
 
     /// Replace the queue wholesale with a normalized restore set. Called
@@ -501,6 +527,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// store. `.sending` items get flipped to `.pending` here so the
     /// flusher re-attempts on next idle.
     func restoreQueue(_ items: [QueuedPrompt]) {
+        forceSendAfterSendingHeadId = nil
         queue = items.map { $0.normalizedAfterRestore() }
     }
 
