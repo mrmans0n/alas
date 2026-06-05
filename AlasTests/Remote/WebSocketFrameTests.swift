@@ -5,9 +5,9 @@ import Foundation
 struct WebSocketFrameTests {
     @Test func decodeExposesFinBit() throws {
         // FIN=0 text frame (byte0 0x01), masked, "hi".
-        var notFinal = Data([0x01, 0x82, 1, 2, 3, 4, 0x68 ^ 1, 0x69 ^ 2])
+        var notFinal = Data([0x01, 0x82, 1, 2, 3, 4, UInt8(0x68) ^ 1, UInt8(0x69) ^ 2])
         #expect(try WebSocketFrame.decode(from: &notFinal)?.fin == false)
-        var final = Data([0x81, 0x82, 1, 2, 3, 4, 0x68 ^ 1, 0x69 ^ 2])
+        var final = Data([0x81, 0x82, 1, 2, 3, 4, UInt8(0x68) ^ 1, UInt8(0x69) ^ 2])
         #expect(try WebSocketFrame.decode(from: &final)?.fin == true)
     }
 

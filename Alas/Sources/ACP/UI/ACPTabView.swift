@@ -250,6 +250,11 @@ private struct ACPSessionView: View {
                                     // that was waiting behind a `lastError` head.
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
+                                onQueueForceSend: isMirror ? { _ in } : { id in
+                                    guard session.forceQueueItem(id: id) else { return }
+                                    manager.persistQueue(for: session)
+                                    manager.runners[sessionId]?.flushQueueIfIdle()
+                                },
                                 onQueueRemove: isMirror ? { _ in } : { id in
                                     session.removeFromQueue(id: id)
                                     manager.persistQueue(for: session)

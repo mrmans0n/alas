@@ -398,6 +398,24 @@ final class ACPSession: ObservableObject, Identifiable {
         queue.insert(item, at: min(dst, queue.count))
     }
 
+    /// Promote a pending queued item to the next drainable position and clear
+    /// any previous send error. If a `.sending` head is already in-flight, the
+    /// forced item is placed immediately behind it so completion can pop the
+    /// current head safely.
+    @discardableResult
+    func forceQueueItem(id: UUID) -> Bool {
+        guard let idx = queue.firstIndex(where: { $0.id == id }) else { return false }
+        guard queue[idx].status == .pending else { return false }
+
+        var item = queue.remove(at: idx)
+        item.status = .pending
+        item.lastError = nil
+
+        let insertAt = (queue.first?.status == .sending) ? 1 : 0
+        queue.insert(item, at: min(insertAt, queue.count))
+        return true
+    }
+
     /// Edit the prompt blocks of a `.pending` item. No-op for `.sending`.
     /// Clears any captured draft — the old segments no longer describe the
     /// new blocks, so a later edit falls back to the heuristic on the
