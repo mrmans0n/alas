@@ -33,6 +33,8 @@ final class RemoteConnection: @unchecked Sendable {
     /// arrival order — clients rely on this (e.g. a `takeOver` must land before
     /// the `sendPrompt` that follows it). Mutated only on `queue`.
     private var processingTail: Task<Void, Never>?
+    /// Reassembles fragmented WebSocket messages before they're decoded.
+    private var reassembler = WebSocketReassembler()
     /// The device this connection authenticated as, set on `queue` once the WS
     /// upgrade succeeds. Queue-confined; the server learns it via the
     /// `onAuthenticated` hop rather than reading this cross-queue.
@@ -234,27 +236,38 @@ final class RemoteConnection: @unchecked Sendable {
             inbound = buffer
 
             switch frame.opcode {
-            case .text, .binary:
-                if let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: frame.payload),
-                   let gateway {
-                    // Chain onto the tail so messages are handled strictly in
-                    // arrival order (each awaits the previous). Independent
-                    // tasks could otherwise interleave and, e.g., run a
-                    // `sendPrompt` before the `takeOver` sent just before it.
-                    let previous = processingTail
-                    processingTail = Task { @MainActor in
-                        await previous?.value
-                        await gateway.handle(msg)
-                    }
+            case .text, .binary, .continuation:
+                // Reassemble fragmented messages (RFC 6455 §5.4) before decoding;
+                // a single message may arrive split across continuation frames.
+                switch reassembler.accept(frame) {
+                case .message(let payload): dispatchMessage(payload)
+                case .incomplete: break
+                case .violation:
+                    teardown()
+                    return
                 }
             case .ping:
                 send(WebSocketFrame.encode(opcode: .pong, payload: frame.payload)) {}
             case .close:
                 teardown()
                 return
-            case .continuation, .pong:
+            case .pong:
                 break
             }
+        }
+    }
+
+    /// Decode a (reassembled) message payload and chain its handling onto the
+    /// per-connection tail so messages run in strict arrival order — each awaits
+    /// the previous. Independent tasks could otherwise interleave and, e.g., run
+    /// a `sendPrompt` before the `takeOver` the client sent just before it.
+    private func dispatchMessage(_ payload: Data) {
+        guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload),
+              let gateway else { return }
+        let previous = processingTail
+        processingTail = Task { @MainActor in
+            await previous?.value
+            await gateway.handle(msg)
         }
     }
 

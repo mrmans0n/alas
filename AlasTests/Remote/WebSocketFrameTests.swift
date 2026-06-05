@@ -3,6 +3,45 @@ import Foundation
 @testable import Alas
 
 struct WebSocketFrameTests {
+    @Test func decodeExposesFinBit() throws {
+        // FIN=0 text frame (byte0 0x01), masked, "hi".
+        var notFinal = Data([0x01, 0x82, 1, 2, 3, 4, 0x68 ^ 1, 0x69 ^ 2])
+        #expect(try WebSocketFrame.decode(from: &notFinal)?.fin == false)
+        var final = Data([0x81, 0x82, 1, 2, 3, 4, 0x68 ^ 1, 0x69 ^ 2])
+        #expect(try WebSocketFrame.decode(from: &final)?.fin == true)
+    }
+
+    @Test func reassemblerPassesCompleteMessage() {
+        var r = WebSocketReassembler()
+        #expect(r.accept(.init(opcode: .text, payload: Data("hi".utf8), fin: true)) == .message(Data("hi".utf8)))
+    }
+
+    @Test func reassemblerJoinsFragments() {
+        var r = WebSocketReassembler()
+        #expect(r.accept(.init(opcode: .text, payload: Data("he".utf8), fin: false)) == .incomplete)
+        #expect(r.accept(.init(opcode: .continuation, payload: Data("ll".utf8), fin: false)) == .incomplete)
+        #expect(r.accept(.init(opcode: .continuation, payload: Data("o".utf8), fin: true)) == .message(Data("hello".utf8)))
+        // Reassembler is reusable for the next message after completing one.
+        #expect(r.accept(.init(opcode: .text, payload: Data("x".utf8), fin: true)) == .message(Data("x".utf8)))
+    }
+
+    @Test func reassemblerRejectsContinuationWithoutStart() {
+        var r = WebSocketReassembler()
+        #expect(r.accept(.init(opcode: .continuation, payload: Data(), fin: true)) == .violation)
+    }
+
+    @Test func reassemblerRejectsNewMessageMidFragment() {
+        var r = WebSocketReassembler()
+        _ = r.accept(.init(opcode: .text, payload: Data("a".utf8), fin: false))
+        #expect(r.accept(.init(opcode: .text, payload: Data("b".utf8), fin: true)) == .violation)
+    }
+
+    @Test func reassemblerEnforcesMaxBytes() {
+        var r = WebSocketReassembler(maxBytes: 3)
+        #expect(r.accept(.init(opcode: .text, payload: Data("ab".utf8), fin: false)) == .incomplete)
+        #expect(r.accept(.init(opcode: .continuation, payload: Data("cd".utf8), fin: true)) == .violation)
+    }
+
     @Test func encodesShortTextFrameUnmasked() {
         let out = WebSocketFrame.encode(opcode: .text, payload: Data("hi".utf8))
         // FIN+text=0x81, len=2, "hi"
