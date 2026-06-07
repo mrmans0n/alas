@@ -129,7 +129,7 @@ struct AgentsPane: View {
             Label("Chat", systemImage: "sparkle").tag(AppConfig.LauncherMode.acp)
         }
         .pickerStyle(.menu)
-        .frame(width: 240)
+        .settingsDropdownFrame()
     }
 
     private var autoLaunchPicker: some View {
@@ -152,7 +152,7 @@ struct AgentsPane: View {
             }
         }
         .pickerStyle(.menu)
-        .frame(width: 240)
+        .settingsDropdownFrame()
     }
 
     private var cardGrid: some View {

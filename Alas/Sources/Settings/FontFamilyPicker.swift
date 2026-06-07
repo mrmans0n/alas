@@ -33,6 +33,7 @@ struct FontFamilyPicker: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .settingsDropdownFrame()
         .popover(isPresented: $open, arrowEdge: .bottom) {
             popoverBody
         }
