@@ -2,6 +2,7 @@ import SwiftUI
 
 enum SettingsRowLayout {
     static let columnSpacing: CGFloat = 16
+    static let dropdownControlWidth: CGFloat = 240
 
     static func columnWidth(for rowWidth: CGFloat) -> CGFloat {
         max(0, (rowWidth - columnSpacing) / 2)
@@ -35,5 +36,11 @@ struct SettingsRow<Control: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 10)
         .overlay(Divider().opacity(0.5), alignment: .top)
+    }
+}
+
+extension View {
+    func settingsDropdownFrame() -> some View {
+        frame(width: SettingsRowLayout.dropdownControlWidth, alignment: .leading)
     }
 }

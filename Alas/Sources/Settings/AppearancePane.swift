@@ -117,7 +117,7 @@ struct AppearancePane: View {
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 240)
+                            .settingsDropdownFrame()
 
                             Button {
                                 cycleSidebarMaterial(by: 1)

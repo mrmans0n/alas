@@ -36,7 +36,7 @@ struct WorktreesPane: View {
                             Text("Manual").tag(AppConfig.WorktreeSortMode.manual)
                         }
                         .pickerStyle(.menu)
-                        .frame(width: 240)
+                        .settingsDropdownFrame()
                     }
                 }
                 SettingsGroup(title: "Branch defaults") {

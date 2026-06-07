@@ -12,6 +12,10 @@ struct SettingsSectionTests {
         #expect(SettingsRowLayout.columnWidth(for: 8) == 0)
     }
 
+    @Test func settingsDropdownControlsUseStandardWidth() {
+        #expect(SettingsRowLayout.dropdownControlWidth == 240)
+    }
+
     @Test func sidebarSectionsDoNotIncludeStandaloneMarkdown() {
         let labels = SettingsSection.allCases.map(\.label)
 

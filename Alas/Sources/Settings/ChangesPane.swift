@@ -106,7 +106,7 @@ struct ChangesPane: View {
             Text("None").tag("none")
         }
         .pickerStyle(.menu)
-        .frame(width: 240)
+        .settingsDropdownFrame()
     }
 }
 
