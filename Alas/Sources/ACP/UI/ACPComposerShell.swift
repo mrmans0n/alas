@@ -14,6 +14,35 @@ enum ACPComposerPlacement: Equatable {
             return min(max(target, 96), min(320, roomAwareMaximum))
         }
     }
+
+    /// Bottom padding for the centred hero content shown in the empty and
+    /// first-run-connecting states, so it always clears the floating
+    /// composer.
+    ///
+    /// The composer floats at `bottomInset(.raisedEmpty)` and is roughly
+    /// `pillHeight` tall, so its top edge sits `inset + pillHeight` above the
+    /// pane's bottom. The hero content is centre-aligned, so with bottom
+    /// padding `p` its lower edge lands at `(H + p) / 2 - contentHeight / 2`.
+    /// Solving for a constant `gap` above the composer gives
+    /// `p = 2*gap + 2*pillHeight + contentHeight + 2*inset - H`. That lands on
+    /// the historical 210pt on a ~900pt pane (so large panes are unchanged)
+    /// and grows as the pane shrinks — the previous fixed 210 let the composer
+    /// overlap the starter chips on short panes.
+    ///
+    /// On very short panes the result is capped so the content's top edge
+    /// stays on-screen (trading the gap for visibility rather than clipping
+    /// the artwork under the toolbar).
+    static func raisedHeroBottomPadding(containerHeight: CGFloat) -> CGFloat {
+        let inset = bottomInset(for: .raisedEmpty, containerHeight: containerHeight)
+        let pillHeight: CGFloat = 98     // empty composer pill (input floor + controls)
+        let contentHeight: CGFloat = 150 // mark + title/subtitle + starter chips
+        let gap: CGFloat = 76            // breathing room above the composer
+        let topMargin: CGFloat = 16
+
+        let desired = 2 * gap + 2 * pillHeight + contentHeight + 2 * inset - containerHeight
+        let fitCap = containerHeight - contentHeight - 2 * topMargin
+        return max(0, min(desired, fitCap))
+    }
 }
 
 /// Floating glass pill composer. Wraps the AppKit-backed `ACPInputField`

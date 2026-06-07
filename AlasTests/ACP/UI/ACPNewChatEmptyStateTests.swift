@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import Alas
@@ -172,5 +173,42 @@ struct ACPNewChatEmptyStateTests {
         #expect(shortRaised > bottom)
         #expect(regularRaised > shortRaised)
         #expect(tallRaised == 320)
+    }
+
+    @Test("raised hero padding keeps centred content clear of the composer on small panes")
+    func raisedHeroPaddingClearsComposerOnSmallPanes() {
+        // Mirrors the geometry the production layout uses: the hero content is
+        // centre-aligned and the composer floats at `raisedEmpty`. These two
+        // constants track the documented model in `raisedHeroBottomPadding`;
+        // if they drift, this guards the no-overlap contract that was the
+        // whole point of making the padding responsive.
+        let pillHeight: CGFloat = 98
+        let contentHeight: CGFloat = 150
+
+        for h in stride(from: CGFloat(400), through: CGFloat(1_200), by: 20) {
+            let inset = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: h)
+            let pad = ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: h)
+
+            let composerTop = inset + pillHeight
+            let contentBottom = (h + pad) / 2 - contentHeight / 2
+            let contentTop = (h + pad) / 2 + contentHeight / 2
+
+            // Never overlaps the floating composer …
+            #expect(contentBottom >= composerTop)
+            // … and never clips above the top of the pane.
+            #expect(contentTop <= h)
+        }
+    }
+
+    @Test("raised hero padding preserves the historical placement on large panes")
+    func raisedHeroPaddingMatchesLegacyOnLargePanes() {
+        // The previous layout hardcoded 210pt; the responsive value must land
+        // on it for a roomy pane so large windows look unchanged, then grow as
+        // the pane shrinks.
+        #expect(ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: 900) == 210)
+        #expect(
+            ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: 600)
+                > ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: 900)
+        )
     }
 }
