@@ -198,12 +198,16 @@ private struct ACPSessionView: View {
 
     private var transcriptAndComposer: some View {
         GeometryReader { proxy in
+            let heroBottomInset = ACPComposerPlacement.raisedHeroBottomPadding(
+                containerHeight: proxy.size.height
+            )
             HStack(spacing: 0) {
                 ZStack(alignment: .bottom) {
                     if let phase = firstRunConnectingPhase {
                         ACPFirstRunConnectingView(
                             agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
-                            phase: phase
+                            phase: phase,
+                            bottomInset: heroBottomInset
                         )
                     } else if isConnecting {
                         ACPConnectingPlaceholder(
@@ -213,6 +217,7 @@ private struct ACPSessionView: View {
                         if isNewEmptySession {
                             ACPNewChatEmptyStateView(
                                 agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                                bottomInset: heroBottomInset,
                                 onStarterPrompt: insertStarterPrompt
                             )
                             .transition(

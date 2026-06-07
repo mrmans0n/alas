@@ -11,6 +11,10 @@ enum ACPFirstRunConnectingViewCopy {
 struct ACPFirstRunConnectingView: View {
     let agentDisplayName: String
     let phase: ACPFirstRunConnectingPhase
+    /// Bottom padding that lifts the centred content clear of the floating
+    /// composer. Responsive to pane height so the composer never overlaps the
+    /// phase chips on short panes (see `raisedHeroBottomPadding`).
+    let bottomInset: CGFloat
 
     @Environment(\.theme) private var theme
 
@@ -36,7 +40,7 @@ struct ACPFirstRunConnectingView: View {
         .frame(maxWidth: 640)
         .padding(.horizontal, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .padding(.bottom, 210)
+        .padding(.bottom, bottomInset)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Connecting new \(agentDisplayName) chat")
     }
