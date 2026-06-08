@@ -95,4 +95,128 @@ struct RemoteNetworkTests {
         #expect(hosts.contains("nacho-mbp.local"))
         #expect(hosts.contains("nacho-mbp"))
     }
+
+    @Test func tailscaleIPv4RangeIsTailnetAndOtherHundredDotAddressesAreRejected() {
+        let interfaces = [
+            RemoteNetworkInterface(name: "en0", host: "100.63.255.255", isLoopback: false),
+            RemoteNetworkInterface(name: "en1", host: "100.64.0.0", isLoopback: false),
+            RemoteNetworkInterface(name: "en2", host: "100.127.255.255", isLoopback: false),
+            RemoteNetworkInterface(name: "en3", host: "100.128.0.0", isLoopback: false),
+        ]
+
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: interfaces,
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: nil
+        )
+
+        #expect(addresses.contains { $0.host == "100.64.0.0" && $0.kind == .tailnet })
+        #expect(addresses.contains { $0.host == "100.127.255.255" && $0.kind == .tailnet })
+        #expect(!addresses.contains { $0.host == "100.63.255.255" })
+        #expect(!addresses.contains { $0.host == "100.128.0.0" })
+    }
+
+    @Test func utunPrivateIPv4IsLanNotTailnetWhenOutsideTailscaleRange() {
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: [
+                RemoteNetworkInterface(name: "utun4", host: "10.8.0.2", isLoopback: false),
+            ],
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: nil
+        )
+
+        #expect(addresses.contains { $0.host == "10.8.0.2" && $0.kind == .lan })
+        #expect(!addresses.contains { $0.host == "10.8.0.2" && $0.kind == .tailnet })
+    }
+
+    @Test func rfc1918IPv4BoundariesAreLanAndNearbyRangesAreRejected() {
+        let interfaces = [
+            RemoteNetworkInterface(name: "en0", host: "172.15.255.255", isLoopback: false),
+            RemoteNetworkInterface(name: "en1", host: "172.16.0.0", isLoopback: false),
+            RemoteNetworkInterface(name: "en2", host: "172.31.255.255", isLoopback: false),
+            RemoteNetworkInterface(name: "en3", host: "172.32.0.0", isLoopback: false),
+            RemoteNetworkInterface(name: "en4", host: "192.168.0.1", isLoopback: false),
+            RemoteNetworkInterface(name: "en5", host: "10.255.255.255", isLoopback: false),
+        ]
+
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: interfaces,
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: nil
+        )
+
+        #expect(addresses.contains { $0.host == "172.16.0.0" && $0.kind == .lan })
+        #expect(addresses.contains { $0.host == "172.31.255.255" && $0.kind == .lan })
+        #expect(addresses.contains { $0.host == "192.168.0.1" && $0.kind == .lan })
+        #expect(addresses.contains { $0.host == "10.255.255.255" && $0.kind == .lan })
+        #expect(!addresses.contains { $0.host == "172.15.255.255" })
+        #expect(!addresses.contains { $0.host == "172.32.0.0" })
+    }
+
+    @Test func malformedIPv4CandidatesAreRejected() {
+        let interfaces = [
+            RemoteNetworkInterface(name: "en0", host: "10.0.0.999", isLoopback: false),
+            RemoteNetworkInterface(name: "en1", host: "10.0.0", isLoopback: false),
+            RemoteNetworkInterface(name: "en2", host: "10.0.0.a", isLoopback: false),
+            RemoteNetworkInterface(name: "en3", host: "010.0.0.1", isLoopback: false),
+        ]
+
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: interfaces,
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: nil
+        )
+
+        #expect(addresses.map(\.host) == ["localhost"])
+    }
+
+    @Test func ipv6TailnetAndLanAddressesAreAdvertisedWithBracketedUrls() {
+        let interfaces = [
+            RemoteNetworkInterface(name: "utun4", host: "fd7a:115c:a1e0::1", isLoopback: false),
+            RemoteNetworkInterface(name: "en0", host: "fd00::42", isLoopback: false),
+        ]
+
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: interfaces,
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: nil
+        )
+
+        #expect(addresses.contains {
+            $0.host == "fd7a:115c:a1e0::1"
+                && $0.kind == .tailnet
+                && $0.url == "http://[fd7a:115c:a1e0::1]:8765"
+        })
+        #expect(addresses.contains {
+            $0.host == "fd00::42"
+                && $0.kind == .lan
+                && $0.url == "http://[fd00::42]:8765"
+        })
+    }
+
+    @Test func duplicateHostsAreNormalizedAcrossDetectedAndAllowedHosts() {
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: [
+                RemoteNetworkInterface(name: "en0", host: "192.168.1.23", isLoopback: false),
+            ],
+            allowedHosts: ["  [192.168.1.23]  ", "LOCALHOST"],
+            preferredHost: nil,
+            machineHostName: nil
+        )
+
+        #expect(addresses.filter { $0.host == "192.168.1.23" }.count == 1)
+        #expect(addresses.filter { $0.host == "localhost" }.count == 1)
+        #expect(!addresses.contains { $0.kind == .custom })
+    }
 }

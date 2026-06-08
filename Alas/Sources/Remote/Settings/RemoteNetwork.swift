@@ -38,6 +38,11 @@ struct RemoteAdvertisedAddress: Codable, Equatable, Identifiable, Sendable {
 }
 
 enum RemoteNetwork {
+    private enum AddressClassification {
+        case lan
+        case tailnet
+    }
+
     static func interfaces() -> [RemoteNetworkInterface] {
         var head: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&head) == 0, let first = head else { return [] }
@@ -91,12 +96,12 @@ enum RemoteNetwork {
     ) -> [RemoteAdvertisedAddress] {
         var candidates: [(RemoteAdvertisedAddress.Kind, String?, String)] = []
 
-        for iface in interfaces where !iface.isLoopback && isTailnetInterface(iface) {
+        for iface in interfaces where !iface.isLoopback && classification(for: iface.host) == .tailnet {
             candidates.append((.tailnet, iface.name, iface.host))
         }
 
-        for iface in interfaces where !iface.isLoopback && !isTailnetInterface(iface) {
-            if isPrivateIPv4(iface.host) {
+        for iface in interfaces where !iface.isLoopback {
+            if classification(for: iface.host) == .lan {
                 candidates.append((.lan, iface.name, iface.host))
             }
         }
@@ -169,17 +174,66 @@ enum RemoteNetwork {
         hosts.map(normalizedHost).filter { !$0.isEmpty }
     }
 
-    private static func isTailnetInterface(_ iface: RemoteNetworkInterface) -> Bool {
-        iface.name.hasPrefix("utun") && (iface.host.hasPrefix("100.") || isPrivateIPv4(iface.host))
+    private static func classification(for host: String) -> AddressClassification? {
+        if isTailnetIPv4(host) || isTailnetIPv6(host) {
+            return .tailnet
+        }
+        if isLANIPv4(host) || isLANIPv6(host) {
+            return .lan
+        }
+        return nil
     }
 
-    private static func isPrivateIPv4(_ host: String) -> Bool {
-        let parts = host.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 4 else { return false }
+    private static func isTailnetIPv4(_ host: String) -> Bool {
+        guard let parts = ipv4Octets(host) else { return false }
+        return parts[0] == 100 && (64...127).contains(parts[1])
+    }
+
+    private static func isTailnetIPv6(_ host: String) -> Bool {
+        guard let bytes = ipv6Bytes(host) else { return false }
+        return bytes.starts(with: [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0])
+    }
+
+    private static func isLANIPv4(_ host: String) -> Bool {
+        guard let parts = ipv4Octets(host) else { return false }
         if parts[0] == 10 { return true }
         if parts[0] == 192 && parts[1] == 168 { return true }
         if parts[0] == 172 && (16...31).contains(parts[1]) { return true }
-        if parts[0] == 100 { return true }
         return false
+    }
+
+    private static func isLANIPv6(_ host: String) -> Bool {
+        guard let bytes = ipv6Bytes(host), !isTailnetIPv6(host) else { return false }
+        return (bytes[0] & 0xfe) == 0xfc
+    }
+
+    private static func ipv4Octets(_ host: String) -> [Int]? {
+        let parts = normalizedHost(host).split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+
+        var octets: [Int] = []
+        for part in parts {
+            guard !part.isEmpty else { return nil }
+            guard part.allSatisfy(\.isNumber) else { return nil }
+            guard part == "0" || !part.hasPrefix("0") else { return nil }
+            guard let value = Int(part), (0...255).contains(value) else { return nil }
+            octets.append(value)
+        }
+        return octets
+    }
+
+    private static func ipv6Bytes(_ host: String) -> [UInt8]? {
+        let normalized = normalizedHost(host)
+        guard normalized.contains(":") else { return nil }
+
+        var address = in6_addr()
+        let result = normalized.withCString { pointer in
+            inet_pton(AF_INET6, pointer, &address)
+        }
+        guard result == 1 else { return nil }
+
+        return withUnsafeBytes(of: &address) { buffer in
+            Array(buffer)
+        }
     }
 }
