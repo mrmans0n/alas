@@ -48,4 +48,15 @@ struct RemoteAccessPolicyTests {
         #expect(RemoteAccessPolicy.normalizedHost(from: "[::1]evil") == nil)
         #expect(RemoteAccessPolicy.normalizedHost(from: "[::1].example") == nil)
     }
+
+    @Test func rejectsMalformedNonBracketedHostPortsAndBrackets() {
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "localhost:evil"))
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "localhost:"))
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "localhost]"))
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "]localhost["))
+        #expect(RemoteAccessPolicy.normalizedHost(from: "localhost:evil") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "localhost:") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "localhost]") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "]localhost[") == nil)
+    }
 }

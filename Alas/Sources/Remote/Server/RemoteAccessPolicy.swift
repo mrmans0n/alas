@@ -34,10 +34,14 @@ struct RemoteAccessPolicy: Equatable, Sendable {
             return String(inside)
         }
 
+        guard !raw.contains("[") && !raw.contains("]") else { return nil }
+
         let colonCount = raw.filter { $0 == ":" }.count
         if colonCount == 1, let colon = raw.lastIndex(of: ":") {
+            let port = raw[raw.index(after: colon)...]
+            guard !port.isEmpty && port.allSatisfy(\.isNumber) else { return nil }
             return String(raw[..<colon])
         }
-        return raw.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        return raw
     }
 }
