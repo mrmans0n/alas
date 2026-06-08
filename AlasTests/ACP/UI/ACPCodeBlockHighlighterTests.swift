@@ -83,6 +83,91 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
     }
 
+    @Test("path resolution maps only supported editor highlighter paths")
+    func pathResolutionMapsSupportedPaths() {
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Sources/App.swift") == "swift")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "script.py") == "py")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "package.json") == "json")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Dockerfile") == "dockerfile")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "page.htm") == "htm")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "styles.scss") == "scss")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "changes.patch") == "patch")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "query.sql") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "README") == nil)
+    }
+
+    @Test("tool output syntax prefers diff shape over paths")
+    func toolOutputSyntaxPrefersDiffShape() {
+        let content = """
+        @@ -1,2 +1,2 @@
+        -old
+        +new
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"]) == "diff")
+    }
+
+    @Test("tool output syntax detects ACP-flattened diffs")
+    func toolOutputSyntaxDetectsACPFlattenedDiffs() {
+        let content = """
+        --- a.swift
+        -let old = 1
+        +let new = 2
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "diff")
+    }
+
+    @Test("tool output syntax detects ACP-flattened diffs with indented code")
+    func toolOutputSyntaxDetectsACPFlattenedDiffsWithIndentedCode() {
+        let content = """
+        --- Sources/App.swift
+        -    let old = 1
+        +    let new = 2
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "diff")
+    }
+
+    @Test("tool output syntax rejects section headings that resemble hunk markers")
+    func toolOutputSyntaxRejectsSectionHeadingHunkMarkers() {
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "@@ Section @@",
+            locations: ["Sources/App.swift"]
+        ) == "swift")
+    }
+
+    @Test("tool output syntax rejects markdown-like flattened diff markers")
+    func toolOutputSyntaxRejectsMarkdownLikeFlattenedDiffMarkers() {
+        let content = """
+        --- Notes
+        - item one
+        + item two
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == nil)
+    }
+
+    @Test("tool output syntax uses exactly one supported location path")
+    func toolOutputSyntaxUsesSingleSupportedPath() {
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "let value = 1",
+            locations: ["Sources/App.swift"]
+        ) == "swift")
+    }
+
+    @Test("tool output syntax remains plain for ambiguous or unsupported paths")
+    func toolOutputSyntaxRejectsAmbiguousOutput() {
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "let value = 1",
+            locations: []
+        ) == nil)
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "let value = 1",
+            locations: ["Sources/App.swift", "Sources/Other.swift"]
+        ) == nil)
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "SELECT * FROM users",
+            locations: ["query.sql"]
+        ) == nil)
+    }
+
     @Test("supported labels apply non-default ACP syntax colors")
     func supportedLabelsApplySyntaxColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")

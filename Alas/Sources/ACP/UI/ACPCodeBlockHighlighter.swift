@@ -21,6 +21,17 @@ enum ACPCodeLanguage {
             normalized = String(normalized.dropFirst())
         }
 
+        return canonicalExtension(for: normalized)
+    }
+
+    static func highlighterExtension(forPath path: String?) -> String? {
+        guard let path else { return nil }
+        let ext = LanguageRegistry.highlighterExtension(forPath: path)
+        guard !ext.isEmpty else { return nil }
+        return supportedHighlighterExtension(ext)
+    }
+
+    private static func canonicalExtension(for normalized: String) -> String? {
         switch normalized {
         case "swift": return "swift"
         case "py", "python": return "py"
@@ -49,6 +60,7 @@ enum ACPCodeLanguage {
         case "diff": return "diff"
         case "patch": return "patch"
         case "html": return "html"
+        case "htm": return "htm"
         case "xml": return "xml"
         case "css": return "css"
         case "scss": return "scss"
@@ -62,8 +74,102 @@ enum ACPCodeLanguage {
         case "dockerfile": return "dockerfile"
         case "sql", "pl", "perl", "ex", "exs", "elixir", "ini":
             return nil
-        default: return nil
+        default:
+            return nil
         }
+    }
+
+    private static func supportedHighlighterExtension(_ ext: String) -> String? {
+        let normalized = ext.lowercased()
+        if LanguageRegistry.language(forFileExtension: normalized) != nil {
+            return normalized
+        }
+        switch normalized {
+        case "diff", "patch", "xml", "scss", "sass":
+            return normalized
+        default:
+            return nil
+        }
+    }
+}
+
+enum ACPToolOutputSyntax {
+    static func highlighterExtension(content: String, locations: [String]) -> String? {
+        if looksLikeDiff(content) {
+            return "diff"
+        }
+        guard locations.count == 1 else {
+            return nil
+        }
+        return ACPCodeLanguage.highlighterExtension(forPath: locations[0])
+    }
+
+    private static func looksLikeDiff(_ content: String) -> Bool {
+        let lines = content
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+
+        guard !lines.isEmpty else { return false }
+        if lines.contains(where: { $0.hasPrefix("diff --git ") }) {
+            return true
+        }
+        if lines.contains(where: isUnifiedHunkHeader) {
+            return true
+        }
+
+        for index in lines.indices {
+            let line = lines[index]
+            guard line.hasPrefix("--- ") else { continue }
+            let path = String(line.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isPathLikeDiffHeader(path) else { continue }
+            let tail = lines[lines.index(after: index)...].prefix(8)
+            let hasRemoval = tail.contains { isDiffChangeLine($0, marker: "-") }
+            let hasAddition = tail.contains { isDiffChangeLine($0, marker: "+") }
+            if hasRemoval || hasAddition {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isUnifiedHunkHeader(_ line: String) -> Bool {
+        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.count >= 4,
+              parts[0] == "@@",
+              isUnifiedRange(parts[1], marker: "-"),
+              isUnifiedRange(parts[2], marker: "+"),
+              parts[3] == "@@" else {
+            return false
+        }
+        return true
+    }
+
+    private static func isUnifiedRange(_ token: String, marker: Character) -> Bool {
+        guard token.first == marker else { return false }
+        let range = token.dropFirst()
+        guard !range.isEmpty else { return false }
+        let segments = range.split(separator: ",", omittingEmptySubsequences: false)
+        guard segments.count == 1 || segments.count == 2 else { return false }
+        return segments.allSatisfy { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+    }
+
+    private static func isPathLikeDiffHeader(_ path: String) -> Bool {
+        path.contains("/") || !(path as NSString).pathExtension.isEmpty
+    }
+
+    private static func isDiffChangeLine(_ line: String, marker: Character) -> Bool {
+        guard line.first == marker else { return false }
+        if marker == "-", line.hasPrefix("--- ") { return false }
+        if marker == "+", line.hasPrefix("+++ ") { return false }
+
+        let body = line.dropFirst()
+        guard let first = body.first else { return false }
+        guard first.isWhitespace else { return true }
+
+        let indentation = body.prefix(while: { $0.isWhitespace })
+        let rest = body.dropFirst(indentation.count)
+        guard rest.contains(where: { !$0.isWhitespace }) else { return false }
+        return indentation.count > 1 || indentation.contains("\t")
     }
 }
 
