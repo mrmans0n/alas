@@ -18,6 +18,8 @@ final class RemoteSessionGateway {
     private var configCoalesce: [String: Task<Void, Never>] = [:]
     private var lastConfig: [String: RemoteSessionConfig] = [:]
     private var coalesce: [String: Task<Void, Never>] = [:]
+    private var sessionListRefresh: Task<Void, Never>?
+    private var sessionListGeneration = 0
     // Per-session request id of the permission/question prompt we last surfaced,
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
@@ -32,7 +34,7 @@ final class RemoteSessionGateway {
     func handle(_ message: RemoteClientMessage) async {
         switch message {
         case .listSessions:
-            send(.sessionList(sessions: await provider.sessionSummaries()))
+            refreshSessionList()
         case .subscribe(let id):
             await provider.hydrateIfNeeded(id: id)
             guard let session = provider.session(for: id) else {
@@ -125,6 +127,18 @@ final class RemoteSessionGateway {
         case .setAutoRun(let id, let enabled):
             guard provider.isWriter(for: id) else { return }
             provider.setAutoRun(for: id, enabled: enabled)
+        }
+    }
+
+    private func refreshSessionList() {
+        sessionListGeneration += 1
+        let generation = sessionListGeneration
+        sessionListRefresh?.cancel()
+        sessionListRefresh = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let summaries = await provider.sessionSummaries()
+            guard !Task.isCancelled, generation == sessionListGeneration else { return }
+            send(.sessionList(sessions: summaries))
         }
     }
 
