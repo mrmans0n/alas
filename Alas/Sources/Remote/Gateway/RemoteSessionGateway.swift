@@ -196,6 +196,8 @@ final class RemoteSessionGateway {
 
     /// Tear down all observation (called when the connection closes).
     func close() {
+        sessionListRefresh?.cancel()
+        sessionListRefresh = nil
         subscriptions.removeAll()
         configSubscriptions.removeAll()
         configCoalesce.values.forEach { $0.cancel() }

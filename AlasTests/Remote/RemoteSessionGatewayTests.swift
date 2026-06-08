@@ -409,6 +409,29 @@ struct RemoteSessionGatewayTests {
         return false })
     }
 
+    @Test func closeCancelsPendingSessionListRefresh() async {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
+        provider.pauseSessionSummaries = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listSessions)
+        for _ in 0..<10 {
+            if provider.sessionSummariesCallCount == 1 { break }
+            await Task.yield()
+        }
+        gw.close()
+        provider.resumeSessionSummaries()
+        for _ in 0..<10 {
+            if !sent.isEmpty { break }
+            await Task.yield()
+        }
+
+        #expect(provider.sessionSummariesCallCount == 1)
+        #expect(sent.isEmpty)
+    }
+
     @Test func takeOverRoutesToProvider() async {
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
