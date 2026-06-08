@@ -52,6 +52,19 @@ struct AppConfigShortcutsCodingTests {
         #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
     }
 
+    @Test func dropsLegacyFindOverrideWhenItCollidesWithNewFindDefault() throws {
+        var cfg = AppConfig.defaults
+        cfg.shortcutOverrides = [
+            ShortcutAction.findAndReplace.rawValue: ShortcutAction.findAndReplace.defaultBinding
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.replaceInEditor.rawValue] == nil)
+        #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
+    }
+
     @Test func preservesExplicitNewReplaceOverrideDuringFindMigration() throws {
         var cfg = AppConfig.defaults
         let legacy = ShortcutBinding(key: "j", modifiers: [.command, .option])

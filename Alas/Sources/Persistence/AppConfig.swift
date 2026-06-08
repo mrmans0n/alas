@@ -714,6 +714,10 @@ private extension AppConfig {
         let replaceKey = ShortcutAction.replaceInEditor.rawValue
         guard let legacyOverride = shortcutOverrides[legacyKey],
               !shortcutOverrides.keys.contains(replaceKey) else { return }
+        if legacyOverride == ShortcutAction.findAndReplace.defaultBinding {
+            shortcutOverrides.removeValue(forKey: legacyKey)
+            return
+        }
         shortcutOverrides.updateValue(legacyOverride, forKey: replaceKey)
         shortcutOverrides.removeValue(forKey: legacyKey)
     }
