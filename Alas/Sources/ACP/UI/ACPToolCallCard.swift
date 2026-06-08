@@ -109,13 +109,14 @@ struct ACPToolCallCard: View {
             } else {
                 if !displayContent.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
-                        Text(displayContent)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .foregroundStyle(theme.color("fg-muted"))
-                            .lineSpacing(2)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ACPSyntaxHighlightedText(
+                            text: displayContent,
+                            explicitLanguage: toolCall.contentLanguage ?? ACPToolOutputSyntax.highlighterExtension(
+                                content: displayContent,
+                                locations: toolCall.locations
+                            ),
+                            fontSize: 11.5
+                        )
                             .padding(.horizontal, 12).padding(.vertical, 10)
                     }
                     .background(theme.color("bg-0").opacity(0.55))

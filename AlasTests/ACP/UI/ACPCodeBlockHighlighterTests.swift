@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -73,14 +74,124 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "terraform") == "tf")
         #expect(ACPCodeLanguage.highlighterExtension(for: "tfvars") == "tfvars")
         #expect(ACPCodeLanguage.highlighterExtension(for: "dockerfile") == "dockerfile")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == "sql")
     }
 
     @Test("future-known unsupported ACP fence labels remain plain")
     func futureKnownUnsupportedFenceLabelsRemainPlain() {
-        #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "pl") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "perl") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ex") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "exs") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
+    }
+
+    @Test("path resolution maps only supported editor highlighter paths")
+    func pathResolutionMapsSupportedPaths() {
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Sources/App.swift") == "swift")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "script.py") == "py")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "package.json") == "json")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "Dockerfile") == "dockerfile")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "page.htm") == "htm")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "styles.scss") == "scss")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "changes.patch") == "patch")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "query.sql") == "sql")
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "README") == nil)
+    }
+
+    @Test("tool output syntax prefers diff shape over paths")
+    func toolOutputSyntaxPrefersDiffShape() {
+        let content = """
+        @@ -1,2 +1,2 @@
+        -old
+        +new
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"]) == "diff")
+    }
+
+    @Test("tool output syntax uses whole-output fenced labels")
+    func toolOutputSyntaxUsesWholeOutputFencedLabels() {
+        let content = """
+        ```sql
+        SELECT id FROM users
+        ```
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "sql")
+    }
+
+    @Test("tool output syntax prefers fenced labels over diff shape")
+    func toolOutputSyntaxPrefersFencedLabelsOverDiffShape() {
+        let content = """
+        ```swift
+        @@ -1 +1 @@
+        -old
+        +new
+        ```
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "swift")
+    }
+
+    @Test("tool output syntax detects ACP-flattened diffs")
+    func toolOutputSyntaxDetectsACPFlattenedDiffs() {
+        let content = """
+        --- a.swift
+        -let old = 1
+        +let new = 2
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "diff")
+    }
+
+    @Test("tool output syntax detects ACP-flattened diffs with indented code")
+    func toolOutputSyntaxDetectsACPFlattenedDiffsWithIndentedCode() {
+        let content = """
+        --- Sources/App.swift
+        -    let old = 1
+        +    let new = 2
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "diff")
+    }
+
+    @Test("tool output syntax rejects section headings that resemble hunk markers")
+    func toolOutputSyntaxRejectsSectionHeadingHunkMarkers() {
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "@@ Section @@",
+            locations: ["Sources/App.swift"]
+        ) == "swift")
+    }
+
+    @Test("tool output syntax rejects markdown-like flattened diff markers")
+    func toolOutputSyntaxRejectsMarkdownLikeFlattenedDiffMarkers() {
+        let content = """
+        --- Notes
+        - item one
+        + item two
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == nil)
+    }
+
+    @Test("tool output syntax uses exactly one supported location path")
+    func toolOutputSyntaxUsesSingleSupportedPath() {
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "let value = 1",
+            locations: ["Sources/App.swift"]
+        ) == "swift")
+    }
+
+    @Test("tool output syntax remains plain for ambiguous or unsupported paths")
+    func toolOutputSyntaxRejectsAmbiguousOutput() {
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "let value = 1",
+            locations: []
+        ) == nil)
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "let value = 1",
+            locations: ["Sources/App.swift", "Sources/Other.swift"]
+        ) == nil)
+        #expect(ACPToolOutputSyntax.highlighterExtension(
+            content: "theme = cool-slate",
+            locations: ["config.ini"]
+        ) == nil)
     }
 
     @Test("supported labels apply non-default ACP syntax colors")
@@ -110,8 +221,8 @@ struct ACPCodeBlockHighlighterTests {
         #expect(try foregroundColor(for: "fff", in: css) != editorTheme.defaultFG)
     }
 
-    @Test("future-known unsupported ACP labels keep attributed output plain")
-    func futureKnownUnsupportedAttributedOutputRemainsPlain() throws {
+    @Test("SQL labels apply non-default ACP syntax colors")
+    func sqlLabelsApplySyntaxColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let editorTheme = EditorTheme(theme: theme)
         let attributed = ACPCodeBlockHighlighter.attributedString(
@@ -121,7 +232,7 @@ struct ACPCodeBlockHighlighterTests {
         )
 
         #expect(attributed.string == "SELECT id FROM users WHERE active = true;")
-        #expect(allForegroundColors(in: attributed, equal: editorTheme.defaultFG))
+        #expect(try foregroundColor(for: "SELECT", in: attributed) != editorTheme.defaultFG)
     }
 
     @Test("Swift code applies syntax color while preserving monospaced font")
@@ -167,5 +278,133 @@ struct ACPCodeBlockHighlighterTests {
         let swiftAttributed = AttributedString(nsAttributed)
 
         #expect(String(swiftAttributed.characters) == "let value = 1")
+    }
+
+    @Test("highlight cache key changes with language and theme inputs")
+    func highlightedTextCacheKeyTracksInputs() throws {
+        let dark = try Theme.loadBundled(id: "cool-slate")
+        let light = try Theme.loadBundled(id: "light")
+        var accentTheme = dark
+        accentTheme.accentOverrideHex = "#123456"
+        var tokenOverrideTheme = dark
+        tokenOverrideTheme.resolvedColorOverrides = [
+            "fg": Color(.sRGB, red: 1, green: 0, blue: 0, opacity: 1),
+        ]
+        var changedTokens = dark.tokens
+        changedTokens["fg"] = "\(changedTokens["fg"] ?? "") changed"
+        let rawTokenTheme = Theme(id: dark.id, name: dark.name, tokens: changedTokens)
+
+        let a = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: dark,
+            fontSize: 12
+        )
+        let b = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "diff",
+            theme: dark,
+            fontSize: 12
+        )
+        let c = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: light,
+            fontSize: 12
+        )
+        let differentText = ACPSyntaxHighlightCacheKey(
+            text: "let value = 2",
+            resolvedExtension: "swift",
+            theme: dark,
+            fontSize: 12
+        )
+        let differentFontSize = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: dark,
+            fontSize: 13
+        )
+        let differentAccent = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: accentTheme,
+            fontSize: 12
+        )
+        let differentRawToken = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: rawTokenTheme,
+            fontSize: 12
+        )
+        let differentResolvedColorOverride = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: tokenOverrideTheme,
+            fontSize: 12
+        )
+
+        #expect(a == a)
+        #expect(a != b)
+        #expect(a != c)
+        #expect(a != differentText)
+        #expect(a != differentFontSize)
+        #expect(a != differentAccent)
+        #expect(a != differentRawToken)
+        #expect(a != differentResolvedColorOverride)
+    }
+
+    @Test("tool output diff choice applies diff syntax colors")
+    func toolOutputDiffChoiceAppliesColors() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let content = """
+        @@ -1 +1 @@
+        -old
+        +new
+        """
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"])
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: content,
+            language: ext,
+            theme: theme,
+            fontSize: 11.5
+        )
+
+        #expect(ext == "diff")
+        #expect(try foregroundColor(for: "@@", in: attributed) != editorTheme.defaultFG)
+    }
+
+    @Test("tool output single path choice applies file syntax colors")
+    func toolOutputSinglePathChoiceAppliesColors() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let content = "func greet() {}"
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"])
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: content,
+            language: ext,
+            theme: theme,
+            fontSize: 11.5
+        )
+
+        #expect(ext == "swift")
+        #expect(try foregroundColor(for: "func", in: attributed) != editorTheme.defaultFG)
+    }
+
+    @Test("tool output unsupported path remains default-colored")
+    func toolOutputUnsupportedPathRemainsPlain() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let content = "theme = cool-slate"
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["config.ini"])
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: content,
+            language: ext,
+            theme: theme,
+            fontSize: 11.5
+        )
+
+        #expect(ext == nil)
+        #expect(allForegroundColors(in: attributed, equal: editorTheme.defaultFG))
     }
 }
