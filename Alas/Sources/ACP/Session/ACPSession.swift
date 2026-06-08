@@ -81,6 +81,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// persisted session fields instead.
     @Published var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
 
+    private var contextRecoveryExpiryTask: Task<Void, Never>?
+
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
     /// explicit force-send remains next.
@@ -191,6 +193,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     deinit {
+        contextRecoveryExpiryTask?.cancel()
         // Foundation cannot await main-actor methods from deinit; dispatch.
         let host = terminalHost
         Task { @MainActor in host.killAll() }
@@ -224,6 +227,7 @@ final class ACPSession: ObservableObject, Identifiable {
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
         switch update {
         case .agentMessageChunk(let block):
+            clearRestoredContextRecoveryStatus()
             let txt = text(of: block)
             let i = appendStreaming(text: txt, locate: { lastAgent() },
                                     makeNew: { .agent(id: UUID(), StreamingText(txt)) })
@@ -235,11 +239,13 @@ final class ACPSession: ObservableObject, Identifiable {
             transcript.completedOutputBoundaryMessageIds.removeAll()
             return [transcript.messages.count - 1]
         case .agentThoughtChunk(let block):
+            clearRestoredContextRecoveryStatus()
             let txt = text(of: block)
             let i = appendStreaming(text: txt, locate: { lastThought() },
                                     makeNew: { .thought(id: UUID(), StreamingText(txt)) })
             return [i]
         case .toolCall(let payload):
+            clearRestoredContextRecoveryStatus()
             let items = payload.content ?? []
             let raw = Self.flatten(items)
             let full = Self.stripWrappingFence(raw,
@@ -258,6 +264,7 @@ final class ACPSession: ObservableObject, Identifiable {
             transcript.completedOutputBoundaryMessageIds.removeAll()
             return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
+            clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
                 if let s = u.status { tc.status = s }
                 if let c = u.content {
@@ -277,6 +284,7 @@ final class ACPSession: ObservableObject, Identifiable {
             }
             return touched.map { [$0] } ?? []
         case .plan(let entries):
+            clearRestoredContextRecoveryStatus()
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
             // Overwrite the existing plan in place only if it belongs to
             // the current turn (i.e. sits after the latest user prompt).
@@ -314,12 +322,24 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    func markContextRecoveryRestored(expiryNanoseconds: UInt64 = 30_000_000_000) {
+        contextRecoveryExpiryTask?.cancel()
+        contextRecoveryStatus = .restored
+        contextRecoveryExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: expiryNanoseconds)
+            guard !Task.isCancelled, self?.contextRecoveryStatus == .restored else { return }
+            self?.contextRecoveryStatus = nil
+            self?.contextRecoveryExpiryTask = nil
+        }
+    }
+
     func appendSystemNotice(_ text: String) {
         transcript.messages.append(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
+        clearRestoredContextRecoveryStatus()
         transcript.messages.append(.fileEdit(id: UUID(), edit))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -759,6 +779,13 @@ final class ACPSession: ObservableObject, Identifiable {
             toolCallIndices[tc.toolCallId] = index
         }
         advanceRenderWindowIfFollowingTail()
+    }
+
+    private func clearRestoredContextRecoveryStatus() {
+        guard contextRecoveryStatus == .restored else { return }
+        contextRecoveryExpiryTask?.cancel()
+        contextRecoveryExpiryTask = nil
+        contextRecoveryStatus = nil
     }
 
     private func rebuildToolCallIndices() {
