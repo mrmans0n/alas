@@ -327,4 +327,59 @@ struct ACPCodeBlockHighlighterTests {
         #expect(a != differentRawToken)
         #expect(a != differentResolvedColorOverride)
     }
+
+    @Test("tool output diff choice applies diff syntax colors")
+    func toolOutputDiffChoiceAppliesColors() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let content = """
+        @@ -1 +1 @@
+        -old
+        +new
+        """
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"])
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: content,
+            language: ext,
+            theme: theme,
+            fontSize: 11.5
+        )
+
+        #expect(ext == "diff")
+        #expect(try foregroundColor(for: "@@", in: attributed) != editorTheme.defaultFG)
+    }
+
+    @Test("tool output single path choice applies file syntax colors")
+    func toolOutputSinglePathChoiceAppliesColors() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let content = "func greet() {}"
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"])
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: content,
+            language: ext,
+            theme: theme,
+            fontSize: 11.5
+        )
+
+        #expect(ext == "swift")
+        #expect(try foregroundColor(for: "func", in: attributed) != editorTheme.defaultFG)
+    }
+
+    @Test("tool output unsupported path remains default-colored")
+    func toolOutputUnsupportedPathRemainsPlain() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let editorTheme = EditorTheme(theme: theme)
+        let content = "SELECT id FROM users"
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["query.sql"])
+        let attributed = ACPCodeBlockHighlighter.attributedString(
+            code: content,
+            language: ext,
+            theme: theme,
+            fontSize: 11.5
+        )
+
+        #expect(ext == nil)
+        #expect(allForegroundColors(in: attributed, equal: editorTheme.defaultFG))
+    }
 }
