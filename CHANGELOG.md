@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-06-08
+
+### 🐛 Fixes
+
+- Center settings dropdown controls consistently across settings panes (#482).
+- Keep the ACP composer clear of hero content on short panes (#483).
+
 ## [0.7.0] - 2026-06-05
 
 ### ✨ Features
