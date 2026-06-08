@@ -2172,6 +2172,15 @@ final class AppState {
         return nil
     }
 
+    private func projectAndWorktree(withWorktreeId id: String) -> (project: ProjectConfig, worktree: Worktree)? {
+        for project in projects {
+            if let worktree = projectsManager.worktrees(projectId: project.id).first(where: { $0.id == id }) {
+                return (project, worktree)
+            }
+        }
+        return nil
+    }
+
     private func projectPath(forWorktreeId id: String) -> String? {
         guard let worktree = worktree(withId: id) else { return nil }
         return projects.first(where: { $0.id == worktree.projectId })?.path
@@ -3217,9 +3226,44 @@ final class AppState {
 // `acpManagers` dictionary. Aggregates across every live per-worktree manager;
 // worktrees not opened this run simply don't appear (documented v1 behavior).
 extension AppState: RemoteSessionsProvider {
-    func sessionSummaries() -> [RemoteSessionSummary] {
+    private func remoteWorktreeSummary(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeSummary {
+        let git = GitService()
+        do {
+            async let status = git.status(worktreePath: worktree.path)
+            async let commits = git.commitsAhead(
+                at: worktree.path,
+                baseBranch: config.worktrees.baseBranch,
+                ignoreUpstream: !config.changes.trackUpstreamForCommits
+            )
+            let (changes, commitResult) = try await (status, commits)
+            return RemoteWorktreeSummaryBuilder.make(
+                projectName: project.name,
+                worktree: worktree,
+                metrics: .available(
+                    comparisonRef: commitResult.comparisonRef,
+                    commitCount: commitResult.commits.count,
+                    changes: changes
+                )
+            )
+        } catch {
+            return RemoteWorktreeSummaryBuilder.make(
+                projectName: project.name,
+                worktree: worktree,
+                metrics: .unavailable
+            )
+        }
+    }
+
+    func sessionSummaries() async -> [RemoteSessionSummary] {
         var out: [RemoteSessionSummary] = []
         for mgr in acpManagers.values {
+            let worktreeSummary: RemoteWorktreeSummary?
+            if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
+                worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
+            } else {
+                worktreeSummary = nil
+            }
+
             for row in mgr.sessionRows where !row.archived {
                 let state = mgr.runners[row.id]?.session.transcript.streamingState
                 out.append(RemoteSessionSummary(
@@ -3227,7 +3271,8 @@ extension AppState: RemoteSessionsProvider {
                     title: row.title,
                     agentId: row.agentId,
                     status: state.map(RemoteSessionGateway.stateString) ?? "idle",
-                    canDrive: mgr.isWriter(for: row.id)
+                    canDrive: mgr.isWriter(for: row.id),
+                    worktree: worktreeSummary
                 ))
             }
         }
