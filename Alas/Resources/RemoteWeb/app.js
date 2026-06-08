@@ -96,7 +96,8 @@ async function connect() {
   }
   if (attempt !== connectAttempt) return;
   if (ws) { try { ws.close(); } catch (_) {} }   // drop any prior (possibly half-open) socket
-  const socket = new WebSocket(`ws://${location.host}/ws`, [token]);   // token as subprotocol
+  const wsScheme = location.protocol === "https:" ? "wss:" : "ws:";
+  const socket = new WebSocket(`${wsScheme}//${location.host}/ws`, [token]);   // token as subprotocol
   ws = socket;
   socket.onopen = () => {
     if (socket !== ws) return;
