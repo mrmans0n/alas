@@ -111,7 +111,7 @@ struct ACPToolCallCard: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         ACPSyntaxHighlightedText(
                             text: displayContent,
-                            explicitLanguage: ACPToolOutputSyntax.highlighterExtension(
+                            explicitLanguage: toolCall.contentLanguage ?? ACPToolOutputSyntax.highlighterExtension(
                                 content: displayContent,
                                 locations: toolCall.locations
                             ),

@@ -236,7 +236,8 @@ final class ACPSession: ObservableObject, Identifiable {
             return [i]
         case .toolCall(let payload):
             let items = payload.content ?? []
-            let full = Self.stripWrappingFence(Self.flatten(items),
+            let raw = Self.flatten(items)
+            let full = Self.stripWrappingFence(raw,
                                                isFinal: Self.isFinalStatus(payload.status))
             transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
@@ -245,6 +246,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 status: payload.status,
                 content: full,
                 preview: Self.previewLine(full),
+                contentLanguage: Self.wrappingFenceLanguage(raw),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: Self.extractTerminalIds(items))))
             didAppendTranscriptMessage()
@@ -259,10 +261,12 @@ final class ACPSession: ObservableObject, Identifiable {
                     // unconditionally, including the empty case, so a
                     // text/diff-only final update doesn't leave a stale
                     // terminal tail rendering in the card.
-                    let full = Self.stripWrappingFence(Self.flatten(c),
+                    let raw = Self.flatten(c)
+                    let full = Self.stripWrappingFence(raw,
                                                       isFinal: Self.isFinalStatus(tc.status))
                     tc.content = full
                     tc.preview = Self.previewLine(full)
+                    tc.contentLanguage = Self.wrappingFenceLanguage(raw)
                     tc.terminalIds = Self.extractTerminalIds(c)
                 }
             }
@@ -600,6 +604,15 @@ final class ACPSession: ObservableObject, Identifiable {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    static func wrappingFenceLanguage(_ full: String) -> String? {
+        guard let first = full.split(separator: "\n", omittingEmptySubsequences: false).first else {
+            return nil
+        }
+        let line = String(first)
+        guard line.hasPrefix("```") else { return nil }
+        return ACPCodeLanguage.highlighterExtension(for: String(line.dropFirst(3)))
     }
 
     private static func isOpeningFence(_ line: String) -> Bool {

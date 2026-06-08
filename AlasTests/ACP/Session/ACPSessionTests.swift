@@ -377,7 +377,24 @@ struct ACPSessionTests {
             rawOutput: nil)))
         if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.content == "let x = 1\nlet y = 2")
+            #expect(tc.contentLanguage == "swift")
             #expect(tc.preview == "let x = 1")
+        } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("toolCallUpdate preserves supported wrapped fence language")
+    func toolCallUpdatePreservesWrappedFenceLanguage() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-sql", title: "query", kind: "read", status: "in_progress",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-sql", status: "completed",
+            content: [.content(.text("```sql\nSELECT id FROM users\n```"))],
+            rawOutput: nil)))
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "SELECT id FROM users")
+            #expect(tc.contentLanguage == "sql")
         } else { Issue.record("expected toolCall message") }
     }
 
@@ -390,6 +407,7 @@ struct ACPSessionTests {
             locations: nil, rawInput: nil, rawOutput: nil)))
         if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.content == "partial output")
+            #expect(tc.contentLanguage == nil)
         } else { Issue.record("expected toolCall message") }
     }
 
@@ -402,6 +420,7 @@ struct ACPSessionTests {
             locations: nil, rawInput: nil, rawOutput: nil)))
         if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.content == "hello\n```\ninner\n```\nworld")
+            #expect(tc.contentLanguage == nil)
         } else { Issue.record("expected toolCall message") }
     }
 }

@@ -50,6 +50,28 @@ struct ACPMessageWireTests {
         #expect(decoded == tc)
     }
 
+    @Test("tool call decodes missing content language as nil")
+    func toolCallMissingContentLanguageDecodesAsNil() throws {
+        let payload = """
+        {
+          "toolCallId": "tc1",
+          "title": "read",
+          "kind": "fs.read",
+          "status": "completed",
+          "content": "abc",
+          "preview": "abc",
+          "locations": ["/a"],
+          "terminalIds": []
+        }
+        """.data(using: .utf8)!
+        let wire = try ACPMessageWire.decode(kind: "tool_call", payload: payload)
+        guard case let .toolCall(decoded) = wire else {
+            #expect(Bool(false), "expected .toolCall, got \(wire)")
+            return
+        }
+        #expect(decoded.contentLanguage == nil)
+    }
+
     @Test("unknown kind decodes to system notice")
     func unknownKind() throws {
         let wire = try ACPMessageWire.decode(kind: "mystery", payload: Data())

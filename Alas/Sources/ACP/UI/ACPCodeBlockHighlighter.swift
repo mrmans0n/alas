@@ -96,6 +96,9 @@ enum ACPCodeLanguage {
 
 enum ACPToolOutputSyntax {
     static func highlighterExtension(content: String, locations: [String]) -> String? {
+        if let fencedLanguage = wholeOutputFenceLanguage(content) {
+            return fencedLanguage
+        }
         if looksLikeDiff(content) {
             return "diff"
         }
@@ -103,6 +106,22 @@ enum ACPToolOutputSyntax {
             return nil
         }
         return ACPCodeLanguage.highlighterExtension(forPath: locations[0])
+    }
+
+    private static func wholeOutputFenceLanguage(_ content: String) -> String? {
+        var lines = content
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        guard let first = lines.first, first.hasPrefix("```"),
+              let language = ACPCodeLanguage.highlighterExtension(for: String(first.dropFirst(3))) else {
+            return nil
+        }
+        lines.removeFirst()
+        while let last = lines.last, last.isEmpty {
+            lines.removeLast()
+        }
+        guard lines.last == "```" else { return nil }
+        return language
     }
 
     private static func looksLikeDiff(_ content: String) -> Bool {

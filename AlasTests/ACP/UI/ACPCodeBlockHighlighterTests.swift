@@ -110,6 +110,28 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["Sources/App.swift"]) == "diff")
     }
 
+    @Test("tool output syntax uses whole-output fenced labels")
+    func toolOutputSyntaxUsesWholeOutputFencedLabels() {
+        let content = """
+        ```sql
+        SELECT id FROM users
+        ```
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "sql")
+    }
+
+    @Test("tool output syntax prefers fenced labels over diff shape")
+    func toolOutputSyntaxPrefersFencedLabelsOverDiffShape() {
+        let content = """
+        ```swift
+        @@ -1 +1 @@
+        -old
+        +new
+        ```
+        """
+        #expect(ACPToolOutputSyntax.highlighterExtension(content: content, locations: []) == "swift")
+    }
+
     @Test("tool output syntax detects ACP-flattened diffs")
     func toolOutputSyntaxDetectsACPFlattenedDiffs() {
         let content = """
