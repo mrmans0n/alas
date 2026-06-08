@@ -156,10 +156,16 @@ enum ACPQueuedBubbleActionMetrics {
     static let buttonSize: CGFloat = 16
     static let buttonSpacing: CGFloat = 4
     static let reservedButtonSlots = 4
+    static let actionGroupToContentSpacing: CGFloat = 8
+    static let minimumLeadingSpacerWidth: CGFloat = 16
 
     static var reservedWidth: CGFloat {
         CGFloat(reservedButtonSlots) * buttonSize
             + CGFloat(reservedButtonSlots - 1) * buttonSpacing
+    }
+
+    static var reservedAccessoryWidth: CGFloat {
+        reservedWidth + actionGroupToContentSpacing
     }
 }
 
