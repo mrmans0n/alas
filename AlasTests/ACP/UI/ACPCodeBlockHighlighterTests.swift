@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -252,5 +253,78 @@ struct ACPCodeBlockHighlighterTests {
         let swiftAttributed = AttributedString(nsAttributed)
 
         #expect(String(swiftAttributed.characters) == "let value = 1")
+    }
+
+    @Test("highlight cache key changes with language and theme inputs")
+    func highlightedTextCacheKeyTracksInputs() throws {
+        let dark = try Theme.loadBundled(id: "cool-slate")
+        let light = try Theme.loadBundled(id: "light")
+        var accentTheme = dark
+        accentTheme.accentOverrideHex = "#123456"
+        var tokenOverrideTheme = dark
+        tokenOverrideTheme.resolvedColorOverrides = [
+            "fg": Color(.sRGB, red: 1, green: 0, blue: 0, opacity: 1),
+        ]
+        var changedTokens = dark.tokens
+        changedTokens["fg"] = "\(changedTokens["fg"] ?? "") changed"
+        let rawTokenTheme = Theme(id: dark.id, name: dark.name, tokens: changedTokens)
+
+        let a = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: dark,
+            fontSize: 12
+        )
+        let b = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "diff",
+            theme: dark,
+            fontSize: 12
+        )
+        let c = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: light,
+            fontSize: 12
+        )
+        let differentText = ACPSyntaxHighlightCacheKey(
+            text: "let value = 2",
+            resolvedExtension: "swift",
+            theme: dark,
+            fontSize: 12
+        )
+        let differentFontSize = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: dark,
+            fontSize: 13
+        )
+        let differentAccent = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: accentTheme,
+            fontSize: 12
+        )
+        let differentRawToken = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: rawTokenTheme,
+            fontSize: 12
+        )
+        let differentResolvedColorOverride = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            theme: tokenOverrideTheme,
+            fontSize: 12
+        )
+
+        #expect(a == a)
+        #expect(a != b)
+        #expect(a != c)
+        #expect(a != differentText)
+        #expect(a != differentFontSize)
+        #expect(a != differentAccent)
+        #expect(a != differentRawToken)
+        #expect(a != differentResolvedColorOverride)
     }
 }
