@@ -33,6 +33,10 @@ zmx_global_cache_dir="${zmx_build_root}/.zig-global-cache"
 cache_root_default="${HOME}/Library/Caches/Alas/zmx"
 cache_root="${ALAS_ZMX_CACHE_DIR:-${cache_root_default}}/${target_arch}"
 keep="${ALAS_ZMX_CACHE_KEEP:-5}"
+retry_delays=()
+for delay in ${ALAS_ZMX_RETRY_DELAYS:-5 15 30}; do
+    retry_delays+=("${delay}")
+done
 
 warn() { echo "build-zmx.sh: warning: $*" >&2; }
 die()  { echo "build-zmx.sh: error: $*" >&2; exit 1; }
@@ -150,15 +154,35 @@ case "${target_arch}" in
 esac
 
 # Build.
-(
-    cd "${zmx_src}"
-    "${zig_bin}" build \
-        -Doptimize=ReleaseFast \
-        -Dtarget="${zig_arch}-macos.14.0" \
-        --prefix "${zmx_install_prefix}" \
-        --cache-dir "${zmx_local_cache_dir}" \
-        --global-cache-dir "${zmx_global_cache_dir}"
-)
+run_zig_build_with_retries() {
+    local attempt status delay
+    attempt=1
+    while true; do
+        if (
+            cd "${zmx_src}"
+            "${zig_bin}" build \
+                -Doptimize=ReleaseFast \
+                -Dtarget="${zig_arch}-macos.14.0" \
+                --prefix "${zmx_install_prefix}" \
+                --cache-dir "${zmx_local_cache_dir}" \
+                --global-cache-dir "${zmx_global_cache_dir}"
+        ); then
+            return 0
+        fi
+
+        status=$?
+        if [ "${attempt}" -gt "${#retry_delays[@]}" ]; then
+            return "${status}"
+        fi
+
+        delay="${retry_delays[$((attempt - 1))]}"
+        warn "zig build failed with exit ${status}; retrying in ${delay}s (attempt $((attempt + 1))/$(( ${#retry_delays[@]} + 1 )))"
+        sleep "${delay}"
+        attempt=$((attempt + 1))
+    done
+}
+
+run_zig_build_with_retries
 [ -x "${zmx_output}" ] || die "zig build did not produce ${zmx_output}"
 
 # Publish to cache atomically. Use a per-process temp file so two concurrent
