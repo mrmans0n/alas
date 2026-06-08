@@ -126,6 +126,42 @@ struct EditorFindControllerTests {
         #expect(controller.matchCount == 3)
     }
 
+    @Test func defaultSearchIsCaseInsensitive() {
+        let textView = makeTextView("Cat cat CAT catalog")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "cat"
+
+        controller.refreshMatches(selecting: .first)
+
+        #expect(controller.matches.map(\.location) == [0, 4, 8, 12])
+        #expect(controller.matchCount == 4)
+        #expect(controller.activeMatchIndex == 0)
+        #expect(controller.activeMatchNumber == 1)
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 3))
+        #expect(controller.nextMatchRange(startingAt: 1) == NSRange(location: 4, length: 3))
+        #expect(controller.previousMatchRange(upTo: 11) == NSRange(location: 8, length: 3))
+        #expect(controller.countMatches() == 4)
+    }
+
+    @Test func caseSensitiveSearchOnlyMatchesExactCase() {
+        let textView = makeTextView("Cat cat CAT catalog")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "cat"
+        controller.isCaseSensitive = true
+
+        controller.refreshMatches(selecting: .first)
+
+        #expect(controller.matches.map(\.location) == [4, 12])
+        #expect(controller.matchCount == 2)
+        #expect(controller.activeMatchIndex == 0)
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 3))
+        #expect(controller.nextMatchRange(startingAt: 0) == NSRange(location: 4, length: 3))
+        #expect(controller.previousMatchRange(upTo: 12) == NSRange(location: 4, length: 3))
+        #expect(controller.countMatches() == 2)
+    }
+
     @Test func findNextJumpsToMatch() {
         let textView = makeTextView("hello world hello")
         let controller = EditorFindController()
@@ -150,6 +186,55 @@ struct EditorFindControllerTests {
         #expect(range != nil)
         #expect(range?.location == 12)
         #expect(range?.length == 5)
+    }
+
+    @Test func selectNextWrapsToFirstMatch() {
+        let textView = makeTextView("one two one")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "one"
+
+        controller.refreshMatches(selecting: .first)
+        #expect(controller.selectNext() == true)
+        #expect(controller.activeMatchIndex == 1)
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 3))
+
+        #expect(controller.selectNext() == true)
+        #expect(controller.activeMatchIndex == 0)
+        #expect(controller.activeMatchNumber == 1)
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 3))
+    }
+
+    @Test func selectPreviousWrapsToLastMatch() {
+        let textView = makeTextView("one two one")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "one"
+
+        controller.refreshMatches(selecting: .first)
+
+        #expect(controller.selectPrevious() == true)
+        #expect(controller.activeMatchIndex == 1)
+        #expect(controller.activeMatchNumber == 2)
+        #expect(textView.selectedRange() == NSRange(location: 8, length: 3))
+    }
+
+    @Test func emptyQueryClearsMatches() {
+        let textView = makeTextView("one two one")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "one"
+        controller.refreshMatches(selecting: .first)
+
+        controller.findString = ""
+        controller.refreshMatches(selecting: .first)
+
+        #expect(controller.matches.isEmpty)
+        #expect(controller.matchCount == 0)
+        #expect(controller.activeMatchIndex == nil)
+        #expect(controller.activeMatchNumber == nil)
+        #expect(controller.selectNext() == false)
+        #expect(controller.selectPrevious() == false)
     }
 
     @Test func replaceCurrentStartsFromCursor() {
@@ -178,6 +263,42 @@ struct EditorFindControllerTests {
 
         #expect(controller.replaceCurrent() == true)
         #expect(textView.string == "xx bb aa")
+    }
+
+    @Test func replaceCurrentUsesCaseInsensitiveSelectedMatchAndRecomputes() {
+        let textView = makeTextView("Cat cat CAT")
+        textView.setSelectedRange(NSRange(location: 0, length: 3))
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "cat"
+        controller.replacementString = "dog"
+        controller.refreshMatches(selecting: .first)
+
+        #expect(controller.replaceCurrent() == true)
+
+        #expect(textView.string == "dog cat CAT")
+        #expect(controller.matches.map(\.location) == [4, 8])
+        #expect(controller.matchCount == 2)
+        #expect(controller.activeMatchIndex == 0)
+        #expect(controller.activeMatchNumber == 1)
+        #expect(textView.selectedRange() == NSRange(location: 4, length: 3))
+    }
+
+    @Test func replaceAllIsCaseInsensitiveByDefault() {
+        let textView = makeTextView("Cat cat CAT")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "cat"
+        controller.replacementString = "dog"
+        controller.refreshMatches(selecting: .first)
+
+        let count = controller.replaceAll()
+
+        #expect(count == 3)
+        #expect(textView.string == "dog dog dog")
+        #expect(controller.matches.isEmpty)
+        #expect(controller.matchCount == 0)
+        #expect(controller.activeMatchIndex == nil)
     }
 
     @Test func replaceCurrentNoOpOnReadOnly() {
