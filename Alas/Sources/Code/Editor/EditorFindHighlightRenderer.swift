@@ -13,13 +13,24 @@ final class EditorFindHighlightRenderer {
     }
 
     func clear() {
-        guard let layoutManager = textView?.layoutManager else {
+        guard let textView,
+              let layoutManager = textView.layoutManager else {
             highlightedRanges.removeAll()
             return
         }
 
+        let textLength = (textView.string as NSString).length
         for range in highlightedRanges {
-            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: range)
+            guard range.location != NSNotFound,
+                  range.location >= 0,
+                  range.length > 0,
+                  range.location < textLength else { continue }
+
+            let cleanupRange = NSRange(
+                location: range.location,
+                length: min(range.length, textLength - range.location)
+            )
+            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: cleanupRange)
         }
         highlightedRanges.removeAll()
     }

@@ -148,6 +148,11 @@ struct EditorTabView: View {
         .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { notification in
             handleFindRequest(notification)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSText.didChangeNotification)) { notification in
+            guard let textView = notification.object as? CodeTextView,
+                  textView === activeTextView else { return }
+            handleEditorTextChanged()
+        }
     }
 
     private func handleFindRequest(_ notification: Notification) {
@@ -272,6 +277,13 @@ struct EditorTabView: View {
         findController.findString = findText
         findController.replacementString = replaceText
         findController.isCaseSensitive = isCaseSensitive
+    }
+
+    private func handleEditorTextChanged() {
+        guard findPresentation != .hidden else { return }
+        syncFindController()
+        _ = findController.countMatches()
+        updateFindStatus()
     }
 
     private func updateFindStatus() {
