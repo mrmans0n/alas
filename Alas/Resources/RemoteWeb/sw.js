@@ -7,7 +7,8 @@ const SHELL_ASSETS = [
   "/marked.min.js?v=27",
   "/purify.min.js?v=27",
   "/manifest.webmanifest",
-  "/icon.svg"
+  "/icon.svg",
+  "/icon-180.png"
 ];
 
 self.addEventListener("install", (event) => {
