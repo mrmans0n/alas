@@ -1,4 +1,5 @@
 import Testing
+import CoreGraphics
 @testable import Alas
 
 @Suite("ACPMessageList pagination")
@@ -51,5 +52,47 @@ struct ACPMessageListPaginationTests {
         #expect(ACPMessageList.queueHeaderCount(statuses: [.pending]) == 1)
         #expect(ACPMessageList.queueHeaderCount(statuses: [.sending]) == 1)
         #expect(ACPMessageList.queueHeaderCount(statuses: [.sending, .pending]) == 2)
+    }
+
+    @Test("content growth restores the tail when tail-follow is still enabled")
+    func contentGrowthRestoresTailWhenFollowing() {
+        let viewportHeight: CGFloat = 600
+        let previousContentHeight: CGFloat = 5_000
+        let newContentHeight: CGFloat = 5_220
+        let oldTailOffset = previousContentHeight - viewportHeight
+
+        #expect(ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: previousContentHeight,
+            newContentHeight: newContentHeight,
+            viewportHeight: viewportHeight,
+            newMinY: oldTailOffset,
+            followsTranscriptTail: true
+        ))
+    }
+
+    @Test("content growth does not restore the tail after the user paused tail-follow")
+    func contentGrowthDoesNotRestoreWhenTailFollowPaused() {
+        #expect(!ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: 5_000,
+            newContentHeight: 5_220,
+            viewportHeight: 600,
+            newMinY: 4_400,
+            followsTranscriptTail: false
+        ))
+    }
+
+    @Test("content growth does not issue an extra restore when already at the new tail")
+    func contentGrowthDoesNotRestoreWhenAlreadyAtTail() {
+        let viewportHeight: CGFloat = 600
+        let newContentHeight: CGFloat = 5_220
+        let newTailOffset = newContentHeight - viewportHeight
+
+        #expect(!ACPMessageList.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: 5_000,
+            newContentHeight: newContentHeight,
+            viewportHeight: viewportHeight,
+            newMinY: newTailOffset,
+            followsTranscriptTail: true
+        ))
     }
 }
