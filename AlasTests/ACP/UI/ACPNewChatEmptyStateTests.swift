@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 import Testing
 @testable import Alas
@@ -162,53 +161,24 @@ struct ACPNewChatEmptyStateTests {
         ])
     }
 
-    @Test("raised composer placement scales with available height")
-    func raisedComposerPlacementScalesWithAvailableHeight() {
+    @Test("composer bottom spacing is stable")
+    func composerBottomSpacingIsStable() {
         let bottom = ACPComposerPlacement.bottomInset(for: .bottom, containerHeight: 800)
-        let shortRaised = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: 360)
-        let regularRaised = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: 720)
-        let tallRaised = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: 1_200)
+        let inFlow = ACPComposerPlacement.bottomInset(for: .inFlow, containerHeight: 800)
 
         #expect(bottom == 18)
-        #expect(shortRaised > bottom)
-        #expect(regularRaised > shortRaised)
-        #expect(tallRaised == 320)
+        #expect(inFlow == 18)
     }
 
-    @Test("raised hero padding keeps centred content clear of the composer on small panes")
-    func raisedHeroPaddingClearsComposerOnSmallPanes() {
-        // Mirrors the geometry the production layout uses: the hero content is
-        // centre-aligned and the composer floats at `raisedEmpty`. These two
-        // constants track the documented model in `raisedHeroBottomPadding`;
-        // if they drift, this guards the no-overlap contract that was the
-        // whole point of making the padding responsive.
-        let pillHeight: CGFloat = 98
-        let contentHeight: CGFloat = 150
-
-        for h in stride(from: CGFloat(400), through: CGFloat(1_200), by: 20) {
-            let inset = ACPComposerPlacement.bottomInset(for: .raisedEmpty, containerHeight: h)
-            let pad = ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: h)
-
-            let composerTop = inset + pillHeight
-            let contentBottom = (h + pad) / 2 - contentHeight / 2
-            let contentTop = (h + pad) / 2 + contentHeight / 2
-
-            // Never overlaps the floating composer …
-            #expect(contentBottom >= composerTop)
-            // … and never clips above the top of the pane.
-            #expect(contentTop <= h)
-        }
-    }
-
-    @Test("raised hero padding preserves the historical placement on large panes")
-    func raisedHeroPaddingMatchesLegacyOnLargePanes() {
-        // The previous layout hardcoded 210pt; the responsive value must land
-        // on it for a roomy pane so large windows look unchanged, then grow as
-        // the pane shrinks.
-        #expect(ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: 900) == 210)
-        #expect(
-            ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: 600)
-                > ACPComposerPlacement.raisedHeroBottomPadding(containerHeight: 900)
-        )
+    @Test("initial empty states keep composer in normal vertical flow")
+    func initialEmptyStatesKeepComposerInNormalVerticalFlow() {
+        #expect(ACPFirstRunConnectingPolicy.composerPlacement(
+            firstRunConnecting: true,
+            newEmptySession: false
+        ) == .inFlow)
+        #expect(ACPFirstRunConnectingPolicy.composerPlacement(
+            firstRunConnecting: false,
+            newEmptySession: true
+        ) == .inFlow)
     }
 }

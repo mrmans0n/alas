@@ -130,16 +130,16 @@ struct ACPFirstRunConnectingPolicyTests {
         #expect(ACPFirstRunConnectingPolicy.phase(for: session) == nil)
     }
 
-    @Test("composer placement is raised during first-run connecting or new empty state")
-    func composerPlacementPolicyRaisesFirstRunConnecting() {
+    @Test("composer placement is in flow during first-run connecting or new empty state")
+    func composerPlacementPolicyKeepsIntroStatesInFlow() {
         #expect(ACPFirstRunConnectingPolicy.composerPlacement(
             firstRunConnecting: true,
             newEmptySession: false
-        ) == .raisedEmpty)
+        ) == .inFlow)
         #expect(ACPFirstRunConnectingPolicy.composerPlacement(
             firstRunConnecting: false,
             newEmptySession: true
-        ) == .raisedEmpty)
+        ) == .inFlow)
         #expect(ACPFirstRunConnectingPolicy.composerPlacement(
             firstRunConnecting: false,
             newEmptySession: false

@@ -52,6 +52,6 @@ enum ACPFirstRunConnectingPolicy {
         firstRunConnecting: Bool,
         newEmptySession: Bool
     ) -> ACPComposerPlacement {
-        (firstRunConnecting || newEmptySession) ? .raisedEmpty : .bottom
+        (firstRunConnecting || newEmptySession) ? .inFlow : .bottom
     }
 }

@@ -198,30 +198,31 @@ private struct ACPSessionView: View {
 
     private var transcriptAndComposer: some View {
         GeometryReader { proxy in
-            let heroBottomInset = ACPComposerPlacement.raisedHeroBottomPadding(
-                containerHeight: proxy.size.height
-            )
             HStack(spacing: 0) {
                 ZStack(alignment: .bottom) {
                     if let phase = firstRunConnectingPhase {
-                        ACPFirstRunConnectingView(
-                            agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
-                            phase: phase,
-                            bottomInset: heroBottomInset
-                        )
-                    } else if isConnecting {
-                        ACPConnectingPlaceholder(
-                            agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
-                        )
-                    } else {
-                        if isNewEmptySession {
+                        introStateAndComposer {
+                            ACPFirstRunConnectingView(
+                                agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                                phase: phase,
+                                bottomInset: 0
+                            )
+                        }
+                    } else if isNewEmptySession {
+                        introStateAndComposer {
                             ACPNewChatEmptyStateView(
                                 agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
-                                bottomInset: heroBottomInset,
+                                bottomInset: 0,
                                 onStarterPrompt: insertStarterPrompt
                             )
                             .transition(
                                 .opacity.combined(with: .move(edge: .top))
+                            )
+                        }
+                    } else {
+                        if isConnecting {
+                            ACPConnectingPlaceholder(
+                                agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
                             )
                         } else {
                             ACPMessageList(
@@ -300,105 +301,23 @@ private struct ACPSessionView: View {
                             )
                             .transition(.opacity)
                         }
-                    }
 
-                    ACPComposer(
-                        session: session,
-                        manager: manager,
-                        worktreeRoot: worktree.path,
-                        agentLookup: { state.agent(id: $0) },
-                        sendOnEnter: state.config.harness.acpSendOnEnter,
-                        focusRequest: composerFocusRequest,
-                        placement: composerPlacement,
-                        filesProvider: { [state, worktree] in
-                            await state.fileIndex.invalidate(forWorktreePath: worktree.path)
-                            async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)
-                            guard let entries = await entries else { return [] }
-                            let root = worktree.path
-                            var result: [URL] = []
-                            var dirEntries: [(path: String, isDirectory: Bool)] = []
-                            for entry in entries {
-                                let url = root.appendingPathComponent(entry.relativePath)
-                                guard (try? url.checkResourceIsReachable()) ?? false else { continue }
-                                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                                if isDir {
-                                    // Untracked directory or submodule gitlink; expand
-                                    // it so its files and subdirectories show too.
-                                    let sub = MentionFuzzy.collectFiles(under: url, limit: 5000)
-                                    result.append(contentsOf: sub)
-                                } else {
-                                    result.append(url)
-                                }
-                                dirEntries.append((entry.relativePath, isDir))
-                            }
-                            // `git ls-files` lists files only — reconstruct every
-                            // directory (tracked dirs and submodules included) so
-                            // they are pickable in the @ menu, flagged for the
-                            // folder icon.
-                            result += MentionFuzzy.pickerDirectories(forEntries: dirEntries, root: root)
-                            return result
-                        }
-                    ) { text, attachments, intent, draft, onPromptFinished -> Bool in
-                        // `intent` is already resolved by the composer for keyboard
-                        // submits; the toolbar send button bypasses the keyboard
-                        // inversion and supplies its own intent directly. No
-                        // further resolution here.
-                        //
-                        // The eager in-memory clear happens AFTER `manager.submit`
-                        // returns but BEFORE the completion closure can run (the
-                        // submit's completion is always dispatched via a Task,
-                        // so it runs on a later main-actor tick). The
-                        // suspendedRevision captured below identifies the post-
-                        // clear state — if the user has typed a new draft by the
-                        // time the completion fires, the conditional checks in
-                        // purge/reinstate skip and the new draft survives.
-                        var suspendedRevision: Int = -1
-                        let accepted = manager.submit(
-                            sessionId: sessionId,
-                            text: text,
-                            attachments: attachments,
-                            intent: intent,
-                            draft: draft
-                        ) { succeeded in
-                            if suspendedRevision >= 0 {
-                                if succeeded {
-                                    manager.purgeSuspendedComposerDraft(
-                                        for: session,
-                                        suspendedRevision: suspendedRevision
-                                    )
-                                } else {
-                                    manager.reinstateSuspendedComposerDraft(
-                                        draft,
-                                        for: session,
-                                        suspendedRevision: suspendedRevision
-                                    )
-                                }
-                            }
-                            onPromptFinished(succeeded)
-                        }
-                        if accepted {
-                            suspendedRevision = manager.suspendComposerDraftForSubmission(
-                                draft, for: session
-                            )
-                        }
-                        return accepted
-                    }
-                    .disabled(isMirror)
-                    .opacity(isMirror ? 0.5 : 1)
+                        composerView(placement: composerPlacement)
 
-                    if let undo = session.steerUndo, !undo.snapshot.isEmpty {
-                        VStack {
-                            Spacer()
-                            ACPSteerUndoToast(
-                                discardedCount: undo.snapshot.count,
-                                onUndo: { manager.runners[sessionId]?.steerUndo() },
-                                onDismiss: { session.steerUndo = nil }
-                            )
-                            .id(undo.id)
-                            .padding(.bottom, 200)
+                        if let undo = session.steerUndo, !undo.snapshot.isEmpty {
+                            VStack {
+                                Spacer()
+                                ACPSteerUndoToast(
+                                    discardedCount: undo.snapshot.count,
+                                    onUndo: { manager.runners[sessionId]?.steerUndo() },
+                                    onDismiss: { session.steerUndo = nil }
+                                )
+                                .id(undo.id)
+                                .padding(.bottom, 200)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .transition(.opacity)
                         }
-                        .frame(maxWidth: .infinity)
-                        .transition(.opacity)
                     }
                 }
                 .animation(emptyStateAnimation, value: isNewEmptySession)
@@ -429,6 +348,103 @@ private struct ACPSessionView: View {
                 updatePlanSidebar(paneWidth: proxy.size.width)
             }
         }
+    }
+
+    private func introStateAndComposer<Intro: View>(
+        @ViewBuilder intro: () -> Intro
+    ) -> some View {
+        VStack(spacing: 0) {
+            intro()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            composerView(placement: .inFlow)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func composerView(placement: ACPComposerPlacement) -> some View {
+        ACPComposer(
+            session: session,
+            manager: manager,
+            worktreeRoot: worktree.path,
+            agentLookup: { state.agent(id: $0) },
+            sendOnEnter: state.config.harness.acpSendOnEnter,
+            focusRequest: composerFocusRequest,
+            placement: placement,
+            filesProvider: { [state, worktree] in
+                await state.fileIndex.invalidate(forWorktreePath: worktree.path)
+                async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)
+                guard let entries = await entries else { return [] }
+                let root = worktree.path
+                var result: [URL] = []
+                var dirEntries: [(path: String, isDirectory: Bool)] = []
+                for entry in entries {
+                    let url = root.appendingPathComponent(entry.relativePath)
+                    guard (try? url.checkResourceIsReachable()) ?? false else { continue }
+                    let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                    if isDir {
+                        // Untracked directory or submodule gitlink; expand
+                        // it so its files and subdirectories show too.
+                        let sub = MentionFuzzy.collectFiles(under: url, limit: 5000)
+                        result.append(contentsOf: sub)
+                    } else {
+                        result.append(url)
+                    }
+                    dirEntries.append((entry.relativePath, isDir))
+                }
+                // `git ls-files` lists files only - reconstruct every
+                // directory (tracked dirs and submodules included) so
+                // they are pickable in the @ menu, flagged for the
+                // folder icon.
+                result += MentionFuzzy.pickerDirectories(forEntries: dirEntries, root: root)
+                return result
+            }
+        ) { text, attachments, intent, draft, onPromptFinished -> Bool in
+            // `intent` is already resolved by the composer for keyboard
+            // submits; the toolbar send button bypasses the keyboard
+            // inversion and supplies its own intent directly. No
+            // further resolution here.
+            //
+            // The eager in-memory clear happens AFTER `manager.submit`
+            // returns but BEFORE the completion closure can run (the
+            // submit's completion is always dispatched via a Task,
+            // so it runs on a later main-actor tick). The
+            // suspendedRevision captured below identifies the post-
+            // clear state - if the user has typed a new draft by the
+            // time the completion fires, the conditional checks in
+            // purge/reinstate skip and the new draft survives.
+            var suspendedRevision: Int = -1
+            let accepted = manager.submit(
+                sessionId: sessionId,
+                text: text,
+                attachments: attachments,
+                intent: intent,
+                draft: draft
+            ) { succeeded in
+                if suspendedRevision >= 0 {
+                    if succeeded {
+                        manager.purgeSuspendedComposerDraft(
+                            for: session,
+                            suspendedRevision: suspendedRevision
+                        )
+                    } else {
+                        manager.reinstateSuspendedComposerDraft(
+                            draft,
+                            for: session,
+                            suspendedRevision: suspendedRevision
+                        )
+                    }
+                }
+                onPromptFinished(succeeded)
+            }
+            if accepted {
+                suspendedRevision = manager.suspendComposerDraftForSubmission(
+                    draft, for: session
+                )
+            }
+            return accepted
+        }
+        .disabled(isMirror)
+        .opacity(isMirror ? 0.5 : 1)
     }
 
     @ViewBuilder
