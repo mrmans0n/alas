@@ -181,10 +181,13 @@ struct ACPMessageList: View {
                     onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
                     onPaused: { setFollowsTranscriptTail(false) },
                     onAtBottom: { setFollowsTranscriptTail(true) },
-                    onGeometry: { prevMinY, newMinY, viewportH, contentH in
+                    onGeometry: { old, new in
                         handleScrollGeometry(
-                            previousMinY: prevMinY, newMinY: newMinY,
-                            viewportHeight: viewportH, contentHeight: contentH,
+                            previousMinY: old.minY,
+                            newMinY: new.minY,
+                            viewportHeight: new.viewportHeight,
+                            previousContentHeight: old.contentHeight,
+                            contentHeight: new.contentHeight,
                             proxy: proxy)
                     }
                 ))
@@ -342,6 +345,21 @@ struct ACPMessageList: View {
         sourceStatus == .pending && targetStatus == .pending
     }
 
+    nonisolated static func shouldRestoreTailAfterContentGrowth(
+        previousContentHeight: CGFloat,
+        newContentHeight: CGFloat,
+        viewportHeight: CGFloat,
+        newMinY: CGFloat,
+        followsTranscriptTail: Bool
+    ) -> Bool {
+        guard followsTranscriptTail else { return false }
+        guard newContentHeight > previousContentHeight + ACPScrollDirectionClassifier.upwardEpsilon else {
+            return false
+        }
+        let distanceFromBottom = max(0, newContentHeight - viewportHeight - newMinY)
+        return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
+    }
+
     /// macOS 14 fallback path. The Tahoe (macOS 15+) ScrollView is no longer
     /// backed by an `NSScrollView`, and `frame(in:.named:)` reported through a
     /// `PreferenceKey` stops delivering live values during scroll, so this
@@ -376,6 +394,7 @@ struct ACPMessageList: View {
         previousMinY: CGFloat,
         newMinY: CGFloat,
         viewportHeight: CGFloat,
+        previousContentHeight: CGFloat,
         contentHeight: CGFloat,
         proxy: ScrollViewProxy
     ) {
@@ -393,6 +412,16 @@ struct ACPMessageList: View {
         case .userScrolledUp: setFollowsTranscriptTail(false)
         case .userAtBottom: setFollowsTranscriptTail(true)
         case .noChange: break
+        }
+        if Self.shouldRestoreTailAfterContentGrowth(
+            previousContentHeight: previousContentHeight,
+            newContentHeight: contentHeight,
+            viewportHeight: viewportHeight,
+            newMinY: newMinY,
+            followsTranscriptTail: session.followsTranscriptTail
+        ) {
+            scrollToTail(proxy: proxy, animated: false)
+            return
         }
         // Head-step pagination: reveal an older chunk as the viewport nears the
         // top of the content. When restored to the tail, `newMinY` is large, so
@@ -497,8 +526,7 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
     let onHeadFrame: (CGRect) -> Void
     let onPaused: () -> Void
     let onAtBottom: () -> Void
-    /// `(previousMinY, newMinY, viewportHeight, contentHeight)`.
-    let onGeometry: (CGFloat, CGFloat, CGFloat, CGFloat) -> Void
+    let onGeometry: (ACPScrollProbe, ACPScrollProbe) -> Void
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -509,7 +537,7 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
                     viewportHeight: geo.visibleRect.height,
                     contentHeight: geo.contentSize.height)
             } action: { old, new in
-                onGeometry(old.minY, new.minY, new.viewportHeight, new.contentHeight)
+                onGeometry(old, new)
             }
         } else {
             content
