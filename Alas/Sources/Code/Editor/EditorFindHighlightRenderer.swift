@@ -3,7 +3,6 @@ import AppKit
 @MainActor
 final class EditorFindHighlightRenderer {
     private weak var textView: CodeTextView?
-    private var highlightedRanges: [NSRange] = []
 
     func attach(textView: CodeTextView) {
         if self.textView !== textView {
@@ -15,24 +14,15 @@ final class EditorFindHighlightRenderer {
     func clear() {
         guard let textView,
               let layoutManager = textView.layoutManager else {
-            highlightedRanges.removeAll()
             return
         }
 
         let textLength = (textView.string as NSString).length
-        for range in highlightedRanges {
-            guard range.location != NSNotFound,
-                  range.location >= 0,
-                  range.length > 0,
-                  range.location < textLength else { continue }
-
-            let cleanupRange = NSRange(
-                location: range.location,
-                length: min(range.length, textLength - range.location)
-            )
-            layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: cleanupRange)
-        }
-        highlightedRanges.removeAll()
+        guard textLength > 0 else { return }
+        layoutManager.removeTemporaryAttribute(
+            .backgroundColor,
+            forCharacterRange: NSRange(location: 0, length: textLength)
+        )
     }
 
     func render(matches: [NSRange], activeIndex: Int?, color: NSColor) {
@@ -51,7 +41,6 @@ final class EditorFindHighlightRenderer {
                   NSMaxRange(range) <= textLength else { continue }
 
             layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: range)
-            highlightedRanges.append(range)
         }
     }
 }
