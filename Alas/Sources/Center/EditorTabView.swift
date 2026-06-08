@@ -56,7 +56,9 @@ struct EditorTabView: View {
     @State private var replaceText: String = ""
     @State private var isCaseSensitive: Bool = false
     @State private var findStatusText: String = ""
+    @State private var findHighlightRenderer = EditorFindHighlightRenderer()
     @State private var activeTextView: CodeTextView? = nil
+    @State private var fallbackEscapeHandler: (() -> Bool)? = nil
     @FocusState private var findFieldFocused: Bool
     @FocusState private var replaceFieldFocused: Bool
 
@@ -109,6 +111,9 @@ struct EditorTabView: View {
         }
         .background(theme.color("bg-1"))
         .onDisappear {
+            clearFindHighlights()
+            activeTextView?.escapeHandler = nil
+            fallbackEscapeHandler = nil
             findPresentation = .hidden
             findStatusText = ""
             findController.textView = nil
@@ -119,13 +124,24 @@ struct EditorTabView: View {
                   let notifTabId = info["tabId"] as? TabID,
                   notifTabId == tabId,
                   let textView = info["textView"] as? CodeTextView else { return }
+            clearFindHighlights()
+            if activeTextView !== textView {
+                activeTextView?.escapeHandler = fallbackEscapeHandler
+                fallbackEscapeHandler = textView.escapeHandler
+            }
             activeTextView = textView
             findController.textView = textView
+            findHighlightRenderer.attach(textView: textView)
+            installEscapeHandler(on: textView)
+            renderFindHighlights()
         }
         .onReceive(NotificationCenter.default.publisher(for: .codeEditorDidDetach)) { notification in
             guard let info = notification.userInfo,
                   let notifTabId = info["tabId"] as? TabID,
                   notifTabId == tabId else { return }
+            clearFindHighlights()
+            activeTextView?.escapeHandler = nil
+            fallbackEscapeHandler = nil
             activeTextView = nil
             findController.textView = nil
         }
@@ -220,6 +236,7 @@ struct EditorTabView: View {
             updateFindStatus()
         } else {
             findStatusText = findText.isEmpty ? "" : "No matches"
+            renderFindHighlights()
         }
     }
 
@@ -233,11 +250,13 @@ struct EditorTabView: View {
         } else {
             findStatusText = "Replaced \(count) matches"
         }
+        renderFindHighlights()
     }
 
     private func closeFindBar() {
         findPresentation = .hidden
         findStatusText = ""
+        clearFindHighlights()
         findFieldFocused = false
         replaceFieldFocused = false
         activeTextView?.window?.makeFirstResponder(activeTextView)
@@ -258,10 +277,12 @@ struct EditorTabView: View {
     private func updateFindStatus() {
         guard !findText.isEmpty else {
             findStatusText = ""
+            clearFindHighlights()
             return
         }
         guard findController.matchCount > 0 else {
             findStatusText = "No matches"
+            clearFindHighlights()
             return
         }
         if let activeMatchNumber = findController.activeMatchNumber {
@@ -269,6 +290,34 @@ struct EditorTabView: View {
         } else {
             findStatusText = ""
         }
+        renderFindHighlights()
+    }
+
+    private func installEscapeHandler(on textView: CodeTextView) {
+        let fallbackEscapeHandler = fallbackEscapeHandler
+        textView.escapeHandler = {
+            if findPresentation != .hidden {
+                closeFindBar()
+                return true
+            }
+            return fallbackEscapeHandler?() ?? false
+        }
+    }
+
+    private func renderFindHighlights() {
+        guard findPresentation != .hidden, !findText.isEmpty else {
+            clearFindHighlights()
+            return
+        }
+        findHighlightRenderer.render(
+            matches: findController.matches,
+            activeIndex: findController.activeMatchIndex,
+            color: NSColor.systemYellow.withAlphaComponent(0.28)
+        )
+    }
+
+    private func clearFindHighlights() {
+        findHighlightRenderer.clear()
     }
 
     private func navigationAnchor(for direction: EditorFindBarView.FindDirection) -> Int? {

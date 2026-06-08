@@ -642,6 +642,10 @@ final class CodeTextView: NSTextView, FontSizeResponder {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.keyCode == 53, escapeHandler?() == true {
+            return true
+        }
+
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let isCommandOnly = modifiers.contains(.command)
             && !modifiers.contains(.shift)
