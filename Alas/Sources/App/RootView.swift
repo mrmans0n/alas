@@ -573,3 +573,10 @@ extension Notification.Name {
     static let codeEditorDidAttach  = Notification.Name("CodeEditorDidAttach")
     static let codeEditorDidDetach  = Notification.Name("CodeEditorDidDetach")
 }
+
+enum EditorFindRequest: Equatable, Sendable {
+    case showFind
+    case showReplace
+    case findNext
+    case findPrevious
+}
