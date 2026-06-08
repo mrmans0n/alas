@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-08
+
+### ✨ Features
+
+- Add syntax highlighting for ACP chat code blocks and tool output (#484).
+- Improve remote session list worktree summaries (#488).
+- Add editor find and replace (#490).
+- Add a PWA shell for the remote client (#491).
+
+### 🐛 Fixes
+
+- Keep remote tool cards usable on mobile (#485).
+- Clear restored transcript context markers correctly (#486).
+- Resolve Git LFS image blobs in diff comparisons (#487).
+- Keep queued ACP controls clickable (#489).
+
+### 📚 Docs
+
+- Refresh the README feature list for ACP, remote, and review tooling.
+
 ## [0.7.1] - 2026-06-08
 
 ### 🐛 Fixes
