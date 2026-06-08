@@ -140,7 +140,7 @@ function renderMessages(forceBottom) {
   const atBottom = forceBottom || (box.scrollTop + box.clientHeight >= box.scrollHeight - 120);
   // Preserve which tool/thought cards the user expanded across re-renders.
   const open = new Set();
-  box.querySelectorAll("details[open]").forEach(d => { if (d.dataset.sid) open.add(d.dataset.sid); });
+  box.querySelectorAll(".m-collapsible.is-open").forEach(d => { if (d.dataset.sid) open.add(d.dataset.sid); });
   box.innerHTML = "";
   for (const [sid, m] of messages) box.appendChild(renderMessage(m, sid, open));
   if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
@@ -172,8 +172,7 @@ function renderMessage(m, sid, open) {
   } else if (m.kind === "systemNotice") {
     node = el("div", "msg m-systemNotice", m.text || "");
   } else if (m.kind === "thought") {
-    node = el("details", "msg m-thought");
-    node.append(el("summary", null, "Thinking…"), el("div", "thought-body", m.text || ""));
+    node = thoughtCard(m.text || "");
   } else if (m.kind === "toolCall") {
     node = toolCard(jparse(m.json) || {});
   } else if (m.kind === "fileEdit") {
@@ -184,11 +183,25 @@ function renderMessage(m, sid, open) {
   } else {
     node = el("div", "msg m-agent", m.text || "");
   }
-  if (node.tagName === "DETAILS") {            // restore prior expand state
+  if (node.classList?.contains("m-collapsible")) {            // restore prior expand state
     node.dataset.sid = sid;
-    if (open && open.has(sid)) node.open = true;
+    if (open && open.has(sid)) setCardOpen(node, true);
   }
   return node;
+}
+
+function thoughtCard(text) {
+  const d = el("div", "msg m-thought m-collapsible");
+  const button = el("button", "thought-toggle", "Thinking…");
+  button.type = "button";
+  button.dataset.cardToggle = "true";
+  button.setAttribute("aria-expanded", "false");
+  const body = el("div", "thought-body", text);
+  body.dataset.cardBody = "true";
+  body.hidden = true;
+  button.onclick = () => setCardOpen(d, !d.classList.contains("is-open"));
+  d.append(button, body);
+  return d;
 }
 
 function toolCard(tc) {
@@ -202,14 +215,29 @@ function toolCard(tc) {
 }
 
 function structCard(verb, name, body, preview) {
-  const d = el("details", "msg m-tool");
-  const sum = el("summary");
-  sum.append(el("span", "tool-verb", verb));
-  sum.append(el("span", "tool-name", name || ""));
-  sum.append(el("span", "tool-preview", preview || ""));
-  sum.append(el("span", "tool-chev", "⌄"));
-  d.append(sum, el("pre", "tool-body", body || ""));
+  const d = el("div", "msg m-tool m-collapsible");
+  const button = el("button", "tool-toggle");
+  button.type = "button";
+  button.dataset.cardToggle = "true";
+  button.setAttribute("aria-expanded", "false");
+  button.append(el("span", "tool-verb", verb));
+  button.append(el("span", "tool-name", name || ""));
+  button.append(el("span", "tool-preview", preview || ""));
+  button.append(el("span", "tool-chev", "⌄"));
+  const content = el("pre", "tool-body", body || "");
+  content.dataset.cardBody = "true";
+  content.hidden = true;
+  button.onclick = () => setCardOpen(d, !d.classList.contains("is-open"));
+  d.append(button, content);
   return d;
+}
+
+function setCardOpen(card, isOpen) {
+  card.classList.toggle("is-open", isOpen);
+  const body = card.querySelector("[data-card-body]");
+  if (body) body.hidden = !isOpen;
+  const toggle = card.querySelector("[data-card-toggle]");
+  if (toggle) toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
 }
 
 function planText(o) {
