@@ -34,7 +34,7 @@ cache_root_default="${HOME}/Library/Caches/Alas/zmx"
 cache_root="${ALAS_ZMX_CACHE_DIR:-${cache_root_default}}/${target_arch}"
 keep="${ALAS_ZMX_CACHE_KEEP:-5}"
 retry_delays=()
-for delay in ${ALAS_ZMX_RETRY_DELAYS:-5 15 30}; do
+for delay in ${ALAS_ZMX_RETRY_DELAYS:-5 15 30 60 120 180}; do
     retry_delays+=("${delay}")
 done
 
@@ -158,6 +158,7 @@ run_zig_build_with_retries() {
     local attempt status delay
     attempt=1
     while true; do
+        rm -f "${zmx_output}"
         if (
             cd "${zmx_src}"
             "${zig_bin}" build \
@@ -166,7 +167,7 @@ run_zig_build_with_retries() {
                 --prefix "${zmx_install_prefix}" \
                 --cache-dir "${zmx_local_cache_dir}" \
                 --global-cache-dir "${zmx_global_cache_dir}"
-        ); then
+        ) && [ -x "${zmx_output}" ]; then
             return 0
         fi
 
@@ -183,7 +184,6 @@ run_zig_build_with_retries() {
 }
 
 run_zig_build_with_retries
-[ -x "${zmx_output}" ] || die "zig build did not produce ${zmx_output}"
 
 # Publish to cache atomically. Use a per-process temp file so two concurrent
 # builds with the same fingerprint don't trample each other's `.tmp` mid-copy
