@@ -10,12 +10,43 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
     let json: String?         // JSON string for structured kinds; nil otherwise
 }
 
+struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
+    let projectName: String
+    let worktreeName: String
+    let branch: String
+    let path: String
+    let metricsAvailable: Bool
+    let comparisonRef: String?
+    let commitCount: Int
+    let changedFileCount: Int
+    let addedLines: Int
+    let deletedLines: Int
+    let conflictCount: Int
+}
+
 struct RemoteSessionSummary: Codable, Equatable, Sendable {
     let id: String
     let title: String
     let agentId: String
     let status: String       // "idle" | "streaming" | "awaitingPermission" | "awaitingInput"
     let canDrive: Bool       // this remote-host instance currently holds the writer lease
+    let worktree: RemoteWorktreeSummary?
+
+    init(
+        id: String,
+        title: String,
+        agentId: String,
+        status: String,
+        canDrive: Bool,
+        worktree: RemoteWorktreeSummary? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.agentId = agentId
+        self.status = status
+        self.canDrive = canDrive
+        self.worktree = worktree
+    }
 }
 
 /// A permission request surfaced to the client.

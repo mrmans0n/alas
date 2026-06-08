@@ -18,7 +18,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var modes: [(id: String, mode: String)] = []
     var autoRuns: [(id: String, enabled: Bool)] = []
     var configs: [String: RemoteSessionConfig] = [:]
-    func sessionSummaries() -> [RemoteSessionSummary] { summaries }
+    var sessionSummariesCallCount = 0
+    func sessionSummaries() async -> [RemoteSessionSummary] {
+        sessionSummariesCallCount += 1
+        return summaries
+    }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
     func hydrateIfNeeded(id: String) async {}
@@ -136,6 +140,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.listSessions)
+        #expect(provider.sessionSummariesCallCount == 1)
         #expect(sent == [.sessionList(sessions: provider.summaries)])
     }
 

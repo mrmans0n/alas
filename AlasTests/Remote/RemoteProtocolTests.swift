@@ -57,6 +57,47 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(list) == list)
     }
 
+    @Test func sessionSummaryRoundTripsWithoutWorktreePayload() throws {
+        let summary = RemoteSessionSummary(
+            id: "s1",
+            title: "Build feature",
+            agentId: "claude",
+            status: "idle",
+            canDrive: true
+        )
+        #expect(try roundTrip(summary) == summary)
+    }
+
+    @Test func sessionSummaryRoundTripsWithWorktreePayload() throws {
+        let summary = RemoteSessionSummary(
+            id: "s1",
+            title: "Build feature",
+            agentId: "claude",
+            status: "streaming",
+            canDrive: false,
+            worktree: RemoteWorktreeSummary(
+                projectName: "alas",
+                worktreeName: "nacho-improve-remote-sessions",
+                branch: "nacho/improve-remote-sessions",
+                path: "/tmp/alas",
+                metricsAvailable: true,
+                comparisonRef: "origin/main",
+                commitCount: 3,
+                changedFileCount: 7,
+                addedLines: 184,
+                deletedLines: 39,
+                conflictCount: 0
+            )
+        )
+        #expect(try roundTrip(summary) == summary)
+    }
+
+    @Test func sessionSummaryDecodesLegacyPayloadWithoutWorktree() throws {
+        let json = #"{"id":"s1","title":"T","agentId":"codex","status":"idle","canDrive":false}"#
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: Data(json.utf8))
+        #expect(decoded == RemoteSessionSummary(id: "s1", title: "T", agentId: "codex", status: "idle", canDrive: false))
+    }
+
     @Test func transcriptDeltaRoundTrips() throws {
         let delta = RemoteServerMessage.transcriptDelta(
             sessionId: "s1",

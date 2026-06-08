@@ -32,7 +32,7 @@ final class RemoteSessionGateway {
     func handle(_ message: RemoteClientMessage) async {
         switch message {
         case .listSessions:
-            send(.sessionList(sessions: provider.sessionSummaries()))
+            send(.sessionList(sessions: await provider.sessionSummaries()))
         case .subscribe(let id):
             await provider.hydrateIfNeeded(id: id)
             guard let session = provider.session(for: id) else {
