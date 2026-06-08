@@ -3,6 +3,10 @@ const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
+let reconnectTimer = null;
+let connectAttempt = 0;
+let pairingPromise = null;
+const initialReconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
 let lastSentText = null;        // text of the most recent sendPrompt, kept so a server promptRejected can restore it instead of losing the message
@@ -21,28 +25,39 @@ function showGate(title, msg, retry) {
 }
 function hideGate() { $("gate").classList.add("hidden"); }
 
+function showUnreachableGate() {
+  showGate("Can't reach Alas", "Make sure your Mac is awake, Alas is running, and this device is on the same Wi-Fi or tailnet.", true);
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, reconnectDelay);
+  reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
+}
+
+function retryConnection() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectDelay = initialReconnectDelay;
+  setStatus("Connecting...", "connecting");
+  connect();
+}
+
 async function ensureToken() {
   // A freshly-scanned QR (?code present) always re-pairs, REPLACING any stored
   // token — otherwise a phone holding a stale/rejected token could never
   // recover by scanning a new code (it would keep reusing the dead token).
   const code = new URLSearchParams(location.search).get("code");
   if (code) {
-    let res;
-    try {
-      res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
-    } catch (_) {
-      showGate("Can’t reach Alas", "Make sure your Mac is awake and on the same Wi-Fi, then scan the QR again.", true);
-      throw new Error("net");
+    if (!pairingPromise) {
+      pairingPromise = pairWithCode(code).finally(() => { pairingPromise = null; });
     }
-    if (!res.ok) {
-      localStorage.removeItem(tokenKey);
-      showGate("Pairing link expired", "That code timed out. In Alas, open Settings → Remote, tap “New code”, and scan the fresh QR.");
-      throw new Error("pair failed");
-    }
-    const token = (await res.json()).token;
-    localStorage.setItem(tokenKey, token);
-    history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
-    return token;
+    return await pairingPromise;
   }
   const token = localStorage.getItem(tokenKey);
   if (token) return token;
@@ -50,28 +65,61 @@ async function ensureToken() {
   throw new Error("no code");
 }
 
+async function pairWithCode(code) {
+  let res;
+  try {
+    res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
+  } catch (_) {
+    showUnreachableGate();
+    throw new Error("net");
+  }
+  if (!res.ok) {
+    localStorage.removeItem(tokenKey);
+    showGate("Pairing link expired", "That code timed out. In Alas, open Settings → Remote, tap “New code”, and scan the fresh QR.");
+    throw new Error("pair failed");
+  }
+  const token = (await res.json()).token;
+  localStorage.setItem(tokenKey, token);
+  history.replaceState({}, "", "/");   // strip code from URL (history + referrer)
+  return token;
+}
+
 async function connect() {
+  const attempt = ++connectAttempt;
   let token;
   try {
     token = await ensureToken();
-  } catch (_) {
+  } catch (err) {
+    if (attempt !== connectAttempt) return;
+    if (err && err.message === "net") scheduleReconnect();
     return;   // no code/token yet (or pairing failed); status is set — wait for the user
   }
+  if (attempt !== connectAttempt) return;
   if (ws) { try { ws.close(); } catch (_) {} }   // drop any prior (possibly half-open) socket
-  ws = new WebSocket(`ws://${location.host}/ws`, [token]);   // token as subprotocol
-  ws.onopen = () => {
+  const socket = new WebSocket(`ws://${location.host}/ws`, [token]);   // token as subprotocol
+  ws = socket;
+  socket.onopen = () => {
+    if (socket !== ws) return;
     setStatus("Connected", "ok");
     hideGate();
-    reconnectDelay = 1500;   // reset back-off after a good connection
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    reconnectDelay = initialReconnectDelay;   // reset back-off after a good connection
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
   };
-  ws.onclose = () => {
-    setStatus("Reconnecting…", "bad");
-    setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);   // capped exponential back-off
+  socket.onclose = () => {
+    if (socket !== ws) return;
+    setStatus("Reconnecting...", "bad");
+    showUnreachableGate();
+    scheduleReconnect();
   };
-  ws.onmessage = (e) => handle(JSON.parse(e.data));
+  socket.onmessage = (e) => {
+    if (socket !== ws) return;
+    handle(JSON.parse(e.data));
+  };
 }
 
 function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); }
@@ -574,7 +622,7 @@ $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
 
 $("back").onclick = showSessions;
-$("gate-retry").onclick = () => location.reload();
+$("gate-retry").onclick = retryConnection;
 
 // iOS overlays the keyboard without shrinking the layout viewport, so a
 // 100dvh shell ends up taller than the visible area when the field is focused.
