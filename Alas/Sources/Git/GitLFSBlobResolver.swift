@@ -15,10 +15,14 @@ enum GitLFSBlobResolver {
     private static func lfsObjectData(forPointerData data: Data, worktreePath: URL) async -> Data? {
         guard let pointer = parsePointer(data) else { return nil }
         guard let commonDir = await gitCommonDirectory(worktreePath: worktreePath) else { return nil }
+        guard let storageDir = await lfsStorageDirectory(
+            worktreePath: worktreePath,
+            commonDir: commonDir
+        ) else { return nil }
 
         let oid = pointer.oid
-        let objectURL = commonDir
-            .appendingPathComponent("lfs/objects")
+        let objectURL = storageDir
+            .appendingPathComponent("objects")
             .appendingPathComponent(String(oid.prefix(2)))
             .appendingPathComponent(String(oid.dropFirst(2).prefix(2)))
             .appendingPathComponent(oid)
@@ -41,6 +45,23 @@ enum GitLFSBlobResolver {
             return URL(fileURLWithPath: path)
         }
         return worktreePath.appendingPathComponent(path)
+    }
+
+    private static func lfsStorageDirectory(worktreePath: URL, commonDir: URL) async -> URL? {
+        let result = try? await Process.git(
+            ["config", "--path", "--get", "lfs.storage"],
+            cwd: worktreePath
+        )
+        guard let result, result.exitCode == 0 else {
+            return commonDir.appendingPathComponent("lfs")
+        }
+
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return commonDir.appendingPathComponent("lfs") }
+        if path.hasPrefix("/") {
+            return URL(fileURLWithPath: path)
+        }
+        return commonDir.appendingPathComponent(path)
     }
 
     private static func parsePointer(_ data: Data) -> LFSPointer? {

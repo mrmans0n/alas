@@ -37,7 +37,8 @@ struct ImageDiffPairLoaderTests {
     private func writeLFSPointer(
         for data: Data,
         named fileName: String,
-        in repo: URL
+        in repo: URL,
+        storageDirectory: URL? = nil
     ) async throws {
         let oid = try await sha256Hex(data)
         let pointer = """
@@ -46,8 +47,8 @@ struct ImageDiffPairLoaderTests {
         size \(data.count)
 
         """
-        let objectDir = repo
-            .appendingPathComponent(".git/lfs/objects")
+        let objectDir = (storageDirectory ?? repo.appendingPathComponent(".git/lfs"))
+            .appendingPathComponent("objects")
             .appendingPathComponent(String(oid.prefix(2)))
             .appendingPathComponent(String(oid.dropFirst(2).prefix(2)))
         try FileManager.default.createDirectory(at: objectDir, withIntermediateDirectories: true)
@@ -305,6 +306,30 @@ struct ImageDiffPairLoaderTests {
         )
         #expect(pair.kind == .added)
         #expect(pair.before == nil)
+        #expect(pair.after != nil)
+    }
+
+    @Test func loadsLFSImageFromConfiguredStorage() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        _ = try await Process.git(["config", "lfs.storage", "custom-lfs"], cwd: repo)
+        try await writeLFSPointer(
+            for: PngFixture.red,
+            named: "logo.png",
+            in: repo,
+            storageDirectory: repo.appendingPathComponent(".git/custom-lfs")
+        )
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "lfs image"], cwd: repo)
+
+        try PngFixture.blue.write(to: repo.appendingPathComponent("logo.png"))
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "logo.png", staged: false
+        )
+        #expect(pair.kind == .modified)
+        #expect(pair.before != nil)
         #expect(pair.after != nil)
     }
 }
