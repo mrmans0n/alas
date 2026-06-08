@@ -301,6 +301,24 @@ struct EditorFindControllerTests {
         #expect(controller.activeMatchIndex == nil)
     }
 
+    @Test func replaceAllCaseSensitiveOnlyReplacesExactCaseMatches() {
+        let textView = makeTextView("Cat cat CAT cat")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "cat"
+        controller.replacementString = "dog"
+        controller.isCaseSensitive = true
+        controller.refreshMatches(selecting: .first)
+
+        let count = controller.replaceAll()
+
+        #expect(count == 2)
+        #expect(textView.string == "Cat dog CAT dog")
+        #expect(controller.matches.isEmpty)
+        #expect(controller.matchCount == 0)
+        #expect(controller.activeMatchIndex == nil)
+    }
+
     @Test func replaceCurrentNoOpOnReadOnly() {
         let textView = makeTextView("hello world")
         textView.isEditable = false
