@@ -18,7 +18,22 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var modes: [(id: String, mode: String)] = []
     var autoRuns: [(id: String, enabled: Bool)] = []
     var configs: [String: RemoteSessionConfig] = [:]
-    func sessionSummaries() -> [RemoteSessionSummary] { summaries }
+    var sessionSummariesCallCount = 0
+    var pauseSessionSummaries = false
+    private var sessionSummariesContinuation: CheckedContinuation<[RemoteSessionSummary], Never>?
+    func sessionSummaries() async -> [RemoteSessionSummary] {
+        sessionSummariesCallCount += 1
+        if pauseSessionSummaries {
+            return await withCheckedContinuation { continuation in
+                sessionSummariesContinuation = continuation
+            }
+        }
+        return summaries
+    }
+    func resumeSessionSummaries() {
+        sessionSummariesContinuation?.resume(returning: summaries)
+        sessionSummariesContinuation = nil
+    }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
     func hydrateIfNeeded(id: String) async {}
@@ -136,7 +151,48 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.listSessions)
+        await Task.yield()
+        #expect(provider.sessionSummariesCallCount == 1)
         #expect(sent == [.sessionList(sessions: provider.summaries)])
+    }
+
+    @Test func listSessionsDoesNotBlockFollowingSubscribe() async throws {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
+        provider.pauseSessionSummaries = true
+        provider.sessions["s1"] = try makeSessionWithAgentText("hello")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        var listHandleReturned = false
+        let listTask = Task { @MainActor in
+            await gw.handle(.listSessions)
+            listHandleReturned = true
+        }
+        for _ in 0..<10 {
+            if provider.sessionSummariesCallCount == 1 { break }
+            await Task.yield()
+        }
+
+        #expect(provider.sessionSummariesCallCount == 1)
+        #expect(listHandleReturned == true)
+        #expect(sent.isEmpty)
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(sent.contains { message in
+            if case .transcriptSnapshot(let id, _, _, _) = message {
+                return id == "s1"
+            }
+            return false
+        })
+
+        provider.resumeSessionSummaries()
+        await listTask.value
+        for _ in 0..<10 {
+            if sent.last == .sessionList(sessions: provider.summaries) { break }
+            await Task.yield()
+        }
+        #expect(sent.last == .sessionList(sessions: provider.summaries))
     }
 
     @Test func subscribeEmitsSnapshot() async throws {
@@ -351,6 +407,29 @@ struct RemoteSessionGatewayTests {
         try await Task.sleep(nanoseconds: 250_000_000)
         #expect(!sent.contains { if case .transcriptDelta = $0 { return true }
         return false })
+    }
+
+    @Test func closeCancelsPendingSessionListRefresh() async {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "T", agentId: "claude", status: "idle", canDrive: false)]
+        provider.pauseSessionSummaries = true
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listSessions)
+        for _ in 0..<10 {
+            if provider.sessionSummariesCallCount == 1 { break }
+            await Task.yield()
+        }
+        gw.close()
+        provider.resumeSessionSummaries()
+        for _ in 0..<10 {
+            if !sent.isEmpty { break }
+            await Task.yield()
+        }
+
+        #expect(provider.sessionSummariesCallCount == 1)
+        #expect(sent.isEmpty)
     }
 
     @Test func takeOverRoutesToProvider() async {

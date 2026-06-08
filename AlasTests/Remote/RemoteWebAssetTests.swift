@@ -25,4 +25,19 @@ struct RemoteWebAssetTests {
         #expect(!app.contains(#"const d = el("details", "msg m-tool")"#))
         #expect(!css.contains(".m-tool > summary"))
     }
+
+    @Test func sessionRowsRenderWorktreeSummaryCards() throws {
+        let app = try asset("app.js")
+        let css = try asset("style.css")
+        let html = try asset("index.html")
+
+        #expect(app.contains("function sessionMetaParts"))
+        #expect(app.contains("function renderSessionRow"))
+        #expect(app.contains(#""changes unavailable""#))
+        #expect(app.contains(#""clean""#))
+        #expect(css.contains(".session-row-card"))
+        #expect(css.contains(".session-meta"))
+        #expect(html.contains("/app.js?v=27"))
+        #expect(html.contains("/style.css?v=27"))
+    }
 }

@@ -99,21 +99,58 @@ function handle(msg) {
 
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
-  sessions.forEach(s => {
-    // A real <button> is natively tappable on iOS Safari (a plain <li> with a
-    // JS click handler is not, even with cursor:pointer).
-    const row = document.createElement("button");
-    row.type = "button";
-    row.className = "session-row";
-    const title = document.createElement("span");
-    title.textContent = s.title;                 // textContent: safe against agent-set titles
-    const status = document.createElement("span");
-    status.className = "status";
-    status.textContent = s.status;
-    row.append(title, status);
-    row.onclick = () => openSession(s.id);
-    list.appendChild(row);
-  });
+  sessions.forEach(s => list.appendChild(renderSessionRow(s)));
+}
+
+function renderSessionRow(s) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "session-row";
+
+  const head = el("div", "session-head");
+  const title = el("span", "session-title", s.title);
+  const status = el("span", "status", s.status);
+  head.append(title, status);
+  row.append(head);
+
+  if (s.worktree) {
+    row.classList.add("session-row-card");
+    row.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
+    const meta = el("div", "session-meta");
+    const parts = sessionMetaParts(s.worktree);
+    parts.forEach(part => meta.append(part));
+    row.append(meta);
+    row.title = s.worktree.path || "";
+  } else {
+    row.classList.add("session-row-minimal");
+  }
+
+  row.onclick = () => openSession(s.id);
+  return row;
+}
+
+function sessionMetaParts(worktree) {
+  if (!worktree.metricsAvailable) return [el("span", "", "changes unavailable")];
+
+  const parts = [];
+  if (worktree.commitCount > 0) parts.push(el("span", "", plural(worktree.commitCount, "commit")));
+  if (worktree.conflictCount > 0) parts.push(el("span", "meta-conflict", plural(worktree.conflictCount, "conflict")));
+  if (worktree.changedFileCount > 0) parts.push(el("span", "", plural(worktree.changedFileCount, "file")));
+
+  const line = [];
+  if (worktree.addedLines > 0) line.push(el("span", "meta-add", "+" + worktree.addedLines));
+  if (worktree.deletedLines > 0) line.push(el("span", "meta-del", "-" + worktree.deletedLines));
+  if (line.length) {
+    const group = el("span", "meta-lines");
+    line.forEach(item => group.append(item));
+    parts.push(group);
+  }
+
+  return parts.length ? parts : [el("span", "", "clean")];
+}
+
+function plural(count, singular) {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
 function openSession(id) {

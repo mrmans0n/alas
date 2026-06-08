@@ -44,10 +44,23 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 /* Sessions list */
 h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
-#session-list { list-style: none; padding: 0; margin: 0; }
-.session-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; width: 100%; padding: 15px 10px; border: none; border-bottom: 0.5px solid var(--line-soft); background: none; color: var(--fg); font: inherit; font-size: 15px; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.session-row:active { background: var(--bg-2); }
-.session-row .status { color: var(--accent); font-size: 11px; flex-shrink: 0; }
+#session-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.session-row { width: 100%; border: none; color: var(--fg); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.session-row-card { display: block; padding: 12px; border: 0.5px solid var(--line); border-radius: 10px; background: color-mix(in oklab, var(--bg-2) 54%, transparent); }
+.session-row-card:active { background: var(--bg-3); }
+.session-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.session-title { flex: 1; min-width: 0; font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-row .status { color: var(--accent); font-size: 11px; flex-shrink: 0; white-space: nowrap; }
+.session-worktree { margin-top: 6px; color: var(--fg-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-meta { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 8px; color: var(--fg-dim); font-size: 11px; line-height: 1.3; }
+.session-meta span { min-width: 0; }
+.meta-lines { display: inline-flex; gap: 5px; }
+.meta-add { color: var(--add); }
+.meta-del { color: var(--del); }
+.meta-conflict { color: oklch(0.82 0.13 90); }
+.session-row-minimal { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 15px 10px; border-bottom: 0.5px solid var(--line-soft); background: none; }
+.session-row-minimal .session-head { flex: 1; }
+.session-row-minimal:active { background: var(--bg-2); }
 #back { background: none; border: none; color: var(--accent); font-size: 15px; padding: 4px 2px; margin: -4px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 
 /* Transcript: a non-scrolling column — only #messages scrolls, #drivebar pins. */
