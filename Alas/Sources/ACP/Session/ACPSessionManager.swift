@@ -1541,7 +1541,7 @@ extension ACPSessionManager {
             if delivered {
                 self.persistContextRecoveryPending(sessionId: sessionId, pending: false)
                 session.contextRestoreWarning = nil
-                session.contextRecoveryStatus = .restored
+                session.markContextRecoveryRestored()
             } else {
                 session.contextRecoveryStatus = .failed("Transcript recovery failed.")
             }

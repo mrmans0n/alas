@@ -206,6 +206,36 @@ struct ACPSessionTests {
         ))
     }
 
+    @Test("restored context recovery marker clears when agent output starts")
+    func restoredContextRecoveryMarkerClearsWhenAgentOutputStarts() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.markContextRecoveryRestored(expiryNanoseconds: 60_000_000_000)
+
+        session.apply(.agentMessageChunk(.text("answer")))
+
+        #expect(session.contextRecoveryStatus == nil)
+    }
+
+    @Test("context recovery failure remains visible when agent output starts")
+    func contextRecoveryFailureRemainsVisibleWhenAgentOutputStarts() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.contextRecoveryStatus = .failed("Transcript recovery failed.")
+
+        session.apply(.agentMessageChunk(.text("answer")))
+
+        #expect(session.contextRecoveryStatus == .failed("Transcript recovery failed."))
+    }
+
+    @Test("restored context recovery marker expires")
+    func restoredContextRecoveryMarkerExpires() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.markContextRecoveryRestored(expiryNanoseconds: 1_000_000)
+
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        #expect(session.contextRecoveryStatus == nil)
+    }
+
     @Test("plan update creates / replaces the plan message")
     func plan() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
