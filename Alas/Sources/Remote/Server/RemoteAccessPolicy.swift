@@ -25,6 +25,11 @@ struct RemoteAccessPolicy: Equatable, Sendable {
 
         if raw.hasPrefix("[") {
             guard let close = raw.firstIndex(of: "]") else { return nil }
+            let suffix = raw[raw.index(after: close)...]
+            let port = suffix.dropFirst()
+            guard suffix.isEmpty || (suffix.hasPrefix(":") && !port.isEmpty && port.allSatisfy(\.isNumber)) else {
+                return nil
+            }
             let inside = raw[raw.index(after: raw.startIndex)..<close]
             return String(inside)
         }

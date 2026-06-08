@@ -36,8 +36,16 @@ struct RemoteAccessPolicyTests {
 
     @Test func normalizesIpv6HostWithAndWithoutPort() {
         #expect(RemoteAccessPolicy.normalizedHost(from: "[::1]:8765") == "::1")
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[::1]") == "::1")
         #expect(RemoteAccessPolicy.normalizedHost(from: "::1") == "::1")
         #expect(RemoteAccessPolicy.normalizedHost(from: "192.168.1.23:8765") == "192.168.1.23")
         #expect(RemoteAccessPolicy.normalizedHost(from: "nacho-mbp.local:8765") == "nacho-mbp.local")
+    }
+
+    @Test func rejectsMalformedBracketedIpv6Suffixes() {
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "[::1]evil"))
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "[::1].example"))
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[::1]evil") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[::1].example") == nil)
     }
 }
