@@ -85,7 +85,7 @@ struct EditorTabView: View {
                     replaceFieldFocused: $replaceFieldFocused,
                     showsReplace: findPresentation == .replace,
                     statusText: findStatusText,
-                    canReplace: findController.canReplace,
+                    canReplace: canReplaceMatches,
                     onFindChanged: refreshFindFromUserInput,
                     onToggleCaseSensitive: toggleCaseSensitive,
                     onFind: navigateFind,
@@ -236,6 +236,11 @@ struct EditorTabView: View {
 
     private func replaceCurrentMatch() {
         syncFindController()
+        guard activeTextView?.isEditable == true else {
+            findStatusText = findText.isEmpty ? "" : "Read-only"
+            renderFindHighlights()
+            return
+        }
         let didReplace = findController.replaceCurrent()
         if didReplace {
             updateFindStatus()
@@ -247,6 +252,11 @@ struct EditorTabView: View {
 
     private func replaceAllMatches() {
         syncFindController()
+        guard activeTextView?.isEditable == true else {
+            findStatusText = findText.isEmpty ? "" : "Read-only"
+            renderFindHighlights()
+            return
+        }
         let count = findController.replaceAll()
         if count == 0 {
             findStatusText = findText.isEmpty ? "" : "No matches"
@@ -277,6 +287,10 @@ struct EditorTabView: View {
         findController.findString = findText
         findController.replacementString = replaceText
         findController.isCaseSensitive = isCaseSensitive
+    }
+
+    private var canReplaceMatches: Bool {
+        findController.canReplace && activeTextView?.isEditable == true
     }
 
     private func handleEditorTextChanged() {

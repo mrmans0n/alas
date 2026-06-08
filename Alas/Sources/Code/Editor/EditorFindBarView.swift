@@ -144,5 +144,25 @@ struct EditorFindBarView: View {
         .padding(.vertical, 8)
         .background(theme.color("bg-1"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
+        .onExitCommand(perform: onDone)
+        .onKeyPress { press in
+            handleKeyPress(press)
+        }
+    }
+
+    private func handleKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .escape:
+            onDone()
+            return .handled
+        case .return:
+            if press.modifiers.contains(.shift) {
+                onFind(.previous)
+                return .handled
+            }
+            return .ignored
+        default:
+            return .ignored
+        }
     }
 }
