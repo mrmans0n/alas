@@ -34,7 +34,8 @@ struct EditorFindBarView: View {
                     .focused($findFieldFocused)
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 12))
-                    .frame(width: 180)
+                    .frame(minWidth: 72, idealWidth: 180, maxWidth: 220)
+                    .layoutPriority(2)
                     .onSubmit { onFind(.next) }
                     .onChange(of: findText) { _ in
                         onFindChanged()
@@ -51,7 +52,8 @@ struct EditorFindBarView: View {
                         .focused($replaceFieldFocused)
                         .textFieldStyle(PlainTextFieldStyle())
                         .font(.system(size: 12))
-                        .frame(width: 180)
+                        .frame(minWidth: 72, idealWidth: 180, maxWidth: 220)
+                        .layoutPriority(1)
                         .onSubmit { onReplace() }
                 }
                 .padding(.horizontal, 8)
@@ -67,6 +69,7 @@ struct EditorFindBarView: View {
                         .frame(width: 22, height: 22)
                 }
                 .help("Previous match")
+                .accessibilityLabel("Previous match")
                 .disabled(findText.isEmpty)
 
                 Button(action: { onFind(.next) }) {
@@ -75,6 +78,7 @@ struct EditorFindBarView: View {
                         .frame(width: 22, height: 22)
                 }
                 .help("Next match")
+                .accessibilityLabel("Next match")
                 .disabled(findText.isEmpty)
             }
             .buttonStyle(PlainButtonStyle())
@@ -90,24 +94,29 @@ struct EditorFindBarView: View {
             }
             .buttonStyle(PlainButtonStyle())
             .help("Match case")
+            .accessibilityLabel("Match case")
+            .accessibilityValue(isCaseSensitive ? "On" : "Off")
 
             Text(statusText)
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
-                .frame(width: 90, alignment: .trailing)
+                .truncationMode(.tail)
+                .frame(minWidth: 44, idealWidth: 90, maxWidth: 100, alignment: .trailing)
 
             if showsReplace {
                 Button("Replace") {
                     onReplace()
                 }
                 .font(.system(size: 11, weight: .medium))
+                .accessibilityLabel("Replace current match")
                 .disabled(!canReplace)
 
                 Button("All") {
                     onReplaceAll()
                 }
                 .font(.system(size: 11, weight: .medium))
+                .accessibilityLabel("Replace all matches")
                 .disabled(!canReplace)
             }
 
@@ -121,6 +130,7 @@ struct EditorFindBarView: View {
             }
             .buttonStyle(PlainButtonStyle())
             .help("Close")
+            .accessibilityLabel("Close find bar")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
