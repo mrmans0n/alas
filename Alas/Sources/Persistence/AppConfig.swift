@@ -704,6 +704,18 @@ extension AppConfig {
             (try? c.decode([String: SidebarChromeOverride].self, forKey: .sidebarChromeOverrides)) ?? [:]
         shortcutOverrides =
             (try? c.decode([String: ShortcutBinding?].self, forKey: .shortcutOverrides)) ?? [:]
+        migrateLegacyFindAndReplaceShortcutOverride()
+    }
+}
+
+private extension AppConfig {
+    mutating func migrateLegacyFindAndReplaceShortcutOverride() {
+        let legacyKey = ShortcutAction.findAndReplace.rawValue
+        let replaceKey = ShortcutAction.replaceInEditor.rawValue
+        guard let legacyOverride = shortcutOverrides[legacyKey],
+              !shortcutOverrides.keys.contains(replaceKey) else { return }
+        shortcutOverrides.updateValue(legacyOverride, forKey: replaceKey)
+        shortcutOverrides.removeValue(forKey: legacyKey)
     }
 }
 

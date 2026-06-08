@@ -37,4 +37,48 @@ struct AppConfigShortcutsCodingTests {
         #expect(decoded.shortcutOverrides.keys.contains(ShortcutAction.switchRepository.rawValue))
         #expect(decoded.shortcutOverrides[ShortcutAction.switchRepository.rawValue] == .some(nil))
     }
+
+    @Test func migratesLegacyFindAndReplaceOverrideToReplaceAction() throws {
+        var cfg = AppConfig.defaults
+        let custom = ShortcutBinding(key: "j", modifiers: [.command, .option])
+        cfg.shortcutOverrides = [
+            ShortcutAction.findAndReplace.rawValue: custom
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.replaceInEditor.rawValue] == .some(custom))
+        #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
+    }
+
+    @Test func preservesExplicitNewReplaceOverrideDuringFindMigration() throws {
+        var cfg = AppConfig.defaults
+        let legacy = ShortcutBinding(key: "j", modifiers: [.command, .option])
+        let replacement = ShortcutBinding(key: "r", modifiers: [.command, .option])
+        cfg.shortcutOverrides = [
+            ShortcutAction.findAndReplace.rawValue: legacy,
+            ShortcutAction.replaceInEditor.rawValue: replacement,
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides[ShortcutAction.replaceInEditor.rawValue] == .some(replacement))
+        #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == .some(legacy))
+    }
+
+    @Test func migratesLegacyFindAndReplaceUnbindToReplaceAction() throws {
+        var cfg = AppConfig.defaults
+        cfg.shortcutOverrides = [
+            ShortcutAction.findAndReplace.rawValue: nil
+        ]
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.shortcutOverrides.keys.contains(ShortcutAction.replaceInEditor.rawValue))
+        #expect(decoded.shortcutOverrides[ShortcutAction.replaceInEditor.rawValue] == .some(nil))
+        #expect(decoded.shortcutOverrides[ShortcutAction.findAndReplace.rawValue] == nil)
+    }
 }
