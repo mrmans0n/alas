@@ -44,4 +44,12 @@ struct ACPMessageListPaginationTests {
         #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: .pending, targetStatus: .sending))
         #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: nil, targetStatus: .pending))
     }
+
+    @Test("queue header count matches rendered queue bubbles")
+    func queueHeaderCountMatchesRenderedQueueBubbles() {
+        #expect(ACPMessageList.queueHeaderCount(statuses: []) == 0)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.pending]) == 1)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending]) == 1)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending, .pending]) == 2)
+    }
 }

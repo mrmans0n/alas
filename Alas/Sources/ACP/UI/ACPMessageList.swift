@@ -127,8 +127,11 @@ struct ACPMessageList: View {
                             StreamingCaret().frame(width: 8, height: 14)
                                 .id("__streaming_caret__")
                         }
-                        if session.visibleQueueCount > 1 {
-                            ACPQueueHeader(count: session.visibleQueueCount, onClear: onQueueClearAll)
+                        let queueHeaderCount = Self.queueHeaderCount(
+                            statuses: session.queue.map(\.status)
+                        )
+                        if queueHeaderCount > 1 {
+                            ACPQueueHeader(count: queueHeaderCount, onClear: onQueueClearAll)
                                 .id("__queue_header__")
                         }
                         ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
@@ -323,6 +326,12 @@ struct ACPMessageList: View {
         switch status {
         case .pending, .sending:
             return true
+        }
+    }
+
+    nonisolated static func queueHeaderCount(statuses: [QueuedPrompt.Status]) -> Int {
+        statuses.reduce(0) { count, status in
+            count + (shouldRenderQueueBubble(status: status) ? 1 : 0)
         }
     }
 
