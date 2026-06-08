@@ -30,6 +30,12 @@ private struct LSPStatusProbes {
     }
 }
 
+private enum EditorFindPresentation: Equatable {
+    case hidden
+    case find
+    case replace
+}
+
 struct EditorTabView: View {
     let worktreePath: URL
     let relativePath: String
@@ -44,13 +50,15 @@ struct EditorTabView: View {
     @Environment(\.theme) var theme
     @Environment(\.openWindow) private var openWindow
 
-    @State private var findBarVisible: Bool = false
+    @State private var findPresentation: EditorFindPresentation = .hidden
     @State private var findController = EditorFindController()
     @State private var findText: String = ""
     @State private var replaceText: String = ""
-    @State private var findBarMessage: String? = nil
+    @State private var isCaseSensitive: Bool = false
+    @State private var findStatusText: String = ""
     @State private var activeTextView: CodeTextView? = nil
     @FocusState private var findFieldFocused: Bool
+    @FocusState private var replaceFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,62 +74,22 @@ struct EditorTabView: View {
             }
             InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
             BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
-            if findBarVisible {
+            if findPresentation != .hidden {
                 EditorFindBarView(
                     findText: $findText,
                     replaceText: $replaceText,
-                    message: $findBarMessage,
+                    isCaseSensitive: $isCaseSensitive,
                     findFieldFocused: $findFieldFocused,
-                    onFind: { direction in
-                        findController.findString = findText
-                        guard !findText.isEmpty else { return }
-                        guard let textView = activeTextView else { return }
-                        let start: Int
-                        switch direction {
-                        case .previous:
-                            start = textView.selectedRange().location
-                        case .next:
-                            start = textView.selectedRange().location + textView.selectedRange().length
-                        }
-                        let range: NSRange?
-                        switch direction {
-                        case .previous:
-                            range = findController.previousMatchRange(upTo: start)
-                        case .next:
-                            range = findController.nextMatchRange(startingAt: start)
-                        }
-                        if let range {
-                            textView.setSelectedRange(range)
-                            textView.scrollRangeToVisible(range)
-                        } else {
-                            findBarMessage = "No matches"
-                        }
-                    },
-                    onReplace: {
-                        findController.findString = findText
-                        findController.replacementString = replaceText
-                        if findController.replaceCurrent() {
-                            findBarMessage = nil
-                        } else {
-                            findBarMessage = "No matches"
-                        }
-                    },
-                    onReplaceAll: {
-                        findController.findString = findText
-                        findController.replacementString = replaceText
-                        let count = findController.replaceAll()
-                        if count == 0 {
-                            findBarMessage = "No matches"
-                        } else if count == 1 {
-                            findBarMessage = "Replaced 1 match"
-                        } else {
-                            findBarMessage = "Replaced \(count) matches"
-                        }
-                    },
-                    onDone: {
-                        findBarVisible = false
-                        findBarMessage = nil
-                    }
+                    replaceFieldFocused: $replaceFieldFocused,
+                    showsReplace: findPresentation == .replace,
+                    statusText: findStatusText,
+                    canReplace: findController.canReplace,
+                    onFindChanged: refreshFindFromUserInput,
+                    onToggleCaseSensitive: toggleCaseSensitive,
+                    onFind: navigateFind,
+                    onReplace: replaceCurrentMatch,
+                    onReplaceAll: replaceAllMatches,
+                    onDone: closeFindBar
                 )
             }
             CodeEditorView(
@@ -141,7 +109,8 @@ struct EditorTabView: View {
         }
         .background(theme.color("bg-1"))
         .onDisappear {
-            findBarVisible = false
+            findPresentation = .hidden
+            findStatusText = ""
             findController.textView = nil
             activeTextView = nil
         }
@@ -160,11 +129,160 @@ struct EditorTabView: View {
             activeTextView = nil
             findController.textView = nil
         }
-        .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { _ in
-            guard appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
-            findBarVisible = true
-            findFieldFocused = true
+        .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { notification in
+            handleFindRequest(notification)
         }
+    }
+
+    private func handleFindRequest(_ notification: Notification) {
+        guard appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
+
+        let request = notification.object as? EditorFindRequest ?? .showReplace
+        switch request {
+        case .showFind:
+            showFindBar(.find, prefillFromSelection: true)
+            focusFindField()
+        case .showReplace:
+            showFindBar(.replace, prefillFromSelection: true)
+            if findText.isEmpty {
+                focusFindField()
+            } else {
+                focusReplaceField()
+            }
+        case .findNext:
+            if findPresentation == .hidden {
+                showFindBarForNavigation()
+            }
+            navigateFind(.next)
+        case .findPrevious:
+            if findPresentation == .hidden {
+                showFindBarForNavigation()
+            }
+            navigateFind(.previous)
+        }
+    }
+
+    private func showFindBar(_ presentation: EditorFindPresentation, prefillFromSelection: Bool) {
+        if prefillFromSelection, let selectedText = selectedSingleLineText() {
+            findText = selectedText
+        }
+
+        findPresentation = presentation
+        refreshFindMatches(selecting: findText.isEmpty ? .none : .nearestFromSelection)
+    }
+
+    private func showFindBarForNavigation() {
+        findPresentation = .find
+        refreshFindMatches(selecting: .none)
+    }
+
+    private func refreshFindFromUserInput() {
+        refreshFindMatches(selecting: findText.isEmpty ? .none : .nearestFromSelection)
+    }
+
+    private func toggleCaseSensitive() {
+        refreshFindMatches(selecting: findText.isEmpty ? .none : .nearestFromSelection)
+    }
+
+    private func navigateFind(_ direction: EditorFindBarView.FindDirection) {
+        syncFindController()
+        guard !findText.isEmpty else {
+            findController.refreshMatches(selecting: .none)
+            updateFindStatus()
+            focusFindField()
+            return
+        }
+
+        switch direction {
+        case .previous:
+            _ = findController.selectPrevious()
+        case .next:
+            _ = findController.selectNext()
+        }
+        updateFindStatus()
+    }
+
+    private func replaceCurrentMatch() {
+        syncFindController()
+        let didReplace = findController.replaceCurrent()
+        if didReplace {
+            updateFindStatus()
+        } else {
+            findStatusText = findText.isEmpty ? "" : "No matches"
+        }
+    }
+
+    private func replaceAllMatches() {
+        syncFindController()
+        let count = findController.replaceAll()
+        if count == 0 {
+            findStatusText = findText.isEmpty ? "" : "No matches"
+        } else if count == 1 {
+            findStatusText = "Replaced 1 match"
+        } else {
+            findStatusText = "Replaced \(count) matches"
+        }
+    }
+
+    private func closeFindBar() {
+        findPresentation = .hidden
+        findStatusText = ""
+        findFieldFocused = false
+        replaceFieldFocused = false
+        activeTextView?.window?.makeFirstResponder(activeTextView)
+    }
+
+    private func refreshFindMatches(selecting selection: EditorFindController.RefreshSelection) {
+        syncFindController()
+        findController.refreshMatches(selecting: selection)
+        updateFindStatus()
+    }
+
+    private func syncFindController() {
+        findController.findString = findText
+        findController.replacementString = replaceText
+        findController.isCaseSensitive = isCaseSensitive
+    }
+
+    private func updateFindStatus() {
+        guard !findText.isEmpty else {
+            findStatusText = ""
+            return
+        }
+        guard findController.matchCount > 0 else {
+            findStatusText = "No matches"
+            return
+        }
+        if let activeMatchNumber = findController.activeMatchNumber {
+            findStatusText = "\(activeMatchNumber) of \(findController.matchCount)"
+        } else {
+            findStatusText = ""
+        }
+    }
+
+    private func selectedSingleLineText() -> String? {
+        guard let textView = activeTextView else { return nil }
+        guard textView.selectedRanges.count == 1 else { return nil }
+        let selectedRange = textView.selectedRange()
+        guard selectedRange.location != NSNotFound, selectedRange.length > 0 else { return nil }
+
+        let text = textView.string as NSString
+        guard selectedRange.location >= 0, NSMaxRange(selectedRange) <= text.length else { return nil }
+
+        let selectedText = text.substring(with: selectedRange)
+        guard !selectedText.isEmpty,
+              selectedText.rangeOfCharacter(from: .newlines) == nil else { return nil }
+        return selectedText
+    }
+
+    private func focusFindField() {
+        replaceFieldFocused = false
+        findFieldFocused = true
+    }
+
+    private func focusReplaceField() {
+        findFieldFocused = false
+        replaceFieldFocused = true
     }
 
     private var nudgeAbsolutePath: String {
