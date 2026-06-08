@@ -25,7 +25,7 @@ struct EditorFindBarView: View {
     @Environment(\.theme) var theme
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: showsReplace ? 4 : 8) {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(theme.color("fg-muted"))
@@ -34,14 +34,14 @@ struct EditorFindBarView: View {
                     .focused($findFieldFocused)
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 12))
-                    .frame(minWidth: 72, idealWidth: 180, maxWidth: 220)
+                    .frame(minWidth: 36, idealWidth: showsReplace ? 120 : 180, maxWidth: .infinity)
                     .layoutPriority(2)
                     .onSubmit { onFind(.next) }
                     .onChange(of: findText) { _ in
                         onFindChanged()
                     }
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, showsReplace ? 6 : 8)
             .padding(.vertical, 4)
             .background(theme.color("bg-2"))
             .cornerRadius(6)
@@ -52,11 +52,11 @@ struct EditorFindBarView: View {
                         .focused($replaceFieldFocused)
                         .textFieldStyle(PlainTextFieldStyle())
                         .font(.system(size: 12))
-                        .frame(minWidth: 72, idealWidth: 180, maxWidth: 220)
+                        .frame(minWidth: 36, idealWidth: 120, maxWidth: .infinity)
                         .layoutPriority(1)
                         .onSubmit { onReplace() }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .background(theme.color("bg-2"))
                 .cornerRadius(6)
@@ -102,25 +102,33 @@ struct EditorFindBarView: View {
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(minWidth: 44, idealWidth: 90, maxWidth: 100, alignment: .trailing)
+                .frame(minWidth: 0, idealWidth: showsReplace ? 52 : 90, maxWidth: showsReplace ? 64 : 100, alignment: .trailing)
 
             if showsReplace {
-                Button("Replace") {
+                Button {
                     onReplace()
+                } label: {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
                 }
-                .font(.system(size: 11, weight: .medium))
+                .buttonStyle(PlainButtonStyle())
+                .help("Replace current match")
                 .accessibilityLabel("Replace current match")
                 .disabled(!canReplace)
 
-                Button("All") {
+                Button {
                     onReplaceAll()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.system(size: 10, weight: .semibold))
+                        .frame(width: 22, height: 22)
                 }
-                .font(.system(size: 11, weight: .medium))
+                .buttonStyle(PlainButtonStyle())
+                .help("Replace all matches")
                 .accessibilityLabel("Replace all matches")
                 .disabled(!canReplace)
             }
-
-            Spacer(minLength: 8)
 
             Button(action: onDone) {
                 Image(systemName: "xmark")

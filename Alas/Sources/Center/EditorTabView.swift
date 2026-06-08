@@ -193,15 +193,15 @@ struct EditorTabView: View {
             return
         }
 
-        let previousActiveLocation = activeMatchLocation()
+        let anchor = navigationAnchor(for: direction)
         findController.refreshMatches(selecting: .none)
         guard findController.matchCount > 0 else {
             updateFindStatus()
             return
         }
 
-        if let previousActiveLocation {
-            selectMatch(around: previousActiveLocation, direction: direction)
+        if let anchor {
+            selectMatch(around: anchor, direction: direction)
         } else {
             switch direction {
             case .previous:
@@ -271,10 +271,20 @@ struct EditorTabView: View {
         }
     }
 
-    private func activeMatchLocation() -> Int? {
-        guard let activeMatchIndex = findController.activeMatchIndex,
-              findController.matches.indices.contains(activeMatchIndex) else { return nil }
-        return findController.matches[activeMatchIndex].location
+    private func navigationAnchor(for direction: EditorFindBarView.FindDirection) -> Int? {
+        guard let textView = activeTextView else { return nil }
+        let selection = textView.selectedRange()
+        let textLength = (textView.string as NSString).length
+        guard selection.location != NSNotFound,
+              selection.location >= 0,
+              NSMaxRange(selection) <= textLength else { return nil }
+
+        switch direction {
+        case .previous:
+            return selection.location
+        case .next:
+            return NSMaxRange(selection)
+        }
     }
 
     private func selectMatch(around location: Int, direction: EditorFindBarView.FindDirection) {
@@ -286,7 +296,7 @@ struct EditorTabView: View {
             index = findController.matches.lastIndex { $0.location < location }
                 ?? findController.matches.count - 1
         case .next:
-            index = findController.matches.firstIndex { $0.location > location }
+            index = findController.matches.firstIndex { $0.location >= location }
                 ?? 0
         }
         _ = findController.selectMatch(at: index)
