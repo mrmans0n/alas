@@ -105,7 +105,7 @@ function renderSessions(sessions) {
 function renderSessionRow(s) {
   const row = document.createElement("button");
   row.type = "button";
-  row.className = "session-row session-row-card";
+  row.className = "session-row";
 
   const head = el("div", "session-head");
   const title = el("span", "session-title", s.title);
@@ -114,6 +114,7 @@ function renderSessionRow(s) {
   row.append(head);
 
   if (s.worktree) {
+    row.classList.add("session-row-card");
     row.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
     const meta = el("div", "session-meta");
     const parts = sessionMetaParts(s.worktree);
