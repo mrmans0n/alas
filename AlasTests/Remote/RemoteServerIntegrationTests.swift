@@ -173,4 +173,53 @@ struct RemoteServerIntegrationTests {
         }
         task.cancel(with: .goingAway, reason: nil)
     }
+
+    @Test func remoteWebAssetsServePWAContentTypes() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-web-assets-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data(#"{"name":"Alas Remote"}"#.utf8)
+            .write(to: root.appendingPathComponent("manifest.webmanifest"))
+        try Data("<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>".utf8)
+            .write(to: root.appendingPathComponent("icon.svg"))
+        try Data([0x89, 0x50, 0x4E, 0x47])
+            .write(to: root.appendingPathComponent("icon.png"))
+
+        let assets = RemoteWebAssets(root: root)
+
+        #expect(assets.asset(forPath: "/manifest.webmanifest")?.contentType == "application/manifest+json; charset=utf-8")
+        #expect(assets.asset(forPath: "/icon.svg")?.contentType == "image/svg+xml; charset=utf-8")
+        #expect(assets.asset(forPath: "/icon.png")?.contentType == "image/png")
+    }
+
+    @Test func remoteServerServesManifestWithManifestContentType() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-web-server-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data(#"{"name":"Alas Remote"}"#.utf8)
+            .write(to: root.appendingPathComponent("manifest.webmanifest"))
+
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let assets = RemoteWebAssets(root: root)
+        let server = RemoteServer(pairing: pairing, assets: assets, provider: FakeSessionsProvider())
+        try server.start(port: 0)
+        defer { server.stop() }
+
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let (data, resp) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/manifest.webmanifest")!
+        )
+        let http = try #require(resp as? HTTPURLResponse)
+        #expect(http.statusCode == 200)
+        #expect(http.value(forHTTPHeaderField: "Content-Type") == "application/manifest+json; charset=utf-8")
+        #expect(String(data: data, encoding: .utf8) == #"{"name":"Alas Remote"}"#)
+    }
 }

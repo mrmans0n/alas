@@ -73,6 +73,9 @@ struct RemoteWebAssets {
         case "html": return "text/html; charset=utf-8"
         case "js": return "application/javascript; charset=utf-8"
         case "css": return "text/css; charset=utf-8"
+        case "webmanifest": return "application/manifest+json; charset=utf-8"
+        case "svg": return "image/svg+xml; charset=utf-8"
+        case "png": return "image/png"
         default: return "application/octet-stream"
         }
     }
