@@ -127,12 +127,15 @@ struct ACPMessageList: View {
                             StreamingCaret().frame(width: 8, height: 14)
                                 .id("__streaming_caret__")
                         }
-                        if session.visibleQueueCount > 1 {
-                            ACPQueueHeader(count: session.visibleQueueCount, onClear: onQueueClearAll)
+                        let queueHeaderCount = Self.queueHeaderCount(
+                            statuses: session.queue.map(\.status)
+                        )
+                        if queueHeaderCount > 1 {
+                            ACPQueueHeader(count: queueHeaderCount, onClear: onQueueClearAll)
                                 .id("__queue_header__")
                         }
                         ForEach(Array(session.queue.enumerated()), id: \.element.id) { idx, item in
-                            if item.status != .sending {
+                            if Self.shouldRenderQueueBubble(status: item.status) {
                                 ACPQueuedBubble(
                                     item: item,
                                     onForceSend: { onQueueForceSend(item.id) },
@@ -145,6 +148,10 @@ struct ACPMessageList: View {
                                           let uuid = UUID(uuidString: s),
                                           let src = session.queue.firstIndex(where: { $0.id == uuid })
                                     else { return false }
+                                    guard Self.canDropQueuedItem(
+                                        sourceStatus: session.queue[src].status,
+                                        targetStatus: item.status
+                                    ) else { return false }
                                     onQueueReorder(src, idx)
                                     return true
                                 }
@@ -306,13 +313,33 @@ struct ACPMessageList: View {
         .frame(height: 1)
     }
 
-    static func topPaginationIndicator(
+    nonisolated static func topPaginationIndicator(
         visibleHead: Int,
         isBackfillingOlderMessages: Bool
     ) -> ACPTopPaginationIndicator {
         if isBackfillingOlderMessages { return .spinner }
         if visibleHead > 0 { return .sentinel }
         return .hidden
+    }
+
+    nonisolated static func shouldRenderQueueBubble(status: QueuedPrompt.Status) -> Bool {
+        switch status {
+        case .pending, .sending:
+            return true
+        }
+    }
+
+    nonisolated static func queueHeaderCount(statuses: [QueuedPrompt.Status]) -> Int {
+        statuses.reduce(0) { count, status in
+            count + (shouldRenderQueueBubble(status: status) ? 1 : 0)
+        }
+    }
+
+    nonisolated static func canDropQueuedItem(
+        sourceStatus: QueuedPrompt.Status?,
+        targetStatus: QueuedPrompt.Status
+    ) -> Bool {
+        sourceStatus == .pending && targetStatus == .pending
     }
 
     /// macOS 14 fallback path. The Tahoe (macOS 15+) ScrollView is no longer

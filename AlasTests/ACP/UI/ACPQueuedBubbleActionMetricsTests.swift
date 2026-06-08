@@ -21,4 +21,11 @@ struct ACPQueuedBubbleActionMetricsTests {
         #expect(editSlotLeading < ACPQueuedBubbleActionMetrics.reservedWidth)
         #expect(removeSlotLeading + button == ACPQueuedBubbleActionMetrics.reservedWidth)
     }
+
+    @Test("left actions reserve a stable lane beside queued content")
+    func leftActionsReserveStableLaneBesideQueuedContent() {
+        #expect(ACPQueuedBubbleActionMetrics.actionGroupToContentSpacing == 8)
+        #expect(ACPQueuedBubbleActionMetrics.minimumLeadingSpacerWidth == 16)
+        #expect(ACPQueuedBubbleActionMetrics.reservedAccessoryWidth == 84)
+    }
 }

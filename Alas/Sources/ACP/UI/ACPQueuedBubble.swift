@@ -13,72 +13,100 @@ struct ACPQueuedBubble: View {
     let onRemove: () -> Void
     let onRetry: () -> Void
 
-    @State private var isHovering = false
+    @StateObject private var hover = ACPDelayedHoverVisibility()
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            Spacer(minLength: 40)
+        let preview = Self.textPreview(of: item.blocks)
+
+        HStack(alignment: .top, spacing: 0) {
+            Spacer(minLength: ACPQueuedBubbleActionMetrics.minimumLeadingSpacerWidth)
             VStack(alignment: .trailing, spacing: 4) {
-                HStack(alignment: .center, spacing: 6) {
-                    HStack(spacing: 6) {
-                        if item.status == .sending {
-                            ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
-                        }
-                        Text(item.status == .sending ? "Sending" : "Queued")
-                            .font(.system(size: 9, weight: .semibold))
-                            .tracking(0.4)
-                            .textCase(.uppercase)
-                            .foregroundStyle(theme.color("fg-faint"))
-                        if let err = item.lastError {
-                            Text("· \(err)")
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(theme.color("del"))
-                                .lineLimit(1)
-                        }
-                    }
-                    .lineLimit(1)
-                    if item.status == .pending {
-                        actionsRow
-                    }
+                statusRow
+                if !imageURLs.isEmpty, !preview.isEmpty {
+                    imageRow
                 }
-                if !imageURLs.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(Array(imageURLs.enumerated()), id: \.offset) { _, url in
-                            if let image = NSImage(contentsOf: url) {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 48, height: 48)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-                        }
-                    }
-                }
-                let preview = Self.textPreview(of: item.blocks)
-                if !preview.isEmpty {
-                    ACPMarkdownText(raw: preview)
-                        .padding(.vertical, 9).padding(.horizontal, 13)
-                        .background(theme.color("accent").opacity(0.10))
-                        .clipShape(
-                            UnevenRoundedRectangle(
-                                cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
-                            )
-                        )
-                        .overlay(
-                            UnevenRoundedRectangle(
-                                cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
-                            )
-                            .strokeBorder(borderColor, style: borderStyle)
-                        )
-                }
+                queuedContentRow(preview: preview)
             }
             .opacity(item.status == .sending ? 0.85 : 0.6)
-            .frame(maxWidth: 540, alignment: .trailing)
+            .frame(maxWidth: contentColumnMaxWidth, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
-        .onHover { isHovering = $0 }
+        .onHover { inside in
+            if inside { hover.enter() } else { hover.leave() }
+        }
         .modifier(PendingDraggableModifier(enabled: item.status == .pending, payload: item.id.uuidString))
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 6) {
+            if item.status == .sending {
+                ProgressView().scaleEffect(0.45).frame(width: 12, height: 12)
+            }
+            Text(item.status == .sending ? "Sending" : "Queued")
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(0.4)
+                .textCase(.uppercase)
+                .foregroundStyle(theme.color("fg-faint"))
+            if let err = item.lastError {
+                Text("· \(err)")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(theme.color("del"))
+                    .lineLimit(1)
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private var imageRow: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(imageURLs.enumerated()), id: \.offset) { _, url in
+                if let image = NSImage(contentsOf: url) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 48, height: 48)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func queuedContentRow(preview: String) -> some View {
+        if !preview.isEmpty {
+            HStack(alignment: .center, spacing: ACPQueuedBubbleActionMetrics.actionGroupToContentSpacing) {
+                if item.status == .pending { actionsRow }
+                textBubble(preview)
+            }
+        } else if !imageURLs.isEmpty {
+            HStack(alignment: .center, spacing: ACPQueuedBubbleActionMetrics.actionGroupToContentSpacing) {
+                if item.status == .pending { actionsRow }
+                imageRow
+            }
+        } else if item.status == .pending {
+            HStack(alignment: .center, spacing: ACPQueuedBubbleActionMetrics.actionGroupToContentSpacing) {
+                actionsRow
+                Color.clear.frame(width: 0, height: ACPQueuedBubbleActionMetrics.buttonSize)
+            }
+        }
+    }
+
+    private func textBubble(_ preview: String) -> some View {
+        ACPMarkdownText(raw: preview)
+            .padding(.vertical, 9).padding(.horizontal, 13)
+            .background(theme.color("accent").opacity(0.10))
+            .clipShape(
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+                )
+            )
+            .overlay(
+                UnevenRoundedRectangle(
+                    cornerRadii: .init(topLeading: 12, bottomLeading: 12, bottomTrailing: 4, topTrailing: 12)
+                )
+                .strokeBorder(borderColor, style: borderStyle)
+            )
     }
 
     private var borderColor: Color {
@@ -128,7 +156,13 @@ struct ACPQueuedBubble: View {
     }
 
     private var actionsVisible: Bool {
-        isHovering && item.status == .pending
+        hover.isVisible && item.status == .pending
+    }
+
+    private var contentColumnMaxWidth: CGFloat {
+        item.status == .pending
+            ? 540 + ACPQueuedBubbleActionMetrics.reservedAccessoryWidth
+            : 540
     }
 
     private func actionButton(
@@ -156,10 +190,16 @@ enum ACPQueuedBubbleActionMetrics {
     static let buttonSize: CGFloat = 16
     static let buttonSpacing: CGFloat = 4
     static let reservedButtonSlots = 4
+    static let actionGroupToContentSpacing: CGFloat = 8
+    static let minimumLeadingSpacerWidth: CGFloat = 16
 
     static var reservedWidth: CGFloat {
         CGFloat(reservedButtonSlots) * buttonSize
             + CGFloat(reservedButtonSlots - 1) * buttonSpacing
+    }
+
+    static var reservedAccessoryWidth: CGFloat {
+        reservedWidth + actionGroupToContentSpacing
     }
 }
 

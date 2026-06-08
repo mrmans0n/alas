@@ -30,4 +30,26 @@ struct ACPMessageListPaginationTests {
             isBackfillingOlderMessages: true
         ) == .spinner)
     }
+
+    @Test("queue bubbles render pending and sending items")
+    func queueBubblesRenderPendingAndSendingItems() {
+        #expect(ACPMessageList.shouldRenderQueueBubble(status: .pending))
+        #expect(ACPMessageList.shouldRenderQueueBubble(status: .sending))
+    }
+
+    @Test("queue drops only accept pending items onto pending targets")
+    func queueDropsOnlyAcceptPendingItemsOntoPendingTargets() {
+        #expect(ACPMessageList.canDropQueuedItem(sourceStatus: .pending, targetStatus: .pending))
+        #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: .sending, targetStatus: .pending))
+        #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: .pending, targetStatus: .sending))
+        #expect(!ACPMessageList.canDropQueuedItem(sourceStatus: nil, targetStatus: .pending))
+    }
+
+    @Test("queue header count matches rendered queue bubbles")
+    func queueHeaderCountMatchesRenderedQueueBubbles() {
+        #expect(ACPMessageList.queueHeaderCount(statuses: []) == 0)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.pending]) == 1)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending]) == 1)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending, .pending]) == 2)
+    }
 }
