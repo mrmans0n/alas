@@ -189,10 +189,10 @@ const CACHE_NAME = "alas-remote-shell-v1";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/style.css?v=26",
-  "/app.js?v=26",
-  "/marked.min.js?v=26",
-  "/purify.min.js?v=26",
+  "/style.css?v=27",
+  "/app.js?v=27",
+  "/marked.min.js?v=27",
+  "/purify.min.js?v=27",
   "/manifest.webmanifest",
   "/icon.svg"
 ];
@@ -252,7 +252,7 @@ In `Alas/Resources/RemoteWeb/index.html`, add these lines in `<head>` after the 
 
 - [ ] **Step 5: Register service worker**
 
-In `index.html`, add this inline script after the existing `/app.js?v=26` script:
+In `index.html`, add this inline script after the existing `/app.js?v=27` script:
 
 ```html
   <script>

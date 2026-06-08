@@ -6,6 +6,7 @@ let reconnectDelay = 1500;
 let reconnectTimer = null;
 let connectAttempt = 0;
 let pairingPromise = null;
+let pairingController = null;
 const initialReconnectDelay = 1500;
 const maxReconnectDelay = 30000;
 let dismissedQuestion = null;   // {sessionId, requestId} the user closed; suppress re-shows of that exact prompt (ids aren't unique across sessions)
@@ -43,6 +44,11 @@ function retryConnection() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  if (pairingController) {
+    pairingController.abort();
+    pairingController = null;
+    pairingPromise = null;
+  }
   reconnectDelay = initialReconnectDelay;
   setStatus("Connecting...", "connecting");
   connect();
@@ -55,7 +61,12 @@ async function ensureToken() {
   const code = new URLSearchParams(location.search).get("code");
   if (code) {
     if (!pairingPromise) {
-      pairingPromise = pairWithCode(code).finally(() => { pairingPromise = null; });
+      const controller = new AbortController();
+      pairingController = controller;
+      pairingPromise = pairWithCode(code, controller.signal).finally(() => {
+        if (pairingController === controller) pairingController = null;
+        pairingPromise = null;
+      });
     }
     return await pairingPromise;
   }
@@ -65,11 +76,12 @@ async function ensureToken() {
   throw new Error("no code");
 }
 
-async function pairWithCode(code) {
+async function pairWithCode(code, signal) {
   let res;
   try {
-    res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }) });
-  } catch (_) {
+    res = await fetch("/pair", { method: "POST", body: JSON.stringify({ code, deviceName: navigator.userAgent.slice(0, 40) }), signal });
+  } catch (err) {
+    if (err && err.name === "AbortError") throw new Error("aborted");
     showUnreachableGate();
     throw new Error("net");
   }
