@@ -226,10 +226,25 @@ struct AlasApp: App {
             .keyboardShortcut(state.shortcut(for: .splitSelectionIntoLines))
             .disabled(!state.hasActiveCodeEditorTab)
             Divider()
-            Button("Find and Replace") {
-                NotificationCenter.default.post(name: .alasShowFindReplace, object: nil)
+            Button("Find") {
+                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showFind)
             }
             .keyboardShortcut(state.shortcut(for: .findAndReplace))
+            .disabled(!state.hasActiveCodeEditorTab)
+            Button("Find and Replace") {
+                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showReplace)
+            }
+            .keyboardShortcut(state.shortcut(for: .replaceInEditor))
+            .disabled(!state.hasActiveCodeEditorTab)
+            Button("Find Next") {
+                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findNext)
+            }
+            .keyboardShortcut("g", modifiers: .command)
+            .disabled(!state.hasActiveCodeEditorTab)
+            Button("Find Previous") {
+                NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findPrevious)
+            }
+            .keyboardShortcut("g", modifiers: [.command, .shift])
             .disabled(!state.hasActiveCodeEditorTab)
         }
         CommandGroup(after: .toolbar) {

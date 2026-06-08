@@ -14,7 +14,7 @@ enum ShortcutGroup: String, CaseIterable, Sendable {
 
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     // Global
-    case searchFiles, switchRepository, findAndReplace, toggleSidebar, toggleRightPane,
+    case searchFiles, switchRepository, findAndReplace, replaceInEditor, toggleSidebar, toggleRightPane,
          createProject, newWorktree, focusMainWorktree, newTerminalTab, launchAgentTerminal, launchAgentChat,
          increaseFontSize, decreaseFontSize, resetFontSize
     // Code editor
@@ -26,7 +26,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
 
     var group: ShortcutGroup {
         switch self {
-        case .searchFiles, .switchRepository, .findAndReplace, .toggleSidebar, .toggleRightPane,
+        case .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
              .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
              .increaseFontSize, .decreaseFontSize, .resetFontSize:
             return .global
@@ -45,7 +45,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles:              return "Search Files"
         case .switchRepository:         return "Switch Repository"
-        case .findAndReplace:           return "Find and Replace"
+        case .findAndReplace:           return "Find"
+        case .replaceInEditor:          return "Find and Replace"
         case .toggleSidebar:            return "Toggle Sidebar"
         case .toggleRightPane:          return "Toggle Right Sidebar"
         case .createProject:            return "Create Project"
@@ -91,7 +92,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var appliesInTerminal: Bool {
         switch self {
         case .splitSelectionIntoLines, .toggleMarkdownPreview,
-             .commitInComposer, .findAndReplace:
+             .commitInComposer, .findAndReplace, .replaceInEditor:
             return false
         default:
             return true
@@ -102,7 +103,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         switch self {
         case .searchFiles:              return .init(key: "p",          modifiers: [.command])
         case .switchRepository:         return .init(key: "k",          modifiers: [.command])
-        case .findAndReplace:           return .init(key: "f",          modifiers: [.command, .option])
+        case .findAndReplace:           return .init(key: "f",          modifiers: [.command])
+        case .replaceInEditor:          return .init(key: "r",          modifiers: [.command])
         case .toggleSidebar:            return .init(key: "b",          modifiers: [.command])
         case .toggleRightPane:          return .init(key: "b",          modifiers: [.command, .option])
         case .createProject:            return .init(key: "n",          modifiers: [.command, .shift])

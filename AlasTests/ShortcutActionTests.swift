@@ -22,7 +22,8 @@ struct ShortcutActionTests {
         let expected: [(ShortcutAction, String, [ShortcutBinding.Modifier])] = [
             (.searchFiles,          "p",          [.command]),
             (.switchRepository,     "k",          [.command]),
-            (.findAndReplace,       "f",          [.command, .option]),
+            (.findAndReplace,       "f",          [.command]),
+            (.replaceInEditor,      "r",          [.command]),
             (.toggleSidebar,        "b",          [.command]),
             (.toggleRightPane,      "b",          [.command, .option]),
             (.createProject,        "n",          [.command, .shift]),
@@ -57,7 +58,7 @@ struct ShortcutActionTests {
 
     @Test func groupAssignmentsMatchSpec() {
         let global: Set<ShortcutAction> = [
-            .searchFiles, .switchRepository, .findAndReplace, .toggleSidebar, .toggleRightPane,
+            .searchFiles, .switchRepository, .findAndReplace, .replaceInEditor, .toggleSidebar, .toggleRightPane,
             .createProject, .newWorktree, .newTerminalTab, .launchAgentTerminal, .launchAgentChat,
             .focusMainWorktree, .increaseFontSize, .decreaseFontSize, .resetFontSize,
         ]
@@ -80,6 +81,17 @@ struct ShortcutActionTests {
             case .commit:     #expect(commit.contains(a), "\(a) miscategorized")
             }
         }
+    }
+
+    @Test func editorFindActionsAreGlobalAndNotReservedInTerminal() {
+        #expect(ShortcutAction.findAndReplace.rawValue == "findAndReplace")
+        #expect(ShortcutAction.findAndReplace.label == "Find")
+        #expect(ShortcutAction.findAndReplace.group == .global)
+        #expect(!ShortcutAction.findAndReplace.appliesInTerminal)
+
+        #expect(ShortcutAction.replaceInEditor.label == "Find and Replace")
+        #expect(ShortcutAction.replaceInEditor.group == .global)
+        #expect(!ShortcutAction.replaceInEditor.appliesInTerminal)
     }
 
     @Test func reservedBindingsContainsStandards() {

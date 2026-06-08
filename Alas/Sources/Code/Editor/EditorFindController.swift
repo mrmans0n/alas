@@ -7,6 +7,13 @@ import Foundation
 /// flow through the normal pipeline.
 @MainActor
 final class EditorFindController {
+    enum RefreshSelection {
+        case none
+        case first
+        case nearestFromSelection
+        case preservingActiveLocation(Int)
+    }
+
     /// Set by the hosting `EditorTabView` after the coordinator attaches.
     weak var textView: CodeTextView?
 
@@ -16,12 +23,104 @@ final class EditorFindController {
     /// Replace string used as replacement text.
     var replacementString: String = ""
 
+    /// Whether matching should require exact case.
+    var isCaseSensitive: Bool = false
+
+    /// Non-overlapping matches for current find string.
+    private(set) var matches: [NSRange] = []
+
+    /// Zero-based index into `matches` for the selected match.
+    private(set) var activeMatchIndex: Int?
+
+    /// One-based active match number for display.
+    var activeMatchNumber: Int? {
+        activeMatchIndex.map { $0 + 1 }
+    }
+
     /// Number of matches for current find string.
     private(set) var matchCount: Int = 0
 
     /// Whether there are any replacements.
     var canReplace: Bool {
         !findString.isEmpty && matchCount > 0
+    }
+
+    /// Recomputes match state and optionally selects a match.
+    func refreshMatches(selecting selection: RefreshSelection) {
+        guard let textView = textView, !findString.isEmpty else {
+            clearMatches()
+            return
+        }
+
+        matches = collectMatches(in: textView.string as NSString)
+        matchCount = matches.count
+        guard !matches.isEmpty else {
+            activeMatchIndex = nil
+            return
+        }
+
+        switch selection {
+        case .none:
+            activeMatchIndex = nil
+        case .first:
+            _ = selectMatch(at: 0)
+        case .nearestFromSelection:
+            _ = selectNearestMatch(to: textView.selectedRange())
+        case .preservingActiveLocation(let location):
+            _ = selectMatch(at: indexOfMatch(atOrAfter: location) ?? 0)
+        }
+    }
+
+    /// Selects the next match, wrapping to the first match from the last.
+    @discardableResult
+    func selectNext() -> Bool {
+        guard !findString.isEmpty else {
+            clearMatches()
+            return false
+        }
+        if matches.isEmpty {
+            refreshMatches(selecting: .nearestFromSelection)
+            return activeMatchIndex != nil
+        }
+        let index = activeMatchIndex.map { ($0 + 1) % matches.count }
+            ?? indexOfMatch(atOrAfter: textView?.selectedRange().location ?? 0)
+            ?? 0
+        return selectMatch(at: index)
+    }
+
+    /// Selects the previous match, wrapping to the last match from the first.
+    @discardableResult
+    func selectPrevious() -> Bool {
+        guard !findString.isEmpty else {
+            clearMatches()
+            return false
+        }
+        if matches.isEmpty {
+            refreshMatches(selecting: .nearestFromSelection)
+            return activeMatchIndex != nil
+        }
+        let index: Int
+        if let activeMatchIndex {
+            index = (activeMatchIndex - 1 + matches.count) % matches.count
+        } else {
+            let location = textView?.selectedRange().location ?? 0
+            index = indexOfMatch(beforeOrAt: location) ?? matches.count - 1
+        }
+        return selectMatch(at: index)
+    }
+
+    /// Selects a match by zero-based index.
+    @discardableResult
+    func selectMatch(at index: Int) -> Bool {
+        guard matches.indices.contains(index), let textView = textView else {
+            activeMatchIndex = nil
+            return false
+        }
+        let range = matches[index]
+        activeMatchIndex = index
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+        return true
     }
 
     /// Find the next match starting from `searchLocation` and return its UTF-16
@@ -32,7 +131,7 @@ final class EditorFindController {
         let text = textView.string as NSString
         guard searchLocation <= text.length else { return nil }
         let range = NSRange(location: searchLocation, length: text.length - searchLocation)
-        let found = text.range(of: findString, options: [], range: range)
+        let found = text.range(of: findString, options: searchOptions, range: range)
         guard found.location != NSNotFound else { return nil }
         return found
     }
@@ -44,7 +143,7 @@ final class EditorFindController {
         let text = textView.string as NSString
         let searchEnd = min(searchLocation, text.length)
         let range = NSRange(location: 0, length: searchEnd)
-        let found = text.range(of: findString, options: .backwards, range: range)
+        let found = text.range(of: findString, options: searchOptions.union(.backwards), range: range)
         guard found.location != NSNotFound else { return nil }
         return found
     }
@@ -61,8 +160,7 @@ final class EditorFindController {
 
         // If the selection is not a valid match, search from cursor position,
         // wrapping to the start if no match is found ahead.
-        let selectionIsMatch = foundRange.length == findString.utf16.count
-            && text.substring(with: foundRange) == findString
+        let selectionIsMatch = rangeIsMatch(foundRange, in: text)
         if !selectionIsMatch {
             let searchStart = foundRange.location
             if let match = nextMatchRange(startingAt: searchStart)
@@ -72,8 +170,7 @@ final class EditorFindController {
             }
         }
 
-        guard foundRange.length == findString.utf16.count,
-              text.substring(with: foundRange) == findString else { return false }
+        guard rangeIsMatch(foundRange, in: text) else { return false }
 
         textView.autoPairDisabled = true
         defer { textView.autoPairDisabled = false }
@@ -82,9 +179,9 @@ final class EditorFindController {
 
         let updatedLength = (textView.string as NSString).length
         let searchStart = min(foundRange.location + replacementString.utf16.count, updatedLength)
-        if let nextRange = nextMatchRange(startingAt: searchStart) {
-            textView.setSelectedRange(nextRange)
-            textView.scrollRangeToVisible(nextRange)
+        refreshMatches(selecting: .preservingActiveLocation(searchStart))
+        if activeMatchIndex == nil, !matches.isEmpty {
+            _ = selectMatch(at: 0)
         }
         return true
     }
@@ -94,19 +191,17 @@ final class EditorFindController {
     func replaceAll() -> Int {
         guard let textView = textView else { return 0 }
         guard textView.isEditable else { return 0 }
-        guard !findString.isEmpty else { return 0 }
+        guard !findString.isEmpty else {
+            clearMatches()
+            return 0
+        }
 
         let text = textView.string as NSString
-        var locations: [Int] = []
-        var current = 0
-        while current <= text.length - findString.utf16.count {
-            let range = NSRange(location: current, length: text.length - current)
-            let found = text.range(of: findString, options: [], range: range)
-            if found.location == NSNotFound { break }
-            locations.append(found.location)
-            current = found.location + found.length
+        let replacementRanges = collectMatches(in: text)
+        guard !replacementRanges.isEmpty else {
+            refreshMatches(selecting: .none)
+            return 0
         }
-        guard !locations.isEmpty else { return 0 }
 
         let count: Int
         if let undoManager = textView.undoManager {
@@ -117,29 +212,28 @@ final class EditorFindController {
             textView.autoPairDisabled = true
             defer { textView.autoPairDisabled = false }
 
-            count = locations.reversed().reduce(0) { acc, loc in
-                let replacementNSRange = NSRange(location: loc, length: findString.utf16.count)
-                textView.insertText(replacementString, replacementRange: replacementNSRange)
+            count = replacementRanges.reversed().reduce(0) { acc, range in
+                textView.insertText(replacementString, replacementRange: range)
                 return acc + 1
             }
         } else {
             textView.autoPairDisabled = true
             defer { textView.autoPairDisabled = false }
 
-            count = locations.reversed().reduce(0) { acc, loc in
-                let replacementNSRange = NSRange(location: loc, length: findString.utf16.count)
-                textView.insertText(replacementString, replacementRange: replacementNSRange)
+            count = replacementRanges.reversed().reduce(0) { acc, range in
+                textView.insertText(replacementString, replacementRange: range)
                 return acc + 1
             }
         }
 
         // After replace-all, move cursor to the first replacement.
-        if let firstLocation = locations.first {
+        if let firstLocation = replacementRanges.first?.location {
             let newNSRange = NSRange(location: firstLocation, length: replacementString.utf16.count)
             if firstLocation <= (textView.string as NSString).length {
                 textView.setSelectedRange(newNSRange)
             }
         }
+        refreshMatches(selecting: .none)
         return count
     }
 
@@ -147,22 +241,85 @@ final class EditorFindController {
     func countMatches() -> Int {
         guard let textView = textView else { return 0 }
         guard !findString.isEmpty else {
-            matchCount = 0
+            clearMatches()
             return 0
         }
 
         let text = textView.string as NSString
-        var count = 0
-        var current = 0
+        let activeLocation = activeMatchIndex.flatMap { matches.indices.contains($0) ? matches[$0].location : nil }
+        matches = collectMatches(in: text)
+        matchCount = matches.count
+        activeMatchIndex = activeLocation.flatMap { location in
+            matches.firstIndex { $0.location == location }
+        }
+        return matchCount
+    }
 
+    private var searchOptions: NSString.CompareOptions {
+        isCaseSensitive ? [] : [.caseInsensitive]
+    }
+
+    private func collectMatches(in text: NSString) -> [NSRange] {
+        guard !findString.isEmpty else { return [] }
+
+        var result: [NSRange] = []
+        var current = 0
         while current <= text.length - findString.utf16.count {
             let range = NSRange(location: current, length: text.length - current)
-            let found = text.range(of: findString, options: [], range: range)
+            let found = text.range(of: findString, options: searchOptions, range: range)
             if found.location == NSNotFound { break }
-            count += 1
+            result.append(found)
             current = found.location + found.length
         }
-        matchCount = count
-        return count
+        return result
+    }
+
+    private func rangeIsMatch(_ range: NSRange, in text: NSString) -> Bool {
+        guard !findString.isEmpty else { return false }
+        guard range.location != NSNotFound,
+              range.location >= 0,
+              range.length == findString.utf16.count,
+              NSMaxRange(range) <= text.length else { return false }
+
+        return text.compare(findString, options: searchOptions, range: range) == .orderedSame
+    }
+
+    private func clearMatches() {
+        matches = []
+        activeMatchIndex = nil
+        matchCount = 0
+    }
+
+    private func indexOfMatch(atOrAfter location: Int) -> Int? {
+        matches.firstIndex { $0.location >= location }
+    }
+
+    private func indexOfMatch(beforeOrAt location: Int) -> Int? {
+        matches.lastIndex { $0.location <= location }
+    }
+
+    private func selectNearestMatch(to selection: NSRange) -> Bool {
+        if let containingIndex = matches.firstIndex(where: { NSLocationInRange(selection.location, $0) }) {
+            return selectMatch(at: containingIndex)
+        }
+        let location = selection.location + selection.length
+        let nearestIndex = matches.indices.min { lhs, rhs in
+            distance(from: location, to: matches[lhs]) < distance(from: location, to: matches[rhs])
+        }
+        guard let nearestIndex else {
+            activeMatchIndex = nil
+            return false
+        }
+        return selectMatch(at: nearestIndex)
+    }
+
+    private func distance(from location: Int, to range: NSRange) -> Int {
+        if location < range.location {
+            return range.location - location
+        }
+        if location > NSMaxRange(range) {
+            return location - NSMaxRange(range)
+        }
+        return 0
     }
 }

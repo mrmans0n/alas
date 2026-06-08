@@ -72,6 +72,14 @@ struct ShortcutResolverTests {
         #expect(conflict == .launchAgentChat)
     }
 
+    @Test func conflictDetectsReplaceInEditorDefaultBinding() async {
+        let state = makeState()
+        let binding = ShortcutBinding(key: "r", modifiers: [.command])
+        let conflict = state.conflict(for: binding, excluding: .searchFiles)
+        #expect(conflict == .replaceInEditor)
+        #expect(!ShortcutAction.replaceInEditor.appliesInTerminal)
+    }
+
     @Test func conflictNilWhenNoneFound() async {
         let state = makeState()
         let weird = ShortcutBinding(key: "j", modifiers: [.command, .control, .shift])
