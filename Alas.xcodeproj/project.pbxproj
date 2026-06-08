@@ -324,6 +324,7 @@
 		51E0500756DC8DD5238F4D19 /* AppStateOverlayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69FCCEC91C40EBC896CF9089 /* AppStateOverlayTests.swift */; };
 		523568D4D67F61ACA677EE44 /* SubHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDE8B45ECF898B83A616586D /* SubHeader.swift */; };
 		524B70F03B9A934CEEA5FA61 /* LSPClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8F6FBCE1218EAB74B608A /* LSPClientTests.swift */; };
+		528CB7F6FF36C6809DE532B8 /* RemoteNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6FA61556FA530605C9FE81 /* RemoteNetwork.swift */; };
 		52A5CDD852333A0C4BDC6995 /* ACPPermissionRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67E03BF5DB4E6BFF8C2FA6A2 /* ACPPermissionRequest.swift */; };
 		52D1F226CE8DB1967977D3F3 /* ACPQuestionRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9D4FBF08CBAB59C08BBF1D /* ACPQuestionRequest.swift */; };
 		5426DC977050AACBCBDA37E9 /* AgentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DAAC7481503A68EA0888682 /* AgentDetectorTests.swift */; };
@@ -947,6 +948,7 @@
 		FB5FD89FC2800E173FC31E7A /* ACPAuthFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DCB7DA8B6EA8CF8B98EA267 /* ACPAuthFailure.swift */; };
 		FB6FF6C91476DEE43E512E30 /* RemoteServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EACA79C819C9FBE68F9D84 /* RemoteServer.swift */; };
 		FBAB18AAEFB289EF765564C5 /* RightPaneSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B15DFCD74150803355CC0A95 /* RightPaneSelectionState.swift */; };
+		FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */; };
 		FC9BC95960AE236F82D69E0B /* ACPQuestionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4306DE43C5ADCC65310C1169 /* ACPQuestionPrompt.swift */; };
 		FCB5091692C10A45B4E5D6BB /* AppConfigWorktreeOrderingDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0458AFA9BCBC4484B084085 /* AppConfigWorktreeOrderingDecodeTests.swift */; };
 		FCE78F165C46577F64D9B9AD /* CenterSelectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */; };
@@ -1132,6 +1134,7 @@
 		29FCCD153F9C2AF78A7B2E47 /* ACPMessageGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageGutter.swift; sourceTree = "<group>"; };
 		2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictTabState.swift; sourceTree = "<group>"; };
 		2AE565966DD010FDFD7DFF50 /* ACPMarkdownLiveStyler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownLiveStyler.swift; sourceTree = "<group>"; };
+		2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteNetworkTests.swift; sourceTree = "<group>"; };
 		2B0206F856D9639147D0A4BF /* ACPComposerActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerActions.swift; sourceTree = "<group>"; };
 		2B142F2A747C7F2D96E8BAD1 /* SessionRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionRegistry.swift; sourceTree = "<group>"; };
 		2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerActionButtonMetricsTests.swift; sourceTree = "<group>"; };
@@ -1844,6 +1847,7 @@
 		EC01D9A0927AF9DD7524CEB7 /* LanguageServerConfigMasonPrefill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LanguageServerConfigMasonPrefill.swift; sourceTree = "<group>"; };
 		EC2BB41ECA8AEAB278294B8A /* ACPPlanSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPlanSidebar.swift; sourceTree = "<group>"; };
 		EC6599EB47850D1E13ACF0EB /* NewProjectDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewProjectDialog.swift; sourceTree = "<group>"; };
+		EC6FA61556FA530605C9FE81 /* RemoteNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteNetwork.swift; sourceTree = "<group>"; };
 		EC7FA2ABE27A4CC2EB0BCA18 /* ACPTranscriptCurrentPlanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptCurrentPlanTests.swift; sourceTree = "<group>"; };
 		EC9F12CC9A1AA0A56CF7BA3A /* AppConfigTerminalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigTerminalTests.swift; sourceTree = "<group>"; };
 		ECB537B70B998A15B81BCBF7 /* CodeTextViewIndentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextViewIndentationTests.swift; sourceTree = "<group>"; };
@@ -1969,6 +1973,7 @@
 				B133843C0559BBD6E769ABB8 /* ACPManagerAccessorsTests.swift */,
 				001E204C8DBD41063D806ECA /* HTTPRequestParserTests.swift */,
 				3066B2C18213B0105D32213F /* RemoteConfigTests.swift */,
+				2AF8084388AF564A1907548C /* RemoteNetworkTests.swift */,
 				BA59378FB8733DBAC67592A3 /* RemotePairingServiceTests.swift */,
 				C02B44D8CC0AE48BFA9CD88E /* RemoteProtocolTests.swift */,
 				A79A06E48E215BF7B9EC2408 /* RemoteServerIntegrationTests.swift */,
@@ -2499,6 +2504,7 @@
 		36EBAD798ECDCED2A7761133 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				EC6FA61556FA530605C9FE81 /* RemoteNetwork.swift */,
 				C9126D442E8CDB093FA36BA5 /* RemoteServerPane.swift */,
 			);
 			path = Settings;
@@ -4267,6 +4273,7 @@
 				B3B038297A419A0E8DF73440 /* RemoteDevice.swift in Sources */,
 				C9C01E8A89C6767524FAC63B /* RemoteHTTPResponder.swift in Sources */,
 				4F2BB7482C39B07F5E35E9D1 /* RemoteMessageWireJSON.swift in Sources */,
+				528CB7F6FF36C6809DE532B8 /* RemoteNetwork.swift in Sources */,
 				342C28B197D5048F78D2E8D6 /* RemotePairingService.swift in Sources */,
 				32674DB95F2B62C00FC0AAA2 /* RemoteProtocol.swift in Sources */,
 				FB6FF6C91476DEE43E512E30 /* RemoteServer.swift in Sources */,
@@ -4701,6 +4708,7 @@
 				9D99FFFDFB3A256C4960D388 /* ReleaseCheckerTests.swift in Sources */,
 				852B01E3449841603FEEDC61 /* ReleaseInfoTests.swift in Sources */,
 				0F556F82FA5BF1E8D50096E2 /* RemoteConfigTests.swift in Sources */,
+				FBEC59B1FD0C1DDDB6CE3100 /* RemoteNetworkTests.swift in Sources */,
 				E22E6141A5EF030F79CF8CBE /* RemotePairingServiceTests.swift in Sources */,
 				A7B9BDE0F2EB1D1769EC81B5 /* RemoteProtocolTests.swift in Sources */,
 				A962107126052DEF597CB7FA /* RemoteServerIntegrationTests.swift in Sources */,
