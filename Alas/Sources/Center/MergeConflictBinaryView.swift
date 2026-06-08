@@ -109,6 +109,15 @@ private struct ImageStageView: NSViewRepresentable {
         let capturedCwd = worktreePath
         coordinator.loadTask = Task {
             let data = await Self.readStageData(stage: capturedStage, path: capturedPath, cwd: capturedCwd)
+            let image: NSImage?
+            if let data {
+                image = await GitLFSBlobResolver.image(
+                    fromGitBlobData: data,
+                    worktreePath: capturedCwd
+                )
+            } else {
+                image = nil
+            }
             if Task.isCancelled { return }
             await MainActor.run {
                 // Defensive: only apply if the coordinator's key still matches
@@ -116,7 +125,7 @@ private struct ImageStageView: NSViewRepresentable {
                 // mid-await, the new task already updated lastKey and we'd be
                 // setting an image for an outdated request.
                 guard coordinator.lastKey == capturedKey else { return }
-                if let data, let image = NSImage(data: data) {
+                if let image {
                     view.image = image
                 } else {
                     view.image = nil

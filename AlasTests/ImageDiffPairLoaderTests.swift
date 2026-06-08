@@ -34,6 +34,51 @@ struct ImageDiffPairLoaderTests {
         )!
     }
 
+    private func writeLFSPointer(
+        for data: Data,
+        named fileName: String,
+        in repo: URL
+    ) async throws {
+        let oid = try await sha256Hex(data)
+        let pointer = """
+        version https://git-lfs.github.com/spec/v1
+        oid sha256:\(oid)
+        size \(data.count)
+
+        """
+        let objectDir = repo
+            .appendingPathComponent(".git/lfs/objects")
+            .appendingPathComponent(String(oid.prefix(2)))
+            .appendingPathComponent(String(oid.dropFirst(2).prefix(2)))
+        try FileManager.default.createDirectory(at: objectDir, withIntermediateDirectories: true)
+        try data.write(to: objectDir.appendingPathComponent(oid))
+        try pointer.write(
+            to: repo.appendingPathComponent(fileName),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private func sha256Hex(_ data: Data) async throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/shasum")
+        process.arguments = ["-a", "256"]
+
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        input.fileHandleForWriting.write(data)
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+
+        let stdout = output.fileHandleForReading.readDataToEndOfFile()
+        let text = String(data: stdout, encoding: .utf8) ?? ""
+        return String(text.prefix(while: { $0 != " " }))
+    }
+
     @Test func loadsModifiedImagePair() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -220,5 +265,46 @@ struct ImageDiffPairLoaderTests {
         #expect(stagedPair.kind == .added)
         #expect(stagedPair.before == nil)
         #expect(stagedPair.after != nil)
+    }
+
+    @Test func loadsLFSImageFromHeadPointerForUnstagedDiff() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await writeLFSPointer(for: PngFixture.red, named: "logo.png", in: repo)
+        _ = try await Process.git(["add", "logo.png"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "lfs image"], cwd: repo)
+
+        try PngFixture.blue.write(to: repo.appendingPathComponent("logo.png"))
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "logo.png", staged: false
+        )
+        #expect(pair.kind == .modified)
+        #expect(pair.before != nil)
+        #expect(pair.after != nil)
+    }
+
+    @Test func loadsLFSImageFromIndexPointerForStagedDiff() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "seed\n".write(
+            to: repo.appendingPathComponent("seed.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        _ = try await Process.git(["add", "seed.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "seed"], cwd: repo)
+
+        try await writeLFSPointer(for: PngFixture.green, named: "new.png", in: repo)
+        _ = try await Process.git(["add", "new.png"], cwd: repo)
+
+        let pair = try await GitService().imageDiffPair(
+            worktreePath: repo, relativePath: "new.png", staged: true
+        )
+        #expect(pair.kind == .added)
+        #expect(pair.before == nil)
+        #expect(pair.after != nil)
     }
 }

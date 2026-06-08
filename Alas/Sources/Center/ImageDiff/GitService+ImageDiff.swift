@@ -172,7 +172,10 @@ extension GitService {
             }
             return nil
         }
-        return NSImage(data: result.stdout)
+        return await GitLFSBlobResolver.image(
+            fromGitBlobData: result.stdout,
+            worktreePath: worktreePath
+        )
     }
 
     fileprivate func frameCount(for image: NSImage?) -> Int {
