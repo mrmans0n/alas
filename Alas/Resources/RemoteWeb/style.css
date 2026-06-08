@@ -150,7 +150,8 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .gate-icon { font-size: 38px; line-height: 1; margin-bottom: 14px; }
 .gate-card h2 { font-size: 19px; font-weight: 700; margin: 0 0 10px; color: var(--fg); }
 .gate-card p { font-size: 14.5px; line-height: 1.55; color: var(--fg-dim); margin: 0; }
-#gate-retry { margin-top: 18px; padding: 11px 20px; border: 0.5px solid var(--line); border-radius: 10px; background: var(--bg-2); color: var(--fg); font-size: 15px; cursor: pointer; }
+#gate-retry { margin-top: 18px; padding: 11px 20px; border: 0.5px solid color-mix(in oklab, var(--accent) 55%, transparent); border-radius: 10px; background: color-mix(in oklab, var(--accent) 18%, transparent); color: var(--fg); font-size: 15px; font-weight: 600; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+#gate-retry:active { background: color-mix(in oklab, var(--accent) 26%, transparent); }
 
 /* Bottom sheets (permission / question) */
 .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; z-index: 10; }
