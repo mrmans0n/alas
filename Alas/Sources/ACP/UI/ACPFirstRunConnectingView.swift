@@ -11,9 +11,8 @@ enum ACPFirstRunConnectingViewCopy {
 struct ACPFirstRunConnectingView: View {
     let agentDisplayName: String
     let phase: ACPFirstRunConnectingPhase
-    /// Bottom padding that lifts the centred content clear of the floating
-    /// composer. Responsive to pane height so the composer never overlaps the
-    /// phase chips on short panes (see `raisedHeroBottomPadding`).
+    /// Extra bottom padding when this view is hosted without an in-flow
+    /// composer.
     let bottomInset: CGFloat
 
     @Environment(\.theme) private var theme
