@@ -73,6 +73,10 @@ arch="${target_arch}"
 ghostty_cache_root_default="${HOME}/Library/Caches/Alas/GhosttyKit"
 ghostty_cache_root="${ALAS_GHOSTTY_CACHE_DIR:-${ghostty_cache_root_default}}/${arch}"
 ghostty_cache_keep="${ALAS_GHOSTTY_CACHE_KEEP:-5}"
+ghostty_retry_delays=()
+for delay in ${ALAS_GHOSTTY_RETRY_DELAYS:-5 15 30 60 120 180}; do
+  ghostty_retry_delays+=("${delay}")
+done
 
 # Emit a one-line warning to stderr. Does not exit.
 warn() { echo "build-ghostty.sh: warning: $*" >&2; }
@@ -129,6 +133,43 @@ EOF
   done
 }
 
+run_zig_build_with_retries() {
+  local zig_bin="$1"
+  local zig_arch="$2"
+  local attempt status delay
+  attempt=1
+
+  while true; do
+    rm -rf "${ghostty_dir}/macos/GhosttyKit.xcframework" "${ghostty_build_root}/share"
+    if (
+      cd "${ghostty_dir}"
+      "${zig_bin}" build \
+        -Doptimize=ReleaseFast \
+        -Demit-xcframework=true \
+        -Dsentry=false \
+        -Dtarget="${zig_arch}-macos.14.0" \
+        --prefix "${ghostty_build_root}" \
+        --cache-dir "${ghostty_local_cache_dir}" \
+        --global-cache-dir "${ghostty_global_cache_dir}"
+    ) &&
+      [ -d "${ghostty_dir}/macos/GhosttyKit.xcframework" ] &&
+      [ -d "${ghostty_resources_path}" ] &&
+      [ -d "${ghostty_terminfo_path}" ]; then
+      return 0
+    fi
+
+    status=$?
+    if [ "${attempt}" -gt "${#ghostty_retry_delays[@]}" ]; then
+      return "${status}"
+    fi
+
+    delay="${ghostty_retry_delays[$((attempt - 1))]}"
+    warn "zig build failed with exit ${status}; retrying in ${delay}s (attempt $((attempt + 1))/$(( ${#ghostty_retry_delays[@]} + 1 )))"
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+  done
+}
+
 # Run zig + rsync xcframework + write local fingerprint. Idempotent.
 build_and_install_local() {
   (
@@ -159,14 +200,7 @@ build_and_install_local() {
       x86_64) zig_arch="x86_64" ;;
       *)      echo "error: unsupported target_arch '${target_arch}'" >&2; exit 1 ;;
     esac
-    "${zig_bin}" build \
-      -Doptimize=ReleaseFast \
-      -Demit-xcframework=true \
-      -Dsentry=false \
-      -Dtarget="${zig_arch}-macos.14.0" \
-      --prefix "${ghostty_build_root}" \
-      --cache-dir "${ghostty_local_cache_dir}" \
-      --global-cache-dir "${ghostty_global_cache_dir}"
+    run_zig_build_with_retries "${zig_bin}" "${zig_arch}"
   )
   rsync -a --delete "${ghostty_dir}/macos/GhosttyKit.xcframework/" "${xcframework_path}/"
   prepare_xcframework
