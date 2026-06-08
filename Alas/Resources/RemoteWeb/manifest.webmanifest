@@ -1,0 +1,18 @@
+{
+  "name": "Alas Remote",
+  "short_name": "Alas",
+  "description": "Remote session control for Alas.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#101417",
+  "theme_color": "#151c20",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
