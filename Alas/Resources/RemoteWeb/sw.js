@@ -8,7 +8,9 @@ const SHELL_ASSETS = [
   "/purify.min.js?v=27",
   "/manifest.webmanifest",
   "/icon.svg",
-  "/icon-180.png"
+  "/icon-180.png",
+  "/icon-192.png",
+  "/icon-512.png"
 ];
 
 self.addEventListener("install", (event) => {
