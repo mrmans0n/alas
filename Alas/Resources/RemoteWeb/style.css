@@ -80,24 +80,22 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 
 /* Thinking — collapsed by default, left accent rule */
 .m-thought { align-self: stretch; border-left: 1.5px solid var(--bg-4); padding-left: 11px; margin: 6px 0; }
-.m-thought > summary { list-style: none; cursor: pointer; color: var(--fg-faint); font-size: 11px; padding: 3px 0; }
-.m-thought > summary::-webkit-details-marker { display: none; }
-.m-thought > summary::before { content: "•••  "; }
-.m-thought[open] > summary::before { content: "×  "; }
+.thought-toggle { display: block; width: 100%; border: none; background: none; color: var(--fg-faint); font: inherit; font-size: 11px; text-align: left; padding: 3px 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.thought-toggle::before { content: "•••  "; }
+.m-thought.is-open .thought-toggle::before { content: "×  "; }
 .m-thought .thought-body { color: var(--fg-dim); font-style: italic; font-size: 13px; line-height: 1.5; padding: 4px 0 2px; }
 
 /* Tool call / structured card — collapsed by default */
 .m-tool { align-self: stretch; background: color-mix(in oklab, var(--bg-1) 60%, transparent); border: 0.5px solid var(--line); border-radius: 8px; margin: 5px 0; overflow: hidden; }
-.m-tool[open] { border-color: var(--bg-4); }
-.m-tool > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
-.m-tool > summary::-webkit-details-marker { display: none; }
+.m-tool.is-open { border-color: var(--bg-4); }
+.tool-toggle { width: 100%; border: none; background: none; color: inherit; font: inherit; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px 10px; text-align: left; -webkit-tap-highlight-color: transparent; }
 .tool-verb { flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--accent); }
 .tool-name { color: var(--fg-muted); font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-preview { flex: 1; min-width: 0; color: var(--fg-faint); font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-status { flex-shrink: 0; margin-left: auto; font-size: 12px; font-weight: 700; }
 .tool-status.ok { color: var(--add); } .tool-status.err { color: var(--del); } .tool-status.run { color: var(--fg-faint); }
 .tool-chev { flex-shrink: 0; color: var(--fg-faint); font-size: 11px; transition: transform .15s; }
-.m-tool[open] .tool-chev { transform: rotate(180deg); }
+.m-tool.is-open .tool-chev { transform: rotate(180deg); }
 .tool-body { margin: 0; padding: 9px 11px; border-top: 0.5px solid var(--line-soft); background: color-mix(in oklab, var(--bg-0) 55%, transparent); font-family: ui-monospace, monospace; font-size: 11.5px; line-height: 1.45; color: var(--fg-muted); white-space: pre; overflow-x: auto; max-height: 46vh; overflow-y: auto; }
 
 /* Composer / drive bar */
