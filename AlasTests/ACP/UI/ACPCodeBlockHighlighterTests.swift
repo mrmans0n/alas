@@ -74,12 +74,15 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(for: "terraform") == "tf")
         #expect(ACPCodeLanguage.highlighterExtension(for: "tfvars") == "tfvars")
         #expect(ACPCodeLanguage.highlighterExtension(for: "dockerfile") == "dockerfile")
+        #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == "sql")
     }
 
     @Test("future-known unsupported ACP fence labels remain plain")
     func futureKnownUnsupportedFenceLabelsRemainPlain() {
-        #expect(ACPCodeLanguage.highlighterExtension(for: "sql") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "pl") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "perl") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "ex") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(for: "exs") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "elixir") == nil)
         #expect(ACPCodeLanguage.highlighterExtension(for: "ini") == nil)
     }
@@ -93,7 +96,7 @@ struct ACPCodeBlockHighlighterTests {
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "page.htm") == "htm")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "styles.scss") == "scss")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "changes.patch") == "patch")
-        #expect(ACPCodeLanguage.highlighterExtension(forPath: "query.sql") == nil)
+        #expect(ACPCodeLanguage.highlighterExtension(forPath: "query.sql") == "sql")
         #expect(ACPCodeLanguage.highlighterExtension(forPath: "README") == nil)
     }
 
@@ -164,8 +167,8 @@ struct ACPCodeBlockHighlighterTests {
             locations: ["Sources/App.swift", "Sources/Other.swift"]
         ) == nil)
         #expect(ACPToolOutputSyntax.highlighterExtension(
-            content: "SELECT * FROM users",
-            locations: ["query.sql"]
+            content: "theme = cool-slate",
+            locations: ["config.ini"]
         ) == nil)
     }
 
@@ -196,8 +199,8 @@ struct ACPCodeBlockHighlighterTests {
         #expect(try foregroundColor(for: "fff", in: css) != editorTheme.defaultFG)
     }
 
-    @Test("future-known unsupported ACP labels keep attributed output plain")
-    func futureKnownUnsupportedAttributedOutputRemainsPlain() throws {
+    @Test("SQL labels apply non-default ACP syntax colors")
+    func sqlLabelsApplySyntaxColors() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let editorTheme = EditorTheme(theme: theme)
         let attributed = ACPCodeBlockHighlighter.attributedString(
@@ -207,7 +210,7 @@ struct ACPCodeBlockHighlighterTests {
         )
 
         #expect(attributed.string == "SELECT id FROM users WHERE active = true;")
-        #expect(allForegroundColors(in: attributed, equal: editorTheme.defaultFG))
+        #expect(try foregroundColor(for: "SELECT", in: attributed) != editorTheme.defaultFG)
     }
 
     @Test("Swift code applies syntax color while preserving monospaced font")
@@ -370,8 +373,8 @@ struct ACPCodeBlockHighlighterTests {
     func toolOutputUnsupportedPathRemainsPlain() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
         let editorTheme = EditorTheme(theme: theme)
-        let content = "SELECT id FROM users"
-        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["query.sql"])
+        let content = "theme = cool-slate"
+        let ext = ACPToolOutputSyntax.highlighterExtension(content: content, locations: ["config.ini"])
         let attributed = ACPCodeBlockHighlighter.attributedString(
             code: content,
             language: ext,

@@ -72,7 +72,8 @@ enum ACPCodeLanguage {
         case "tf", "terraform": return "tf"
         case "tfvars": return "tfvars"
         case "dockerfile": return "dockerfile"
-        case "sql", "pl", "perl", "ex", "exs", "elixir", "ini":
+        case "sql": return "sql"
+        case "pl", "perl", "ex", "exs", "elixir", "ini":
             return nil
         default:
             return nil
@@ -85,7 +86,7 @@ enum ACPCodeLanguage {
             return normalized
         }
         switch normalized {
-        case "diff", "patch", "xml", "scss", "sass":
+        case "diff", "patch", "xml", "scss", "sass", "sql":
             return normalized
         default:
             return nil
