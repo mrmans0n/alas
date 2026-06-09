@@ -1,13 +1,17 @@
 import AppKit
 import SwiftUI
 
+struct NewWorktreePresentation: Identifiable, Equatable {
+    let id = UUID()
+    let projectId: String?
+}
+
 struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
-    @State private var showNewWorktree = false
-    @State private var newWorktreePresetProjectId: String?
+    @State private var newWorktreePresentation: NewWorktreePresentation?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -17,7 +21,7 @@ struct RootView: View {
                     EmptyState(
                         canCreateWorktree: false,
                         onAddProject: { showNewProject = true },
-                        onNewWorktree: { showNewWorktree = true }
+                        onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
                     )
                 } else {
                     ThreePaneLayout(
@@ -51,8 +55,7 @@ struct RootView: View {
                                     removingProject = state.projects.first { $0.id == projectId }
                                 },
                                 onNewWorktree: { projectId in
-                                    newWorktreePresetProjectId = projectId
-                                    showNewWorktree = true
+                                    newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
                                 },
                                 onHideSidebar: {
                                     state.config.sidebarVisible = false
@@ -118,8 +121,7 @@ struct RootView: View {
         .ignoresSafeArea()
         .modifier(RootCommandHandlers(
             state: state,
-            showNewWorktree: $showNewWorktree,
-            newWorktreePresetProjectId: $newWorktreePresetProjectId,
+            newWorktreePresentation: $newWorktreePresentation,
             showNewProject: $showNewProject,
             selectedWorktree: selectedWorktree,
             openSettings: openSettingsWindow
@@ -137,11 +139,14 @@ struct RootView: View {
                 project: project
             )
         }
-        .sheet(isPresented: $showNewWorktree, onDismiss: { newWorktreePresetProjectId = nil }) {
+        .sheet(item: $newWorktreePresentation) { presentation in
             NewWorktreeDialog(
                 state: state,
-                presented: $showNewWorktree,
-                presetProjectId: newWorktreePresetProjectId
+                presented: Binding(
+                    get: { newWorktreePresentation != nil },
+                    set: { if !$0 { newWorktreePresentation = nil } }
+                ),
+                presetProjectId: presentation.projectId
             )
         }
         .alert(
@@ -330,8 +335,7 @@ struct RootView: View {
 
 private struct RootCommandHandlers: ViewModifier {
     @Bindable var state: AppState
-    @Binding var showNewWorktree: Bool
-    @Binding var newWorktreePresetProjectId: String?
+    @Binding var newWorktreePresentation: NewWorktreePresentation?
     @Binding var showNewProject: Bool
     let selectedWorktree: () -> Worktree?
     let openSettings: () -> Void
@@ -340,8 +344,7 @@ private struct RootCommandHandlers: ViewModifier {
         content
             .modifier(RootBaseHandlers(
                 state: state,
-                showNewWorktree: $showNewWorktree,
-                newWorktreePresetProjectId: $newWorktreePresetProjectId,
+                newWorktreePresentation: $newWorktreePresentation,
                 showNewProject: $showNewProject,
                 selectedWorktree: selectedWorktree,
                 openSettings: openSettings
@@ -355,8 +358,7 @@ private struct RootCommandHandlers: ViewModifier {
 
 private struct RootBaseHandlers: ViewModifier {
     @Bindable var state: AppState
-    @Binding var showNewWorktree: Bool
-    @Binding var newWorktreePresetProjectId: String?
+    @Binding var newWorktreePresentation: NewWorktreePresentation?
     @Binding var showNewProject: Bool
     let selectedWorktree: () -> Worktree?
     let openSettings: () -> Void
@@ -376,8 +378,7 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let c = b
             .onReceive(NotificationCenter.default.publisher(for: .alasNewWorktree)) { notification in
-                newWorktreePresetProjectId = notification.object as? String
-                showNewWorktree = true
+                newWorktreePresentation = NewWorktreePresentation(projectId: notification.object as? String)
             }
         let d = c
             .onReceive(NotificationCenter.default.publisher(for: .alasFocusMainWorktree)) { _ in

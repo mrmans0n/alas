@@ -3,6 +3,18 @@ import Testing
 @testable import Alas
 
 struct NewWorktreeDialogTests {
+    @Test func presentationKeepsRequestedProjectId() {
+        let presentation = NewWorktreePresentation(projectId: "alas")
+
+        #expect(presentation.projectId == "alas")
+    }
+
+    @Test func presentationSupportsGlobalCreation() {
+        let presentation = NewWorktreePresentation(projectId: nil)
+
+        #expect(presentation.projectId == nil)
+    }
+
     @Test func repositorySelectorShowsForGlobalCreation() {
         #expect(NewWorktreeDialog.showsRepositorySelector(
             presetProjectId: nil,
