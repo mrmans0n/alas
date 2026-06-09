@@ -49,8 +49,12 @@ struct OpenSessionsSection: View {
                 performKill(row)
                 confirmKillRow = nil
             }
-        } message: { _ in
-            Text("This session has clients attached and may belong to another Alas window.")
+        } message: { row in
+            if case .active = row.kind {
+                Text("This terminal tab and the process running in it will be terminated.")
+            } else {
+                Text("This session has clients attached and may belong to another Alas window.")
+            }
         }
         .alert("Kill all idle sessions?", isPresented: $confirmKillAllIdle) {
             Button("Cancel", role: .cancel) { }
@@ -98,11 +102,17 @@ struct OpenSessionsSection: View {
 
     // MARK: actions
 
-    /// In-use orphans go through a confirm; everything else kills immediately.
+    /// Active tabs honor the "confirm before closing terminal tabs" setting;
+    /// in-use orphans always confirm (they may belong to another window);
+    /// idle orphans kill immediately.
     private func kill(_ row: OpenSessionRow) {
-        if case .orphanInUse = row.kind {
+        switch row.kind {
+        case .active:
+            if state.config.terminal.confirmCloseTabs { confirmKillRow = row }
+            else { performKill(row) }
+        case .orphanInUse:
             confirmKillRow = row
-        } else {
+        case .orphanIdle:
             performKill(row)
         }
     }
