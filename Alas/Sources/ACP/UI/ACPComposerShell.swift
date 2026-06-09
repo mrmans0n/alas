@@ -177,7 +177,7 @@ struct ACPComposer: View {
                     action: currentAction,
                     onPrimary: handlePrimary,
                     onMenu: handleMenu,
-                    queueBadgeCount: session.queue.count
+                    queueBadgeCount: session.visibleQueueCount
                 )
             }
             .padding(.horizontal, 2)

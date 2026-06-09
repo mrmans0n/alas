@@ -817,6 +817,37 @@ extension ACPSessionRunner {
         sendNow(blocks: head.blocks, queuedItemId: head.id)
     }
 
+    /// User clicked the row-local "send now" affordance for a queued item.
+    /// While idle this just promotes the item to the drainable head. While a
+    /// turn is active, it behaves like steering: cancel the current turn,
+    /// discard the remaining queue, and send the selected queued prompt.
+    func forceSendQueuedItem(id: UUID) {
+        guard holdsLeaseForWrite() else { return }
+        guard let idx = session.queue.firstIndex(where: { $0.id == id }),
+              session.queue[idx].status == .pending
+        else { return }
+
+        if session.transcript.streamingState == .idle,
+           activePromptID == nil,
+           !steerInProgress {
+            guard session.forceQueueItem(id: id) else { return }
+            persistQueue()
+            flushQueueIfIdle()
+            return
+        }
+
+        guard session.agentState == .ready else {
+            guard session.forceQueueItem(id: id) else { return }
+            persistQueue()
+            flushQueueIfIdle()
+            return
+        }
+
+        let item = session.queue.remove(at: idx)
+        persistQueue()
+        steer(blocks: item.blocks, recordUserPrompt: !item.transcriptRecorded)
+    }
+
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue
     /// (including any `.sending` head whose `sendNow` task is mid-RPC),
     /// then send the new prompt as a fresh turn. Only the `.pending`
@@ -828,6 +859,7 @@ extension ACPSessionRunner {
     /// resolves to a no-op.
     func steer(
         blocks: [ACPContentBlock],
+        recordUserPrompt: Bool = true,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         let snapshot = session.queue.filter { $0.status == .pending }
@@ -872,7 +904,12 @@ extension ACPSessionRunner {
                     onPromptFinished?(false)
                     return
                 }
-                self.sendNow(blocks: blocks, queuedItemId: nil, onPromptFinished: onPromptFinished)
+                self.sendNow(
+                    blocks: blocks,
+                    queuedItemId: nil,
+                    recordUserPrompt: recordUserPrompt,
+                    onPromptFinished: onPromptFinished
+                )
             }
         }
     }
@@ -913,6 +950,7 @@ extension ACPSessionRunner {
     func sendNow(
         blocks: [ACPContentBlock],
         queuedItemId: UUID?,
+        recordUserPrompt: Bool = true,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         let promptID = nextPromptID
@@ -948,6 +986,7 @@ extension ACPSessionRunner {
                 // before-question. Skip for a queued retry whose prompt
                 // is already in the transcript from the previous attempt.
                 let shouldRecord: Bool = {
+                    guard recordUserPrompt else { return false }
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }),
                        self.session.queue[idx].transcriptRecorded {
