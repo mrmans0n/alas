@@ -34,6 +34,22 @@ struct TabsManagerTests {
         #expect(mgr.activeTabId(forWorktree: worktreeId) == nil)
     }
 
+    @Test func closingDiffTabsByPathClosesAllMatchingDiffsOnly() {
+        let worktreeId = "tabs-manager-closing-diff-tabs-by-path"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let editor = mgr.appendEditor(worktreeId: worktreeId, title: "a.txt", relativePath: "a.txt")
+        let unstaged = mgr.appendDiff(worktreeId: worktreeId, title: "a.txt", relativePath: "a.txt")
+        let staged = mgr.appendDiff(worktreeId: worktreeId, title: "a.txt (staged)", relativePath: "a.txt", staged: true)
+        let other = mgr.appendDiff(worktreeId: worktreeId, title: "b.txt", relativePath: "b.txt")
+
+        let closed = mgr.closeDiffTabs(worktreeId: worktreeId, relativePaths: ["a.txt"])
+
+        #expect(closed == [unstaged.id, staged.id])
+        #expect(mgr.tabs(forWorktree: worktreeId).map(\.id) == [editor.id, other.id])
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == other.id)
+    }
+
     @Test func activatingTabNumberUsesOneBasedWorktreeLocalOrder() {
         let worktreeId = "tabs-manager-activate-tab-number"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

@@ -792,7 +792,11 @@ final class RightPaneState {
             return
         }
         await refresh()
-        closeDiffTabs?(paths)
+        let remainingChangedPaths = Set(changes.flatMap(Self.unstagePaths(for:)))
+        let cleanPaths = paths.filter { !remainingChangedPaths.contains($0) }
+        if !cleanPaths.isEmpty {
+            closeDiffTabs?(cleanPaths)
+        }
     }
 
     /// Run `git diff HEAD -- <file>` (or `--cached` on unborn HEAD, or

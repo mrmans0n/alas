@@ -54,12 +54,7 @@ final class RightPaneStore {
             new.trackUpstreamForCommits = trackUpstreamForCommits
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
-                let pathSet = Set(paths)
-                for tab in app.tabs.tabs(forWorktree: id) {
-                    if case .diff(let s) = tab, pathSet.contains(s.relativePath) {
-                        app.closeTab(worktreeId: id, tabId: s.id)
-                    }
-                }
+                app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)
             }
             new.openConflict = { [weak self] path in
                 guard let app = self?.appState else { return }
