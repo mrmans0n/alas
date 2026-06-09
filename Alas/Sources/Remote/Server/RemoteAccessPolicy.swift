@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 struct RemoteAccessPolicy: Equatable, Sendable {
     private let allowedHosts: Set<String>
@@ -27,11 +28,13 @@ struct RemoteAccessPolicy: Equatable, Sendable {
             guard let close = raw.firstIndex(of: "]") else { return nil }
             let suffix = raw[raw.index(after: close)...]
             let port = suffix.dropFirst()
-            guard suffix.isEmpty || (suffix.hasPrefix(":") && !port.isEmpty && port.allSatisfy(\.isNumber)) else {
+            guard suffix.isEmpty || (suffix.hasPrefix(":") && Self.isASCIIPort(port)) else {
                 return nil
             }
             let inside = raw[raw.index(after: raw.startIndex)..<close]
-            return String(inside)
+            let host = String(inside)
+            guard Self.isIPv6Literal(host) else { return nil }
+            return host
         }
 
         guard !raw.contains("[") && !raw.contains("]") else { return nil }
@@ -39,9 +42,21 @@ struct RemoteAccessPolicy: Equatable, Sendable {
         let colonCount = raw.filter { $0 == ":" }.count
         if colonCount == 1, let colon = raw.lastIndex(of: ":") {
             let port = raw[raw.index(after: colon)...]
-            guard !port.isEmpty && port.allSatisfy(\.isNumber) else { return nil }
-            return String(raw[..<colon])
+            guard Self.isASCIIPort(port) else { return nil }
+            let host = String(raw[..<colon])
+            return host.isEmpty ? nil : host
         }
         return raw
+    }
+
+    private static func isIPv6Literal(_ host: String) -> Bool {
+        var address = in6_addr()
+        return host.withCString { inet_pton(AF_INET6, $0, &address) == 1 }
+    }
+
+    private static func isASCIIPort<S: StringProtocol>(_ port: S) -> Bool {
+        !port.isEmpty && port.utf8.allSatisfy { byte in
+            byte >= Character("0").asciiValue! && byte <= Character("9").asciiValue!
+        }
     }
 }

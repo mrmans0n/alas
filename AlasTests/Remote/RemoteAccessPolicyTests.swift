@@ -59,4 +59,19 @@ struct RemoteAccessPolicyTests {
         #expect(RemoteAccessPolicy.normalizedHost(from: "localhost]") == nil)
         #expect(RemoteAccessPolicy.normalizedHost(from: "]localhost[") == nil)
     }
+
+    @Test func rejectsBracketedNonIpv6HostsAndEmptyIpv6Hosts() {
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "[localhost]"))
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "[127.0.0.1]"))
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[localhost]") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[127.0.0.1]") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[]") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "[]:8765") == nil)
+    }
+
+    @Test func rejectsNonAsciiPortsAndEmptyNonBracketedHosts() {
+        #expect(!RemoteAccessPolicy.loopback.allows(hostHeader: "localhost:１２３"))
+        #expect(RemoteAccessPolicy.normalizedHost(from: "localhost:１２３") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: ":8765") == nil)
+    }
 }
