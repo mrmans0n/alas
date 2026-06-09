@@ -74,4 +74,14 @@ struct RemoteAccessPolicyTests {
         #expect(RemoteAccessPolicy.normalizedHost(from: "localhost:１２３") == nil)
         #expect(RemoteAccessPolicy.normalizedHost(from: ":8765") == nil)
     }
+
+    @Test func rejectsMalformedMultiColonHostsButAllowsRawIpv6() {
+        let policy = RemoteAccessPolicy(allowedHosts: ["localhost:8765:9000"])
+
+        #expect(!policy.allows(hostHeader: "localhost:8765:9000"))
+        #expect(RemoteAccessPolicy.normalizedHost(from: "localhost:8765:9000") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "foo:bar:baz") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "example.com::8765") == nil)
+        #expect(RemoteAccessPolicy.normalizedHost(from: "2001:db8::1") == "2001:db8::1")
+    }
 }

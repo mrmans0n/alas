@@ -46,7 +46,10 @@ struct RemoteAccessPolicy: Equatable, Sendable {
             let host = String(raw[..<colon])
             return host.isEmpty ? nil : host
         }
-        return raw
+        if colonCount == 0 {
+            return raw
+        }
+        return Self.isIPv6Literal(raw) ? raw : nil
     }
 
     private static func isIPv6Literal(_ host: String) -> Bool {
