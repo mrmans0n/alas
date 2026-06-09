@@ -1,7 +1,6 @@
 import Foundation
 
-/// Builds HTTP/1.1 responses for non-WebSocket requests: the static web
-/// client bundle and the POST /pair endpoint. Pure given its inputs.
+/// Safe, user-facing remote diagnostics served by `/remote-info`.
 struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
     let appName: String
     let port: UInt16?
@@ -10,6 +9,9 @@ struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
     let pairedDeviceCount: Int
 }
 
+/// Builds HTTP/1.1 responses for non-WebSocket requests: the static web
+/// client bundle, safe diagnostics routes, and the POST /pair endpoint. Pure
+/// given its inputs.
 @MainActor
 struct RemoteHTTPResponder {
     let pairing: RemotePairingService

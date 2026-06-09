@@ -36,6 +36,8 @@ final class RemoteServer {
     /// Settings pane via AppState) react, since `port` itself isn't observable.
     var onPortChange: ((UInt16?) -> Void)?
 
+    /// Callers with app state should pass a diagnostics closure; the default is
+    /// a safe empty fallback for contexts that do not have app state available.
     init(
         pairing: RemotePairingService,
         assets: RemoteWebAssets,

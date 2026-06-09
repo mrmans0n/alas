@@ -161,22 +161,7 @@ struct RemoteServerIntegrationTests {
     @Test func remoteDiagnosticsRoutesReturnSafeJSON() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         _ = try pairing.redeem(code: pairing.beginPairing(), deviceName: "iPhone")
-
-        let diagnostics = RemoteDiagnosticsSnapshot(
-            appName: "Alas",
-            port: 8765,
-            addresses: [
-                RemoteAdvertisedAddress(
-                    kind: .lan,
-                    interfaceName: "en0",
-                    host: "192.168.1.23",
-                    port: 8765,
-                    isRecommended: true
-                )
-            ],
-            usesPlainHTTP: true,
-            pairedDeviceCount: 1
-        )
+        var diagnosticsPorts: [UInt16?] = []
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-diag-\(UUID().uuidString)", isDirectory: true)
@@ -188,7 +173,24 @@ struct RemoteServerIntegrationTests {
             assets: RemoteWebAssets(root: root),
             provider: FakeSessionsProvider(),
             accessPolicy: RemoteAccessPolicy(allowedHosts: ["127.0.0.1"]),
-            diagnostics: { _ in diagnostics }
+            diagnostics: { providerPort in
+                diagnosticsPorts.append(providerPort)
+                return RemoteDiagnosticsSnapshot(
+                    appName: "Alas",
+                    port: providerPort,
+                    addresses: [
+                        RemoteAdvertisedAddress(
+                            kind: .lan,
+                            interfaceName: "en0",
+                            host: "192.168.1.23",
+                            port: providerPort ?? 0,
+                            isRecommended: true
+                        )
+                    ],
+                    usesPlainHTTP: true,
+                    pairedDeviceCount: 1
+                )
+            }
         )
         try server.start(port: 0)
         defer { server.stop() }
@@ -208,10 +210,22 @@ struct RemoteServerIntegrationTests {
             from: URL(string: "http://127.0.0.1:\(port)/remote-info")!
         )
         #expect((infoResponse as? HTTPURLResponse)?.statusCode == 200)
+        let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: infoData)
+        #expect(diagnosticsPorts == [port])
+        #expect(snapshot.port == port)
+        #expect(snapshot.appName == "Alas")
+        #expect(snapshot.pairedDeviceCount == 1)
+        #expect(snapshot.usesPlainHTTP)
+        let address = try #require(snapshot.addresses.first)
+        #expect(snapshot.addresses.count == 1)
+        #expect(address.kind == .lan)
+        #expect(address.interfaceName == "en0")
+        #expect(address.host == "192.168.1.23")
+        #expect(address.port == port)
+        #expect(address.url == "http://192.168.1.23:\(port)")
+        #expect(address.isRecommended)
+
         let text = try #require(String(data: infoData, encoding: .utf8))
-        #expect(text.contains(#""appName":"Alas""#))
-        #expect(text.contains(#""pairedDeviceCount":1"#))
-        #expect(text.contains("192.168.1.23"))
         #expect(!text.contains("token"))
         #expect(!text.contains("code"))
         #expect(!text.contains("session"))
