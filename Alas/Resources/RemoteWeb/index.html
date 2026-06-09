@@ -81,10 +81,10 @@
       <button id="cfg-close" class="sheet-close">Close</button>
     </div>
   </div>
-  <div id="rename-sheet" class="sheet hidden">
+  <div id="rename-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="rename-title">
     <div class="sheet-card">
-      <p class="sheet-title">Rename session</p>
-      <input id="rename-input" class="sheet-input" type="text" autocomplete="off" maxlength="120" />
+      <p id="rename-title" class="sheet-title">Rename session</p>
+      <input id="rename-input" class="sheet-input" type="text" autocomplete="off" maxlength="120" aria-label="Session title" />
       <button id="rename-submit" class="btn-submit">Rename</button>
       <button id="rename-cancel" class="sheet-close">Cancel</button>
     </div>

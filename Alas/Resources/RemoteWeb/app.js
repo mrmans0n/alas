@@ -170,41 +170,38 @@ function renderSessions(sessions) {
 
 function renderSessionRow(s) {
   const row = document.createElement("div");
-  row.tabIndex = 0;
-  row.role = "button";
   row.dataset.sessionId = s.id;
   row.className = "session-row";
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "session-open";
+  open.onclick = () => openSession(s.id);
 
   const head = el("div", "session-head");
   const title = el("span", "session-title", s.title);
   const status = el("span", "status", s.status);
+  head.append(title, status);
+  open.append(head);
+
   const rename = el("button", "rename-btn", "✎");
   rename.type = "button";
   rename.setAttribute("aria-label", "Rename session");
-  rename.onclick = (e) => { e.stopPropagation(); showRenameSheet(s.id); };
-  head.append(title, status, rename);
-  row.append(head);
+  rename.onclick = () => showRenameSheet(s.id);
 
   if (s.worktree) {
     row.classList.add("session-row-card");
-    row.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
+    open.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
     const meta = el("div", "session-meta");
     const parts = sessionMetaParts(s.worktree);
     parts.forEach(part => meta.append(part));
-    row.append(meta);
+    open.append(meta);
     row.title = s.worktree.path || "";
   } else {
     row.classList.add("session-row-minimal");
   }
 
-  row.onclick = () => openSession(s.id);
-  row.onkeydown = (e) => {
-    if (e.target !== row) return;
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      openSession(s.id);
-    }
-  };
+  row.append(open, rename);
   return row;
 }
 
