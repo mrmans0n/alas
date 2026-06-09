@@ -633,7 +633,6 @@ struct TerminalServiceZmxTests {
 
         svc.killOrphanSession(name: "alas-aaaa-1111")
         svc.waitForPendingKills(timeout: 2.0)
-        await waitForCalls(recorder, count: 1) { $0.calls.count }
 
         #expect(recorder.calls.contains(.init(
             executable: URL(fileURLWithPath: "/fake/Contents/Resources/zmx/zmx"),
@@ -652,7 +651,6 @@ struct TerminalServiceZmxTests {
 
         svc.killIdleOrphans(snap)
         svc.waitForPendingKills(timeout: 2.0)
-        await waitForCalls(recorder, count: 2) { $0.calls.count }
 
         let killed = Set(recorder.calls.filter { $0.args.first == "kill" }.map { $0.args[1] })
         #expect(killed == ["alas-idle-1", "alas-idle-2"])
