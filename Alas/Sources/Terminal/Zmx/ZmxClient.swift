@@ -4,6 +4,10 @@ import os
 struct ZmxSessionInfo: Equatable, Sendable {
     let name: String
     let startDir: String?
+    var pid: Int?
+    var clients: Int?
+    var created: Int?
+    var cmd: String?
 }
 
 /// Thin Swift wrapper around the bundled `zmx` CLI. Exposes the three
@@ -146,16 +150,25 @@ final class ZmxClient: Sendable {
             .split(separator: "\t", omittingEmptySubsequences: true)
         var name: String?
         var startDir: String?
+        var pid: Int?
+        var clients: Int?
+        var created: Int?
+        var cmd: String?
         for field in fields {
             let parts = field.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
             guard parts.count == 2 else { continue }
+            let value = String(parts[1])
             switch parts[0] {
-            case "name": name = String(parts[1])
-            case "start_dir": startDir = String(parts[1])
+            case "name": name = value
+            case "start_dir": startDir = value
+            case "pid": pid = Int(value)
+            case "clients": clients = Int(value)
+            case "created": created = Int(value)
+            case "cmd": cmd = value
             default: break
             }
         }
         guard let name else { return nil }
-        return ZmxSessionInfo(name: name, startDir: startDir)
+        return ZmxSessionInfo(name: name, startDir: startDir, pid: pid, clients: clients, created: created, cmd: cmd)
     }
 }
