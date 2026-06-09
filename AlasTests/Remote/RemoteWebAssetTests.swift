@@ -37,8 +37,28 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=27"))
-        #expect(html.contains("/style.css?v=27"))
+        #expect(html.contains("/app.js?v=28"))
+        #expect(html.contains("/style.css?v=28"))
+    }
+
+    @Test func remoteWebExposesSessionRenameControls() throws {
+        let app = try asset("app.js")
+        let css = try asset("style.css")
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(html.contains(#"id="detail-title""#))
+        #expect(html.contains(#"id="detail-rename""#))
+        #expect(html.contains(#"id="rename-sheet""#))
+        #expect(html.contains(#"id="rename-input""#))
+        #expect(app.contains(#"type: "renameSession""#))
+        #expect(app.contains("function showRenameSheet"))
+        #expect(app.contains(#"case "sessionRenamed""#))
+        #expect(css.contains(".rename-btn"))
+        #expect(css.contains("#detail-title"))
+        #expect(css.contains(".sheet-input"))
+        #expect(sw.contains(#""/app.js?v=28""#))
+        #expect(sw.contains(#""/style.css?v=28""#))
     }
 
     @Test func serviceWorkerKeepsControlAndDiagnosticRoutesNetworkOnly() throws {

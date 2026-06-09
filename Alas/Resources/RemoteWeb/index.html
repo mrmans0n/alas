@@ -11,11 +11,13 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=27" />
+  <link rel="stylesheet" href="/style.css?v=28" />
 </head>
 <body>
   <header id="bar">
     <button id="back" class="hidden">‹ Sessions</button>
+    <span id="detail-title" class="hidden"></span>
+    <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
     <span id="nav-title">Alas Remote</span>
     <span id="status" class="chip" data-state="connecting">connecting…</span>
   </header>
@@ -79,6 +81,14 @@
       <button id="cfg-close" class="sheet-close">Close</button>
     </div>
   </div>
+  <div id="rename-sheet" class="sheet hidden">
+    <div class="sheet-card">
+      <p class="sheet-title">Rename session</p>
+      <input id="rename-input" class="sheet-input" type="text" autocomplete="off" maxlength="120" />
+      <button id="rename-submit" class="btn-submit">Rename</button>
+      <button id="rename-cancel" class="sheet-close">Cancel</button>
+    </div>
+  </div>
   <div id="gate" class="hidden">
     <div class="gate-card">
       <div class="gate-icon" id="gate-icon">⚠</div>
@@ -87,9 +97,9 @@
       <button id="gate-retry" class="hidden">Try again</button>
     </div>
   </div>
-  <script src="/marked.min.js?v=27"></script>
-  <script src="/purify.min.js?v=27"></script>
-  <script src="/app.js?v=27"></script>
+  <script src="/marked.min.js?v=28"></script>
+  <script src="/purify.min.js?v=28"></script>
+  <script src="/app.js?v=28"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
