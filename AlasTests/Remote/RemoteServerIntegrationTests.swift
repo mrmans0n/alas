@@ -1,9 +1,14 @@
 import Testing
 import Foundation
+import Network
 @testable import Alas
 
 @MainActor
 struct RemoteServerIntegrationTests {
+    private enum TimeoutError: Error {
+        case timedOut
+    }
+
     private func makeManager() throws -> ACPSessionManager {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-server-\(UUID()).sqlite")
@@ -158,6 +163,24 @@ struct RemoteServerIntegrationTests {
         #expect((resp as? HTTPURLResponse)?.statusCode == 401)
     }
 
+    @Test func pairWithRejectedHostReturns403AndDoesNotRedeemCode() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        req.httpMethod = "POST"
+        req.setValue("evil.example", forHTTPHeaderField: "Host")
+        req.httpBody = Data(#"{"code":"\#(code)","deviceName":"x"}"#.utf8)
+
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 403)
+
+        let token = try pairing.redeem(code: code, deviceName: "after-403")
+        #expect(pairing.validate(token: token) != nil)
+    }
+
     @Test func remoteDiagnosticsRoutesReturnSafeJSON() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         _ = try pairing.redeem(code: pairing.beginPairing(), deviceName: "iPhone")
@@ -248,6 +271,37 @@ struct RemoteServerIntegrationTests {
         task.cancel(with: .goingAway, reason: nil)
     }
 
+    @Test func webSocketWithRejectedHostIsRejectedBeforeTokenValidation() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        let queue = DispatchQueue(label: "io.alas.tests.remote.ws-rejected-host")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let request = [
+            "GET /ws HTTP/1.1",
+            "Host: evil.example",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(token)"
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.first?.lastSeenAt == nil)
+    }
+
     @Test func remoteWebAssetsServePWAContentTypes() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-web-assets-\(UUID().uuidString)", isDirectory: true)
@@ -295,5 +349,78 @@ struct RemoteServerIntegrationTests {
         #expect(http.statusCode == 200)
         #expect(http.value(forHTTPHeaderField: "Content-Type") == "application/manifest+json; charset=utf-8")
         #expect(String(data: data, encoding: .utf8) == #"{"name":"Alas Remote"}"#)
+    }
+
+    private func start(_ conn: NWConnection, on queue: DispatchQueue) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let completion = Completion<Void>()
+            conn.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    completion.finish(.success(()), continuation: continuation)
+                case .failed(let error):
+                    completion.finish(.failure(error), continuation: continuation)
+                case .cancelled:
+                    completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+                default:
+                    break
+                }
+            }
+            queue.asyncAfter(deadline: .now() + 2) {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+            conn.start(queue: queue)
+        }
+    }
+
+    private func send(_ request: String, on conn: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            conn.send(content: Data(request.utf8), completion: .contentProcessed { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            })
+        }
+    }
+
+    private func receiveHTTPResponse(from conn: NWConnection,
+                                     on queue: DispatchQueue,
+                                     timeout: TimeInterval = 2) async throws -> Data {
+        return try await withCheckedThrowingContinuation { continuation in
+            let completion = Completion<Data>()
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, error in
+                if let error {
+                    completion.finish(.failure(error), continuation: continuation)
+                    return
+                }
+                completion.finish(.success(data ?? Data()), continuation: continuation)
+            }
+            queue.asyncAfter(deadline: .now() + timeout) {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+        }
+    }
+
+    private final class Completion<Value: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var didComplete = false
+
+        func finish(_ result: Result<Value, Error>,
+                    continuation: CheckedContinuation<Value, Error>) {
+            lock.lock()
+            guard !didComplete else {
+                lock.unlock()
+                return
+            }
+            didComplete = true
+            lock.unlock()
+
+            switch result {
+            case .success(let value): continuation.resume(returning: value)
+            case .failure(let error): continuation.resume(throwing: error)
+            }
+        }
     }
 }

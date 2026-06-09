@@ -148,6 +148,7 @@ final class RemoteServer {
                 self.pairing.touch(deviceId: id)
                 return id
             },
+            accessPolicy: accessPolicy,
             makeGateway: { send in
                 RemoteSessionGateway(provider: provider, send: send)
             },

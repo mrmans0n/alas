@@ -20,6 +20,7 @@ final class RemoteConnection: @unchecked Sendable {
     private let makeGateway: @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway
     private let responder: @MainActor (HTTPRequest, Data) -> Data
     private let authorize: @MainActor (String) -> String?   // token → deviceId (nil = reject)
+    private let accessPolicy: RemoteAccessPolicy
     private let onAuthenticated: ((RemoteConnection, String) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
@@ -44,6 +45,7 @@ final class RemoteConnection: @unchecked Sendable {
          queue: DispatchQueue,
          responder: @escaping @MainActor (HTTPRequest, Data) -> Data,
          authorize: @escaping @MainActor (String) -> String?,
+         accessPolicy: RemoteAccessPolicy,
          makeGateway: @escaping @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway,
          onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
          onClose: @escaping (RemoteConnection) -> Void = { _ in }) {
@@ -51,6 +53,7 @@ final class RemoteConnection: @unchecked Sendable {
         self.queue = queue
         self.responder = responder
         self.authorize = authorize
+        self.accessPolicy = accessPolicy
         self.makeGateway = makeGateway
         self.onAuthenticated = onAuthenticated
         self.onClose = onClose
@@ -121,6 +124,15 @@ final class RemoteConnection: @unchecked Sendable {
                     [weak self] in self?.teardown()
                 }
             }
+            return
+        }
+
+        guard accessPolicy.allows(hostHeader: req.headers["host"]) else {
+            send(RemoteHTTPResponder.http(
+                status: "403 Forbidden",
+                contentType: "text/plain",
+                body: Data("forbidden".utf8)
+            )) { [weak self] in self?.teardown() }
             return
         }
 
