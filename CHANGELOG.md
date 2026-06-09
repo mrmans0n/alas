@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-06-09
+
+### ✨ Features
+
+- Harden remote LAN and tailnet access (#495).
+- Close stale diff tabs after discarded file changes (#497).
+- Add Open sessions management to Terminal settings (#500).
+
+### 🐛 Fixes
+
+- Keep queued prompt send state consistent (#494).
+- Select the correct project for new worktrees (#496).
+- Remove the ACP selector chip color dot (#498).
+- Rename remote sessions consistently (#499).
+
+### 🏗️ Internal
+
+- Bump the app version to 0.7.4.
+
 ## [0.7.3] - 2026-06-09
 
 ### 🐛 Fixes
