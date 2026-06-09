@@ -49,6 +49,11 @@ struct HTTPRequestParserTests {
         #expect(req?.headers.count == 1)               // colon-free line skipped, not crashed
     }
 
+    @Test func rejectsDuplicateHostHeaders() {
+        var buffer = Data("GET / HTTP/1.1\r\nHost: localhost\r\nhost: evil.example\r\n\r\n".utf8)
+        #expect(throws: RemoteServerError.self) { _ = try HTTPRequestParser.parse(&buffer) }
+    }
+
     @Test func throwsOnNonUTF8Headers() {
         var buffer = Data([0x47, 0xFF, 0xFE]) + Data("\r\n\r\n".utf8)  // 0xFF 0xFE invalid UTF-8
         #expect(throws: RemoteServerError.self) { _ = try HTTPRequestParser.parse(&buffer) }

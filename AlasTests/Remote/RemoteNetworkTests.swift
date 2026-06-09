@@ -17,8 +17,8 @@ struct RemoteNetworkTests {
             machineHostName: "nacho-mbp"
         )
 
-        #expect(addresses.map(\.host) == ["100.88.1.20", "192.168.1.23", "localhost"])
-        #expect(addresses.map(\.kind) == [.tailnet, .lan, .localhost])
+        #expect(addresses.map(\.host) == ["100.88.1.20", "192.168.1.23", "localhost", "nacho-mbp.local"])
+        #expect(addresses.map(\.kind) == [.tailnet, .lan, .localhost, .custom])
         #expect(addresses.first?.isRecommended == true)
         #expect(addresses.first?.url == "http://100.88.1.20:8765")
     }
@@ -74,6 +74,28 @@ struct RemoteNetworkTests {
         })
     }
 
+    @Test func machineHostNameIsAdvertisedAsLocalCandidate() {
+        let fromBareName = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: [],
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: "Nacho-MBP"
+        )
+        let fromLocalName = RemoteNetwork.advertisedAddresses(
+            port: 8765,
+            interfaces: [],
+            allowedHosts: [],
+            preferredHost: nil,
+            machineHostName: "Nacho-MBP.local"
+        )
+
+        #expect(fromBareName.map(\.host) == ["localhost", "nacho-mbp.local"])
+        #expect(fromBareName.map(\.kind) == [.localhost, .custom])
+        #expect(fromLocalName.map(\.host) == ["localhost", "nacho-mbp.local"])
+        #expect(fromLocalName.map(\.kind) == [.localhost, .custom])
+    }
+
     @Test func allowedHostCandidatesIncludeLocalhostDetectedIpsAndMachineNames() {
         let interfaces = [
             RemoteNetworkInterface(name: "en0", host: "192.168.1.23", isLoopback: false),
@@ -94,6 +116,33 @@ struct RemoteNetworkTests {
         #expect(hosts.contains("custom.example"))
         #expect(hosts.contains("nacho-mbp.local"))
         #expect(hosts.contains("nacho-mbp"))
+    }
+
+    @Test func allowedHostCandidatesExcludePublicInterfaceIpsUnlessConfigured() {
+        let interfaces = [
+            RemoteNetworkInterface(name: "en0", host: "8.8.8.8", isLoopback: false),
+            RemoteNetworkInterface(name: "en1", host: "2001:4860::8888", isLoopback: false),
+            RemoteNetworkInterface(name: "en2", host: "192.168.1.23", isLoopback: false),
+            RemoteNetworkInterface(name: "utun4", host: "100.88.1.20", isLoopback: false),
+        ]
+
+        let automaticHosts = RemoteNetwork.allowedHostCandidates(
+            interfaces: interfaces,
+            allowedHosts: [],
+            machineHostName: nil
+        )
+        let configuredHosts = RemoteNetwork.allowedHostCandidates(
+            interfaces: interfaces,
+            allowedHosts: ["8.8.8.8", "2001:4860::8888"],
+            machineHostName: nil
+        )
+
+        #expect(automaticHosts.contains("192.168.1.23"))
+        #expect(automaticHosts.contains("100.88.1.20"))
+        #expect(!automaticHosts.contains("8.8.8.8"))
+        #expect(!automaticHosts.contains("2001:4860::8888"))
+        #expect(configuredHosts.contains("8.8.8.8"))
+        #expect(configuredHosts.contains("2001:4860::8888"))
     }
 
     @Test func tailscaleIPv4RangeIsTailnetAndOtherHundredDotAddressesAreRejected() {

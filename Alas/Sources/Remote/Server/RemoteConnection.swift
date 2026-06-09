@@ -140,6 +140,14 @@ final class RemoteConnection: @unchecked Sendable {
         let headerByteCount = inbound.count - peek.count   // bytes through CRLFCRLF
         if req.headers["upgrade"]?.lowercased() == "websocket" {
             inbound.removeFirst(headerByteCount)
+            guard req.method == "GET", req.path == "/ws" else {
+                sendAndClose(RemoteHTTPResponder.http(
+                    status: "404 Not Found",
+                    contentType: "text/plain",
+                    body: Data("not found".utf8)
+                ))
+                return
+            }
             handleUpgrade(req)
             return
         }

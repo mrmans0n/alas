@@ -108,6 +108,10 @@ enum RemoteNetwork {
 
         candidates.append((.localhost, nil, "localhost"))
 
+        if let host = machineLocalHost(from: machineHostName) {
+            candidates.append((.custom, nil, host))
+        }
+
         for host in normalizedHosts(allowedHosts) {
             if !candidates.contains(where: { normalizedHost($0.2) == host }) {
                 candidates.append((.custom, nil, host))
@@ -147,7 +151,9 @@ enum RemoteNetwork {
     ) -> Set<String> {
         var hosts: Set<String> = ["localhost", "127.0.0.1", "::1"]
         for iface in interfaces {
-            hosts.insert(normalizedHost(iface.host))
+            if iface.isLoopback || classification(for: iface.host) != nil {
+                hosts.insert(normalizedHost(iface.host))
+            }
         }
         for host in normalizedHosts(allowedHosts) {
             hosts.insert(host)
@@ -172,6 +178,15 @@ enum RemoteNetwork {
 
     private static func normalizedHosts(_ hosts: [String]) -> [String] {
         hosts.map(normalizedHost).filter { !$0.isEmpty }
+    }
+
+    private static func machineLocalHost(from machineHostName: String?) -> String? {
+        guard let machineHostName else { return nil }
+        let normalized = normalizedHost(machineHostName)
+        guard !normalized.isEmpty,
+              !normalized.contains(":"),
+              ipv4Octets(normalized) == nil else { return nil }
+        return normalized.hasSuffix(".local") ? normalized : "\(normalized).local"
     }
 
     private static func classification(for host: String) -> AddressClassification? {

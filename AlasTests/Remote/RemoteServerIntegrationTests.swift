@@ -400,6 +400,39 @@ struct RemoteServerIntegrationTests {
         try await waitForConnectionClose(from: conn, on: queue)
     }
 
+    @Test func webSocketUpgradeIsOnlyAcceptedOnWsPath() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        let queue = DispatchQueue(label: "io.alas.tests.remote.ws-route")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let request = [
+            "GET /health HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(token)"
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+
+        #expect(text.hasPrefix("HTTP/1.1 404 Not Found"))
+        #expect(pairing.devices.first?.lastSeenAt == nil)
+        try await waitForConnectionClose(from: conn, on: queue)
+    }
+
     @Test func remoteWebAssetsServePWAContentTypes() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-web-assets-\(UUID().uuidString)", isDirectory: true)
