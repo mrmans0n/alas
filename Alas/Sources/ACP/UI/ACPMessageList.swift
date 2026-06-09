@@ -324,8 +324,10 @@ struct ACPMessageList: View {
 
     nonisolated static func shouldRenderQueueBubble(status: QueuedPrompt.Status) -> Bool {
         switch status {
-        case .pending, .sending:
+        case .pending:
             return true
+        case .sending:
+            return false
         }
     }
 

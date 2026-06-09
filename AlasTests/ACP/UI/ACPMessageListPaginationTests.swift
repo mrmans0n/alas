@@ -31,10 +31,10 @@ struct ACPMessageListPaginationTests {
         ) == .spinner)
     }
 
-    @Test("queue bubbles render pending and sending items")
-    func queueBubblesRenderPendingAndSendingItems() {
+    @Test("queue bubbles render pending items only")
+    func queueBubblesRenderPendingItemsOnly() {
         #expect(ACPMessageList.shouldRenderQueueBubble(status: .pending))
-        #expect(ACPMessageList.shouldRenderQueueBubble(status: .sending))
+        #expect(!ACPMessageList.shouldRenderQueueBubble(status: .sending))
     }
 
     @Test("queue drops only accept pending items onto pending targets")
@@ -49,7 +49,7 @@ struct ACPMessageListPaginationTests {
     func queueHeaderCountMatchesRenderedQueueBubbles() {
         #expect(ACPMessageList.queueHeaderCount(statuses: []) == 0)
         #expect(ACPMessageList.queueHeaderCount(statuses: [.pending]) == 1)
-        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending]) == 1)
-        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending, .pending]) == 2)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending]) == 0)
+        #expect(ACPMessageList.queueHeaderCount(statuses: [.sending, .pending]) == 1)
     }
 }

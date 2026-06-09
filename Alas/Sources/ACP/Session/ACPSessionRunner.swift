@@ -817,6 +817,37 @@ extension ACPSessionRunner {
         sendNow(blocks: head.blocks, queuedItemId: head.id)
     }
 
+    /// User clicked the row-local "send now" affordance for a queued item.
+    /// While idle this just promotes the item to the drainable head. While a
+    /// turn is active, it behaves like steering: cancel the current turn,
+    /// discard the remaining queue, and send the selected queued prompt.
+    func forceSendQueuedItem(id: UUID) {
+        guard holdsLeaseForWrite() else { return }
+        guard let idx = session.queue.firstIndex(where: { $0.id == id }),
+              session.queue[idx].status == .pending
+        else { return }
+
+        if session.transcript.streamingState == .idle,
+           activePromptID == nil,
+           !steerInProgress {
+            guard session.forceQueueItem(id: id) else { return }
+            persistQueue()
+            flushQueueIfIdle()
+            return
+        }
+
+        guard session.agentState == .ready else {
+            guard session.forceQueueItem(id: id) else { return }
+            persistQueue()
+            flushQueueIfIdle()
+            return
+        }
+
+        let item = session.queue.remove(at: idx)
+        persistQueue()
+        steer(blocks: item.blocks)
+    }
+
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue
     /// (including any `.sending` head whose `sendNow` task is mid-RPC),
     /// then send the new prompt as a fresh turn. Only the `.pending`

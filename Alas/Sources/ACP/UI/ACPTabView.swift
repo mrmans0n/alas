@@ -256,9 +256,7 @@ private struct ACPSessionView: View {
                                     manager.runners[sessionId]?.flushQueueIfIdle()
                                 },
                                 onQueueForceSend: isMirror ? { _ in } : { id in
-                                    guard session.forceQueueItem(id: id) else { return }
-                                    manager.persistQueue(for: session)
-                                    manager.runners[sessionId]?.flushQueueIfIdle()
+                                    manager.runners[sessionId]?.forceSendQueuedItem(id: id)
                                 },
                                 onQueueRemove: isMirror ? { _ in } : { id in
                                     session.removeFromQueue(id: id)
