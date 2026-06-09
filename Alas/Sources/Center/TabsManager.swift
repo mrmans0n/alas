@@ -975,6 +975,20 @@ final class TabsManager {
         persist(worktreeId)
     }
 
+    @discardableResult
+    func closeDiffTabs(worktreeId: String, relativePaths: some Sequence<String>) -> [TabID] {
+        let pathSet = Set(relativePaths)
+        guard !pathSet.isEmpty else { return [] }
+        let tabIds = tabs(forWorktree: worktreeId).compactMap { tab -> TabID? in
+            guard case .diff(let state) = tab, pathSet.contains(state.relativePath) else { return nil }
+            return state.id
+        }
+        for tabId in tabIds {
+            close(worktreeId: worktreeId, tabId: tabId)
+        }
+        return tabIds
+    }
+
     func closeOthers(worktreeId: String, keeping tabId: TabID) -> [TabID] {
         guard var file = byWorktree[worktreeId] else { return [] }
         let closed = file.tabs.filter { $0.id != tabId }.map(\.id)
