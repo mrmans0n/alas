@@ -2,9 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Styled chip + custom popover dropdown used for the composer's model and
-/// mode pickers. Shows a colored dot, label, and chevron; tapping opens a
-/// popover with optional search (auto-shown when items > 5) and a list of
-/// rows. Mirrors the design's `chat-model` button visual.
+/// mode pickers. Shows a label and chevron; tapping opens a popover with
+/// optional search (auto-shown when items > 5) and a list of rows. Mirrors
+/// the design's `chat-model` button visual.
 struct ACPSelectChip: View {
     struct Item: Identifiable, Equatable {
         let id: String
@@ -30,11 +30,7 @@ struct ACPSelectChip: View {
             // handoff: dark accent-tinted fill, 0.5px accent-colored
             // outline at low opacity, accent-tinted (not white) text.
             // Outline-on-fill, not a solid bright pill.
-            HStack(spacing: 5) {
-                Circle()
-                    .fill(accent)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: accent.opacity(0.7), radius: 3)
+            HStack(spacing: ACPSelectChipMetrics.labelChevronSpacing) {
                 Text(label.isEmpty ? placeholder : label)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Self.labelForeground(accent: accent, theme: theme))
@@ -139,6 +135,11 @@ struct ACPSelectChip: View {
         }
         return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
     }
+}
+
+enum ACPSelectChipMetrics {
+    static let labelChevronSpacing: CGFloat = 5
+    static let leadingIndicatorDiameter: CGFloat = 0
 }
 
 /// Popover content: optional search field + scrollable list.
