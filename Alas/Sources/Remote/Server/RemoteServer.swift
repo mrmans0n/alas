@@ -25,6 +25,8 @@ final class RemoteServer {
     let pairing: RemotePairingService
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
+    private let accessPolicy: RemoteAccessPolicy
+    private let diagnosticsProvider: @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot
     private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
     /// bind failure, so we don't loop.
@@ -34,10 +36,26 @@ final class RemoteServer {
     /// Settings pane via AppState) react, since `port` itself isn't observable.
     var onPortChange: ((UInt16?) -> Void)?
 
-    init(pairing: RemotePairingService, assets: RemoteWebAssets, provider: RemoteSessionsProvider) {
+    init(
+        pairing: RemotePairingService,
+        assets: RemoteWebAssets,
+        provider: RemoteSessionsProvider,
+        accessPolicy: RemoteAccessPolicy = .loopback,
+        diagnostics: @escaping @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot = { port in
+            RemoteDiagnosticsSnapshot(
+                appName: "Alas",
+                port: port,
+                addresses: [],
+                usesPlainHTTP: true,
+                pairedDeviceCount: 0
+            )
+        }
+    ) {
         self.pairing = pairing
         self.assets = assets
         self.provider = provider
+        self.accessPolicy = accessPolicy
+        self.diagnosticsProvider = diagnostics
     }
 
     /// Starts listening on the given port (0 = OS-assigned). A non-zero port that
@@ -113,7 +131,11 @@ final class RemoteServer {
     private func accept(_ nwConn: NWConnection) {
         guard connections.count < maxConnections else { nwConn.cancel()
         return }
-        let responder = RemoteHTTPResponder(pairing: pairing, assets: assets)
+        let responder = RemoteHTTPResponder(
+            pairing: pairing,
+            assets: assets,
+            diagnostics: { self.diagnosticsProvider(self.port) }
+        )
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let conn = RemoteConnection(
             conn: nwConn,

@@ -158,6 +158,66 @@ struct RemoteServerIntegrationTests {
         #expect((resp as? HTTPURLResponse)?.statusCode == 401)
     }
 
+    @Test func remoteDiagnosticsRoutesReturnSafeJSON() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        _ = try pairing.redeem(code: pairing.beginPairing(), deviceName: "iPhone")
+
+        let diagnostics = RemoteDiagnosticsSnapshot(
+            appName: "Alas",
+            port: 8765,
+            addresses: [
+                RemoteAdvertisedAddress(
+                    kind: .lan,
+                    interfaceName: "en0",
+                    host: "192.168.1.23",
+                    port: 8765,
+                    isRecommended: true
+                )
+            ],
+            usesPlainHTTP: true,
+            pairedDeviceCount: 1
+        )
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-diag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: root),
+            provider: FakeSessionsProvider(),
+            accessPolicy: RemoteAccessPolicy(allowedHosts: ["127.0.0.1"]),
+            diagnostics: { _ in diagnostics }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let (healthData, healthResponse) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/health")!
+        )
+        #expect((healthResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(data: healthData, encoding: .utf8)?.contains(#""ok":true"#) == true)
+
+        let (infoData, infoResponse) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/remote-info")!
+        )
+        #expect((infoResponse as? HTTPURLResponse)?.statusCode == 200)
+        let text = try #require(String(data: infoData, encoding: .utf8))
+        #expect(text.contains(#""appName":"Alas""#))
+        #expect(text.contains(#""pairedDeviceCount":1"#))
+        #expect(text.contains("192.168.1.23"))
+        #expect(!text.contains("token"))
+        #expect(!text.contains("code"))
+        #expect(!text.contains("session"))
+        #expect(!text.contains("/Users/"))
+    }
+
     @Test func webSocketWithBadTokenIsRejected() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)
