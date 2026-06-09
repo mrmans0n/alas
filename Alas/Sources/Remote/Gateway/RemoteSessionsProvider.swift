@@ -22,7 +22,13 @@ protocol RemoteSessionsProvider: AnyObject {
     func setModel(for id: String, modelId: String)
     func setMode(for id: String, modeId: String)
     func setAutoRun(for id: String, enabled: Bool)
+    func renameSession(for id: String, title: String) -> Bool
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
+}
+
+@MainActor
+extension RemoteSessionsProvider {
+    func renameSession(for id: String, title: String) -> Bool { false }
 }
