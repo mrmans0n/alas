@@ -10,7 +10,7 @@ struct OpenSessionsSection: View {
 
     @State private var snapshot: OpenSessionsSnapshot = .empty
     @State private var isLoading = false
-    @State private var hasLoaded = false
+    @State private var loadTask: Task<Void, Never>? = nil
     @State private var confirmKillRow: OpenSessionRow? = nil
     @State private var confirmKillAllIdle = false
 
@@ -22,10 +22,8 @@ struct OpenSessionsSection: View {
 
             if !state.terminal.zmxClient.isAvailable {
                 note("Persistent sessions are disabled.")
-            } else if !hasLoaded && isLoading {
-                note("Loading…")
             } else if snapshot.isEmpty {
-                note("No open sessions.")
+                note(isLoading ? "Loading…" : "No open sessions.")
             } else {
                 if !snapshot.active.isEmpty {
                     subsectionLabel("Active in this window")
@@ -45,13 +43,13 @@ struct OpenSessionsSection: View {
         .alert("Kill this session?", isPresented: Binding(
             get: { confirmKillRow != nil },
             set: { if !$0 { confirmKillRow = nil } }
-        )) {
+        ), presenting: confirmKillRow) { row in
             Button("Cancel", role: .cancel) { confirmKillRow = nil }
             Button("Kill", role: .destructive) {
-                if let row = confirmKillRow { performKill(row) }
+                performKill(row)
                 confirmKillRow = nil
             }
-        } message: {
+        } message: { _ in
             Text("This session has clients attached and may belong to another Alas window.")
         }
         .alert("Kill all idle sessions?", isPresented: $confirmKillAllIdle) {
@@ -76,6 +74,7 @@ struct OpenSessionsSection: View {
                     AlasButton(title: "Kill all idle", style: .subtle) { confirmKillAllIdle = true }
                 }
                 AlasButton(title: "Refresh", icon: "arrow.clockwise") { reload() }
+                    .disabled(isLoading)
             }
         }
         .padding(.bottom, 8)
@@ -119,13 +118,15 @@ struct OpenSessionsSection: View {
     }
 
     private func reload(delay: TimeInterval = 0) {
+        loadTask?.cancel()
         isLoading = true
-        Task {
+        loadTask = Task {
             if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+            guard !Task.isCancelled else { return }
             let snap = await state.terminal.loadOpenSessions()
+            guard !Task.isCancelled else { return }
             snapshot = snap
             isLoading = false
-            hasLoaded = true
         }
     }
 }
