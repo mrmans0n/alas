@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-06-09
+
+### 🐛 Fixes
+
+- Fix ACP intro layout overlap during the first-run connecting state (#493).
+- Keep the ACP transcript tail pinned after content grows (#492).
+
 ## [0.7.2] - 2026-06-08
 
 ### ✨ Features
