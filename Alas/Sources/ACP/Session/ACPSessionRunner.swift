@@ -469,13 +469,19 @@ final class ACPSessionRunner {
 
     func persistGeneratedTitleIfStoredPlaceholder() {
         guard holdsLeaseForWrite() else { return }
-        guard let row = try? store.loadSession(id: sessionId) else { return }
-        guard row.titleSource == .placeholder else {
-            session.title = row.title
-            session.titleSource = row.titleSource
+        let now = Int64(Date().timeIntervalSince1970)
+        guard (try? store.updateGeneratedTitleIfPlaceholder(
+            id: sessionId,
+            title: session.title,
+            updatedAt: now
+        )) == true else {
+            guard let row = try? store.loadSession(id: sessionId) else { return }
+            if row.titleSource != .placeholder {
+                session.title = row.title
+                session.titleSource = row.titleSource
+            }
             return
         }
-        persistSessionRow(preserveTitle: false)
     }
 
     /// Returns `absolutePath` relative to the runner's worktree, or

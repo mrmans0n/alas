@@ -157,6 +157,57 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.titleSource == .placeholder)
     }
 
+    @Test("generated title update only changes placeholder title rows")
+    func generatedTitleUpdateOnlyChangesPlaceholderRows() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "placeholder",
+            agentId: "claude",
+            title: "New session",
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+        try store.upsertSession(.init(
+            id: "manual",
+            agentId: "claude",
+            title: "Remote Title",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let placeholderChanged = try store.updateGeneratedTitleIfPlaceholder(
+            id: "placeholder",
+            title: "Generated Title",
+            updatedAt: 4
+        )
+        let manualChanged = try store.updateGeneratedTitleIfPlaceholder(
+            id: "manual",
+            title: "Stale Generated Title",
+            updatedAt: 4
+        )
+
+        let placeholder = try #require(try store.loadSession(id: "placeholder"))
+        let manual = try #require(try store.loadSession(id: "manual"))
+        #expect(placeholderChanged)
+        #expect(placeholder.title == "Generated Title")
+        #expect(placeholder.titleSource == .generated)
+        #expect(manualChanged == false)
+        #expect(manual.title == "Remote Title")
+        #expect(manual.titleSource == .manual)
+    }
+
     @Test("context recovery pending is stored separately from metadata upserts")
     func contextRecoveryPendingRoundTrip() throws {
         let store = try tmp()
