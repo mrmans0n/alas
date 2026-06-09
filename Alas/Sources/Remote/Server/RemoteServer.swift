@@ -140,6 +140,11 @@ final class RemoteServer {
 
     func updateAccessPolicy(_ policy: RemoteAccessPolicy) {
         accessPolicy = policy
+        // Pre-refresh unauthenticated sockets hold their original policy copy;
+        // close them so their first request cannot run under stale host rules.
+        for (oid, conn) in connections where connectionDevice[oid] == nil {
+            conn.cancel()
+        }
     }
 
     private func accept(_ nwConn: NWConnection) {

@@ -144,7 +144,7 @@ final class AppState {
                     RemoteDiagnosticsSnapshot(
                         appName: "Alas",
                         port: port,
-                        addresses: self?.makeRemoteAdvertisedAddresses(port: port) ?? [],
+                        addresses: self?.remoteAdvertisedAddresses ?? [],
                         usesPlainHTTP: true,
                         pairedDeviceCount: self?.remotePairing.devices.count ?? 0
                     )

@@ -172,17 +172,66 @@ struct RemoteServerIntegrationTests {
         let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
         let deviceId = try #require(pairing.devices.first?.id)
 
-        let task = URLSession.shared.webSocketTask(
-            with: URL(string: "ws://127.0.0.1:\(port)/ws")!,
-            protocols: [token]
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let first = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        let second = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        first.resume()
+        second.resume()
+        try await first.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        try await second.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        _ = try await first.receive()
+        _ = try await second.receive()
+
+        #expect(server.connectedDeviceCounts()[deviceId] == 2)
+
+        server.disconnectDevice(deviceId)
+
+        var cleanedUp = false
+        for _ in 0..<50 {
+            if server.connectedDeviceCounts()[deviceId, default: 0] == 0 {
+                cleanedUp = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(cleanedUp, "expected connected-device counts to clear after disconnect")
+
+        first.cancel(with: .goingAway, reason: nil)
+        second.cancel(with: .goingAway, reason: nil)
+    }
+
+    @Test func updateAccessPolicyClosesIdleConnectionsAndAppliesToNewRequests() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
         )
-        task.resume()
-        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
-        _ = try await task.receive()
+        let queue = DispatchQueue(label: "io.alas.tests.remote.policy-refresh")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
 
-        #expect(server.connectedDeviceCounts()[deviceId] == 1)
+        try await send("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n", on: conn)
+        try await Task.sleep(nanoseconds: 20_000_000)
 
-        task.cancel(with: .goingAway, reason: nil)
+        server.updateAccessPolicy(RemoteAccessPolicy(allowedHosts: ["evil.example"]))
+
+        try await send("\r\n", on: conn)
+        do {
+            let staleResponse = try await receiveHTTPResponse(from: conn, on: queue, timeout: 1)
+            let text = try #require(String(data: staleResponse, encoding: .utf8))
+            #expect(!text.hasPrefix("HTTP/1.1 200 OK"))
+        } catch {
+            // Expected if the server closed the pre-refresh idle connection.
+        }
+
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
+        req.setValue("evil.example", forHTTPHeaderField: "Host")
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 200)
     }
 
     @Test func unknownPathReturns404() async throws {
