@@ -1,4 +1,4 @@
-const CACHE_NAME = "alas-remote-shell-v2";
+const CACHE_NAME = "alas-remote-shell-v3";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
@@ -34,7 +34,13 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
 
   if (request.method !== "GET") return;
-  if (url.pathname === "/pair" || url.pathname === "/ws") return;
+  if (
+    url.pathname === "/pair" ||
+    url.pathname === "/ws" ||
+    url.pathname === "/health" ||
+    url.pathname === "/remote-info" ||
+    url.pathname.startsWith("/api/")
+  ) return;
   if (request.headers.get("upgrade") === "websocket") return;
 
   if (request.mode === "navigate") {

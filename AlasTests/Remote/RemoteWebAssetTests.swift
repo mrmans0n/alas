@@ -40,4 +40,16 @@ struct RemoteWebAssetTests {
         #expect(html.contains("/app.js?v=27"))
         #expect(html.contains("/style.css?v=27"))
     }
+
+    @Test func serviceWorkerKeepsControlAndDiagnosticRoutesNetworkOnly() throws {
+        let sw = try asset("sw.js")
+
+        #expect(sw.contains(#"url.pathname === "/pair""#))
+        #expect(sw.contains(#"url.pathname === "/ws""#))
+        #expect(sw.contains(#"url.pathname === "/health""#))
+        #expect(sw.contains(#"url.pathname === "/remote-info""#))
+        #expect(sw.contains(#"url.pathname.startsWith("/api/")"#))
+        #expect(!sw.contains(#""/health","#))
+        #expect(!sw.contains(#""/remote-info","#))
+    }
 }
