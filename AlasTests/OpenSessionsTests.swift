@@ -31,4 +31,16 @@ struct OpenSessionsTests {
     @Test func relativeAgeDays() {
         #expect(relativeAge(createdEpoch: 1_000_000 - 2 * 86_400, now: now) == "2d ago")
     }
+
+    @Test func relativeAgeExactlyAtMinuteBoundary() {
+        #expect(relativeAge(createdEpoch: 1_000_000 - 60, now: now) == "1m ago")
+    }
+
+    @Test func relativeAgeExactlyAtHourBoundary() {
+        #expect(relativeAge(createdEpoch: 1_000_000 - 3600, now: now) == "1h ago")
+    }
+
+    @Test func relativeAgeExactlyAtDayBoundary() {
+        #expect(relativeAge(createdEpoch: 1_000_000 - 86_400, now: now) == "1d ago")
+    }
 }
