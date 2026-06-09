@@ -285,12 +285,12 @@ extension ACPSessionStore {
         try db.exec("UPDATE sessions SET archived = ? WHERE id = ?", bindings: [archived ? 1 : 0, id])
     }
 
-    func renameSession(id: String, title: String, titleSource: ACPSessionTitleSource, updatedAt: Int64) throws {
-        try db.exec("""
+    func renameSession(id: String, title: String, titleSource: ACPSessionTitleSource, updatedAt: Int64) throws -> Bool {
+        try db.execChanges("""
         UPDATE sessions
         SET title = ?, title_source = ?, updated_at = ?
         WHERE id = ? AND archived = 0
-        """, bindings: [title, titleSource.rawValue, updatedAt, id])
+        """, bindings: [title, titleSource.rawValue, updatedAt, id]) > 0
     }
 
     func appendMessage(sessionId: String, id: String, kind: String, seq: Int64, payload: Data, createdAt: Int64) throws {

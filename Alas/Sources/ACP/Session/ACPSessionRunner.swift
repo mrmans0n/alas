@@ -467,6 +467,17 @@ final class ACPSessionRunner {
         ), preserveTitle: preserveTitle)
     }
 
+    func persistGeneratedTitleIfStoredPlaceholder() {
+        guard holdsLeaseForWrite() else { return }
+        guard let row = try? store.loadSession(id: sessionId) else { return }
+        guard row.titleSource == .placeholder else {
+            session.title = row.title
+            session.titleSource = row.titleSource
+            return
+        }
+        persistSessionRow(preserveTitle: false)
+    }
+
     /// Returns `absolutePath` relative to the runner's worktree, or
     /// `nil` if the path escapes it. Used by the file-edit card so the
     /// diff opener can hand the value straight to `git.diff(file:)`.
@@ -1003,7 +1014,9 @@ extension ACPSessionRunner {
                     self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
                                                   attachments: Self.attachments(of: blocks))
                     self.persistFromIndex(before)
-                    if self.session.title != titleBefore { self.persistSessionRow(preserveTitle: false) }
+                    if self.session.title != titleBefore {
+                        self.persistGeneratedTitleIfStoredPlaceholder()
+                    }
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
                         self.session.queue[idx].transcriptRecorded = true

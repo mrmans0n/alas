@@ -26,6 +26,14 @@ final class SQLiteDatabase {
         try stmt.run()
     }
 
+    func execChanges(_ sql: String, bindings: [Any?] = []) throws -> Int32 {
+        guard let h = handle else { return 0 }
+        let stmt = try SQLiteStatement(db: h, sql: sql)
+        try stmt.bind(bindings)
+        try stmt.run()
+        return sqlite3_changes(h)
+    }
+
     func query(_ sql: String, bindings: [Any?] = []) throws -> [[String: Any?]] {
         guard let h = handle else { return [] }
         let stmt = try SQLiteStatement(db: h, sql: sql)

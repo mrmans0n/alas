@@ -127,6 +127,36 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.autoRun)
     }
 
+    @Test("rename session reports archived rows as unchanged")
+    func renameSessionReportsArchivedRowsAsUnchanged() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Archived",
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: true
+        ))
+
+        let renamed = try store.renameSession(
+            id: "local-1",
+            title: "Remote Title",
+            titleSource: .manual,
+            updatedAt: 4
+        )
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(!renamed)
+        #expect(row.title == "Archived")
+        #expect(row.titleSource == .placeholder)
+    }
+
     @Test("context recovery pending is stored separately from metadata upserts")
     func contextRecoveryPendingRoundTrip() throws {
         let store = try tmp()

@@ -686,7 +686,9 @@ final class ACPSessionManager: ObservableObject {
               !row.archived else { return false }
         let now = Int64(Date().timeIntervalSince1970)
         do {
-            try store.renameSession(id: id, title: trimmed, titleSource: source, updatedAt: now)
+            guard try store.renameSession(id: id, title: trimmed, titleSource: source, updatedAt: now) else {
+                return false
+            }
             if let session = sessions[id] {
                 session.title = trimmed
                 session.titleSource = source
