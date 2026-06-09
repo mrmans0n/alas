@@ -72,6 +72,18 @@ struct OpenSessionsTests {
         #expect(snap.orphaned[1].kind == .orphanInUse)
     }
 
+    @Test func classifyTrackedSessionWithZeroClientsStaysActiveNotOrphan() {
+        // A tracked tab whose daemon reports clients=0 must NOT leak into the
+        // orphaned/idle bucket — otherwise killIdleOrphans could reap a live tab.
+        let tracked = [
+            TrackedSessionRef(leafId: "leaf-1", worktreeId: "wt-1", zmxSessionName: "alas-aaaa-1111"),
+        ]
+        let infos = [info("alas-aaaa-1111", clients: 0)]
+        let snap = OpenSessionsClassifier.classify(infos: infos, tracked: tracked, sessionPrefix: "")
+        #expect(snap.active.map(\.name) == ["alas-aaaa-1111"])
+        #expect(snap.orphaned.isEmpty)
+    }
+
     @Test func classifyTreatsUnknownClientCountAsInUse() {
         let infos = [info("alas-bbbb-2222", clients: nil, dir: "/x")]
         let snap = OpenSessionsClassifier.classify(infos: infos, tracked: [], sessionPrefix: "")
@@ -121,5 +133,6 @@ struct OpenSessionsTests {
         let snap = OpenSessionsClassifier.classify(infos: infos, tracked: tracked, sessionPrefix: "dev_")
         #expect(snap.active.map(\.name) == ["alas-aaaa-1111"])
         #expect(snap.orphaned.map(\.name) == ["alas-bbbb-2222"])
+        #expect(snap.active.first?.clients == 1)
     }
 }

@@ -72,12 +72,15 @@ enum OpenSessionsClassifier {
             infoByBareName[bare] = info
         }
 
-        let trackedWithName = tracked.compactMap { ref -> (String, TrackedSessionRef)? in
-            ref.zmxSessionName.map { ($0, ref) }
+        // Registry should not emit duplicate zmxSessionNames; if it somehow
+        // does, last write wins so we never produce two rows with the same id.
+        var trackedByName: [String: TrackedSessionRef] = [:]
+        for ref in tracked {
+            if let name = ref.zmxSessionName { trackedByName[name] = ref }
         }
-        let trackedNames = Set(trackedWithName.map(\.0))
+        let trackedNames = Set(trackedByName.keys)
 
-        let active: [OpenSessionRow] = trackedWithName.map { bareName, ref in
+        let active: [OpenSessionRow] = trackedByName.map { bareName, ref in
             let info = infoByBareName[bareName]
             return OpenSessionRow(
                 name: bareName,
