@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 
@@ -41,11 +42,44 @@ struct RemoteServerPane: View {
                     }
 
                     if state.config.remote.enabled, let port = state.remotePort {
-                        SettingsRow(name: "Address", desc: "Reachable at this address on your LAN/tailnet.") {
-                            Text(Self.reachableURL(port: port))
-                                .font(.system(size: 12.5, design: .monospaced))
-                                .textSelection(.enabled)
-                                .foregroundColor(theme.color("fg"))
+                        ForEach(state.remoteAdvertisedAddresses) { address in
+                            SettingsRow(
+                                name: addressLabel(address),
+                                desc: addressDescription(address)
+                            ) {
+                                HStack(spacing: 8) {
+                                    if selectedAddress(port: address.port)?.id == address.id {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 13))
+                                            .foregroundColor(theme.color("accent"))
+                                    }
+                                    Button {
+                                        let pasteboard = NSPasteboard.general
+                                        pasteboard.clearContents()
+                                        pasteboard.setString(address.url, forType: .string)
+                                    } label: {
+                                        Text("Copy")
+                                            .font(.system(size: 12, weight: .medium))
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        chooseAddress(address)
+                                    } label: {
+                                        Text("Use for QR")
+                                            .font(.system(size: 12, weight: .medium))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                        SettingsRow(
+                            name: "PWA install",
+                            desc: "Live remote access works over a trusted LAN or tailnet. Full browser install and offline shell behavior can require HTTPS, depending on the phone browser."
+                        ) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 14))
+                                .foregroundColor(theme.color("fg-dim"))
                         }
                         SettingsRow(name: "Pair a device", desc: "Show a QR code to pair a new phone or tablet.") {
                             AlasButton(
@@ -56,7 +90,7 @@ struct RemoteServerPane: View {
                             }
                         }
                         if let code = pairingCode {
-                            QRView(text: "\(Self.reachableURL(port: port))/?code=\(code)")
+                            QRView(text: "\(pairingURL(port: port))/?code=\(code)")
                                 .frame(width: 180, height: 180)
                                 .padding(.top, 8)
                             Text("Refreshes automatically — scan anytime.")
@@ -73,10 +107,14 @@ struct RemoteServerPane: View {
                             EmptyView()
                         }
                     } else {
+                        let connected = state.remoteConnectedDeviceCounts()
                         ForEach(state.remotePairing.devices) { device in
+                            let liveCount = connected[device.id] ?? 0
+                            let seen = device.lastSeenAt.map { "Last seen \($0.formatted())" } ?? "Never connected"
+                            let desc = liveCount > 0 ? "Connected now (\(liveCount)); \(seen)" : seen
                             SettingsRow(
                                 name: device.name,
-                                desc: device.lastSeenAt.map { "Last seen \($0.formatted())" } ?? "Never connected"
+                                desc: desc
                             ) {
                                 Button {
                                     state.revokeRemoteDevice(device.id)
@@ -94,6 +132,26 @@ struct RemoteServerPane: View {
                                 .buttonStyle(.plain)
                             }
                         }
+                        SettingsRow(
+                            name: "All devices",
+                            desc: "Revoke every paired browser and close active remote sockets."
+                        ) {
+                            Button {
+                                pairingCode = nil
+                                state.revokeAllRemoteDevices()
+                            } label: {
+                                Text("Revoke All")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(theme.color("warn"))
+                                    .padding(.horizontal, 12)
+                                    .frame(height: 28)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .strokeBorder(theme.color("warn").opacity(0.4), lineWidth: 0.5)
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
@@ -108,8 +166,42 @@ struct RemoteServerPane: View {
         }
     }
 
-    private static func reachableURL(port: UInt16) -> String {
-        "http://\(LocalNetwork.primaryIPv4() ?? "localhost"):\(port)"
+    private func addressLabel(_ address: RemoteAdvertisedAddress) -> String {
+        switch address.kind {
+        case .tailnet: return "Tailnet"
+        case .lan: return "LAN"
+        case .localhost: return "Localhost"
+        case .custom: return "Custom"
+        }
+    }
+
+    private func addressDescription(_ address: RemoteAdvertisedAddress) -> String {
+        if let interface = address.interfaceName {
+            return "\(address.url) on \(interface)"
+        }
+        return address.url
+    }
+
+    private func chooseAddress(_ address: RemoteAdvertisedAddress) {
+        state.config.remote.preferredAdvertisedHost = address.host
+        state.saveConfig()
+        state.refreshRemoteAccessState()
+    }
+
+    private func pairingURL(port: UInt16) -> String {
+        let selected = selectedAddress(port: port)
+        return selected?.url ?? "http://localhost:\(port)"
+    }
+
+    private func selectedAddress(port: UInt16) -> RemoteAdvertisedAddress? {
+        let addresses = state.remoteAdvertisedAddresses
+        if let preferred = state.config.remote.preferredAdvertisedHost,
+           let match = addresses.first(where: {
+               RemoteNetwork.normalizedHost($0.host) == RemoteNetwork.normalizedHost(preferred)
+           }) {
+            return match
+        }
+        return addresses.first(where: \.isRecommended) ?? addresses.first
     }
 }
 
@@ -141,45 +233,5 @@ struct QRView: View {
 
         guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))
-    }
-}
-
-/// Local network introspection for the reachable-address hint.
-enum LocalNetwork {
-    /// Returns the first non-loopback IPv4 address, preferring `en*`/`utun*`
-    /// interfaces. Returns nil if none can be determined.
-    static func primaryIPv4() -> String? {
-        var head: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&head) == 0, let first = head else { return nil }
-        defer { freeifaddrs(head) }
-
-        var preferred: String?
-        var fallback: String?
-
-        var cursor: UnsafeMutablePointer<ifaddrs>? = first
-        while let ptr = cursor {
-            defer { cursor = ptr.pointee.ifa_next }
-            let flags = Int32(ptr.pointee.ifa_flags)
-            guard (flags & IFF_UP) == IFF_UP, (flags & IFF_LOOPBACK) == 0 else { continue }
-            guard let addr = ptr.pointee.ifa_addr, addr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
-
-            let name = String(cString: ptr.pointee.ifa_name)
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(
-                addr, socklen_t(addr.pointee.sa_len),
-                &host, socklen_t(host.count),
-                nil, 0, NI_NUMERICHOST
-            )
-            guard result == 0 else { continue }
-            let ip = String(cString: host)
-            guard !ip.isEmpty else { continue }
-
-            if name.hasPrefix("en") || name.hasPrefix("utun") {
-                if preferred == nil { preferred = ip }
-            } else if fallback == nil {
-                fallback = ip
-            }
-        }
-        return preferred ?? fallback
     }
 }
