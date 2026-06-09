@@ -1,6 +1,7 @@
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
 let ws, currentSession = null, messages = new Map();
+let sessionTitles = new Map();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
 let reconnectTimer = null;
@@ -14,6 +15,7 @@ let lastSentText = null;        // text of the most recent sendPrompt, kept so a
 let lastSentAttachments = [];   // images of the most recent sendPrompt, restored alongside the text on promptRejected
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
+let renameTarget = null;
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
@@ -151,6 +153,7 @@ function handle(msg) {
     case "questionRequest": if (msg.sessionId === currentSession) showQuestion(msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
+    case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
@@ -160,33 +163,45 @@ function handle(msg) {
 
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
+  sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
   sessions.forEach(s => list.appendChild(renderSessionRow(s)));
+  if (currentSession) setDetailTitle(currentSession);
 }
 
 function renderSessionRow(s) {
-  const row = document.createElement("button");
-  row.type = "button";
+  const row = document.createElement("div");
+  row.dataset.sessionId = s.id;
   row.className = "session-row";
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "session-open";
+  open.onclick = () => openSession(s.id);
 
   const head = el("div", "session-head");
   const title = el("span", "session-title", s.title);
   const status = el("span", "status", s.status);
   head.append(title, status);
-  row.append(head);
+  open.append(head);
+
+  const rename = el("button", "rename-btn", "✎");
+  rename.type = "button";
+  rename.setAttribute("aria-label", "Rename session");
+  rename.onclick = () => showRenameSheet(s.id);
 
   if (s.worktree) {
     row.classList.add("session-row-card");
-    row.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
+    open.append(el("div", "session-worktree", `${s.worktree.projectName} / ${s.worktree.worktreeName}`));
     const meta = el("div", "session-meta");
     const parts = sessionMetaParts(s.worktree);
     parts.forEach(part => meta.append(part));
-    row.append(meta);
+    open.append(meta);
     row.title = s.worktree.path || "";
   } else {
     row.classList.add("session-row-minimal");
   }
 
-  row.onclick = () => openSession(s.id);
+  row.append(open, rename);
   return row;
 }
 
@@ -218,6 +233,7 @@ function openSession(id) {
   currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments();
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
+  $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("messages").innerHTML = ""; renderConfigAffordances(); renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
@@ -225,11 +241,47 @@ function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances();
-  hidePermission(); hideQuestion();          // never leave a sheet over the list
+  hidePermission(); hideQuestion(); hideRenameSheet();          // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
+  $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
   $("transcript").classList.add("hidden"); $("sessions").classList.remove("hidden");
   send({ type: "listSessions" });
+}
+
+function setDetailTitle(sessionId) {
+  $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";
+}
+
+function showRenameSheet(sessionId) {
+  renameTarget = sessionId;
+  const input = $("rename-input");
+  input.value = sessionTitles.get(sessionId) || "";
+  $("rename-sheet").classList.remove("hidden");
+  requestAnimationFrame(() => { input.focus(); input.select(); });
+}
+
+function hideRenameSheet() {
+  $("rename-sheet").classList.add("hidden");
+  renameTarget = null;
+}
+
+function submitRename() {
+  if (!renameTarget) return;
+  const title = $("rename-input").value.trim();
+  if (!title) return;
+  send({ type: "renameSession", sessionId: renameTarget, title });
+  hideRenameSheet();
+}
+
+function applySessionRenamed(sessionId, title) {
+  sessionTitles.set(sessionId, title);
+  const row = Array.from(document.querySelectorAll("[data-session-id]"))
+    .find(candidate => candidate.dataset.sessionId === sessionId);
+  const rowTitle = row && row.querySelector(".session-title");
+  if (rowTitle) rowTitle.textContent = title;
+  if (currentSession === sessionId) setDetailTitle(sessionId);
+  if (renameTarget === sessionId) $("rename-input").value = title;
 }
 
 function renderMessages(forceBottom) {
@@ -611,6 +663,14 @@ $("config").onclick = showConfig;
 $("cfg-close").onclick = hideConfig;
 $("cfg").onclick = (e) => { if (e.target.id === "cfg") hideConfig(); };
 $("cfg-autorun").onchange = (e) => { ensureWriter(); send({ type: "setAutoRun", sessionId: currentSession, enabled: e.target.checked }); };
+$("detail-rename").onclick = () => { if (currentSession) showRenameSheet(currentSession); };
+$("rename-submit").onclick = submitRename;
+$("rename-cancel").onclick = hideRenameSheet;
+$("rename-sheet").onclick = (e) => { if (e.target.id === "rename-sheet") hideRenameSheet(); };
+$("rename-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); submitRename(); }
+  if (e.key === "Escape") { e.preventDefault(); hideRenameSheet(); }
+});
 $("attach").onclick = () => $("file").click();
 $("file").onchange = async (e) => {
   const files = Array.from(e.target.files || []);

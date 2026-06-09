@@ -34,10 +34,11 @@ enum RemoteClientMessage: Equatable, Sendable {
     case setModel(sessionId: String, modelId: String)
     case setMode(sessionId: String, modeId: String)
     case setAutoRun(sessionId: String, enabled: Bool)
+    case renameSession(sessionId: String, title: String)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, attachments, modelId, modeId, enabled }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, attachments, modelId, modeId, enabled, title }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -71,6 +72,10 @@ extension RemoteClientMessage: Codable {
             self = .setMode(sessionId: try c.decode(String.self, forKey: .sessionId), modeId: try c.decode(String.self, forKey: .modeId))
         case "setAutoRun":
             self = .setAutoRun(sessionId: try c.decode(String.self, forKey: .sessionId), enabled: try c.decode(Bool.self, forKey: .enabled))
+        case "renameSession":
+            self = .renameSession(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                title: try c.decode(String.self, forKey: .title))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -118,6 +123,10 @@ extension RemoteClientMessage: Codable {
             try c.encode("setAutoRun", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(e, forKey: .enabled)
+        case .renameSession(let id, let title):
+            try c.encode("renameSession", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(title, forKey: .title)
         }
     }
 }
@@ -137,13 +146,14 @@ enum RemoteServerMessage: Equatable, Sendable {
     /// instead of silently losing it.
     case promptRejected(sessionId: String)
     case sessionConfig(RemoteSessionConfig)
+    case sessionRenamed(sessionId: String, title: String)
     case error(message: String)
 }
 
 extension RemoteServerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, sessions, sessionId, streamingState, canDrive, messages, upserts, payload, requestId, message
-        case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages
+        case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
     }
 
     init(from decoder: Decoder) throws {
@@ -189,6 +199,10 @@ extension RemoteServerMessage: Codable {
                 currentMode: try c.decodeIfPresent(String.self, forKey: .currentMode),
                 autoRunEnabled: try c.decode(Bool.self, forKey: .autoRunEnabled),
                 acceptsImages: try c.decode(Bool.self, forKey: .acceptsImages)))
+        case "sessionRenamed":
+            self = .sessionRenamed(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                title: try c.decode(String.self, forKey: .title))
         case "error": self = .error(message: try c.decode(String.self, forKey: .message))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
@@ -241,6 +255,10 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(cfg.currentMode, forKey: .currentMode)
             try c.encode(cfg.autoRunEnabled, forKey: .autoRunEnabled)
             try c.encode(cfg.acceptsImages, forKey: .acceptsImages)
+        case .sessionRenamed(let id, let title):
+            try c.encode("sessionRenamed", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(title, forKey: .title)
         case .error(let m): try c.encode("error", forKey: .type)
         try c.encode(m, forKey: .message)
         }

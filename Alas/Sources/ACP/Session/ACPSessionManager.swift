@@ -627,7 +627,7 @@ final class ACPSessionManager: ObservableObject {
     /// Persist a session-level change (model/mode/title/autoRun) and bump updated_at.
     /// No-ops only when another live instance owns the writer lease (this pane
     /// is a mirror); the writer and not-yet-leased cases persist normally.
-    func persist(_ s: ACPSession) {
+    func persist(_ s: ACPSession, preserveTitle: Bool = true) {
         guard !anotherLiveInstanceOwnsLease(sessionId: s.id) else { return }
         guard let row = try? store.loadSession(id: s.id) else { return }
         let now = Int64(Date().timeIntervalSince1970)
@@ -637,7 +637,8 @@ final class ACPSessionManager: ObservableObject {
             currentModel: s.currentModel, currentMode: s.currentMode,
             autoRun: s.autoRunEnabled,
             createdAt: row.createdAt, updatedAt: now,
-            lastOpenedAt: row.lastOpenedAt, archived: row.archived))
+            lastOpenedAt: row.lastOpenedAt, archived: row.archived),
+            preserveTitle: preserveTitle)
         refreshRecent()
     }
 
@@ -674,7 +675,29 @@ final class ACPSessionManager: ObservableObject {
         guard !trimmed.isEmpty else { return }
         session.title = trimmed
         session.titleSource = source
-        persist(session)
+        persist(session, preserveTitle: false)
+    }
+
+    @discardableResult
+    func renameSessionCosmetic(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let row = try? store.loadSession(id: id),
+              !row.archived else { return false }
+        let now = Int64(Date().timeIntervalSince1970)
+        do {
+            guard try store.renameSession(id: id, title: trimmed, titleSource: source, updatedAt: now) else {
+                return false
+            }
+            if let session = sessions[id] {
+                session.title = trimmed
+                session.titleSource = source
+            }
+            refreshRecent()
+            return true
+        } catch {
+            return false
+        }
     }
 
     func persistComposerDraft(_ draft: ACPComposerDraft, for session: ACPSession) {

@@ -17,6 +17,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var models: [(id: String, model: String)] = []
     var modes: [(id: String, mode: String)] = []
     var autoRuns: [(id: String, enabled: Bool)] = []
+    var renamed: [(id: String, title: String)] = []
+    var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
     var sessionSummariesCallCount = 0
     var pauseSessionSummaries = false
@@ -74,6 +76,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func setModel(for id: String, modelId: String) { models.append((id, modelId)) }
     func setMode(for id: String, modeId: String) { modes.append((id, modeId)) }
     func setAutoRun(for id: String, enabled: Bool) { autoRuns.append((id, enabled)) }
+    func renameSession(for id: String, title: String) -> Bool {
+        renamed.append((id, title))
+        return renameSucceeds
+    }
     func sessionConfig(for id: String) -> RemoteSessionConfig? { configs[id] }
 }
 
@@ -521,6 +527,48 @@ struct RemoteSessionGatewayTests {
         #expect(provider.models.map(\.model) == ["opus"])
         #expect(provider.modes.map(\.mode) == ["ask"])
         #expect(provider.autoRuns.map(\.enabled) == [true])
+    }
+
+    @Test func renameSessionTrimsTitleDoesNotRequireWriterAndRefreshesList() async {
+        let provider = FakeSessionsProvider()
+        provider.summaries = [RemoteSessionSummary(id: "s1", title: "Renamed", agentId: "claude", status: "idle", canDrive: false)]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.renameSession(sessionId: "s1", title: "  Renamed  "))
+        await Task.yield()
+
+        #expect(provider.renamed.map(\.id) == ["s1"])
+        #expect(provider.renamed.map(\.title) == ["Renamed"])
+        #expect(sent.contains(.sessionRenamed(sessionId: "s1", title: "Renamed")))
+        #expect(sent.contains(.sessionList(sessions: provider.summaries)))
+        #expect(provider.sessionSummariesCallCount == 1)
+    }
+
+    @Test func renameSessionIgnoresEmptyTitle() async {
+        let provider = FakeSessionsProvider()
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.renameSession(sessionId: "s1", title: " \n\t "))
+        await Task.yield()
+
+        #expect(provider.renamed.isEmpty)
+        #expect(sent.isEmpty)
+    }
+
+    @Test func renameSessionFailureEmitsError() async {
+        let provider = FakeSessionsProvider()
+        provider.renameSucceeds = false
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.renameSession(sessionId: "missing", title: "Name"))
+        await Task.yield()
+
+        #expect(provider.renamed.map(\.id) == ["missing"])
+        #expect(provider.renamed.map(\.title) == ["Name"])
+        #expect(sent.contains { if case .error(let message) = $0 { return message.contains("rename") } else { return false } })
     }
 
     @Test func subscribeEmitsSessionConfig() async throws {

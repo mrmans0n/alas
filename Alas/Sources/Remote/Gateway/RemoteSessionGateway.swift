@@ -127,6 +127,15 @@ final class RemoteSessionGateway {
         case .setAutoRun(let id, let enabled):
             guard provider.isWriter(for: id) else { return }
             provider.setAutoRun(for: id, enabled: enabled)
+        case .renameSession(let id, let title):
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            guard provider.renameSession(for: id, title: trimmed) else {
+                send(.error(message: "Could not rename session."))
+                return
+            }
+            send(.sessionRenamed(sessionId: id, title: trimmed))
+            refreshSessionList()
         }
     }
 

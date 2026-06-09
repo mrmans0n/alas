@@ -234,6 +234,22 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(RemoteClientMessage.setAutoRun(sessionId: "s1", enabled: true)) == .setAutoRun(sessionId: "s1", enabled: true))
     }
 
+    @Test func clientRenameSessionRoundTrips() throws {
+        let msg = RemoteClientMessage.renameSession(sessionId: "s1", title: "Build feature")
+        #expect(try roundTrip(msg) == msg)
+    }
+
+    @Test func clientRenameSessionDecodes() throws {
+        let json = #"{"type":"renameSession","sessionId":"s1","title":"Build feature"}"#
+        let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: Data(json.utf8))
+        #expect(msg == .renameSession(sessionId: "s1", title: "Build feature"))
+    }
+
+    @Test func sessionRenamedRoundTrips() throws {
+        let msg = RemoteServerMessage.sessionRenamed(sessionId: "s1", title: "Build feature")
+        #expect(try roundTrip(msg) == msg)
+    }
+
     @Test func sessionConfigRoundTripsWithNilCurrent() throws {
         // currentModel/currentMode nil → encodeIfPresent omits the keys; decode must still round-trip.
         let cfg = RemoteServerMessage.sessionConfig(.init(

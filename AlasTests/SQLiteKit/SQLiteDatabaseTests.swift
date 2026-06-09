@@ -38,4 +38,19 @@ struct SQLiteDatabaseTests {
         #expect((rows[0]["d"] as? Data) == Data([0x01, 0x02]))
         #expect(rows[0]["e"] == nil)
     }
+
+    @Test("execChanges returns affected row count")
+    func execChangesReturnsAffectedRowCount() throws {
+        let url = tmp()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let db = try SQLiteDatabase(path: url.path)
+        try db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL)")
+        try db.exec("INSERT INTO t (id, name) VALUES (1, 'alice')")
+
+        let changed = try db.execChanges("UPDATE t SET name = ? WHERE id = ?", bindings: ["bob", 1])
+        let missing = try db.execChanges("UPDATE t SET name = ? WHERE id = ?", bindings: ["nobody", 2])
+
+        #expect(changed == 1)
+        #expect(missing == 0)
+    }
 }

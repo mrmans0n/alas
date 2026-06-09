@@ -902,6 +902,42 @@ struct ACPSessionRunnerTests {
         #expect(row?.title == seedTitle)
     }
 
+    @Test("generated prompt title does not overwrite stored manual title")
+    func generatedPromptTitleDoesNotOverwriteStoredManualTitle() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-generated-title-preserve-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "Remote Title",
+            titleSource: .manual,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "New session")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        let succeeded = await withCheckedContinuation { continuation in
+            runner.send(text: "Generated from stale writer", attachments: []) { succeeded in
+                continuation.resume(returning: succeeded)
+            }
+        }
+
+        #expect(succeeded)
+        let row = try #require(try store.loadSession(id: sid))
+        #expect(row.title == "Remote Title")
+        #expect(row.titleSource == .manual)
+        #expect(session.title == "Remote Title")
+        #expect(session.titleSource == .manual)
+    }
+
     private func waitUntil(
         timeoutNanoseconds: UInt64 = 1_000_000_000,
         _ condition: @escaping @MainActor () -> Bool

@@ -89,6 +89,125 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.currentModel == "opus")
     }
 
+    @Test("metadata-only upsert can preserve stored title")
+    func sessionMetadataUpsertPreservesStoredTitleWhenRequested() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Remote Title",
+            titleSource: .manual,
+            currentModel: "sonnet",
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Stale Writer Title",
+            titleSource: .placeholder,
+            currentModel: "opus",
+            currentMode: nil,
+            autoRun: true,
+            createdAt: 1,
+            updatedAt: 4,
+            lastOpenedAt: 5,
+            archived: false
+        ), preserveTitle: true)
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.title == "Remote Title")
+        #expect(row.titleSource == .manual)
+        #expect(row.currentModel == "opus")
+        #expect(row.autoRun)
+    }
+
+    @Test("rename session reports archived rows as unchanged")
+    func renameSessionReportsArchivedRowsAsUnchanged() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Archived",
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: true
+        ))
+
+        let renamed = try store.renameSession(
+            id: "local-1",
+            title: "Remote Title",
+            titleSource: .manual,
+            updatedAt: 4
+        )
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(!renamed)
+        #expect(row.title == "Archived")
+        #expect(row.titleSource == .placeholder)
+    }
+
+    @Test("generated title update only changes placeholder title rows")
+    func generatedTitleUpdateOnlyChangesPlaceholderRows() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "placeholder",
+            agentId: "claude",
+            title: "New session",
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+        try store.upsertSession(.init(
+            id: "manual",
+            agentId: "claude",
+            title: "Remote Title",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let placeholderChanged = try store.updateGeneratedTitleIfPlaceholder(
+            id: "placeholder",
+            title: "Generated Title",
+            updatedAt: 4
+        )
+        let manualChanged = try store.updateGeneratedTitleIfPlaceholder(
+            id: "manual",
+            title: "Stale Generated Title",
+            updatedAt: 4
+        )
+
+        let placeholder = try #require(try store.loadSession(id: "placeholder"))
+        let manual = try #require(try store.loadSession(id: "manual"))
+        #expect(placeholderChanged)
+        #expect(placeholder.title == "Generated Title")
+        #expect(placeholder.titleSource == .generated)
+        #expect(manualChanged == false)
+        #expect(manual.title == "Remote Title")
+        #expect(manual.titleSource == .manual)
+    }
+
     @Test("context recovery pending is stored separately from metadata upserts")
     func contextRecoveryPendingRoundTrip() throws {
         let store = try tmp()
