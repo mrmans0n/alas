@@ -155,6 +155,10 @@ struct RemoteServerIntegrationTests {
             assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
             provider: provider
         )
+        var publishedCounts: [[String: Int]] = []
+        server.onConnectionDeviceCountsChange = { counts in
+            publishedCounts.append(counts)
+        }
         try server.start(port: 0)
         defer { server.stop() }
 
@@ -183,6 +187,7 @@ struct RemoteServerIntegrationTests {
         _ = try await second.receive()
 
         #expect(server.connectedDeviceCounts()[deviceId] == 2)
+        #expect(publishedCounts.contains { $0[deviceId] == 2 })
 
         server.disconnectDevice(deviceId)
 
@@ -195,6 +200,7 @@ struct RemoteServerIntegrationTests {
             try await Task.sleep(nanoseconds: 20_000_000)
         }
         #expect(cleanedUp, "expected connected-device counts to clear after disconnect")
+        #expect(publishedCounts.contains { $0.isEmpty }, "expected connected-device count callback to publish empty counts after disconnect")
 
         first.cancel(with: .goingAway, reason: nil)
         second.cancel(with: .goingAway, reason: nil)

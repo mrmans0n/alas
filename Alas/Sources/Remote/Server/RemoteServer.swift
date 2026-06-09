@@ -35,6 +35,9 @@ final class RemoteServer {
     /// listener becomes ready, nil when it fails/cancels. Lets observers (the
     /// Settings pane via AppState) react, since `port` itself isn't observable.
     var onPortChange: ((UInt16?) -> Void)?
+    /// Invoked on the main actor whenever authenticated remote socket counts
+    /// change. AppState snapshots this so Settings observes live disconnects.
+    var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
 
     /// Callers with app state should pass a diagnostics closure; the default is
     /// a safe empty fallback for contexts that do not have app state available.
@@ -120,6 +123,7 @@ final class RemoteServer {
         for conn in connections.values { conn.cancel() }
         connections.removeAll()
         connectionDevice.removeAll()
+        onConnectionDeviceCountsChange?([:])
     }
 
     /// Immediately closes every live connection authenticated as `deviceId`.
@@ -170,13 +174,19 @@ final class RemoteServer {
                 RemoteSessionGateway(provider: provider, send: send)
             },
             onAuthenticated: { [weak self] conn, did in
-                Task { @MainActor in self?.connectionDevice[ObjectIdentifier(conn)] = did }
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.connectionDevice[ObjectIdentifier(conn)] = did
+                    self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
+                }
             },
             onClose: { [weak self] conn in
                 Task { @MainActor in
+                    guard let self else { return }
                     let oid = ObjectIdentifier(conn)
-                    self?.connections[oid] = nil
-                    self?.connectionDevice[oid] = nil
+                    self.connections[oid] = nil
+                    self.connectionDevice[oid] = nil
+                    self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
                 }
             })
         connections[ObjectIdentifier(conn)] = conn

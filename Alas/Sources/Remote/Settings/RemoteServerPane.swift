@@ -42,13 +42,27 @@ struct RemoteServerPane: View {
                     }
 
                     if state.config.remote.enabled, let port = state.remotePort {
+                        if state.remoteAdvertisedAddresses.isEmpty {
+                            let fallbackURL = "http://localhost:\(port)"
+                            SettingsRow(name: "Localhost", desc: fallbackURL) {
+                                Button {
+                                    let pasteboard = NSPasteboard.general
+                                    pasteboard.clearContents()
+                                    pasteboard.setString(fallbackURL, forType: .string)
+                                } label: {
+                                    Text("Copy")
+                                        .font(.system(size: 12, weight: .medium))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                         ForEach(state.remoteAdvertisedAddresses) { address in
                             SettingsRow(
                                 name: addressLabel(address),
                                 desc: addressDescription(address)
                             ) {
                                 HStack(spacing: 8) {
-                                    if selectedAddress(port: address.port)?.id == address.id {
+                                    if selectedAddress()?.id == address.id {
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 13))
                                             .foregroundColor(theme.color("accent"))
@@ -189,11 +203,11 @@ struct RemoteServerPane: View {
     }
 
     private func pairingURL(port: UInt16) -> String {
-        let selected = selectedAddress(port: port)
+        let selected = selectedAddress()
         return selected?.url ?? "http://localhost:\(port)"
     }
 
-    private func selectedAddress(port: UInt16) -> RemoteAdvertisedAddress? {
+    private func selectedAddress() -> RemoteAdvertisedAddress? {
         let addresses = state.remoteAdvertisedAddresses
         if let preferred = state.config.remote.preferredAdvertisedHost,
            let match = addresses.first(where: {

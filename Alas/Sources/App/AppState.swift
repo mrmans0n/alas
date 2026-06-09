@@ -70,6 +70,7 @@ final class AppState {
     /// listener binds asynchronously, so the value arrives after `start`).
     private(set) var remotePort: UInt16?
     private(set) var remoteAdvertisedAddresses: [RemoteAdvertisedAddress] = []
+    private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -111,7 +112,7 @@ final class AppState {
     }
 
     func remoteConnectedDeviceCounts() -> [String: Int] {
-        remoteServer?.connectedDeviceCounts() ?? [:]
+        remoteConnectedDeviceCountsSnapshot
     }
 
     func revokeAllRemoteDevices() {
@@ -154,6 +155,9 @@ final class AppState {
                 self?.remotePort = p
                 self?.refreshRemoteAccessState()
             }
+            server.onConnectionDeviceCountsChange = { [weak self] counts in
+                self?.remoteConnectedDeviceCountsSnapshot = counts
+            }
             do {
                 // Pin a stable default port so a paired phone's URL survives app
                 // restarts (config 0 means "use the default", not OS-assigned).
@@ -165,6 +169,7 @@ final class AppState {
                 remoteServer = nil
                 remotePort = nil
                 remoteAdvertisedAddresses = []
+                remoteConnectedDeviceCountsSnapshot = [:]
                 lastRemoteError = error.localizedDescription
             }
         } else {
@@ -172,6 +177,7 @@ final class AppState {
             remoteServer = nil
             remotePort = nil
             remoteAdvertisedAddresses = []
+            remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
         }
     }
