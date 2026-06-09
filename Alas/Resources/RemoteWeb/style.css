@@ -105,9 +105,9 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 .m-thought .thought-body { color: var(--fg-dim); font-style: italic; font-size: 13px; line-height: 1.5; padding: 4px 0 2px; }
 
 /* Tool call / structured card — collapsed by default */
-.m-tool { align-self: stretch; background: color-mix(in oklab, var(--bg-1) 60%, transparent); border: 0.5px solid var(--line); border-radius: 8px; margin: 5px 0; overflow: hidden; }
+.m-tool { align-self: stretch; color: var(--fg); background: color-mix(in oklab, var(--bg-1) 60%, transparent); border: 0.5px solid var(--line); border-radius: 8px; margin: 5px 0; overflow: hidden; }
 .m-tool.is-open { border-color: var(--bg-4); }
-.tool-toggle { width: 100%; border: none; background: none; color: inherit; font: inherit; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px 10px; text-align: left; -webkit-tap-highlight-color: transparent; }
+.tool-toggle { appearance: none; -webkit-appearance: none; width: 100%; border: none; background: none; color: var(--fg); font: inherit; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 8px 10px; text-align: left; -webkit-tap-highlight-color: transparent; }
 .tool-verb { flex-shrink: 0; font-size: 10px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--accent); }
 .tool-name { color: var(--fg-muted); font-family: ui-monospace, monospace; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-preview { flex: 1; min-width: 0; color: var(--fg-faint); font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

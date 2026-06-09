@@ -22,8 +22,21 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#"const d = el("div", "msg m-tool m-collapsible")"#))
         #expect(app.contains("setCardOpen"))
         #expect(app.contains(#"setAttribute("aria-expanded""#))
+        #expect(app.contains("function toolBody"))
+        #expect(app.contains(#""toolCallId""#))
         #expect(!app.contains(#"const d = el("details", "msg m-tool")"#))
         #expect(!css.contains(".m-tool > summary"))
+    }
+
+    @Test func toolCardMobileFixBustsServiceWorkerAssetCache() throws {
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(html.contains(#"/app.js?v=29"#))
+        #expect(html.contains(#"/style.css?v=29"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v5";"#))
+        #expect(sw.contains(#""/app.js?v=29""#))
+        #expect(sw.contains(#""/style.css?v=29""#))
     }
 
     @Test func sessionRowsRenderWorktreeSummaryCards() throws {
@@ -37,8 +50,8 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=28"))
-        #expect(html.contains("/style.css?v=28"))
+        #expect(html.contains("/app.js?v=29"))
+        #expect(html.contains("/style.css?v=29"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -63,8 +76,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=28""#))
-        #expect(sw.contains(#""/style.css?v=28""#))
+        #expect(sw.contains(#""/app.js?v=29""#))
+        #expect(sw.contains(#""/style.css?v=29""#))
     }
 
     @Test func serviceWorkerKeepsControlAndDiagnosticRoutesNetworkOnly() throws {

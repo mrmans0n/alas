@@ -358,10 +358,25 @@ function toolCard(tc) {
   const verb = TOOL_VERB[tc.kind] || (tc.kind ? cap(tc.kind) : "Tool");
   const name = tc.title || (tc.locations && tc.locations[0]) || "";
   const card = structCard(verb, name && name.toLowerCase() !== verb.toLowerCase() ? name : "",
-                          (typeof tc.content === "string" && tc.content) ? tc.content : "No output.", tc.preview);
+                          toolBody(tc), tc.preview);
   const [ch, scls] = TOOL_STATUS[tc.status] || [tc.status || "", "run"];
   card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", el("span", "tool-status " + scls, ch));
   return card;
+}
+
+function toolBody(tc) {
+  if (typeof tc.content === "string" && tc.content) return tc.content;
+  const rows = [
+    ["toolCallId", tc.toolCallId],
+    ["title", tc.title],
+    ["kind", tc.kind],
+    ["status", tc.status],
+    ["preview", tc.preview],
+    ["locations", Array.isArray(tc.locations) ? tc.locations.join("\n") : ""],
+    ["terminalIds", Array.isArray(tc.terminalIds) ? tc.terminalIds.join("\n") : ""]
+  ].filter(([, value]) => typeof value === "string" && value.length > 0);
+  if (!rows.length) return "Tool invoked.";
+  return rows.map(([key, value]) => `${key}: ${value}`).join("\n");
 }
 
 function structCard(verb, name, body, preview) {
