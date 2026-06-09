@@ -300,6 +300,7 @@ struct RemoteServerIntegrationTests {
         let text = try #require(String(data: response, encoding: .utf8))
         #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
         #expect(pairing.devices.first?.lastSeenAt == nil)
+        try await waitForConnectionClose(from: conn, on: queue)
     }
 
     @Test func remoteWebAssetsServePWAContentTypes() async throws {
@@ -390,13 +391,54 @@ struct RemoteServerIntegrationTests {
                                      timeout: TimeInterval = 2) async throws -> Data {
         return try await withCheckedThrowingContinuation { continuation in
             let completion = Completion<Data>()
-            conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, error in
-                if let error {
-                    completion.finish(.failure(error), continuation: continuation)
-                    return
+            let accumulator = DataAccumulator()
+            let headerTerminator = Data("\r\n\r\n".utf8)
+
+            func receiveMore() {
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+                    if let error {
+                        completion.finish(.failure(error), continuation: continuation)
+                        return
+                    }
+                    if let data, !data.isEmpty {
+                        let snapshot = accumulator.append(data)
+                        if snapshot.range(of: headerTerminator) != nil {
+                            completion.finish(.success(snapshot), continuation: continuation)
+                            return
+                        }
+                    }
+                    if isComplete {
+                        completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+                    } else if !completion.isFinished {
+                        receiveMore()
+                    }
                 }
-                completion.finish(.success(data ?? Data()), continuation: continuation)
             }
+
+            receiveMore()
+            queue.asyncAfter(deadline: .now() + timeout) {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+        }
+    }
+
+    private func waitForConnectionClose(from conn: NWConnection,
+                                        on queue: DispatchQueue,
+                                        timeout: TimeInterval = 2) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let completion = Completion<Void>()
+
+            func receiveUntilClosed() {
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, isComplete, error in
+                    if error != nil || isComplete {
+                        completion.finish(.success(()), continuation: continuation)
+                    } else if !completion.isFinished {
+                        receiveUntilClosed()
+                    }
+                }
+            }
+
+            receiveUntilClosed()
             queue.asyncAfter(deadline: .now() + timeout) {
                 completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
             }
@@ -406,6 +448,12 @@ struct RemoteServerIntegrationTests {
     private final class Completion<Value: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
         private var didComplete = false
+
+        var isFinished: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return didComplete
+        }
 
         func finish(_ result: Result<Value, Error>,
                     continuation: CheckedContinuation<Value, Error>) {
@@ -421,6 +469,18 @@ struct RemoteServerIntegrationTests {
             case .success(let value): continuation.resume(returning: value)
             case .failure(let error): continuation.resume(throwing: error)
             }
+        }
+    }
+
+    private final class DataAccumulator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            data.append(chunk)
+            return data
         }
     }
 }
