@@ -143,6 +143,48 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    @Test func connectedDeviceCountsReflectAuthenticatedWebSockets() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        provider.sessions[s.id] = s
+
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: provider
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"phone"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+        let deviceId = try #require(pairing.devices.first?.id)
+
+        let task = URLSession.shared.webSocketTask(
+            with: URL(string: "ws://127.0.0.1:\(port)/ws")!,
+            protocols: [token]
+        )
+        task.resume()
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        _ = try await task.receive()
+
+        #expect(server.connectedDeviceCounts()[deviceId] == 1)
+
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
     @Test func unknownPathReturns404() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)

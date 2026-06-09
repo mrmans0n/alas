@@ -25,7 +25,7 @@ final class RemoteServer {
     let pairing: RemotePairingService
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
-    private let accessPolicy: RemoteAccessPolicy
+    private var accessPolicy: RemoteAccessPolicy
     private let diagnosticsProvider: @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot
     private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
@@ -128,6 +128,18 @@ final class RemoteServer {
         for (oid, did) in connectionDevice where did == deviceId {
             connections[oid]?.cancel()
         }
+    }
+
+    func connectedDeviceCounts() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for deviceId in connectionDevice.values {
+            counts[deviceId, default: 0] += 1
+        }
+        return counts
+    }
+
+    func updateAccessPolicy(_ policy: RemoteAccessPolicy) {
+        accessPolicy = policy
     }
 
     private func accept(_ nwConn: NWConnection) {

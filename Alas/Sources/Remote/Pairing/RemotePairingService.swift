@@ -89,6 +89,11 @@ final class RemotePairingService {
         store.save(devices)
     }
 
+    func revokeAll() {
+        devices.removeAll()
+        store.save(devices)
+    }
+
     // MARK: helpers
     private static func randomToken(byteCount: Int) -> String {
         var bytes = [UInt8](repeating: 0, count: byteCount)
