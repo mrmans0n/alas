@@ -231,13 +231,44 @@ struct ZmxClientTests {
         #expect(infos == [
             ZmxSessionInfo(
                 name: "alas-old-leaf",
-                startDir: "/Users/nacho/.alas/.worktrees/alas/nacho-new-worktree-acp"
+                startDir: "/Users/nacho/.alas/.worktrees/alas/nacho-new-worktree-acp",
+                pid: 25367,
+                clients: 1,
+                created: 1779957881,
+                cmd: "/bin/zsh -l"
             ),
             ZmxSessionInfo(
                 name: "alas-other",
-                startDir: "/Volumes/Workspace/alas"
+                startDir: "/Volumes/Workspace/alas",
+                pid: 25368,
+                clients: 0,
+                created: 1779957882,
+                cmd: "/bin/zsh -l -i"
             ),
         ])
         #expect(recorder.calls[0].args == ["ls"])
+    }
+
+    @Test
+    func listSessionInfosToleratesMissingAndMalformedFields() {
+        let recorder = RecordingRunner()
+        recorder.result = SubprocessRunner.Result(
+            exitCode: 0,
+            stdout: """
+              name=alas-minimal
+              name=alas-bad\tclients=notanumber\tcreated=\tpid=12
+              clients=3\tstart_dir=/tmp
+
+            """,
+            stderr: ""
+        )
+        let client = ZmxClient(env: env(available: true), runner: recorder.runner())
+        let infos = client.listSessionInfos()
+
+        // Row 3 has no `name=` field and is dropped entirely.
+        #expect(infos == [
+            ZmxSessionInfo(name: "alas-minimal", startDir: nil, pid: nil, clients: nil, created: nil, cmd: nil),
+            ZmxSessionInfo(name: "alas-bad", startDir: nil, pid: 12, clients: nil, created: nil, cmd: nil),
+        ])
     }
 }

@@ -596,4 +596,63 @@ struct TerminalServiceZmxTests {
         #expect(plan.args == [])
         #expect(recorder.calls.isEmpty)
     }
+
+    // MARK: open-sessions wrappers
+
+    @Test func loadOpenSessionsClassifiesAgainstRegistry() async {
+        let recorder = RecordingRunner()
+        let activeName = ZmxSessionName.derive(worktreeId: "wt-1", leafId: "leaf-abc")
+        recorder.resultsByFirstArg["ls"] = SubprocessRunner.Result(
+            exitCode: 0,
+            stdout: """
+              name=\(activeName)\tpid=1\tclients=1\tcreated=1779957881\tstart_dir=/work/active\tcmd=/bin/zsh -l
+              name=alas-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb\tpid=2\tclients=0\tcreated=1779957882\tstart_dir=/work/orphan\tcmd=/bin/zsh
+
+            """,
+            stderr: ""
+        )
+        let svc = TerminalService(zmxClient: ZmxClient(env: makeZmxEnv(), runner: recorder.runner()))
+        let surface = AlasGhostty.SurfaceView(testIO: FakeGhosttySurfaceIO())
+        svc.registry.register(TerminalSession(
+            id: "leaf-abc", worktreeId: "wt-1", projectId: "proj-1",
+            surface: surface, executable: "/bin/zsh", args: [],
+            zmxSessionName: activeName
+        ))
+
+        let snap = await svc.loadOpenSessions()
+
+        #expect(snap.active.map(\.name) == [activeName])
+        #expect(snap.active.first?.kind == .active(leafId: "leaf-abc", worktreeId: "wt-1"))
+        #expect(snap.orphaned.map(\.name) == ["alas-aaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb"])
+        #expect(snap.orphaned.first?.isIdle == true)
+    }
+
+    @Test func killOrphanSessionRunsZmxKill() async {
+        let recorder = RecordingRunner()
+        let svc = TerminalService(zmxClient: ZmxClient(env: makeZmxEnv(), runner: recorder.runner()))
+
+        svc.killOrphanSession(name: "alas-aaaa-1111")
+        svc.waitForPendingKills(timeout: 2.0)
+
+        #expect(recorder.calls.contains(.init(
+            executable: URL(fileURLWithPath: "/fake/Contents/Resources/zmx/zmx"),
+            args: ["kill", "alas-aaaa-1111"]
+        )))
+    }
+
+    @Test func killIdleOrphansKillsOnlyIdleRows() async {
+        let recorder = RecordingRunner()
+        let svc = TerminalService(zmxClient: ZmxClient(env: makeZmxEnv(), runner: recorder.runner()))
+        let snap = OpenSessionsSnapshot(active: [], orphaned: [
+            OpenSessionRow(name: "alas-idle-1", kind: .orphanIdle, startDir: nil, cmd: nil, clients: 0, created: nil),
+            OpenSessionRow(name: "alas-busy-1", kind: .orphanInUse, startDir: nil, cmd: nil, clients: 2, created: nil),
+            OpenSessionRow(name: "alas-idle-2", kind: .orphanIdle, startDir: nil, cmd: nil, clients: 0, created: nil),
+        ])
+
+        svc.killIdleOrphans(snap)
+        svc.waitForPendingKills(timeout: 2.0)
+
+        let killed = Set(recorder.calls.filter { $0.args.first == "kill" }.map { $0.args[1] })
+        #expect(killed == ["alas-idle-1", "alas-idle-2"])
+    }
 }

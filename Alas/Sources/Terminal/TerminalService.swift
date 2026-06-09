@@ -294,6 +294,40 @@ final class TerminalService {
         }
     }
 
+    /// Snapshot of the currently-open zmx sessions for the Settings ›
+    /// Terminal "Open sessions" list. Runs `zmx ls` off-main (it blocks up
+    /// to ~5s), then classifies the result against this window's registry.
+    func loadOpenSessions() async -> OpenSessionsSnapshot {
+        guard zmxClient.isAvailable else { return .empty }
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+        let tracked = registry.all.map {
+            TrackedSessionRef(leafId: $0.id, worktreeId: $0.worktreeId, zmxSessionName: $0.zmxSessionName)
+        }
+        let client = zmxClient
+        let infos = await Task.detached { client.listSessionInfos() }.value
+        return OpenSessionsClassifier.classify(infos: infos, tracked: tracked, sessionPrefix: prefix)
+    }
+
+    /// Kill a single orphaned session by its bare name. `ZmxClient.killSession`
+    /// re-prepends `ZMX_SESSION_PREFIX` itself, matching the create/kill
+    /// symmetry used everywhere else. Dispatched off-main and tracked so a
+    /// hung daemon never blocks the UI and `waitForPendingKills` can drain it.
+    func killOrphanSession(name: String) {
+        let client = zmxClient
+        dispatchTrackedKill { client.killSession(name: name) }
+    }
+
+    /// Kill every idle (`clients == 0`) orphan in `snapshot` — the
+    /// "grown wild" cleanup. Active and in-use rows are left untouched.
+    func killIdleOrphans(_ snapshot: OpenSessionsSnapshot) {
+        let names = snapshot.orphaned.filter(\.isIdle).map(\.name)
+        guard !names.isEmpty else { return }
+        let client = zmxClient
+        dispatchTrackedKill {
+            for name in names { client.killSession(name: name) }
+        }
+    }
+
     /// Pure filter exposed for tests: pick the scoped `alas-*` sessions
     /// belonging to one of our worktrees that no known leaf claims.
     /// Returns bare (unprefixed) names so callers can pass them straight to

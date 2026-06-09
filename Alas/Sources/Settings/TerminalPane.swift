@@ -44,6 +44,8 @@ struct TerminalPane: View {
                     }
                 }
 
+                OpenSessionsSection(state: state)
+
                 SettingsGroup(title: "Startup scripts") {
                     SettingsRow(name: "Run on session open",
                                 desc: "Executed in every new terminal pane after the shell starts.") {
