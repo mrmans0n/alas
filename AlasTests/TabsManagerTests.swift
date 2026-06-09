@@ -140,6 +140,49 @@ struct TabsManagerTests {
         #expect(mgr.tabs(forWorktree: worktreeId).first?.title == "alas")
     }
 
+    @Test func renamingACPSessionTabsBySessionIdUpdatesAllMatchingTabsAndTrims() {
+        let worktreeId = "tabs-manager-rename-acp-by-session"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        _ = mgr.append(acpSession: ACPSessionTabState(sessionId: "s1", title: "Old A"), to: worktreeId)
+        _ = mgr.append(acpSession: ACPSessionTabState(sessionId: "s2", title: "Other"), to: worktreeId)
+        _ = mgr.append(acpSession: ACPSessionTabState(sessionId: "s1", title: "Old B"), to: worktreeId)
+
+        let count = mgr.renameACPSessionTabs(worktreeId: worktreeId, sessionId: "s1", title: "  Renamed  ")
+
+        #expect(count == 2)
+        let titles = mgr.tabs(forWorktree: worktreeId).map(\.title)
+        #expect(titles == ["Renamed", "Other", "Renamed"])
+
+        let reloaded = TabsManager()
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        #expect(reloaded.tabs(forWorktree: worktreeId).map(\.title) == ["Renamed", "Other", "Renamed"])
+    }
+
+    @Test func renamingACPSessionTabsBySessionIdRejectsEmptyTitle() {
+        let worktreeId = "tabs-manager-rename-acp-by-session-empty"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        _ = mgr.append(acpSession: ACPSessionTabState(sessionId: "s1", title: "Old"), to: worktreeId)
+
+        let count = mgr.renameACPSessionTabs(worktreeId: worktreeId, sessionId: "s1", title: "   ")
+
+        #expect(count == 0)
+        #expect(mgr.tabs(forWorktree: worktreeId).first?.title == "Old")
+    }
+
+    @Test func renamingACPSessionTabsBySessionIdIgnoresUnchangedTitles() {
+        let worktreeId = "tabs-manager-rename-acp-by-session-unchanged"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        _ = mgr.append(acpSession: ACPSessionTabState(sessionId: "s1", title: "Same"), to: worktreeId)
+
+        let count = mgr.renameACPSessionTabs(worktreeId: worktreeId, sessionId: "s1", title: "  Same  ")
+
+        #expect(count == 0)
+        #expect(mgr.tabs(forWorktree: worktreeId).first?.title == "Same")
+    }
+
     @Test func editorTabStateDecodesLegacyShape() throws {
         // Old shape: no externalAbsolutePath key.
         let json = #"""
