@@ -845,7 +845,7 @@ extension ACPSessionRunner {
 
         let item = session.queue.remove(at: idx)
         persistQueue()
-        steer(blocks: item.blocks)
+        steer(blocks: item.blocks, recordUserPrompt: !item.transcriptRecorded)
     }
 
     /// Cancel the in-flight turn (if any), discard the ENTIRE queue
@@ -859,6 +859,7 @@ extension ACPSessionRunner {
     /// resolves to a no-op.
     func steer(
         blocks: [ACPContentBlock],
+        recordUserPrompt: Bool = true,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         let snapshot = session.queue.filter { $0.status == .pending }
@@ -903,7 +904,12 @@ extension ACPSessionRunner {
                     onPromptFinished?(false)
                     return
                 }
-                self.sendNow(blocks: blocks, queuedItemId: nil, onPromptFinished: onPromptFinished)
+                self.sendNow(
+                    blocks: blocks,
+                    queuedItemId: nil,
+                    recordUserPrompt: recordUserPrompt,
+                    onPromptFinished: onPromptFinished
+                )
             }
         }
     }
@@ -944,6 +950,7 @@ extension ACPSessionRunner {
     func sendNow(
         blocks: [ACPContentBlock],
         queuedItemId: UUID?,
+        recordUserPrompt: Bool = true,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         let promptID = nextPromptID
@@ -979,6 +986,7 @@ extension ACPSessionRunner {
                 // before-question. Skip for a queued retry whose prompt
                 // is already in the transcript from the previous attempt.
                 let shouldRecord: Bool = {
+                    guard recordUserPrompt else { return false }
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }),
                        self.session.queue[idx].transcriptRecorded {

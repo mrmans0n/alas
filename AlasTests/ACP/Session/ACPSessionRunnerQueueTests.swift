@@ -360,6 +360,32 @@ struct ACPSessionRunnerQueueTests {
         #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
+    @Test("forceSendQueuedItem while busy does not double-record a failed queued retry")
+    func forceSendQueuedItemWhileBusyPreservesRecordedRetry() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        session.agentState = .ready
+        session.transcript.streamingState = .streaming
+        session.recordUserPrompt(text: "selected", attachments: [])
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("selected")])
+        session.queue[1].lastError = "network"
+        session.queue[1].transcriptRecorded = true
+        let selectedId = session.queue[1].id
+        runner.persistQueue()
+
+        runner.forceSendQueuedItem(id: selectedId)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let prompts = mock.sent.filter { $0.method == "session/prompt" }
+        #expect(prompts.count == 1)
+        var userTexts: [String] = []
+        for msg in session.transcript.messages {
+            if case .user(_, let text, _) = msg { userTexts.append(text) }
+        }
+        #expect(userTexts == ["selected"])
+    }
+
     @Test("userCancel() drains queue after canceling the running turn")
     func cancelThenFlushDrainsQueue() async throws {
         let (runner, mock, session, _) = try mkRunner()
