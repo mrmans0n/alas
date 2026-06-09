@@ -199,14 +199,14 @@ struct ACPStoredMessage: Equatable {
 }
 
 extension ACPSessionStore {
-    func upsertSession(_ s: ACPSessionRow) throws {
+    func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, context_recovery_pending,
                               current_model, current_mode, auto_run, created_at, updated_at, last_opened_at, archived)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
-            title = excluded.title,
-            title_source = excluded.title_source,
+            title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
+            title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
             remote_session_id = COALESCE(excluded.remote_session_id, sessions.remote_session_id),
             context_recovery_pending = sessions.context_recovery_pending,
             current_model = excluded.current_model,
@@ -218,7 +218,9 @@ extension ACPSessionStore {
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.contextRecoveryPending ? 1 : 0,
             s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
-            s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0
+            s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
+            preserveTitle ? 1 : 0,
+            preserveTitle ? 1 : 0
         ])
     }
 
@@ -281,6 +283,14 @@ extension ACPSessionStore {
 
     func setArchived(id: String, archived: Bool) throws {
         try db.exec("UPDATE sessions SET archived = ? WHERE id = ?", bindings: [archived ? 1 : 0, id])
+    }
+
+    func renameSession(id: String, title: String, titleSource: ACPSessionTitleSource, updatedAt: Int64) throws {
+        try db.exec("""
+        UPDATE sessions
+        SET title = ?, title_source = ?, updated_at = ?
+        WHERE id = ? AND archived = 0
+        """, bindings: [title, titleSource.rawValue, updatedAt, id])
     }
 
     func appendMessage(sessionId: String, id: String, kind: String, seq: Int64, payload: Data, createdAt: Int64) throws {

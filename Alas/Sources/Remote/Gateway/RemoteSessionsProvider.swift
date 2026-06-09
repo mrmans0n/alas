@@ -27,8 +27,3 @@ protocol RemoteSessionsProvider: AnyObject {
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
 }
-
-@MainActor
-extension RemoteSessionsProvider {
-    func renameSession(for id: String, title: String) -> Bool { false }
-}

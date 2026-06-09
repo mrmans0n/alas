@@ -453,7 +453,7 @@ final class ACPSessionRunner {
     /// `ACPSessionManager.persist` does the same thing plus a recent-
     /// list refresh; the runner skips that because it has no manager
     /// handle, and the next open via the manager picks up the new row.
-    func persistSessionRow() {
+    func persistSessionRow(preserveTitle: Bool = true) {
         guard holdsLeaseForWrite() else { return }
         guard let row = try? store.loadSession(id: sessionId) else { return }
         let now = Int64(Date().timeIntervalSince1970)
@@ -464,7 +464,7 @@ final class ACPSessionRunner {
             autoRun: session.autoRunEnabled,
             createdAt: row.createdAt, updatedAt: now,
             lastOpenedAt: row.lastOpenedAt, archived: row.archived
-        ))
+        ), preserveTitle: preserveTitle)
     }
 
     /// Returns `absolutePath` relative to the runner's worktree, or
@@ -1003,7 +1003,7 @@ extension ACPSessionRunner {
                     self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
                                                   attachments: Self.attachments(of: blocks))
                     self.persistFromIndex(before)
-                    if self.session.title != titleBefore { self.persistSessionRow() }
+                    if self.session.title != titleBefore { self.persistSessionRow(preserveTitle: false) }
                     if let qid = queuedItemId,
                        let idx = self.session.queue.firstIndex(where: { $0.id == qid }) {
                         self.session.queue[idx].transcriptRecorded = true

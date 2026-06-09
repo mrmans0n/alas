@@ -10,6 +10,22 @@ struct RemoteAppStateAccessTests {
         func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
     }
 
+    private struct ProjectMemoryStore: PersistenceStoreProtocol {
+        let projectsFile: ProjectsFile
+
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
+            if type == ProjectsFile.self {
+                return projectsFile as? T
+            }
+            if type == AppConfig.self {
+                return AppConfig.defaults as? T
+            }
+            return nil
+        }
+    }
+
     @Test func appStateRemoteServerPublishesAndRefreshesConfiguredAccessState() async throws {
         let port = try availableTCPPort()
         let state = AppState(store: MemoryStore())
@@ -49,6 +65,167 @@ struct RemoteAppStateAccessTests {
         state.syncRemoteServer()
         #expect(state.remotePort == nil)
         #expect(state.remoteAdvertisedAddresses.isEmpty)
+    }
+
+    @Test func remoteRenameSessionUpdatesManualSessionTitleAndOpenTab() throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let worktreeId: String
+        do {
+            let state = makeRemoteRenameState()
+            worktreeId = try #require(state.selectedWorktreeId)
+            cleanupWorktreeId = worktreeId
+
+            state.openNewACPSession(agentID: "test-agent")
+            let tab = try #require(acpTabs(in: state).first)
+            let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+            let session = try #require(manager.placeholderSession(id: tab.sessionId))
+
+            let renamed = state.renameSession(for: tab.sessionId, title: "  Remote Title  ")
+
+            #expect(renamed)
+            #expect(session.title == "Remote Title")
+            #expect(session.titleSource == .manual)
+            #expect(state.tabs.tabs(forWorktree: worktreeId).first?.title == "Remote Title")
+        }
+    }
+
+    @Test func remoteRenameSessionRejectsEmptyAndUnknownSession() throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let worktreeId: String
+        do {
+            let state = makeRemoteRenameState()
+            worktreeId = try #require(state.selectedWorktreeId)
+            cleanupWorktreeId = worktreeId
+            state.openNewACPSession(agentID: "test-agent")
+            let tab = try #require(acpTabs(in: state).first)
+            let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+            let session = try #require(manager.placeholderSession(id: tab.sessionId))
+
+            #expect(!state.renameSession(for: tab.sessionId, title: " \n\t "))
+            #expect(!state.renameSession(for: "missing", title: "Remote Title"))
+            #expect(session.title == "New session")
+            #expect(session.titleSource == .placeholder)
+            #expect(state.tabs.tabs(forWorktree: worktreeId).first?.title == "New session")
+        }
+    }
+
+    @Test func remoteRenameSessionUpdatesNonLiveRecentSession() throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let worktreeId: String
+        let sessionId = "recent-\(UUID().uuidString)"
+        do {
+            let state = makeRemoteRenameState()
+            worktreeId = try #require(state.selectedWorktreeId)
+            cleanupWorktreeId = worktreeId
+            state.openNewACPSession(agentID: "test-agent")
+            let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+            try seedStoredSession(id: sessionId, title: "Recent", in: manager)
+
+            let renamed = state.renameSession(for: sessionId, title: "Recent Remote")
+
+            #expect(renamed)
+            let session = try #require(manager.liveSession(for: sessionId))
+            #expect(session.title == "Recent Remote")
+            #expect(session.titleSource == .manual)
+        }
+        do {
+            let store = try ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeId).path)
+            let row = try #require(try store.loadSession(id: sessionId))
+            #expect(row.title == "Recent Remote")
+            #expect(row.titleSource == .manual)
+        }
+    }
+
+    @Test func remoteRenameSessionRejectsArchivedSession() throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let worktreeId: String
+        let sessionId = "archived-\(UUID().uuidString)"
+        do {
+            let state = makeRemoteRenameState()
+            worktreeId = try #require(state.selectedWorktreeId)
+            cleanupWorktreeId = worktreeId
+            state.openNewACPSession(agentID: "test-agent")
+            let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+            try seedStoredSession(id: sessionId, title: "Archived", archived: true, in: manager)
+
+            #expect(!state.renameSession(for: sessionId, title: "Remote Title"))
+            #expect(manager.liveSession(for: sessionId) == nil)
+        }
+    }
+
+    @Test func remoteRenameSessionUpdatesMirrorSessionWithoutWriterLease() throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let worktreeId: String
+        let sessionId: String
+        do {
+            let state = makeRemoteRenameState()
+            worktreeId = try #require(state.selectedWorktreeId)
+            cleanupWorktreeId = worktreeId
+            state.openNewACPSession(agentID: "test-agent")
+            let tab = try #require(acpTabs(in: state).first)
+            sessionId = tab.sessionId
+            let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+            let session = try #require(manager.placeholderSession(id: sessionId))
+            let mirrorOwner = try ACPSessionManager(
+                worktreeId: worktreeId,
+                worktreePath: "/tmp/mirror-owner",
+                store: ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeId).path),
+                instanceId: "mirror-owner",
+                pid: Int64(getpid())
+            )
+            let writerSession = try #require(mirrorOwner.placeholderSession(id: sessionId))
+            #expect(mirrorOwner.acquireWriterLease(sessionId: sessionId))
+            #expect(manager.isMirror(sessionId: sessionId))
+
+            let renamed = state.renameSession(for: sessionId, title: "Mirror Title")
+
+            #expect(renamed)
+            #expect(session.title == "Mirror Title")
+            #expect(session.titleSource == .manual)
+            #expect(state.tabs.tabs(forWorktree: worktreeId).first?.title == "Mirror Title")
+            #expect(writerSession.title == "New session")
+            writerSession.autoRunEnabled = true
+            mirrorOwner.persist(writerSession)
+            mirrorOwner.releaseWriterLease(sessionId: sessionId)
+        }
+
+        do {
+            let store = try ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeId).path)
+            let row = try #require(try store.loadSession(id: sessionId))
+            #expect(row.title == "Mirror Title")
+            #expect(row.titleSource == .manual)
+            #expect(row.autoRun)
+        }
     }
 
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
@@ -95,5 +272,88 @@ struct RemoteAppStateAccessTests {
         }
         guard nameResult == 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
         return UInt16(bigEndian: bound.sin_port)
+    }
+
+    private func makeRemoteRenameState() -> AppState {
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "Project",
+            path: "/tmp/project-\(UUID().uuidString)",
+            color: "blue",
+            addedAt: Date()
+        )
+        let state = AppState(store: ProjectMemoryStore(projectsFile: ProjectsFile(projects: [project])))
+        let worktree = Worktree(
+            id: UUID().uuidString,
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: project.path),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager.insertOptimisticWorktree(worktree)
+        state.selectedWorktreeId = worktree.id
+        state.config.changes.aiToolId = "test-agent"
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [
+                AgentDefinition(
+                    id: "test-agent",
+                    displayName: "Test Agent",
+                    binary: "test-agent",
+                    binaryOverride: nil,
+                    promptModeArgs: [],
+                    bypassPermissionsFlag: nil,
+                    extraTerminalArgs: nil,
+                    isBuiltin: false,
+                    isEnabled: true,
+                    builtinLogoAssetName: nil
+                ),
+            ],
+            installedIds: ["test-agent"]
+        )
+        return state
+    }
+
+    private func acpTabs(in state: AppState) -> [ACPSessionTabState] {
+        guard let worktreeId = state.selectedWorktreeId else { return [] }
+        return state.tabs.tabs(forWorktree: worktreeId).compactMap { tab in
+            if case .acpSession(let tabState) = tab {
+                return tabState
+            }
+            return nil
+        }
+    }
+
+    private func seedStoredSession(
+        id: String,
+        title: String,
+        archived: Bool = false,
+        in manager: ACPSessionManager
+    ) throws {
+        let now = Int64(Date().timeIntervalSince1970)
+        try manager.store.upsertSession(ACPSessionRow(
+            id: id,
+            agentId: "test-agent",
+            title: title,
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: now,
+            updatedAt: now,
+            lastOpenedAt: now,
+            archived: archived
+        ))
+        manager.refreshRecent()
+    }
+
+    private func cleanupRemoteRenameFiles(worktreeId: String) {
+        try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
+        let db = Paths.acpSessionsDB(forWorktreeId: worktreeId)
+        try? FileManager.default.removeItem(at: db)
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: db.path + "-wal"))
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: db.path + "-shm"))
     }
 }

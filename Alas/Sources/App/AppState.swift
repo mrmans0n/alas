@@ -3456,6 +3456,23 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    func renameSession(for id: String, title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+
+        for mgr in acpManagers.values {
+            guard mgr.liveSession(for: id) != nil
+                    || mgr.sessionRows.contains(where: { $0.id == id && !$0.archived }) else { continue }
+            guard let session = mgr.liveSession(for: id) ?? mgr.placeholderSession(id: id) else { return false }
+            guard mgr.renameSessionCosmetic(id: session.id, title: trimmed, source: .manual) else { return false }
+
+            _ = tabs.renameACPSessionTabs(worktreeId: mgr.worktreeId, sessionId: session.id, title: trimmed)
+            return true
+        }
+
+        return false
+    }
+
     func sessionConfig(for id: String) -> RemoteSessionConfig? {
         for mgr in acpManagers.values {
             guard let s = mgr.liveSession(for: id) else { continue }

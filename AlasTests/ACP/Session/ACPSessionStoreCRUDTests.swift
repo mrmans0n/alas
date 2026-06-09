@@ -89,6 +89,44 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.currentModel == "opus")
     }
 
+    @Test("metadata-only upsert can preserve stored title")
+    func sessionMetadataUpsertPreservesStoredTitleWhenRequested() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Remote Title",
+            titleSource: .manual,
+            currentModel: "sonnet",
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Stale Writer Title",
+            titleSource: .placeholder,
+            currentModel: "opus",
+            currentMode: nil,
+            autoRun: true,
+            createdAt: 1,
+            updatedAt: 4,
+            lastOpenedAt: 5,
+            archived: false
+        ), preserveTitle: true)
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.title == "Remote Title")
+        #expect(row.titleSource == .manual)
+        #expect(row.currentModel == "opus")
+        #expect(row.autoRun)
+    }
+
     @Test("context recovery pending is stored separately from metadata upserts")
     func contextRecoveryPendingRoundTrip() throws {
         let store = try tmp()
