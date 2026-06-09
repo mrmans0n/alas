@@ -199,6 +199,7 @@ function renderSessionRow(s) {
 
   row.onclick = () => openSession(s.id);
   row.onkeydown = (e) => {
+    if (e.target !== row) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       openSession(s.id);

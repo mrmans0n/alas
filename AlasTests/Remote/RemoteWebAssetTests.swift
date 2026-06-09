@@ -54,6 +54,7 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#"type: "renameSession""#))
         #expect(app.contains("function showRenameSheet"))
         #expect(app.contains(#"case "sessionRenamed""#))
+        #expect(app.contains("if (e.target !== row) return;"))
         #expect(css.contains(".rename-btn"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
