@@ -1,9 +1,14 @@
 import Testing
 import Foundation
+import Network
 @testable import Alas
 
 @MainActor
 struct RemoteServerIntegrationTests {
+    private enum TimeoutError: Error {
+        case timedOut
+    }
+
     private func makeManager() throws -> ACPSessionManager {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("remote-server-\(UUID()).sqlite")
@@ -138,6 +143,103 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    @Test func connectedDeviceCountsReflectAuthenticatedWebSockets() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        provider.sessions[s.id] = s
+
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            provider: provider
+        )
+        var publishedCounts: [[String: Int]] = []
+        server.onConnectionDeviceCountsChange = { counts in
+            publishedCounts.append(counts)
+        }
+        try server.start(port: 0)
+        defer { server.stop() }
+
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"phone"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+        let deviceId = try #require(pairing.devices.first?.id)
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let first = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        let second = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        first.resume()
+        second.resume()
+        try await first.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        try await second.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        _ = try await first.receive()
+        _ = try await second.receive()
+
+        #expect(server.connectedDeviceCounts()[deviceId] == 2)
+        #expect(publishedCounts.contains { $0[deviceId] == 2 })
+
+        server.disconnectDevice(deviceId)
+
+        var cleanedUp = false
+        for _ in 0..<50 {
+            if server.connectedDeviceCounts()[deviceId, default: 0] == 0 {
+                cleanedUp = true
+                break
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(cleanedUp, "expected connected-device counts to clear after disconnect")
+        #expect(publishedCounts.contains { $0.isEmpty }, "expected connected-device count callback to publish empty counts after disconnect")
+
+        first.cancel(with: .goingAway, reason: nil)
+        second.cancel(with: .goingAway, reason: nil)
+    }
+
+    @Test func updateAccessPolicyClosesIdleConnectionsAndAppliesToNewRequests() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        let queue = DispatchQueue(label: "io.alas.tests.remote.policy-refresh")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        try await send("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n", on: conn)
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        server.updateAccessPolicy(RemoteAccessPolicy(allowedHosts: ["evil.example"]))
+
+        try await send("\r\n", on: conn)
+        do {
+            let staleResponse = try await receiveHTTPResponse(from: conn, on: queue, timeout: 1)
+            let text = try #require(String(data: staleResponse, encoding: .utf8))
+            #expect(!text.hasPrefix("HTTP/1.1 200 OK"))
+        } catch {
+            // Expected if the server closed the pre-refresh idle connection.
+        }
+
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
+        req.setValue("evil.example", forHTTPHeaderField: "Host")
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 200)
+    }
+
     @Test func unknownPathReturns404() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)
@@ -158,6 +260,98 @@ struct RemoteServerIntegrationTests {
         #expect((resp as? HTTPURLResponse)?.statusCode == 401)
     }
 
+    @Test func pairWithRejectedHostReturns403AndDoesNotRedeemCode() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let code = pairing.beginPairing()
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        req.httpMethod = "POST"
+        req.setValue("evil.example", forHTTPHeaderField: "Host")
+        req.httpBody = Data(#"{"code":"\#(code)","deviceName":"x"}"#.utf8)
+
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        #expect((resp as? HTTPURLResponse)?.statusCode == 403)
+
+        let token = try pairing.redeem(code: code, deviceName: "after-403")
+        #expect(pairing.validate(token: token) != nil)
+    }
+
+    @Test func remoteDiagnosticsRoutesReturnSafeJSON() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        _ = try pairing.redeem(code: pairing.beginPairing(), deviceName: "iPhone")
+        var diagnosticsPorts: [UInt16?] = []
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("remote-diag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let server = RemoteServer(
+            pairing: pairing,
+            assets: RemoteWebAssets(root: root),
+            provider: FakeSessionsProvider(),
+            accessPolicy: RemoteAccessPolicy(allowedHosts: ["127.0.0.1"]),
+            diagnostics: { providerPort in
+                diagnosticsPorts.append(providerPort)
+                return RemoteDiagnosticsSnapshot(
+                    appName: "Alas",
+                    port: providerPort,
+                    addresses: [
+                        RemoteAdvertisedAddress(
+                            kind: .lan,
+                            interfaceName: "en0",
+                            host: "192.168.1.23",
+                            port: providerPort ?? 0,
+                            isRecommended: true
+                        )
+                    ],
+                    usesPlainHTTP: true,
+                    pairedDeviceCount: 1
+                )
+            }
+        )
+        try server.start(port: 0)
+        defer { server.stop() }
+
+        for _ in 0..<50 where server.port == nil {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let port = try #require(server.port)
+
+        let (healthData, healthResponse) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/health")!
+        )
+        #expect((healthResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(data: healthData, encoding: .utf8)?.contains(#""ok":true"#) == true)
+
+        let (infoData, infoResponse) = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/remote-info")!
+        )
+        #expect((infoResponse as? HTTPURLResponse)?.statusCode == 200)
+        let snapshot = try JSONDecoder().decode(RemoteDiagnosticsSnapshot.self, from: infoData)
+        #expect(diagnosticsPorts == [port])
+        #expect(snapshot.port == port)
+        #expect(snapshot.appName == "Alas")
+        #expect(snapshot.pairedDeviceCount == 1)
+        #expect(snapshot.usesPlainHTTP)
+        let address = try #require(snapshot.addresses.first)
+        #expect(snapshot.addresses.count == 1)
+        #expect(address.kind == .lan)
+        #expect(address.interfaceName == "en0")
+        #expect(address.host == "192.168.1.23")
+        #expect(address.port == port)
+        #expect(address.url == "http://192.168.1.23:\(port)")
+        #expect(address.isRecommended)
+
+        let text = try #require(String(data: infoData, encoding: .utf8))
+        #expect(!text.contains("token"))
+        #expect(!text.contains("code"))
+        #expect(!text.contains("session"))
+        #expect(!text.contains("/Users/"))
+    }
+
     @Test func webSocketWithBadTokenIsRejected() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)
@@ -172,6 +366,71 @@ struct RemoteServerIntegrationTests {
             // Expected: the server returns 401 instead of 101, so receive fails.
         }
         task.cancel(with: .goingAway, reason: nil)
+    }
+
+    @Test func webSocketWithRejectedHostIsRejectedBeforeTokenValidation() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        let queue = DispatchQueue(label: "io.alas.tests.remote.ws-rejected-host")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let request = [
+            "GET /ws HTTP/1.1",
+            "Host: evil.example",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(token)"
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 403 Forbidden"))
+        #expect(pairing.devices.first?.lastSeenAt == nil)
+        try await waitForConnectionClose(from: conn, on: queue)
+    }
+
+    @Test func webSocketUpgradeIsOnlyAcceptedOnWsPath() async throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let token = try pairing.redeem(code: pairing.beginPairing(), deviceName: "phone")
+        let (server, port) = try await startServer(pairing: pairing)
+        defer { server.stop() }
+
+        let conn = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: NWEndpoint.Port(rawValue: port)!,
+            using: .tcp
+        )
+        let queue = DispatchQueue(label: "io.alas.tests.remote.ws-route")
+        try await start(conn, on: queue)
+        defer { conn.cancel() }
+
+        let request = [
+            "GET /health HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Protocol: \(token)"
+        ].joined(separator: "\r\n") + "\r\n\r\n"
+        try await send(request, on: conn)
+        let response = try await receiveHTTPResponse(from: conn, on: queue)
+        let text = try #require(String(data: response, encoding: .utf8))
+
+        #expect(text.hasPrefix("HTTP/1.1 404 Not Found"))
+        #expect(pairing.devices.first?.lastSeenAt == nil)
+        try await waitForConnectionClose(from: conn, on: queue)
     }
 
     @Test func remoteWebAssetsServePWAContentTypes() async throws {
@@ -221,5 +480,137 @@ struct RemoteServerIntegrationTests {
         #expect(http.statusCode == 200)
         #expect(http.value(forHTTPHeaderField: "Content-Type") == "application/manifest+json; charset=utf-8")
         #expect(String(data: data, encoding: .utf8) == #"{"name":"Alas Remote"}"#)
+    }
+
+    private func start(_ conn: NWConnection, on queue: DispatchQueue) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let completion = Completion<Void>()
+            conn.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    completion.finish(.success(()), continuation: continuation)
+                case .failed(let error):
+                    completion.finish(.failure(error), continuation: continuation)
+                case .cancelled:
+                    completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+                default:
+                    break
+                }
+            }
+            queue.asyncAfter(deadline: .now() + 2) {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+            conn.start(queue: queue)
+        }
+    }
+
+    private func send(_ request: String, on conn: NWConnection) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            conn.send(content: Data(request.utf8), completion: .contentProcessed { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            })
+        }
+    }
+
+    private func receiveHTTPResponse(from conn: NWConnection,
+                                     on queue: DispatchQueue,
+                                     timeout: TimeInterval = 2) async throws -> Data {
+        return try await withCheckedThrowingContinuation { continuation in
+            let completion = Completion<Data>()
+            let accumulator = DataAccumulator()
+            let headerTerminator = Data("\r\n\r\n".utf8)
+
+            func receiveMore() {
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, isComplete, error in
+                    if let error {
+                        completion.finish(.failure(error), continuation: continuation)
+                        return
+                    }
+                    if let data, !data.isEmpty {
+                        let snapshot = accumulator.append(data)
+                        if snapshot.range(of: headerTerminator) != nil {
+                            completion.finish(.success(snapshot), continuation: continuation)
+                            return
+                        }
+                    }
+                    if isComplete {
+                        completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+                    } else if !completion.isFinished {
+                        receiveMore()
+                    }
+                }
+            }
+
+            receiveMore()
+            queue.asyncAfter(deadline: .now() + timeout) {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+        }
+    }
+
+    private func waitForConnectionClose(from conn: NWConnection,
+                                        on queue: DispatchQueue,
+                                        timeout: TimeInterval = 2) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let completion = Completion<Void>()
+
+            func receiveUntilClosed() {
+                conn.receive(minimumIncompleteLength: 1, maximumLength: 4096) { _, _, isComplete, error in
+                    if error != nil || isComplete {
+                        completion.finish(.success(()), continuation: continuation)
+                    } else if !completion.isFinished {
+                        receiveUntilClosed()
+                    }
+                }
+            }
+
+            receiveUntilClosed()
+            queue.asyncAfter(deadline: .now() + timeout) {
+                completion.finish(.failure(TimeoutError.timedOut), continuation: continuation)
+            }
+        }
+    }
+
+    private final class Completion<Value: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var didComplete = false
+
+        var isFinished: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return didComplete
+        }
+
+        func finish(_ result: Result<Value, Error>,
+                    continuation: CheckedContinuation<Value, Error>) {
+            lock.lock()
+            guard !didComplete else {
+                lock.unlock()
+                return
+            }
+            didComplete = true
+            lock.unlock()
+
+            switch result {
+            case .success(let value): continuation.resume(returning: value)
+            case .failure(let error): continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private final class DataAccumulator: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) -> Data {
+            lock.lock()
+            defer { lock.unlock() }
+            data.append(chunk)
+            return data
+        }
     }
 }

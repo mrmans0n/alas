@@ -69,6 +69,59 @@ final class AppState {
     /// so the pane reveals the address/QR as soon as the server comes up (the
     /// listener binds asynchronously, so the value arrives after `start`).
     private(set) var remotePort: UInt16?
+    private(set) var remoteAdvertisedAddresses: [RemoteAdvertisedAddress] = []
+    private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
+
+    private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
+        RemoteNetwork.interfaces()
+    }
+
+    private func makeRemoteAdvertisedAddresses(
+        port: UInt16?,
+        interfaces: [RemoteNetworkInterface]
+    ) -> [RemoteAdvertisedAddress] {
+        guard let port else { return [] }
+        return RemoteNetwork.advertisedAddresses(
+            port: port,
+            interfaces: interfaces,
+            allowedHosts: config.remote.allowedHosts,
+            preferredHost: config.remote.preferredAdvertisedHost
+        )
+    }
+
+    private func makeRemoteAdvertisedAddresses(port: UInt16?) -> [RemoteAdvertisedAddress] {
+        makeRemoteAdvertisedAddresses(port: port, interfaces: makeRemoteInterfaces())
+    }
+
+    private func makeRemoteAccessPolicy(interfaces: [RemoteNetworkInterface]) -> RemoteAccessPolicy {
+        let hosts = RemoteNetwork.allowedHostCandidates(
+            interfaces: interfaces,
+            allowedHosts: config.remote.allowedHosts
+        )
+        return RemoteAccessPolicy(allowedHosts: hosts)
+    }
+
+    private func makeRemoteAccessPolicy() -> RemoteAccessPolicy {
+        makeRemoteAccessPolicy(interfaces: makeRemoteInterfaces())
+    }
+
+    func refreshRemoteAccessState() {
+        let interfaces = makeRemoteInterfaces()
+        remoteAdvertisedAddresses = makeRemoteAdvertisedAddresses(port: remotePort, interfaces: interfaces)
+        remoteServer?.updateAccessPolicy(makeRemoteAccessPolicy(interfaces: interfaces))
+    }
+
+    func remoteConnectedDeviceCounts() -> [String: Int] {
+        remoteConnectedDeviceCountsSnapshot
+    }
+
+    func revokeAllRemoteDevices() {
+        let ids = remotePairing.devices.map(\.id)
+        remotePairing.revokeAll()
+        for id in ids {
+            remoteServer?.disconnectDevice(id)
+        }
+    }
 
     /// Starts or stops the remote server to match `config.remote`. Idempotent;
     /// call at launch and after toggling the config. A bind failure is captured
@@ -76,12 +129,35 @@ final class AppState {
     /// a port is busy.
     func syncRemoteServer() {
         if config.remote.enabled {
-            guard remoteServer == nil else { return }
+            guard remoteServer == nil else {
+                refreshRemoteAccessState()
+                return
+            }
             let root = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
                 .appendingPathComponent("RemoteWeb")
             let assets = RemoteWebAssets(root: root)
-            let server = RemoteServer(pairing: remotePairing, assets: assets, provider: self)
-            server.onPortChange = { [weak self] p in self?.remotePort = p }
+            let server = RemoteServer(
+                pairing: remotePairing,
+                assets: assets,
+                provider: self,
+                accessPolicy: makeRemoteAccessPolicy(),
+                diagnostics: { [weak self] port in
+                    RemoteDiagnosticsSnapshot(
+                        appName: "Alas",
+                        port: port,
+                        addresses: self?.remoteAdvertisedAddresses ?? [],
+                        usesPlainHTTP: true,
+                        pairedDeviceCount: self?.remotePairing.devices.count ?? 0
+                    )
+                }
+            )
+            server.onPortChange = { [weak self] p in
+                self?.remotePort = p
+                self?.refreshRemoteAccessState()
+            }
+            server.onConnectionDeviceCountsChange = { [weak self] counts in
+                self?.remoteConnectedDeviceCountsSnapshot = counts
+            }
             do {
                 // Pin a stable default port so a paired phone's URL survives app
                 // restarts (config 0 means "use the default", not OS-assigned).
@@ -92,12 +168,16 @@ final class AppState {
             } catch {
                 remoteServer = nil
                 remotePort = nil
+                remoteAdvertisedAddresses = []
+                remoteConnectedDeviceCountsSnapshot = [:]
                 lastRemoteError = error.localizedDescription
             }
         } else {
             remoteServer?.stop()
             remoteServer = nil
             remotePort = nil
+            remoteAdvertisedAddresses = []
+            remoteConnectedDeviceCountsSnapshot = [:]
             lastRemoteError = nil
         }
     }

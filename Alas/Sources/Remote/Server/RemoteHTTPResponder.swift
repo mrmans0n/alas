@@ -1,13 +1,31 @@
 import Foundation
 
+/// Safe, user-facing remote diagnostics served by `/remote-info`.
+struct RemoteDiagnosticsSnapshot: Codable, Equatable, Sendable {
+    let appName: String
+    let port: UInt16?
+    let addresses: [RemoteAdvertisedAddress]
+    let usesPlainHTTP: Bool
+    let pairedDeviceCount: Int
+}
+
 /// Builds HTTP/1.1 responses for non-WebSocket requests: the static web
-/// client bundle and the POST /pair endpoint. Pure given its inputs.
+/// client bundle, safe diagnostics routes, and the POST /pair endpoint. Pure
+/// given its inputs.
 @MainActor
 struct RemoteHTTPResponder {
     let pairing: RemotePairingService
     let assets: RemoteWebAssets
+    let diagnostics: () -> RemoteDiagnosticsSnapshot
 
     func response(for req: HTTPRequest, body: Data) -> Data {
+        if req.method == "GET", req.path == "/health" {
+            return Self.json(["ok": true])
+        }
+        if req.method == "GET", req.path == "/remote-info" {
+            let data = (try? JSONEncoder().encode(diagnostics())) ?? Data(#"{"error":"encode"}"#.utf8)
+            return Self.http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data)
+        }
         if req.method == "POST", req.path == "/pair" {
             return pairResponse(body: body)
         }
@@ -18,6 +36,11 @@ struct RemoteHTTPResponder {
             }
         }
         return Self.http(status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8))
+    }
+
+    private static func json(_ object: [String: Bool]) -> Data {
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [])) ?? Data(#"{"ok":false}"#.utf8)
+        return http(status: "200 OK", contentType: "application/json; charset=utf-8", body: data)
     }
 
     private func pairResponse(body: Data) -> Data {

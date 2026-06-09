@@ -42,18 +42,31 @@ struct AppConfig: Codable, Equatable {
     struct Remote: Codable, Equatable {
         var enabled: Bool = false
         var port: UInt16 = 0          // 0 = OS-assigned
+        var allowedHosts: [String] = []
+        var preferredAdvertisedHost: String? = nil
 
-        init(enabled: Bool = false, port: UInt16 = 0) {
+        init(
+            enabled: Bool = false,
+            port: UInt16 = 0,
+            allowedHosts: [String] = [],
+            preferredAdvertisedHost: String? = nil
+        ) {
             self.enabled = enabled
             self.port = port
+            self.allowedHosts = allowedHosts
+            self.preferredAdvertisedHost = preferredAdvertisedHost
         }
 
-        enum CodingKeys: String, CodingKey { case enabled, port }
+        enum CodingKeys: String, CodingKey {
+            case enabled, port, allowedHosts, preferredAdvertisedHost
+        }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
             port = (try? c.decode(UInt16.self, forKey: .port)) ?? 0
+            allowedHosts = (try? c.decode([String].self, forKey: .allowedHosts)) ?? []
+            preferredAdvertisedHost = try? c.decodeIfPresent(String.self, forKey: .preferredAdvertisedHost)
         }
     }
 

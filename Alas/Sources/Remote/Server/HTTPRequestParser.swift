@@ -41,6 +41,9 @@ enum HTTPRequestParser {
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = line[line.startIndex..<colon].trimmingCharacters(in: .whitespaces).lowercased()
             let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            if key == "host", headers["host"] != nil {
+                throw RemoteServerError.badRequest("duplicate host header")
+            }
             headers[key] = value
         }
         buffer.removeSubrange(buffer.startIndex..<range.upperBound)

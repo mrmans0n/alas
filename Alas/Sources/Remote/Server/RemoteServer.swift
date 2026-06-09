@@ -25,6 +25,8 @@ final class RemoteServer {
     let pairing: RemotePairingService
     private let assets: RemoteWebAssets
     private let provider: RemoteSessionsProvider
+    private var accessPolicy: RemoteAccessPolicy
+    private let diagnosticsProvider: @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot
     private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
     /// bind failure, so we don't loop.
@@ -33,11 +35,32 @@ final class RemoteServer {
     /// listener becomes ready, nil when it fails/cancels. Lets observers (the
     /// Settings pane via AppState) react, since `port` itself isn't observable.
     var onPortChange: ((UInt16?) -> Void)?
+    /// Invoked on the main actor whenever authenticated remote socket counts
+    /// change. AppState snapshots this so Settings observes live disconnects.
+    var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
 
-    init(pairing: RemotePairingService, assets: RemoteWebAssets, provider: RemoteSessionsProvider) {
+    /// Callers with app state should pass a diagnostics closure; the default is
+    /// a safe empty fallback for contexts that do not have app state available.
+    init(
+        pairing: RemotePairingService,
+        assets: RemoteWebAssets,
+        provider: RemoteSessionsProvider,
+        accessPolicy: RemoteAccessPolicy = .loopback,
+        diagnostics: @escaping @MainActor (UInt16?) -> RemoteDiagnosticsSnapshot = { port in
+            RemoteDiagnosticsSnapshot(
+                appName: "Alas",
+                port: port,
+                addresses: [],
+                usesPlainHTTP: true,
+                pairedDeviceCount: 0
+            )
+        }
+    ) {
         self.pairing = pairing
         self.assets = assets
         self.provider = provider
+        self.accessPolicy = accessPolicy
+        self.diagnosticsProvider = diagnostics
     }
 
     /// Starts listening on the given port (0 = OS-assigned). A non-zero port that
@@ -100,6 +123,7 @@ final class RemoteServer {
         for conn in connections.values { conn.cancel() }
         connections.removeAll()
         connectionDevice.removeAll()
+        onConnectionDeviceCountsChange?([:])
     }
 
     /// Immediately closes every live connection authenticated as `deviceId`.
@@ -110,10 +134,31 @@ final class RemoteServer {
         }
     }
 
+    func connectedDeviceCounts() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for deviceId in connectionDevice.values {
+            counts[deviceId, default: 0] += 1
+        }
+        return counts
+    }
+
+    func updateAccessPolicy(_ policy: RemoteAccessPolicy) {
+        accessPolicy = policy
+        // Pre-refresh unauthenticated sockets hold their original policy copy;
+        // close them so their first request cannot run under stale host rules.
+        for (oid, conn) in connections where connectionDevice[oid] == nil {
+            conn.cancel()
+        }
+    }
+
     private func accept(_ nwConn: NWConnection) {
         guard connections.count < maxConnections else { nwConn.cancel()
         return }
-        let responder = RemoteHTTPResponder(pairing: pairing, assets: assets)
+        let responder = RemoteHTTPResponder(
+            pairing: pairing,
+            assets: assets,
+            diagnostics: { self.diagnosticsProvider(self.port) }
+        )
         let provider = self.provider   // captured strongly; the server owns it for its lifetime
         let conn = RemoteConnection(
             conn: nwConn,
@@ -124,17 +169,24 @@ final class RemoteServer {
                 self.pairing.touch(deviceId: id)
                 return id
             },
+            accessPolicy: accessPolicy,
             makeGateway: { send in
                 RemoteSessionGateway(provider: provider, send: send)
             },
             onAuthenticated: { [weak self] conn, did in
-                Task { @MainActor in self?.connectionDevice[ObjectIdentifier(conn)] = did }
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.connectionDevice[ObjectIdentifier(conn)] = did
+                    self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
+                }
             },
             onClose: { [weak self] conn in
                 Task { @MainActor in
+                    guard let self else { return }
                     let oid = ObjectIdentifier(conn)
-                    self?.connections[oid] = nil
-                    self?.connectionDevice[oid] = nil
+                    self.connections[oid] = nil
+                    self.connectionDevice[oid] = nil
+                    self.onConnectionDeviceCountsChange?(self.connectedDeviceCounts())
                 }
             })
         connections[ObjectIdentifier(conn)] = conn

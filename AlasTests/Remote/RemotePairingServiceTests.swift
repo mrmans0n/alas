@@ -60,6 +60,17 @@ struct RemotePairingServiceTests {
         #expect(svc.devices.isEmpty)
     }
 
+    @Test func revokeAllClearsEveryDevice() throws {
+        let svc = make()
+        _ = try svc.redeem(code: svc.beginPairing(), deviceName: "A")
+        _ = try svc.redeem(code: svc.beginPairing(), deviceName: "B")
+        #expect(svc.devices.count == 2)
+
+        svc.revokeAll()
+
+        #expect(svc.devices.isEmpty)
+    }
+
     @Test func unknownTokenRejected() {
         let svc = make()
         #expect(svc.validate(token: "garbage") == nil)

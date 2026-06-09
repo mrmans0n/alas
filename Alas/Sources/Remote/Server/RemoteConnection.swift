@@ -7,7 +7,7 @@ import CryptoKit
 /// bridges decoded client messages to a `RemoteSessionGateway`.
 ///
 /// Concurrency model: all mutable state (`inbound`, `isWebSocket`, `gateway`,
-/// `closed`) is confined to the single serial `queue` the connection runs on.
+/// `closed`, `isClosing`) is confined to the single serial `queue` the connection runs on.
 /// `NWConnection` delivers every `receive`/`send` completion on that queue, so
 /// those callbacks touch state directly. Work that must reach ACP/pairing state
 /// (the responder/authorize/makeGateway closures) hops to `@MainActor`, and any
@@ -20,6 +20,7 @@ final class RemoteConnection: @unchecked Sendable {
     private let makeGateway: @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway
     private let responder: @MainActor (HTTPRequest, Data) -> Data
     private let authorize: @MainActor (String) -> String?   // token → deviceId (nil = reject)
+    private let accessPolicy: RemoteAccessPolicy
     private let onAuthenticated: ((RemoteConnection, String) -> Void)?
     private let onClose: (RemoteConnection) -> Void
 
@@ -28,6 +29,10 @@ final class RemoteConnection: @unchecked Sendable {
     private var isWebSocket = false
     private var gateway: RemoteSessionGateway?
     private var closed = false
+    /// Set once a terminal response has been queued. This closes the gap between
+    /// queueing the response and the send completion, so pipelined bytes cannot
+    /// re-drive `drain()` against the same rejected request.
+    private var isClosing = false
     /// Tail of the per-connection message-processing chain. Each decoded frame's
     /// `gateway.handle` awaits the previous one, so messages are processed in
     /// arrival order — clients rely on this (e.g. a `takeOver` must land before
@@ -44,6 +49,7 @@ final class RemoteConnection: @unchecked Sendable {
          queue: DispatchQueue,
          responder: @escaping @MainActor (HTTPRequest, Data) -> Data,
          authorize: @escaping @MainActor (String) -> String?,
+         accessPolicy: RemoteAccessPolicy,
          makeGateway: @escaping @MainActor (@escaping (RemoteServerMessage) -> Void) -> RemoteSessionGateway,
          onAuthenticated: ((RemoteConnection, String) -> Void)? = nil,
          onClose: @escaping (RemoteConnection) -> Void = { _ in }) {
@@ -51,6 +57,7 @@ final class RemoteConnection: @unchecked Sendable {
         self.queue = queue
         self.responder = responder
         self.authorize = authorize
+        self.accessPolicy = accessPolicy
         self.makeGateway = makeGateway
         self.onAuthenticated = onAuthenticated
         self.onClose = onClose
@@ -80,13 +87,14 @@ final class RemoteConnection: @unchecked Sendable {
     private func receive() {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
+            guard !self.isClosing else { return }
             if let data, !data.isEmpty {
                 self.inbound.append(data)
                 self.drain()
             }
             if isComplete || error != nil {
                 self.teardown()
-            } else if !self.closed {
+            } else if !self.closed && !self.isClosing {
                 self.receive()
             }
         }
@@ -106,9 +114,7 @@ final class RemoteConnection: @unchecked Sendable {
             req = try HTTPRequestParser.parse(&peek)
         } catch {
             // Malformed request line/headers — refuse and close.
-            send(RemoteHTTPResponder.http(status: "400 Bad Request", contentType: "text/plain", body: Data())) {
-                [weak self] in self?.teardown()
-            }
+            sendAndClose(RemoteHTTPResponder.http(status: "400 Bad Request", contentType: "text/plain", body: Data()))
             return
         }
         guard let req else {
@@ -116,17 +122,32 @@ final class RemoteConnection: @unchecked Sendable {
             // block so an unauthenticated peer can't grow memory by dribbling
             // bytes with no CRLFCRLF terminator.
             if inbound.count > Self.maxHeaderBytes {
-                send(RemoteHTTPResponder.http(status: "431 Request Header Fields Too Large",
-                                              contentType: "text/plain", body: Data())) {
-                    [weak self] in self?.teardown()
-                }
+                sendAndClose(RemoteHTTPResponder.http(status: "431 Request Header Fields Too Large",
+                                                      contentType: "text/plain", body: Data()))
             }
+            return
+        }
+
+        guard accessPolicy.allows(hostHeader: req.headers["host"]) else {
+            sendAndClose(RemoteHTTPResponder.http(
+                status: "403 Forbidden",
+                contentType: "text/plain",
+                body: Data("forbidden".utf8)
+            ))
             return
         }
 
         let headerByteCount = inbound.count - peek.count   // bytes through CRLFCRLF
         if req.headers["upgrade"]?.lowercased() == "websocket" {
             inbound.removeFirst(headerByteCount)
+            guard req.method == "GET", req.path == "/ws" else {
+                sendAndClose(RemoteHTTPResponder.http(
+                    status: "404 Not Found",
+                    contentType: "text/plain",
+                    body: Data("not found".utf8)
+                ))
+                return
+            }
             handleUpgrade(req)
             return
         }
@@ -138,10 +159,8 @@ final class RemoteConnection: @unchecked Sendable {
         // `inbound.prefix(needed)`. Reject it (and it's reachable unauthenticated).
         guard needed >= 0 else {
             inbound.removeFirst(headerByteCount)
-            send(RemoteHTTPResponder.http(status: "400 Bad Request",
-                                          contentType: "text/plain", body: Data())) {
-                [weak self] in self?.teardown()
-            }
+            sendAndClose(RemoteHTTPResponder.http(status: "400 Bad Request",
+                                                  contentType: "text/plain", body: Data()))
             return
         }
         // Reject an oversized declared (or already-buffered) body before we
@@ -149,10 +168,8 @@ final class RemoteConnection: @unchecked Sendable {
         // reachable unauthenticated.
         if needed > Self.maxBodyBytes || inbound.count - headerByteCount > Self.maxBodyBytes {
             inbound.removeFirst(headerByteCount)
-            send(RemoteHTTPResponder.http(status: "413 Payload Too Large",
-                                          contentType: "text/plain", body: Data())) {
-                [weak self] in self?.teardown()
-            }
+            sendAndClose(RemoteHTTPResponder.http(status: "413 Payload Too Large",
+                                                  contentType: "text/plain", body: Data()))
             return
         }
         guard inbound.count - headerByteCount >= needed else { return }   // wait for more
@@ -164,7 +181,7 @@ final class RemoteConnection: @unchecked Sendable {
             guard let self else { return }
             let out = self.responder(req, body)
             self.onQueue { [weak self] in
-                self?.send(out) { [weak self] in self?.teardown() }
+                self?.sendAndClose(out)
             }
         }
     }
@@ -182,10 +199,8 @@ final class RemoteConnection: @unchecked Sendable {
             self.onQueue { [weak self] in
                 guard let self else { return }
                 guard let deviceId else {
-                    self.send(RemoteHTTPResponder.http(status: "401 Unauthorized",
-                                                       contentType: "text/plain", body: Data())) {
-                        [weak self] in self?.teardown()
-                    }
+                    self.sendAndClose(RemoteHTTPResponder.http(status: "401 Unauthorized",
+                                                               contentType: "text/plain", body: Data()))
                     return
                 }
                 self.deviceId = deviceId
@@ -280,6 +295,12 @@ final class RemoteConnection: @unchecked Sendable {
 
     // MARK: lifecycle / io
 
+    private func sendAndClose(_ data: Data) {
+        guard !isClosing else { return }
+        isClosing = true
+        send(data) { [weak self] in self?.teardown() }
+    }
+
     private func send(_ data: Data, completion: @escaping @Sendable () -> Void) {
         // NWConnection delivers this completion on our serial queue. On a send
         // error, tear down rather than running the follow-up (which would touch
@@ -292,6 +313,7 @@ final class RemoteConnection: @unchecked Sendable {
     private func teardown() {
         guard !closed else { return }
         closed = true
+        isClosing = true
         processingTail?.cancel()
         processingTail = nil
         if let gateway { Task { @MainActor in gateway.close() } }
