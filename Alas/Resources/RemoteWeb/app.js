@@ -899,8 +899,7 @@ function markdownReferenceDefinition(line) {
 }
 
 function markdownReferenceDefinitionDestinationContinuationLine(line) {
-  const content = indentedReferenceDefinitionContinuationContent(line);
-  return content !== null && content.length > 0;
+  return line.trim().length > 0;
 }
 
 function markdownReferenceDefinitionTitleContinuationLine(line) {

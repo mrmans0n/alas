@@ -802,8 +802,7 @@ enum ACPBareURLLinkifier {
     }
 
     private static func markdownReferenceDefinitionDestinationContinuationLine(in line: String) -> Bool {
-        guard let content = indentedReferenceDefinitionContinuationContent(in: line) else { return false }
-        return !content.isEmpty
+        !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private static func markdownReferenceDefinitionTitleContinuationLine(in line: String) -> Bool {

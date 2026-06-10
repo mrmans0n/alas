@@ -82,6 +82,21 @@ struct ACPBareURLLinkifierTests {
         #expect(output == input)
     }
 
+    @Test("preserves shortcut reference with unindented destination continuation")
+    func preservesShortcutReferenceWithUnindentedDestinationContinuation() {
+        let input = """
+        [https://example.com]:
+        https://target.example
+
+        [https://example.com]
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == input)
+    }
+
     @Test("linkifies shortcut text when the matching no-destination definition is invalid")
     func linkifiesShortcutTextWhenNoDestinationDefinitionIsInvalid() {
         let input = """
