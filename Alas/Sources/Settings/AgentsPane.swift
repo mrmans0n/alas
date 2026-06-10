@@ -69,6 +69,22 @@ struct AgentsPane: View {
                 }
 
                 SettingsGroup(title: "Chat") {
+                    SettingsRow(name: "Font family") {
+                        FontFamilyPicker(
+                            family: state.bind(\.agents.chatFontFamily),
+                            catalog: MonospaceFontCatalog.families()
+                        )
+                    }
+                    SettingsRow(name: "Font size") {
+                        AlasField(text: Binding(
+                            get: { String(state.config.agents.chatFontSize) },
+                            set: {
+                                let raw = Int($0) ?? 13
+                                state.config.agents.chatFontSize = max(8, min(64, raw))
+                                state.saveConfig()
+                            }
+                        ), monospaced: true).frame(width: 80)
+                    }
                     SettingsRow(name: "While busy, ⏎ queues; ⌥⏎ steers",
                                 desc: "Turn off to swap — ⏎ steers and ⌥⏎ queues. Steering cancels the running turn and discards any pending queue items.") {
                         AlasToggle(on: Binding(
