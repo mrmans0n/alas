@@ -315,6 +315,7 @@ function rewriteMarkdownBareUrls(text, preserveFencedCodeBlocks) {
   let lineStart = 0;
   let openingFence = null;
   let openingHtmlBlockTag = null;
+  let allowsIndentedCodeBlock = true;
   let referenceDefinitionContinuation = null;
   const inlineState = {
     codeSpanDelimiterLength: null,
@@ -329,45 +330,57 @@ function rewriteMarkdownBareUrls(text, preserveFencedCodeBlocks) {
     if (openingFence) {
       out += line;
       const closingFence = closingCodeFenceDelimiter(line);
-      if (closingFence && closesCodeFence(closingFence, openingFence)) openingFence = null;
+      const closedFence = closingFence && closesCodeFence(closingFence, openingFence);
+      if (closedFence) openingFence = null;
+      allowsIndentedCodeBlock = !!closedFence;
     } else if (openingHtmlBlockTag) {
       out += line;
-      if (closingRawHtmlBlockTag(line, openingHtmlBlockTag)) openingHtmlBlockTag = null;
+      const closedHtmlBlock = closingRawHtmlBlockTag(line, openingHtmlBlockTag);
+      if (closedHtmlBlock) openingHtmlBlockTag = null;
+      allowsIndentedCodeBlock = closedHtmlBlock;
     } else if (inlineState.codeSpanDelimiterLength == null &&
                referenceDefinitionContinuation === "destination" &&
                markdownReferenceDefinitionDestinationContinuationLine(line)) {
       out += line;
       referenceDefinitionContinuation = "title";
+      allowsIndentedCodeBlock = false;
     } else if (inlineState.codeSpanDelimiterLength == null &&
                referenceDefinitionContinuation === "title" &&
                markdownReferenceDefinitionTitleContinuationLine(line)) {
       out += line;
       referenceDefinitionContinuation = null;
+      allowsIndentedCodeBlock = false;
     } else if (inlineState.codeSpanDelimiterLength == null) {
       const referenceDefinition = markdownReferenceDefinition(line);
       if (referenceDefinition) {
         out += line;
         referenceDefinitionContinuation = referenceDefinition.hasDestination ? "title" : "destination";
+        allowsIndentedCodeBlock = false;
       } else {
         referenceDefinitionContinuation = null;
         const lineFence = openingCodeFenceDelimiter(line);
         if (lineFence) {
           out += line;
           openingFence = lineFence;
+          allowsIndentedCodeBlock = false;
         } else {
           const htmlBlockTag = openingRawHtmlBlockTag(line);
           if (htmlBlockTag) {
             out += line;
             if (!closingRawHtmlBlockTag(line, htmlBlockTag)) openingHtmlBlockTag = htmlBlockTag;
-          } else if (markdownIndentedCodeBlockLine(line)) {
+            allowsIndentedCodeBlock = !openingHtmlBlockTag;
+          } else if (allowsIndentedCodeBlock && markdownIndentedCodeBlockLine(line)) {
             out += line;
+            allowsIndentedCodeBlock = true;
           } else {
             out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
+            allowsIndentedCodeBlock = markdownBlankLine(line);
           }
         }
       }
     } else {
       out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
+      allowsIndentedCodeBlock = markdownBlankLine(line);
     }
 
     lineStart = lineEnd;
@@ -503,6 +516,10 @@ function codeFenceDelimiter(line, allowsTrailingText) {
 
 function closesCodeFence(candidate, openingFence) {
   return candidate.marker === openingFence.marker && candidate.length >= openingFence.length;
+}
+
+function markdownBlankLine(line) {
+  return /^[\s]*$/.test(line);
 }
 
 function markdownIndentedCodeBlockLine(line) {

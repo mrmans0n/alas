@@ -32,10 +32,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=32"#))
+        #expect(html.contains(#"/app.js?v=33"#))
         #expect(html.contains(#"/style.css?v=29"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v8";"#))
-        #expect(sw.contains(#""/app.js?v=32""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v9";"#))
+        #expect(sw.contains(#""/app.js?v=33""#))
         #expect(sw.contains(#""/style.css?v=29""#))
     }
 
@@ -43,6 +43,7 @@ struct RemoteWebAssetTests {
         let app = try asset("app.js")
 
         #expect(app.contains("function markdownIndentedCodeBlockLine"))
+        #expect(app.contains("function markdownBlankLine"))
         #expect(app.contains("markdownIndentedCodeBlockLine(line)"))
         #expect(app.contains("function markdownEmphasisDelimiterRunBeforeUrlStart"))
     }
@@ -58,7 +59,7 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=32"))
+        #expect(html.contains("/app.js?v=33"))
         #expect(html.contains("/style.css?v=29"))
     }
 
@@ -84,7 +85,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=32""#))
+        #expect(sw.contains(#""/app.js?v=33""#))
         #expect(sw.contains(#""/style.css?v=29""#))
     }
 

@@ -8,6 +8,7 @@ enum ACPBareURLLinkifier {
         var lineStart = text.startIndex
         var openingFence: CodeFenceDelimiter?
         var openingHTMLBlockTag: String?
+        var allowsIndentedCodeBlock = true
         var inlineState = InlineRewriteState(referenceLabels: markdownReferenceLabels(in: text))
         var referenceDefinitionContinuation: ReferenceDefinitionContinuation?
 
@@ -19,33 +20,43 @@ enum ACPBareURLLinkifier {
 
             if preserveFencedCodeBlocks, let currentFence = openingFence {
                 output += line
+                var closedFence = false
                 if closingCodeFenceDelimiter(in: line)?.closes(currentFence) == true {
                     openingFence = nil
+                    closedFence = true
                 }
+                allowsIndentedCodeBlock = closedFence
             } else if preserveFencedCodeBlocks, let currentHTMLBlockTag = openingHTMLBlockTag {
                 output += line
+                var closedHTMLBlock = false
                 if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) {
                     openingHTMLBlockTag = nil
+                    closedHTMLBlock = true
                 }
+                allowsIndentedCodeBlock = closedHTMLBlock
             } else if inlineState.codeSpanDelimiterLength == nil,
                       referenceDefinitionContinuation == .destination,
                       markdownReferenceDefinitionDestinationContinuationLine(in: line) {
                 output += line
                 referenceDefinitionContinuation = .title
+                allowsIndentedCodeBlock = false
             } else if inlineState.codeSpanDelimiterLength == nil,
                       referenceDefinitionContinuation == .title,
                       markdownReferenceDefinitionTitleContinuationLine(in: line) {
                 output += line
                 referenceDefinitionContinuation = nil
+                allowsIndentedCodeBlock = false
             } else if inlineState.codeSpanDelimiterLength == nil,
                       let referenceDefinition = markdownReferenceDefinition(in: line) {
                 output += line
                 referenceDefinitionContinuation = referenceDefinition.hasDestination ? .title : .destination
+                allowsIndentedCodeBlock = false
             } else if preserveFencedCodeBlocks,
                       inlineState.codeSpanDelimiterLength == nil,
                       let lineFence = openingCodeFenceDelimiter(in: line) {
                 output += line
                 openingFence = lineFence
+                allowsIndentedCodeBlock = false
             } else if preserveFencedCodeBlocks,
                       inlineState.codeSpanDelimiterLength == nil,
                       let htmlBlockTag = openingRawHTMLBlockTag(in: line) {
@@ -53,15 +64,19 @@ enum ACPBareURLLinkifier {
                 if !closingRawHTMLBlockTag(in: line, tag: htmlBlockTag) {
                     openingHTMLBlockTag = htmlBlockTag
                 }
+                allowsIndentedCodeBlock = openingHTMLBlockTag == nil
             } else if preserveFencedCodeBlocks,
                       inlineState.codeSpanDelimiterLength == nil,
+                      allowsIndentedCodeBlock,
                       markdownIndentedCodeBlockLine(in: line) {
                 output += line
+                allowsIndentedCodeBlock = true
             } else {
                 if inlineState.codeSpanDelimiterLength == nil {
                     referenceDefinitionContinuation = nil
                 }
                 output += rewriteInline(line, state: &inlineState, remainingTextAfterSegment: text[lineRangeEnd...])
+                allowsIndentedCodeBlock = markdownBlankLine(in: line)
             }
 
             lineStart = lineRangeEnd
@@ -228,6 +243,10 @@ enum ACPBareURLLinkifier {
             end = previous
         }
         return end
+    }
+
+    private static func markdownBlankLine(in line: String) -> Bool {
+        line.allSatisfy { $0.isWhitespace || $0.isNewline }
     }
 
     private static func markdownIndentedCodeBlockLine(in line: String) -> Bool {
