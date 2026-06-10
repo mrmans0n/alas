@@ -666,7 +666,10 @@ function hasValidBoundaryBefore(text, i) {
 
 function rawUrlEnd(text, start) {
   let i = start;
-  while (i < text.length && !/[\s<>\[\]\x00-\x1F\x7F]/.test(text[i])) i += 1;
+  while (i < text.length && !/[\s<>\x00-\x1F\x7F]/.test(text[i])) {
+    if (text[i] === "]" && text[i + 1] === "[") break;
+    i += 1;
+  }
   return i;
 }
 

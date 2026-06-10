@@ -337,13 +337,15 @@ enum ACPBareURLLinkifier {
         var index = start
         while index < text.endIndex {
             let character = text[index]
+            let nextIndex = text.index(after: index)
             if character.isWhitespace ||
                 character.isNewline ||
-                "<>[]".contains(character) ||
+                "<>".contains(character) ||
+                (character == "]" && nextIndex < text.endIndex && text[nextIndex] == "[") ||
                 character.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
                 break
             }
-            index = text.index(after: index)
+            index = nextIndex
         }
         return index
     }

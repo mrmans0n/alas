@@ -479,6 +479,33 @@ struct ACPBareURLLinkifierTests {
         #expect(output == "Open (<https://example.com/path>), then stop.")
     }
 
+    @Test("preserves balanced square brackets in URL query")
+    func preservesBalancedSquareBracketsInURLQuery() {
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            "Open https://example.com/search?ids[]=1 before continuing.",
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == "Open <https://example.com/search?ids[]=1> before continuing.")
+    }
+
+    @Test("excludes unmatched trailing square bracket")
+    func excludesUnmatchedTrailingSquareBracket() {
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            "Open [https://example.com/path]",
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == "Open [<https://example.com/path>]")
+    }
+
+    @Test("does not consume missing reference bracket as URL text")
+    func doesNotConsumeMissingReferenceBracketAsURLText() {
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            "See [https://example.com/path][missing].",
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == "See [<https://example.com/path>][missing].")
+    }
+
     @Test("rewrites bare http URL to Markdown autolink")
     func rewritesBareHTTPURL() {
         let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
