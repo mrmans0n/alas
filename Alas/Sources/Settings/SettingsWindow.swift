@@ -36,6 +36,7 @@ struct SettingsWindow: View {
                     case .agents:     AgentsPane(state: state) { section = $0 }
                     case .appearance: AppearancePane(state: state)
                     case .changes:    ChangesPane(state: state)
+                    case .chat:       ChatPane(state: state)
                     case .code:       CodePane(state: state)
                     case .shortcuts:  ShortcutsPane(state: state)
                     case .spaces:     SpacesPane(state: state)

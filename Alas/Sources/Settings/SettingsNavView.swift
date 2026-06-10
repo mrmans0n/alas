@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, code, general, remote, shortcuts, spaces, terminal, worktrees, debug
+    case agents, appearance, changes, chat, code, general, remote, shortcuts, spaces, terminal, worktrees, debug
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -9,6 +9,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .agents:     return "Agents"
         case .appearance: return "Appearance"
         case .changes:    return "Changes"
+        case .chat:       return "Chat"
         case .code:       return "Code"
         case .general:    return "General"
         case .remote:     return "Remote"
@@ -24,6 +25,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .agents:     return "sparkle"
         case .appearance: return "palette"
         case .changes:    return "diff"
+        case .chat:       return "message"
         case .code:       return "code"
         case .general:    return "gear"
         case .remote:     return "iphone.gen3"
@@ -32,6 +34,18 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .terminal:   return "terminal"
         case .worktrees:  return "branch"
         }
+    }
+
+    static func visibleSections(showsDebug: Bool) -> [SettingsSection] {
+        SettingsSection.allCases
+            .filter { showsDebug || $0 != .debug }
+            .sorted(by: {
+                if $0 == .general { return true }
+                if $1 == .general { return false }
+                if $0 == .debug { return false }
+                if $1 == .debug { return true }
+                return $0.label < $1.label
+            })
     }
 }
 
@@ -73,15 +87,6 @@ struct SettingsNavView: View {
     }
 
     private var sections: [SettingsSection] {
-        let visible = SettingsSection.allCases
-            .filter { showsDebug || $0 != .debug }
-            .sorted(by: {
-                if $0 == .general { return true }
-                if $1 == .general { return false }
-                if $0 == .debug { return false }
-                if $1 == .debug { return true }
-                return $0.label < $1.label
-            })
-        return visible
+        SettingsSection.visibleSections(showsDebug: showsDebug)
     }
 }
