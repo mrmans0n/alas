@@ -128,9 +128,13 @@ struct ACPMarkdownText: View {
         if let hit = inlineCache.object(forKey: key) {
             return AttributedString(hit)
         }
+        let renderSource = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            s,
+            preserveFencedCodeBlocks: false
+        )
         let attr: AttributedString
         if let parsed = try? AttributedString(
-            markdown: s,
+            markdown: renderSource,
             options: AttributedString.MarkdownParsingOptions(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace
             )
