@@ -176,6 +176,24 @@ struct ACPBareURLLinkifierTests {
         """)
     }
 
+    @Test("preserves indented code block contents")
+    func preservesIndentedCodeBlockContents() {
+        let input = """
+            curl https://example.com/api
+
+        See https://prose.example.
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+            curl https://example.com/api
+
+        See <https://prose.example>.
+        """)
+    }
+
     @Test("ignores reference definitions inside raw HTML blocks")
     func ignoresReferenceDefinitionsInsideRawHTMLBlocks() {
         let input = """

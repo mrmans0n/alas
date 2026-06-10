@@ -53,6 +53,10 @@ enum ACPBareURLLinkifier {
                 if !closingRawHTMLBlockTag(in: line, tag: htmlBlockTag) {
                     openingHTMLBlockTag = htmlBlockTag
                 }
+            } else if preserveFencedCodeBlocks,
+                      inlineState.codeSpanDelimiterLength == nil,
+                      markdownIndentedCodeBlockLine(in: line) {
+                output += line
             } else {
                 if inlineState.codeSpanDelimiterLength == nil {
                     referenceDefinitionContinuation = nil
@@ -224,6 +228,24 @@ enum ACPBareURLLinkifier {
             end = previous
         }
         return end
+    }
+
+    private static func markdownIndentedCodeBlockLine(in line: String) -> Bool {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex {
+            switch line[index] {
+            case "\t":
+                return true
+            case " ":
+                leadingSpaces += 1
+                if leadingSpaces >= 4 { return true }
+                index = line.index(after: index)
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     private static func isFenceLikeBacktickDelimiterLine(in text: String, at index: String.Index, delimiterLength: Int) -> Bool {
