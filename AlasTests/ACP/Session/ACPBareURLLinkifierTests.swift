@@ -186,6 +186,24 @@ struct ACPBareURLLinkifierTests {
         """)
     }
 
+    @Test("ends block raw HTML at blank line")
+    func endsBlockRawHTMLAtBlankLine() {
+        let input = """
+        <div>
+
+        See https://prose.example.
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        <div>
+
+        See <https://prose.example>.
+        """)
+    }
+
     @Test("preserves indented code block contents")
     func preservesIndentedCodeBlockContents() {
         let input = """

@@ -29,7 +29,8 @@ enum ACPBareURLLinkifier {
             } else if preserveFencedCodeBlocks, let currentHTMLBlockTag = openingHTMLBlockTag {
                 output += line
                 var closedHTMLBlock = false
-                if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) {
+                if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) ||
+                    rawHTMLBlockEndsAtBlankLine(in: line, tag: currentHTMLBlockTag) {
                     openingHTMLBlockTag = nil
                     closedHTMLBlock = true
                 }
@@ -451,6 +452,10 @@ enum ACPBareURLLinkifier {
         "param", "source", "track", "wbr",
     ]
 
+    private static let rawHTMLExplicitCloseBlockTags: Set<String> = [
+        "pre", "script", "style",
+    ]
+
     private static func openingRawHTMLBlockTag(in line: String) -> String? {
         var index = line.startIndex
         var leadingSpaces = 0
@@ -492,6 +497,12 @@ enum ACPBareURLLinkifier {
         let tag = String(line[tagStart..<tagIndex]).lowercased()
         guard rawHTMLBlockTags.contains(tag), !rawHTMLVoidBlockTags.contains(tag) else { return nil }
         return tag
+    }
+
+    private static func rawHTMLBlockEndsAtBlankLine(in line: String, tag: String) -> Bool {
+        !tag.hasPrefix("#") &&
+        !rawHTMLExplicitCloseBlockTags.contains(tag) &&
+        markdownBlankLine(in: line)
     }
 
     private static func closingRawHTMLBlockTag(in line: String, tag: String) -> Bool {

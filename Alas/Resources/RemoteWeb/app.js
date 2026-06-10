@@ -335,7 +335,8 @@ function rewriteMarkdownBareUrls(text, preserveFencedCodeBlocks) {
       allowsIndentedCodeBlock = !!closedFence;
     } else if (openingHtmlBlockTag) {
       out += line;
-      const closedHtmlBlock = closingRawHtmlBlockTag(line, openingHtmlBlockTag);
+      const closedHtmlBlock = closingRawHtmlBlockTag(line, openingHtmlBlockTag) ||
+        rawHtmlBlockEndsAtBlankLine(line, openingHtmlBlockTag);
       if (closedHtmlBlock) openingHtmlBlockTag = null;
       allowsIndentedCodeBlock = closedHtmlBlock;
     } else if (inlineState.codeSpanDelimiterLength == null &&
@@ -549,6 +550,8 @@ const rawHtmlVoidBlockTags = new Set([
   "param", "source", "track", "wbr",
 ]);
 
+const rawHtmlExplicitCloseBlockTags = new Set(["pre", "script", "style"]);
+
 function openingRawHtmlBlockTag(line) {
   let i = 0;
   let leadingSpaces = 0;
@@ -570,6 +573,10 @@ function openingRawHtmlBlockTag(line) {
   const tag = match[1].toLowerCase();
   if (!rawHtmlBlockTags.has(tag) || rawHtmlVoidBlockTags.has(tag)) return null;
   return tag;
+}
+
+function rawHtmlBlockEndsAtBlankLine(line, tag) {
+  return !tag.startsWith("#") && !rawHtmlExplicitCloseBlockTags.has(tag) && markdownBlankLine(line);
 }
 
 function closingRawHtmlBlockTag(line, tag) {
