@@ -524,7 +524,7 @@ function markdownBlankLine(line) {
 }
 
 function markdownAllowsIndentedCodeBlockAfterLine(line) {
-  return markdownBlankLine(line) || markdownAtxHeadingLine(line);
+  return markdownBlankLine(line) || markdownAtxHeadingLine(line) || markdownThematicBreakLine(line);
 }
 
 function markdownAtxHeadingLine(line) {
@@ -544,6 +544,36 @@ function markdownAtxHeadingLine(line) {
   if (markerCount === 0) return false;
   if (i >= line.length) return true;
   return /\s/.test(line[i]);
+}
+
+function markdownThematicBreakLine(line) {
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < line.length && line[i] === " ") {
+    leadingSpaces += 1;
+    if (leadingSpaces > 3) return false;
+    i += 1;
+  }
+
+  let marker = null;
+  let markerCount = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (ch === "\n" || ch === "\r") break;
+    if (ch === " " || ch === "\t") {
+      i += 1;
+      continue;
+    }
+    if (marker === null) {
+      if (ch !== "-" && ch !== "_" && ch !== "*") return false;
+      marker = ch;
+    }
+    if (ch !== marker) return false;
+    markerCount += 1;
+    i += 1;
+  }
+
+  return markerCount >= 3;
 }
 
 function markdownIndentedCodeBlockLine(line) {
