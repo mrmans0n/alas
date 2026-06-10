@@ -17,6 +17,24 @@ struct ACPMarkdownTextBareURLTests {
         ])
     }
 
+    @Test("tilde fence closer rejects trailing non-whitespace text")
+    func tildeFenceCloserRejectsTrailingNonWhitespaceText() {
+        let blocks = ACPMarkdownText.parse("""
+        ~~~sh
+        curl https://example.com/api
+        ~~~not-a-close
+        curl https://example.com/next
+        ~~~
+        """)
+        #expect(blocks == [
+            .code(language: "sh", body: """
+            curl https://example.com/api
+            ~~~not-a-close
+            curl https://example.com/next
+            """),
+        ])
+    }
+
     @Test("bare https URL carries a link attribute")
     func bareURLCarriesLinkAttribute() throws {
         let attributed = NSAttributedString(

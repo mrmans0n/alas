@@ -230,7 +230,9 @@ struct ACPMarkdownText: View {
 
     private static func closesFence(_ trimmedLine: String, _ openingFence: FenceDelimiter) -> Bool {
         guard trimmedLine.first == openingFence.marker else { return false }
-        return trimmedLine.prefix(while: { $0 == openingFence.marker }).count >= openingFence.length
+        let markerCount = trimmedLine.prefix(while: { $0 == openingFence.marker }).count
+        guard markerCount >= openingFence.length else { return false }
+        return trimmedLine.dropFirst(markerCount).allSatisfy(\.isWhitespace)
     }
 
     static func parse(_ text: String) -> [Block] {
