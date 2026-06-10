@@ -22,6 +22,7 @@ struct SettingsSectionTests {
         #expect(!labels.contains("Markdown"))
         #expect(labels.contains("General"))
         #expect(labels.contains("Appearance"))
+        #expect(labels.contains("Chat"))
     }
 
     @Test func sidebarSectionsAreSortedAlphabeticallyExceptDebugLast() {
