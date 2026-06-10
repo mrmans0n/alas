@@ -359,6 +359,8 @@ function rewriteMarkdownBareUrls(text, preserveFencedCodeBlocks) {
           if (htmlBlockTag) {
             out += line;
             if (!closingRawHtmlBlockTag(line, htmlBlockTag)) openingHtmlBlockTag = htmlBlockTag;
+          } else if (markdownIndentedCodeBlockLine(line)) {
+            out += line;
           } else {
             out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
           }
@@ -501,6 +503,17 @@ function codeFenceDelimiter(line, allowsTrailingText) {
 
 function closesCodeFence(candidate, openingFence) {
   return candidate.marker === openingFence.marker && candidate.length >= openingFence.length;
+}
+
+function markdownIndentedCodeBlockLine(line) {
+  let leadingSpaces = 0;
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === "\t") return true;
+    if (line[i] !== " ") return false;
+    leadingSpaces += 1;
+    if (leadingSpaces >= 4) return true;
+  }
+  return false;
 }
 
 const rawHtmlBlockTags = new Set([
