@@ -20,6 +20,11 @@ struct SettingsSectionTests {
         let labels = SettingsSection.allCases.map(\.label)
 
         #expect(!labels.contains("Markdown"))
+    }
+
+    @Test func sidebarSectionsIncludeChat() {
+        let labels = SettingsSection.allCases.map(\.label)
+
         #expect(labels.contains("General"))
         #expect(labels.contains("Appearance"))
         #expect(labels.contains("Chat"))
