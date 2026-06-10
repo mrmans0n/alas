@@ -35,6 +35,18 @@ struct ACPMarkdownTextBareURLTests {
         ])
     }
 
+    @Test("four-space indented tilde fence stays paragraph text")
+    func fourSpaceIndentedTildeFenceStaysParagraphText() {
+        let blocks = ACPMarkdownText.parse("""
+            ~~~
+            curl https://example.com/api
+            ~~~
+        """)
+        #expect(blocks == [
+            .paragraph("    ~~~\n    curl https://example.com/api\n    ~~~"),
+        ])
+    }
+
     @Test("bare https URL carries a link attribute")
     func bareURLCarriesLinkAttribute() throws {
         let attributed = NSAttributedString(

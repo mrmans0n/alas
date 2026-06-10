@@ -220,19 +220,36 @@ struct ACPMarkdownText: View {
         let language: String?
     }
 
-    private static func matchFence(_ trimmedLine: String) -> FenceDelimiter? {
-        guard let marker = trimmedLine.first, marker == "`" || marker == "~" else { return nil }
-        let length = trimmedLine.prefix(while: { $0 == marker }).count
+    private static func matchFence(_ line: String) -> FenceDelimiter? {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return nil }
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex else { return nil }
+        let fenceText = line[index...]
+        guard let marker = fenceText.first, marker == "`" || marker == "~" else { return nil }
+        let length = fenceText.prefix(while: { $0 == marker }).count
         guard length >= 3 else { return nil }
-        let language = trimmedLine.dropFirst(length).trimmingCharacters(in: .whitespaces)
+        let language = fenceText.dropFirst(length).trimmingCharacters(in: .whitespaces)
         return FenceDelimiter(marker: marker, length: length, language: language.isEmpty ? nil : language)
     }
 
-    private static func closesFence(_ trimmedLine: String, _ openingFence: FenceDelimiter) -> Bool {
-        guard trimmedLine.first == openingFence.marker else { return false }
-        let markerCount = trimmedLine.prefix(while: { $0 == openingFence.marker }).count
+    private static func closesFence(_ line: String, _ openingFence: FenceDelimiter) -> Bool {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return false }
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex, line[index] == openingFence.marker else { return false }
+        let markerCount = line[index...].prefix(while: { $0 == openingFence.marker }).count
         guard markerCount >= openingFence.length else { return false }
-        return trimmedLine.dropFirst(markerCount).allSatisfy(\.isWhitespace)
+        let afterMarker = line.index(index, offsetBy: markerCount)
+        return line[afterMarker...].allSatisfy(\.isWhitespace)
     }
 
     static func parse(_ text: String) -> [Block] {
@@ -245,10 +262,10 @@ struct ACPMarkdownText: View {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             // Fenced code block.
-            if let fence = matchFence(trimmed) {
+            if let fence = matchFence(line) {
                 i += 1
                 var body: [String] = []
-                while i < lines.count, !closesFence(lines[i].trimmingCharacters(in: .whitespaces), fence) {
+                while i < lines.count, !closesFence(lines[i], fence) {
                     body.append(lines[i])
                     i += 1
                 }
@@ -297,7 +314,7 @@ struct ACPMarkdownText: View {
             while i < lines.count {
                 let next = lines[i].trimmingCharacters(in: .whitespaces)
                 if next.isEmpty { break }
-                if matchFence(next) != nil || next.hasPrefix(">") || matchHeading(next) != nil { break }
+                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil { break }
                 para.append(lines[i])
                 i += 1
             }
