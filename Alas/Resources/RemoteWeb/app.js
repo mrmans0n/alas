@@ -674,7 +674,14 @@ function startsWithWebScheme(text, i) {
 
 function hasValidBoundaryBefore(text, i) {
   if (i === 0) return true;
-  return /\s|[\(\[\{"']/.test(text[i - 1]);
+  const previous = text[i - 1];
+  if (/[*_~]/.test(previous)) {
+    let delimiterRunStart = i - 1;
+    while (delimiterRunStart > 0 && text[delimiterRunStart - 1] === previous) delimiterRunStart -= 1;
+    if (delimiterRunStart === 0) return true;
+    return /\s|[\(\[\{"']/.test(text[delimiterRunStart - 1]);
+  }
+  return /\s|[\(\[\{"']/.test(previous);
 }
 
 function rawUrlEnd(text, start) {
@@ -689,8 +696,17 @@ function rawUrlEnd(text, start) {
 function trimmedUrlEnd(text, start, rawEnd) {
   let end = rawEnd;
   const surplusClosings = unbalancedClosingSurplus(text, start, rawEnd);
+  const emphasisDelimiterRun = markdownEmphasisDelimiterRunBeforeUrlStart(text, start);
+  let remainingEmphasisDelimitersToTrim = emphasisDelimiterRun ? emphasisDelimiterRun.length : 0;
   while (end > start) {
     const ch = text[end - 1];
+    if (emphasisDelimiterRun &&
+        remainingEmphasisDelimitersToTrim > 0 &&
+        ch === emphasisDelimiterRun.delimiter) {
+      remainingEmphasisDelimitersToTrim -= 1;
+      end -= 1;
+      continue;
+    }
     if (".,;:!?\"'".includes(ch)) {
       end -= 1;
       continue;
@@ -703,6 +719,15 @@ function trimmedUrlEnd(text, start, rawEnd) {
     break;
   }
   return end;
+}
+
+function markdownEmphasisDelimiterRunBeforeUrlStart(text, start) {
+  if (start === 0) return null;
+  const delimiter = text[start - 1];
+  if (!/[*_~]/.test(delimiter)) return null;
+  let length = 1;
+  for (let i = start - 2; i >= 0 && text[i] === delimiter; i -= 1) length += 1;
+  return { delimiter, length };
 }
 
 function unbalancedClosingSurplus(text, start, end) {

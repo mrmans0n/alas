@@ -43,6 +43,16 @@ struct ACPBareURLLinkifierTests {
         #expect(output == "See [<https://example.com>] and then <https://example.org>.")
     }
 
+    @Test("linkifies emphasized bare URL text")
+    func linkifiesEmphasizedBareURLText() {
+        let input = "See **https://example.com/strong** and _https://example.org/em_."
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == "See **<https://example.com/strong>** and _<https://example.org/em>_.")
+    }
+
     @Test("preserves defined reference-style and shortcut link text")
     func preservesDefinedReferenceLinkText() {
         let input = """

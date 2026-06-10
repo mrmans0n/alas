@@ -370,7 +370,19 @@ enum ACPBareURLLinkifier {
 
     private static func hasValidBoundaryBefore(_ index: String.Index, in text: String) -> Bool {
         guard index > text.startIndex else { return true }
-        let previous = text[text.index(before: index)]
+        let previousIndex = text.index(before: index)
+        let previous = text[previousIndex]
+        if "*_~".contains(previous) {
+            var delimiterRunStart = previousIndex
+            while delimiterRunStart > text.startIndex {
+                let before = text.index(before: delimiterRunStart)
+                guard text[before] == previous else { break }
+                delimiterRunStart = before
+            }
+            guard delimiterRunStart > text.startIndex else { return true }
+            let beforeRun = text[text.index(before: delimiterRunStart)]
+            return beforeRun.isWhitespace || "([{\"'".contains(beforeRun)
+        }
         return previous.isWhitespace || "([{\"'".contains(previous)
     }
 
@@ -500,9 +512,18 @@ enum ACPBareURLLinkifier {
 
     private static func trimmedURLEnd(in text: String, from start: String.Index, rawEnd: String.Index) -> String.Index {
         var end = rawEnd
+        let emphasisDelimiterRun = markdownEmphasisDelimiterRunBeforeURLStart(start, in: text)
+        var remainingEmphasisDelimitersToTrim = emphasisDelimiterRun?.length ?? 0
         while end > start {
             let previousIndex = text.index(before: end)
             let character = text[previousIndex]
+            if let delimiter = emphasisDelimiterRun?.delimiter,
+               remainingEmphasisDelimitersToTrim > 0,
+               character == delimiter {
+                remainingEmphasisDelimitersToTrim -= 1
+                end = previousIndex
+                continue
+            }
             if ". ,;:!?\"'".filter({ !$0.isWhitespace }).contains(character) {
                 end = previousIndex
                 continue
@@ -514,6 +535,25 @@ enum ACPBareURLLinkifier {
             break
         }
         return end
+    }
+
+    private static func markdownEmphasisDelimiterRunBeforeURLStart(
+        _ start: String.Index,
+        in text: String
+    ) -> (delimiter: Character, length: Int)? {
+        guard start > text.startIndex else { return nil }
+        var index = text.index(before: start)
+        let delimiter = text[index]
+        guard "*_~".contains(delimiter) else { return nil }
+
+        var length = 1
+        while index > text.startIndex {
+            let before = text.index(before: index)
+            guard text[before] == delimiter else { break }
+            length += 1
+            index = before
+        }
+        return (delimiter, length)
     }
 
     private static func isValidBareWebURL(_ text: String) -> Bool {
