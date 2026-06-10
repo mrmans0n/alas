@@ -154,6 +154,50 @@ struct ACPBareURLLinkifierTests {
         #expect(output == #"<a href="https://example.com">x</a> and <https://prose.example>."#)
     }
 
+    @Test("preserves raw HTML block contents")
+    func preservesRawHTMLBlockContents() {
+        let input = """
+        <pre>
+        https://example.com/raw
+        </pre>
+
+        See https://prose.example.
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        <pre>
+        https://example.com/raw
+        </pre>
+
+        See <https://prose.example>.
+        """)
+    }
+
+    @Test("ignores reference definitions inside raw HTML blocks")
+    func ignoresReferenceDefinitionsInsideRawHTMLBlocks() {
+        let input = """
+        <div>
+        [https://example.com]: https://target.example
+        </div>
+
+        [https://example.com]
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        <div>
+        [https://example.com]: https://target.example
+        </div>
+
+        [<https://example.com>]
+        """)
+    }
+
     @Test("skips inline code spans")
     func skipsInlineCode() {
         let input = "Run `curl https://example.com/api` and then open https://example.com/docs."

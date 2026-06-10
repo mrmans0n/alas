@@ -7,6 +7,7 @@ enum ACPBareURLLinkifier {
         var output = ""
         var lineStart = text.startIndex
         var openingFence: CodeFenceDelimiter?
+        var openingHTMLBlockTag: String?
         var inlineState = InlineRewriteState(referenceLabels: markdownReferenceLabels(in: text))
         var referenceDefinitionContinuation: ReferenceDefinitionContinuation?
 
@@ -20,6 +21,11 @@ enum ACPBareURLLinkifier {
                 output += line
                 if closingCodeFenceDelimiter(in: line)?.closes(currentFence) == true {
                     openingFence = nil
+                }
+            } else if preserveFencedCodeBlocks, let currentHTMLBlockTag = openingHTMLBlockTag {
+                output += line
+                if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) {
+                    openingHTMLBlockTag = nil
                 }
             } else if inlineState.codeSpanDelimiterLength == nil,
                       referenceDefinitionContinuation == .destination,
@@ -40,6 +46,13 @@ enum ACPBareURLLinkifier {
                       let lineFence = openingCodeFenceDelimiter(in: line) {
                 output += line
                 openingFence = lineFence
+            } else if preserveFencedCodeBlocks,
+                      inlineState.codeSpanDelimiterLength == nil,
+                      let htmlBlockTag = openingRawHTMLBlockTag(in: line) {
+                output += line
+                if !closingRawHTMLBlockTag(in: line, tag: htmlBlockTag) {
+                    openingHTMLBlockTag = htmlBlockTag
+                }
             } else {
                 if inlineState.codeSpanDelimiterLength == nil {
                     referenceDefinitionContinuation = nil
@@ -369,6 +382,83 @@ enum ACPBareURLLinkifier {
         return character.isLetter || character == "!" || character == "/" || character == "?"
     }
 
+    private static let rawHTMLBlockTags: Set<String> = [
+        "address", "article", "aside", "base", "basefont", "blockquote", "body",
+        "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+        "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+        "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+        "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
+        "nav", "noframes", "ol", "optgroup", "option", "p", "param", "section",
+        "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr",
+        "track", "ul", "pre", "script", "style",
+    ]
+
+    private static let rawHTMLVoidBlockTags: Set<String> = [
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+        "param", "source", "track", "wbr",
+    ]
+
+    private static func openingRawHTMLBlockTag(in line: String) -> String? {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            index = line.index(after: index)
+        }
+        guard leadingSpaces <= 3, index < line.endIndex, line[index] == "<" else { return nil }
+
+        let rest = line[index...]
+        if rest.hasPrefix("<!--") { return "#comment" }
+        if rest.hasPrefix("<?") { return "#processing-instruction" }
+        if rest.hasPrefix("<![CDATA[") { return "#cdata" }
+        if rest.hasPrefix("<!"),
+           rest.index(index, offsetBy: 2, limitedBy: line.endIndex).map({ $0 < line.endIndex && line[$0].isUppercase }) == true {
+            return "#declaration"
+        }
+
+        var tagIndex = line.index(after: index)
+        guard tagIndex < line.endIndex, line[tagIndex].isLetter else { return nil }
+        let tagStart = tagIndex
+        while tagIndex < line.endIndex, line[tagIndex].isLetter || line[tagIndex].isNumber || line[tagIndex] == "-" {
+            tagIndex = line.index(after: tagIndex)
+        }
+
+        guard tagIndex < line.endIndex else { return nil }
+        let next = line[tagIndex]
+        let hasValidTerminator: Bool
+        if next.isWhitespace || next == ">" {
+            hasValidTerminator = true
+        } else if next == "/" {
+            let afterSlash = line.index(after: tagIndex)
+            hasValidTerminator = afterSlash < line.endIndex && line[afterSlash] == ">"
+        } else {
+            hasValidTerminator = false
+        }
+        guard hasValidTerminator else { return nil }
+
+        let tag = String(line[tagStart..<tagIndex]).lowercased()
+        guard rawHTMLBlockTags.contains(tag), !rawHTMLVoidBlockTags.contains(tag) else { return nil }
+        return tag
+    }
+
+    private static func closingRawHTMLBlockTag(in line: String, tag: String) -> Bool {
+        switch tag {
+        case "#comment":
+            return line.contains("-->")
+        case "#processing-instruction":
+            return line.contains("?>")
+        case "#cdata":
+            return line.contains("]]>")
+        case "#declaration":
+            return line.contains(">")
+        default:
+            return line.range(
+                of: "</\\s*\(tag)\\s*>",
+                options: [.regularExpression, .caseInsensitive]
+            ) != nil
+        }
+    }
+
     private static func rawURLEnd(in text: String, from start: String.Index) -> String.Index {
         var index = start
         while index < text.endIndex {
@@ -554,6 +644,7 @@ enum ACPBareURLLinkifier {
         var labels: Set<String> = []
         var lineStart = text.startIndex
         var openingFence: CodeFenceDelimiter?
+        var openingHTMLBlockTag: String?
         var pendingDefinitionLabel: String?
 
         while lineStart < text.endIndex {
@@ -566,6 +657,10 @@ enum ACPBareURLLinkifier {
                 if closingCodeFenceDelimiter(in: line)?.closes(currentFence) == true {
                     openingFence = nil
                 }
+            } else if let currentHTMLBlockTag = openingHTMLBlockTag {
+                if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) {
+                    openingHTMLBlockTag = nil
+                }
             } else if let label = pendingDefinitionLabel {
                 if markdownReferenceDefinitionDestinationContinuationLine(in: line) {
                     labels.insert(normalizeMarkdownReferenceLabel(label))
@@ -573,6 +668,10 @@ enum ACPBareURLLinkifier {
                 pendingDefinitionLabel = nil
             } else if let lineFence = openingCodeFenceDelimiter(in: line) {
                 openingFence = lineFence
+            } else if let htmlBlockTag = openingRawHTMLBlockTag(in: line) {
+                if !closingRawHTMLBlockTag(in: line, tag: htmlBlockTag) {
+                    openingHTMLBlockTag = htmlBlockTag
+                }
             } else if let definition = markdownReferenceDefinition(in: line) {
                 if definition.hasDestination {
                     labels.insert(normalizeMarkdownReferenceLabel(definition.label))
