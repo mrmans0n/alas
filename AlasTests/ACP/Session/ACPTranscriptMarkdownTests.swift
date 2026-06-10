@@ -80,6 +80,31 @@ struct ACPTranscriptMarkdownTests {
         """)
     }
 
+    @Test("document preserves reference definitions while autolinking prose URLs")
+    func documentPreservesReferenceDefinitions() {
+        let raw = """
+        [ref]: https://example.com/path "https://title.example"
+        [continued]:
+          https://continued.example/path
+
+        See [https://example.com/path][ref] and https://prose.example.
+        """
+        let messages: [ACPMessage] = [.agent(id: UUID(), StreamingText(raw))]
+        let md = ACPTranscriptMarkdown.document(title: "T", agentName: "A", messages: messages)
+        #expect(md == """
+        # T
+
+        ## A
+
+        [ref]: https://example.com/path "https://title.example"
+        [continued]:
+          https://continued.example/path
+
+        See [https://example.com/path][ref] and <https://prose.example>.
+
+        """)
+    }
+
     @Test("messageBody returns serialized Markdown with bare URL autolinks")
     func messageBodyAutolinksBareURLs() {
         #expect(ACPTranscriptMarkdown.messageBody(

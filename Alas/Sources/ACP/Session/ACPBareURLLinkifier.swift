@@ -3,14 +3,12 @@ import Foundation
 enum ACPBareURLLinkifier {
     static func markdownAutolinkingBareURLs(_ text: String, preserveFencedCodeBlocks: Bool) -> String {
         guard text.contains("http://") || text.contains("https://") else { return text }
-        guard preserveFencedCodeBlocks else {
-            return rewriteInline(text)
-        }
 
         var output = ""
         var lineStart = text.startIndex
         var openingFence: CodeFenceDelimiter?
-        var inlineState = InlineRewriteState()
+        var inlineState = InlineRewriteState(referenceLabels: markdownReferenceLabels(in: text))
+        var referenceDefinitionContinuation: ReferenceDefinitionContinuation?
 
         while lineStart < text.endIndex {
             let lineEnd = text[lineStart...].firstIndex(of: "\n") ?? text.endIndex
@@ -18,16 +16,34 @@ enum ACPBareURLLinkifier {
             let lineRangeEnd = includesNewline ? text.index(after: lineEnd) : lineEnd
             let line = String(text[lineStart..<lineRangeEnd])
 
-            if let currentFence = openingFence {
+            if preserveFencedCodeBlocks, let currentFence = openingFence {
                 output += line
                 if closingCodeFenceDelimiter(in: line)?.closes(currentFence) == true {
                     openingFence = nil
                 }
             } else if inlineState.codeSpanDelimiterLength == nil,
+                      referenceDefinitionContinuation == .destination,
+                      markdownReferenceDefinitionDestinationContinuationLine(in: line) {
+                output += line
+                referenceDefinitionContinuation = .title
+            } else if inlineState.codeSpanDelimiterLength == nil,
+                      referenceDefinitionContinuation == .title,
+                      markdownReferenceDefinitionTitleContinuationLine(in: line) {
+                output += line
+                referenceDefinitionContinuation = nil
+            } else if inlineState.codeSpanDelimiterLength == nil,
+                      let referenceDefinition = markdownReferenceDefinition(in: line) {
+                output += line
+                referenceDefinitionContinuation = referenceDefinition.hasDestination ? .title : .destination
+            } else if preserveFencedCodeBlocks,
+                      inlineState.codeSpanDelimiterLength == nil,
                       let lineFence = openingCodeFenceDelimiter(in: line) {
                 output += line
                 openingFence = lineFence
             } else {
+                if inlineState.codeSpanDelimiterLength == nil {
+                    referenceDefinitionContinuation = nil
+                }
                 output += rewriteInline(line, state: &inlineState, remainingTextAfterSegment: text[lineRangeEnd...])
             }
 
@@ -38,12 +54,18 @@ enum ACPBareURLLinkifier {
     }
 
     private static func rewriteInline(_ text: String) -> String {
-        var state = InlineRewriteState()
+        var state = InlineRewriteState(referenceLabels: markdownReferenceLabels(in: text))
         return rewriteInline(text, state: &state)
     }
 
     private struct InlineRewriteState {
         var codeSpanDelimiterLength: Int?
+        var referenceLabels: Set<String>
+    }
+
+    private enum ReferenceDefinitionContinuation {
+        case destination
+        case title
     }
 
     private static func rewriteInline(
@@ -105,7 +127,8 @@ enum ACPBareURLLinkifier {
                 continue
             }
 
-            if text[index] == "[", let linkEnd = markdownBracketedLinkEnd(in: text, from: index) {
+            if text[index] == "[",
+               let linkEnd = markdownBracketedLinkEnd(in: text, from: index, referenceLabels: state.referenceLabels) {
                 output += text[index...linkEnd]
                 index = text.index(after: linkEnd)
                 continue
@@ -314,7 +337,10 @@ enum ACPBareURLLinkifier {
         var index = start
         while index < text.endIndex {
             let character = text[index]
-            if character.isWhitespace || character.isNewline || character.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+            if character.isWhitespace ||
+                character.isNewline ||
+                "<>[]".contains(character) ||
+                character.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
                 break
             }
             index = text.index(after: index)
@@ -377,20 +403,35 @@ enum ACPBareURLLinkifier {
         return closes > opens
     }
 
-    private static func markdownBracketedLinkEnd(in text: String, from start: String.Index) -> String.Index? {
+    private static func markdownBracketedLinkEnd(
+        in text: String,
+        from start: String.Index,
+        referenceLabels: Set<String>
+    ) -> String.Index? {
         guard let labelEnd = markdownLabelEnd(in: text, from: start) else { return nil }
+        let label = normalizeMarkdownReferenceLabel(String(text[text.index(after: start)..<labelEnd]))
+        if referenceLabels.contains(label) {
+            return labelEnd
+        }
+
         let next = text.index(after: labelEnd)
-        guard next < text.endIndex else { return labelEnd }
+        guard next < text.endIndex else { return nil }
+        if text[next...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return nil
+        }
 
         if text[next] == "(", let destinationEnd = markdownDestinationEnd(in: text, from: next) {
             return destinationEnd
         }
 
         if text[next] == "[", let referenceEnd = markdownLabelEnd(in: text, from: next) {
-            return referenceEnd
+            let referenceLabel = String(text[text.index(after: next)..<referenceEnd])
+            let normalizedReference = normalizeMarkdownReferenceLabel(referenceLabel)
+            let effectiveReference = normalizedReference.isEmpty ? label : normalizedReference
+            return referenceLabels.contains(effectiveReference) ? referenceEnd : nil
         }
 
-        return labelEnd
+        return nil
     }
 
     private static func markdownLabelEnd(in text: String, from start: String.Index) -> String.Index? {
@@ -464,5 +505,123 @@ enum ACPBareURLLinkifier {
         }
 
         return nil
+    }
+
+    private struct MarkdownReferenceDefinition {
+        let label: String
+        let hasDestination: Bool
+    }
+
+    private static func markdownReferenceLabels(in text: String) -> Set<String> {
+        var labels: Set<String> = []
+        var lineStart = text.startIndex
+        var openingFence: CodeFenceDelimiter?
+        var pendingDefinitionLabel: String?
+
+        while lineStart < text.endIndex {
+            let lineEnd = text[lineStart...].firstIndex(of: "\n") ?? text.endIndex
+            let includesNewline = lineEnd < text.endIndex
+            let lineRangeEnd = includesNewline ? text.index(after: lineEnd) : lineEnd
+            let line = String(text[lineStart..<lineRangeEnd])
+
+            if let currentFence = openingFence {
+                if closingCodeFenceDelimiter(in: line)?.closes(currentFence) == true {
+                    openingFence = nil
+                }
+            } else if let label = pendingDefinitionLabel {
+                if markdownReferenceDefinitionDestinationContinuationLine(in: line) {
+                    labels.insert(normalizeMarkdownReferenceLabel(label))
+                }
+                pendingDefinitionLabel = nil
+            } else if let lineFence = openingCodeFenceDelimiter(in: line) {
+                openingFence = lineFence
+            } else if let definition = markdownReferenceDefinition(in: line) {
+                if definition.hasDestination {
+                    labels.insert(normalizeMarkdownReferenceLabel(definition.label))
+                } else {
+                    pendingDefinitionLabel = definition.label
+                }
+            }
+
+            lineStart = lineRangeEnd
+        }
+
+        return labels
+    }
+
+    private static func markdownReferenceDefinition(in line: String) -> MarkdownReferenceDefinition? {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            index = line.index(after: index)
+        }
+        guard leadingSpaces <= 3, index < line.endIndex, line[index] == "[" else { return nil }
+        guard let labelEnd = markdownLabelEnd(in: line, from: index) else { return nil }
+        let colonIndex = line.index(after: labelEnd)
+        guard colonIndex < line.endIndex, line[colonIndex] == ":" else { return nil }
+
+        let label = String(line[line.index(after: index)..<labelEnd])
+        guard !normalizeMarkdownReferenceLabel(label).isEmpty else { return nil }
+
+        let afterColon = line[line.index(after: colonIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return MarkdownReferenceDefinition(label: label, hasDestination: !afterColon.isEmpty)
+    }
+
+    private static func markdownReferenceDefinitionDestinationContinuationLine(in line: String) -> Bool {
+        guard let content = indentedReferenceDefinitionContinuationContent(in: line) else { return false }
+        return !content.isEmpty
+    }
+
+    private static func markdownReferenceDefinitionTitleContinuationLine(in line: String) -> Bool {
+        guard let content = indentedReferenceDefinitionContinuationContent(in: line) else { return false }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let opener = trimmed.first else { return false }
+        let closer: Character
+        switch opener {
+        case "\"", "'":
+            closer = opener
+        case "(":
+            closer = ")"
+        default:
+            return false
+        }
+
+        var isEscaped = false
+        var index = trimmed.index(after: trimmed.startIndex)
+        while index < trimmed.endIndex {
+            let character = trimmed[index]
+            if isEscaped {
+                isEscaped = false
+            } else if character == "\\" {
+                isEscaped = true
+            } else if character == closer {
+                return trimmed.index(after: index) == trimmed.endIndex
+            }
+            index = trimmed.index(after: index)
+        }
+
+        return false
+    }
+
+    private static func indentedReferenceDefinitionContinuationContent(in line: String) -> String? {
+        let contentEnd = trailingWhitespaceTrimmedEnd(in: line)
+        var index = line.startIndex
+        var leadingWhitespace = 0
+        while index < contentEnd, line[index] == " " || line[index] == "\t" {
+            leadingWhitespace += 1
+            index = line.index(after: index)
+        }
+        guard leadingWhitespace > 0, index < contentEnd else { return nil }
+        return String(line[index..<contentEnd])
+    }
+
+    private static func normalizeMarkdownReferenceLabel(_ label: String) -> String {
+        label
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .lowercased()
     }
 }

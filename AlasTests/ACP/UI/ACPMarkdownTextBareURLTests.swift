@@ -42,6 +42,17 @@ struct ACPMarkdownTextBareURLTests {
         #expect(url == nil)
     }
 
+    @Test("bracketed bare URL is clickable")
+    func bracketedBareURLIsClickable() throws {
+        let attributed = NSAttributedString(
+            ACPMarkdownText.inlineMarkdown("See [https://example.com].")
+        )
+        let range = (attributed.string as NSString).range(of: "https://example.com")
+        try #require(range.location != NSNotFound)
+        let url = attributed.attribute(.link, at: range.location, effectiveRange: nil) as? URL
+        #expect(url?.absoluteString == "https://example.com")
+    }
+
     @Test("trailing punctuation is not part of the link")
     func trailingPunctuationIsNotPartOfLink() throws {
         let attributed = NSAttributedString(

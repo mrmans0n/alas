@@ -23,24 +23,95 @@ struct ACPBareURLLinkifierTests {
         #expect(output == input)
     }
 
-    @Test("preserves reference-style link text")
-    func preservesReferenceStyleLinkText() {
+    @Test("linkifies missing reference-style link text")
+    func linkifiesMissingReferenceStyleLinkText() {
         let input = "See [https://example.com][ref] and then https://example.org."
         let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
             input,
             preserveFencedCodeBlocks: true
         )
-        #expect(output == "See [https://example.com][ref] and then <https://example.org>.")
+        #expect(output == "See [<https://example.com>][ref] and then <https://example.org>.")
     }
 
-    @Test("preserves shortcut link text")
-    func preservesShortcutLinkText() {
+    @Test("linkifies bracketed URL text without a reference definition")
+    func linkifiesBracketedURLTextWithoutReferenceDefinition() {
         let input = "See [https://example.com] and then https://example.org."
         let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
             input,
             preserveFencedCodeBlocks: true
         )
-        #expect(output == "See [https://example.com] and then <https://example.org>.")
+        #expect(output == "See [<https://example.com>] and then <https://example.org>.")
+    }
+
+    @Test("preserves defined reference-style and shortcut link text")
+    func preservesDefinedReferenceLinkText() {
+        let input = """
+        See [https://example.com][ref] and [https://shortcut.example].
+
+        [ref]: https://target.example
+        [https://shortcut.example]: https://shortcut-target.example
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == input)
+    }
+
+    @Test("preserves defined shortcut reference followed by punctuation")
+    func preservesDefinedShortcutReferenceWithPunctuation() {
+        let input = """
+        See [https://example.com].
+
+        [https://example.com]: https://target.example
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == input)
+    }
+
+    @Test("linkifies shortcut text when the matching no-destination definition is invalid")
+    func linkifiesShortcutTextWhenNoDestinationDefinitionIsInvalid() {
+        let input = """
+        [https://example.com]:
+
+        [https://example.com]
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        [https://example.com]:
+
+        [<https://example.com>]
+        """)
+    }
+
+    @Test("preserves reference definitions and indented continuations")
+    func preservesReferenceDefinitionsAndContinuations() {
+        let input = """
+        [inline]: https://example.com/path "https://title.example"
+        [continued]:
+          https://continued.example/path
+          "https://continued-title.example"
+
+        See https://prose.example.
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        [inline]: https://example.com/path "https://title.example"
+        [continued]:
+          https://continued.example/path
+          "https://continued-title.example"
+
+        See <https://prose.example>.
+        """)
     }
 
     @Test("preserves inline links with nested brackets in label")
