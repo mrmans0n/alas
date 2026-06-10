@@ -35,6 +35,18 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .worktrees:  return "branch"
         }
     }
+
+    static func visibleSections(showsDebug: Bool) -> [SettingsSection] {
+        SettingsSection.allCases
+            .filter { showsDebug || $0 != .debug }
+            .sorted(by: {
+                if $0 == .general { return true }
+                if $1 == .general { return false }
+                if $0 == .debug { return false }
+                if $1 == .debug { return true }
+                return $0.label < $1.label
+            })
+    }
 }
 
 struct SettingsNavView: View {
@@ -75,15 +87,6 @@ struct SettingsNavView: View {
     }
 
     private var sections: [SettingsSection] {
-        let visible = SettingsSection.allCases
-            .filter { showsDebug || $0 != .debug }
-            .sorted(by: {
-                if $0 == .general { return true }
-                if $1 == .general { return false }
-                if $0 == .debug { return false }
-                if $1 == .debug { return true }
-                return $0.label < $1.label
-            })
-        return visible
+        SettingsSection.visibleSections(showsDebug: showsDebug)
     }
 }

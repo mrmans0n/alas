@@ -16,4 +16,21 @@ struct ChatPaneTests {
         controller.view.layoutSubtreeIfNeeded()
         #expect(!controller.view.subviews.isEmpty)
     }
+
+    @Test func chatPaneDefinesMovedChatControls() {
+        #expect(ChatPane.groupTitles == [
+            "Appearance",
+            "Launcher (⌥⌘T)",
+            "Composer",
+            "Sessions",
+        ])
+        #expect(ChatPane.rowLabels == [
+            "Font family",
+            "Font size",
+            "Default launch surface",
+            "While busy, ⏎ queues; ⌥⏎ steers",
+            "Confirm before closing chat tabs",
+            "⚡ Auto-run",
+        ])
+    }
 }
