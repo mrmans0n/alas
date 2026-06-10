@@ -127,6 +127,12 @@ enum ACPBareURLLinkifier {
                 continue
             }
 
+            if text[index] == "<", let end = rawHTMLTagEnd(in: text, from: index) {
+                output += text[index...end]
+                index = text.index(after: end)
+                continue
+            }
+
             if text[index] == "[",
                let linkEnd = markdownBracketedLinkEnd(in: text, from: index, referenceLabels: state.referenceLabels) {
                 output += text[index...linkEnd]
@@ -331,6 +337,36 @@ enum ACPBareURLLinkifier {
         guard index > text.startIndex else { return true }
         let previous = text[text.index(before: index)]
         return previous.isWhitespace || "([{\"'".contains(previous)
+    }
+
+    private static func rawHTMLTagEnd(in text: String, from start: String.Index) -> String.Index? {
+        guard isRawHTMLTagStart(in: text, at: start) else { return nil }
+
+        var index = text.index(after: start)
+        var quote: Character?
+        while index < text.endIndex {
+            let character = text[index]
+            if let currentQuote = quote {
+                if character == currentQuote {
+                    quote = nil
+                }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character == ">" {
+                return index
+            }
+            index = text.index(after: index)
+        }
+
+        return nil
+    }
+
+    private static func isRawHTMLTagStart(in text: String, at start: String.Index) -> Bool {
+        guard start < text.endIndex, text[start] == "<" else { return false }
+        let next = text.index(after: start)
+        guard next < text.endIndex else { return false }
+        let character = text[next]
+        return character.isLetter || character == "!" || character == "/" || character == "?"
     }
 
     private static func rawURLEnd(in text: String, from start: String.Index) -> String.Index {

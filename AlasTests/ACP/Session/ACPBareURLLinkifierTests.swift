@@ -144,6 +144,16 @@ struct ACPBareURLLinkifierTests {
         #expect(output == input)
     }
 
+    @Test("preserves raw HTML tag attributes")
+    func preservesRawHTMLTagAttributes() {
+        let input = #"<a href="https://example.com">x</a> and https://prose.example."#
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == #"<a href="https://example.com">x</a> and <https://prose.example>."#)
+    }
+
     @Test("skips inline code spans")
     func skipsInlineCode() {
         let input = "Run `curl https://example.com/api` and then open https://example.com/docs."
