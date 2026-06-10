@@ -198,6 +198,9 @@ private struct ACPSessionView: View {
 
     private var transcriptAndComposer: some View {
         GeometryReader { proxy in
+            let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
+                forPaneWidth: proxy.size.width
+            )
             HStack(spacing: 0) {
                 ZStack(alignment: .bottom) {
                     if let phase = firstRunConnectingPhase {
@@ -228,6 +231,7 @@ private struct ACPSessionView: View {
                             ACPMessageList(
                                 session: session,
                                 transcript: session.transcript,
+                                contentMaxWidth: chatContentMaxWidth,
                                 onOpenDiff: { relativePath in
                                     state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
                                 },
@@ -300,7 +304,10 @@ private struct ACPSessionView: View {
                             .transition(.opacity)
                         }
 
-                        composerView(placement: composerPlacement)
+                        composerView(
+                            placement: composerPlacement,
+                            contentMaxWidth: chatContentMaxWidth
+                        )
 
                         if let undo = session.steerUndo, !undo.snapshot.isEmpty {
                             VStack {
@@ -359,7 +366,10 @@ private struct ACPSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func composerView(placement: ACPComposerPlacement) -> some View {
+    private func composerView(
+        placement: ACPComposerPlacement,
+        contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth
+    ) -> some View {
         ACPComposer(
             session: session,
             manager: manager,
@@ -368,6 +378,7 @@ private struct ACPSessionView: View {
             sendOnEnter: state.config.harness.acpSendOnEnter,
             focusRequest: composerFocusRequest,
             placement: placement,
+            contentMaxWidth: contentMaxWidth,
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
                 async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)

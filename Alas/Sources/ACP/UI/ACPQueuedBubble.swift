@@ -8,6 +8,7 @@ import SwiftUI
 /// lose those affordances and gain a spinner-edged border.
 struct ACPQueuedBubble: View {
     let item: QueuedPrompt
+    let contentMaxWidth: CGFloat
     let onForceSend: () -> Void
     let onEdit: () -> Void
     let onRemove: () -> Void
@@ -160,9 +161,10 @@ struct ACPQueuedBubble: View {
     }
 
     private var contentColumnMaxWidth: CGFloat {
-        item.status == .pending
-            ? 540 + ACPQueuedBubbleActionMetrics.reservedAccessoryWidth
-            : 540
+        let bubbleMaxWidth = contentMaxWidth * 0.75
+        return item.status == .pending
+            ? bubbleMaxWidth + ACPQueuedBubbleActionMetrics.reservedAccessoryWidth
+            : bubbleMaxWidth
     }
 
     private func actionButton(

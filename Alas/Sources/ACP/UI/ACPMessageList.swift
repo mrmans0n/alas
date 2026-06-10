@@ -4,6 +4,7 @@ import SwiftUI
 struct ACPMessageList: View {
     @ObservedObject var session: ACPSession
     @ObservedObject var transcript: ACPTranscript
+    let contentMaxWidth: CGFloat
     let onOpenDiff: (String) -> Void
     let policy: ACPPermissionPolicy?
     let scopeKey: String
@@ -138,6 +139,7 @@ struct ACPMessageList: View {
                             if Self.shouldRenderQueueBubble(status: item.status) {
                                 ACPQueuedBubble(
                                     item: item,
+                                    contentMaxWidth: contentMaxWidth,
                                     onForceSend: { onQueueForceSend(item.id) },
                                     onEdit: { onQueueEdit(item) },
                                     onRemove: { onQueueRemove(item.id) },
@@ -169,7 +171,7 @@ struct ACPMessageList: View {
                             .frame(height: composerSpacerHeight)
                             .id("__composer_spacer__")
                     }
-                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: contentMaxWidth, alignment: .leading)
                     .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
                     .padding(.top, 24)
                     .frame(maxWidth: .infinity, alignment: .center)
