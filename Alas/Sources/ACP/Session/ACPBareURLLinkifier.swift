@@ -77,7 +77,7 @@ enum ACPBareURLLinkifier {
                     referenceDefinitionContinuation = nil
                 }
                 output += rewriteInline(line, state: &inlineState, remainingTextAfterSegment: text[lineRangeEnd...])
-                allowsIndentedCodeBlock = markdownBlankLine(in: line)
+                allowsIndentedCodeBlock = markdownAllowsIndentedCodeBlockAfterLine(in: line)
             }
 
             lineStart = lineRangeEnd
@@ -248,6 +248,29 @@ enum ACPBareURLLinkifier {
 
     private static func markdownBlankLine(in line: String) -> Bool {
         line.allSatisfy { $0.isWhitespace || $0.isNewline }
+    }
+
+    private static func markdownAllowsIndentedCodeBlockAfterLine(in line: String) -> Bool {
+        markdownBlankLine(in: line) || markdownATXHeadingLine(in: line)
+    }
+
+    private static func markdownATXHeadingLine(in line: String) -> Bool {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return false }
+            index = line.index(after: index)
+        }
+
+        var markerCount = 0
+        while index < line.endIndex, line[index] == "#", markerCount < 6 {
+            markerCount += 1
+            index = line.index(after: index)
+        }
+        guard markerCount > 0 else { return false }
+        guard index < line.endIndex else { return true }
+        return line[index].isWhitespace || line[index].isNewline
     }
 
     private static func markdownIndentedCodeBlockLine(in line: String) -> Bool {

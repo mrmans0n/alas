@@ -263,6 +263,26 @@ struct ACPBareURLLinkifierTests {
         """)
     }
 
+    @Test("preserves indented code block after heading")
+    func preservesIndentedCodeBlockAfterHeading() {
+        let input = """
+        # Example
+            curl https://example.com/api
+
+        See https://prose.example.
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        # Example
+            curl https://example.com/api
+
+        See <https://prose.example>.
+        """)
+    }
+
     @Test("linkifies indented paragraph continuation")
     func linkifiesIndentedParagraphContinuation() {
         let input = """

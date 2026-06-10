@@ -375,13 +375,13 @@ function rewriteMarkdownBareUrls(text, preserveFencedCodeBlocks) {
             allowsIndentedCodeBlock = true;
           } else {
             out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
-            allowsIndentedCodeBlock = markdownBlankLine(line);
+            allowsIndentedCodeBlock = markdownAllowsIndentedCodeBlockAfterLine(line);
           }
         }
       }
     } else {
       out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
-      allowsIndentedCodeBlock = markdownBlankLine(line);
+      allowsIndentedCodeBlock = markdownAllowsIndentedCodeBlockAfterLine(line);
     }
 
     lineStart = lineEnd;
@@ -521,6 +521,29 @@ function closesCodeFence(candidate, openingFence) {
 
 function markdownBlankLine(line) {
   return /^[\s]*$/.test(line);
+}
+
+function markdownAllowsIndentedCodeBlockAfterLine(line) {
+  return markdownBlankLine(line) || markdownAtxHeadingLine(line);
+}
+
+function markdownAtxHeadingLine(line) {
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < line.length && line[i] === " ") {
+    leadingSpaces += 1;
+    if (leadingSpaces > 3) return false;
+    i += 1;
+  }
+
+  let markerCount = 0;
+  while (i < line.length && line[i] === "#" && markerCount < 6) {
+    markerCount += 1;
+    i += 1;
+  }
+  if (markerCount === 0) return false;
+  if (i >= line.length) return true;
+  return /\s/.test(line[i]);
 }
 
 function markdownIndentedCodeBlockLine(line) {
