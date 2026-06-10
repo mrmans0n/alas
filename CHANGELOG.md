@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-06-10
+
+### ✨ Features
+
+- Add a dedicated Chat settings section (#505).
+- Linkify bare ACP transcript URLs (#503).
+- Add wide layout and typography controls for ACP chat (#502).
+
+### 🐛 Fixes
+
+- Persist Cursor ACP fast mode correctly (#504).
+
 ## [0.7.5] - 2026-06-10
 
 ### 🐛 Fixes
