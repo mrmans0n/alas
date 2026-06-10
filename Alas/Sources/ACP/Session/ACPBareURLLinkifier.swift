@@ -750,7 +750,8 @@ enum ACPBareURLLinkifier {
                     openingFence = nil
                 }
             } else if let currentHTMLBlockTag = openingHTMLBlockTag {
-                if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) {
+                if closingRawHTMLBlockTag(in: line, tag: currentHTMLBlockTag) ||
+                    rawHTMLBlockEndsAtBlankLine(in: line, tag: currentHTMLBlockTag) {
                     openingHTMLBlockTag = nil
                 }
             } else if let label = pendingDefinitionLabel {

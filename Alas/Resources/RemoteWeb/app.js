@@ -836,7 +836,10 @@ function markdownReferenceLabels(text) {
       const closingFence = closingCodeFenceDelimiter(line);
       if (closingFence && closesCodeFence(closingFence, openingFence)) openingFence = null;
     } else if (openingHtmlBlockTag) {
-      if (closingRawHtmlBlockTag(line, openingHtmlBlockTag)) openingHtmlBlockTag = null;
+      if (closingRawHtmlBlockTag(line, openingHtmlBlockTag) ||
+          rawHtmlBlockEndsAtBlankLine(line, openingHtmlBlockTag)) {
+        openingHtmlBlockTag = null;
+      }
     } else if (pendingDefinitionLabel !== null) {
       if (markdownReferenceDefinitionDestinationContinuationLine(line)) {
         labels.add(normalizeMarkdownReferenceLabel(pendingDefinitionLabel));

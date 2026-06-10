@@ -204,6 +204,22 @@ struct ACPBareURLLinkifierTests {
         """)
     }
 
+    @Test("finds shortcut reference definitions after block raw HTML blank line")
+    func findsShortcutReferenceDefinitionsAfterBlockRawHTMLBlankLine() {
+        let input = """
+        <div>
+
+        [https://example.com]: https://target.example
+
+        [https://example.com]
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == input)
+    }
+
     @Test("preserves indented code block contents")
     func preservesIndentedCodeBlockContents() {
         let input = """
