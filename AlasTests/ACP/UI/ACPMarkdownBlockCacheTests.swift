@@ -27,6 +27,17 @@ struct ACPMarkdownBlockCacheTests {
         #expect(cache.stableBlocks.count > stableAfterOpen)
     }
 
+    @Test("blank line inside an unclosed tilde fence does NOT promote stable blocks")
+    func tildeFenceKeepsUnstable() async {
+        let cache = ACPMarkdownBlockCache()
+        cache.update(with: "intro\n\n~~~sh\ncurl https://example.com/api")
+        let stableAfterOpen = cache.stableBlocks.count
+        cache.update(with: "intro\n\n~~~sh\ncurl https://example.com/api\n\nstill code")
+        #expect(cache.stableBlocks.count == stableAfterOpen)
+        cache.update(with: "intro\n\n~~~sh\ncurl https://example.com/api\n\nstill code\n~~~\n\nafter")
+        #expect(cache.stableBlocks.count > stableAfterOpen)
+    }
+
     @Test("cached output equals direct parse for the same input")
     func cacheParityWithDirectParse() async {
         let raw = """
