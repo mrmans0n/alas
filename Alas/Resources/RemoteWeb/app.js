@@ -918,34 +918,69 @@ function markdownReferenceDefinition(line) {
   if (!normalizeMarkdownReferenceLabel(label)) return null;
 
   const afterColon = line.slice(labelEnd + 2).trim();
-  return { label, hasDestination: afterColon.length > 0 };
+  if (afterColon.length === 0) return { label, hasDestination: false };
+  if (!markdownReferenceDefinitionDestinationContent(afterColon)) return null;
+  return { label, hasDestination: true };
 }
 
 function markdownReferenceDefinitionDestinationContinuationLine(line) {
-  return line.trim().length > 0;
+  return markdownReferenceDefinitionDestinationContent(line.trim());
 }
 
 function markdownReferenceDefinitionTitleContinuationLine(line) {
   const content = indentedReferenceDefinitionContinuationContent(line);
   if (content === null) return false;
 
-  let contentEnd = content.length;
-  while (contentEnd > 0 && /\s/.test(content[contentEnd - 1])) contentEnd -= 1;
-  if (contentEnd === 0) return false;
+  return markdownReferenceDefinitionTitleContent(content.trim());
+}
+
+function markdownReferenceDefinitionDestinationContent(content) {
+  if (!content) return false;
+
+  let i = 0;
+  if (content[i] === "<") {
+    i += 1;
+    let isEscaped = false;
+    while (i < content.length) {
+      const ch = content[i];
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (ch === "\\") {
+        isEscaped = true;
+      } else if (ch === ">") {
+        const rest = content.slice(i + 1).trim();
+        return rest.length === 0 || markdownReferenceDefinitionTitleContent(rest);
+      } else if (ch === "\n" || ch === "\r") {
+        return false;
+      }
+      i += 1;
+    }
+    return false;
+  }
+
+  while (i < content.length && !/\s/.test(content[i])) i += 1;
+  if (i === 0) return false;
+
+  const rest = content.slice(i).trim();
+  return rest.length === 0 || markdownReferenceDefinitionTitleContent(rest);
+}
+
+function markdownReferenceDefinitionTitleContent(content) {
+  if (!content) return false;
 
   const opener = content[0];
   const closer = opener === "(" ? ")" : opener;
   if (opener !== "\"" && opener !== "'" && opener !== "(") return false;
 
   let isEscaped = false;
-  for (let j = 1; j < contentEnd; j += 1) {
+  for (let j = 1; j < content.length; j += 1) {
     const ch = content[j];
     if (isEscaped) {
       isEscaped = false;
     } else if (ch === "\\") {
       isEscaped = true;
     } else if (ch === closer) {
-      return j === contentEnd - 1;
+      return j === content.length - 1;
     }
   }
 

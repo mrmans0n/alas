@@ -97,6 +97,44 @@ struct ACPBareURLLinkifierTests {
         #expect(output == input)
     }
 
+    @Test("linkifies invalid reference destination continuation")
+    func linkifiesInvalidReferenceDestinationContinuation() {
+        let input = """
+        [https://example.com]:
+        See https://target.example
+
+        [https://example.com]
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        [https://example.com]:
+        See <https://target.example>
+
+        [<https://example.com>]
+        """)
+    }
+
+    @Test("linkifies invalid same-line reference destination")
+    func linkifiesInvalidSameLineReferenceDestination() {
+        let input = """
+        [https://example.com]: See https://target.example
+
+        [https://example.com]
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        [<https://example.com>]: See <https://target.example>
+
+        [<https://example.com>]
+        """)
+    }
+
     @Test("linkifies shortcut text when the matching no-destination definition is invalid")
     func linkifiesShortcutTextWhenNoDestinationDefinitionIsInvalid() {
         let input = """
@@ -277,6 +315,26 @@ struct ACPBareURLLinkifierTests {
         )
         #expect(output == """
         # Example
+            curl https://example.com/api
+
+        See <https://prose.example>.
+        """)
+    }
+
+    @Test("preserves indented code block after thematic break")
+    func preservesIndentedCodeBlockAfterThematicBreak() {
+        let input = """
+        ---
+            curl https://example.com/api
+
+        See https://prose.example.
+        """
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == """
+        ---
             curl https://example.com/api
 
         See <https://prose.example>.

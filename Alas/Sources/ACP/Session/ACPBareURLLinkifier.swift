@@ -251,7 +251,9 @@ enum ACPBareURLLinkifier {
     }
 
     private static func markdownAllowsIndentedCodeBlockAfterLine(in line: String) -> Bool {
-        markdownBlankLine(in: line) || markdownATXHeadingLine(in: line)
+        markdownBlankLine(in: line) ||
+        markdownATXHeadingLine(in: line) ||
+        markdownThematicBreakLine(in: line)
     }
 
     private static func markdownATXHeadingLine(in line: String) -> Bool {
@@ -271,6 +273,38 @@ enum ACPBareURLLinkifier {
         guard markerCount > 0 else { return false }
         guard index < line.endIndex else { return true }
         return line[index].isWhitespace || line[index].isNewline
+    }
+
+    private static func markdownThematicBreakLine(in line: String) -> Bool {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return false }
+            index = line.index(after: index)
+        }
+
+        var marker: Character?
+        var markerCount = 0
+        while index < line.endIndex {
+            let character = line[index]
+            if character == "\n" || character == "\r" {
+                break
+            }
+            if character == " " || character == "\t" {
+                index = line.index(after: index)
+                continue
+            }
+            if marker == nil {
+                guard character == "-" || character == "_" || character == "*" else { return false }
+                marker = character
+            }
+            guard character == marker else { return false }
+            markerCount += 1
+            index = line.index(after: index)
+        }
+
+        return markerCount >= 3
     }
 
     private static func markdownIndentedCodeBlockLine(in line: String) -> Bool {
@@ -821,16 +855,60 @@ enum ACPBareURLLinkifier {
         guard !normalizeMarkdownReferenceLabel(label).isEmpty else { return nil }
 
         let afterColon = line[line.index(after: colonIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
-        return MarkdownReferenceDefinition(label: label, hasDestination: !afterColon.isEmpty)
+        guard !afterColon.isEmpty else {
+            return MarkdownReferenceDefinition(label: label, hasDestination: false)
+        }
+        guard markdownReferenceDefinitionDestinationContent(String(afterColon)) else { return nil }
+        return MarkdownReferenceDefinition(label: label, hasDestination: true)
     }
 
     private static func markdownReferenceDefinitionDestinationContinuationLine(in line: String) -> Bool {
-        !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        markdownReferenceDefinitionDestinationContent(
+            line.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 
     private static func markdownReferenceDefinitionTitleContinuationLine(in line: String) -> Bool {
         guard let content = indentedReferenceDefinitionContinuationContent(in: line) else { return false }
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return markdownReferenceDefinitionTitleContent(trimmed)
+    }
+
+    private static func markdownReferenceDefinitionDestinationContent(_ content: String) -> Bool {
+        guard !content.isEmpty else { return false }
+
+        var index = content.startIndex
+        if content[index] == "<" {
+            index = content.index(after: index)
+            var isEscaped = false
+            while index < content.endIndex {
+                let character = content[index]
+                if isEscaped {
+                    isEscaped = false
+                } else if character == "\\" {
+                    isEscaped = true
+                } else if character == ">" {
+                    let afterDestination = content.index(after: index)
+                    let rest = content[afterDestination...].trimmingCharacters(in: .whitespacesAndNewlines)
+                    return rest.isEmpty || markdownReferenceDefinitionTitleContent(String(rest))
+                } else if character.isNewline {
+                    return false
+                }
+                index = content.index(after: index)
+            }
+            return false
+        }
+
+        while index < content.endIndex, !content[index].isWhitespace, !content[index].isNewline {
+            index = content.index(after: index)
+        }
+        guard index > content.startIndex else { return false }
+
+        let rest = content[index...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty || markdownReferenceDefinitionTitleContent(String(rest))
+    }
+
+    private static func markdownReferenceDefinitionTitleContent(_ trimmed: String) -> Bool {
         guard let opener = trimmed.first else { return false }
         let closer: Character
         switch opener {
