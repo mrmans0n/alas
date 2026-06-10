@@ -1002,6 +1002,7 @@ function markdownDestinationEnd(text, start) {
     } else if (/\s/.test(ch)) {
       if (hasDestinationContent && depth === 1) canStartTitleQuote = true;
     } else {
+      if (canStartTitleQuote) return -1;
       hasDestinationContent = true;
       canStartTitleQuote = false;
     }

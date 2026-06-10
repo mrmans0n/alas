@@ -718,6 +718,9 @@ enum ACPBareURLLinkifier {
                     canStartTitleQuote = true
                 }
             } else {
+                if canStartTitleQuote {
+                    return nil
+                }
                 hasDestinationContent = true
                 canStartTitleQuote = false
             }

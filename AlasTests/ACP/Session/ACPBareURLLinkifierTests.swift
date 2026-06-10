@@ -154,6 +154,16 @@ struct ACPBareURLLinkifierTests {
         #expect(output == input)
     }
 
+    @Test("linkifies URL inside invalid inline link destination")
+    func linkifiesURLInsideInvalidInlineLinkDestination() {
+        let input = "See [note](not really https://example.com)."
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == "See [note](not really <https://example.com>).")
+    }
+
     @Test("preserves raw HTML tag attributes")
     func preservesRawHTMLTagAttributes() {
         let input = #"<a href="https://example.com">x</a> and https://prose.example."#
