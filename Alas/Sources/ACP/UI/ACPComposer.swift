@@ -22,6 +22,7 @@ struct ACPInputField: NSViewRepresentable {
     /// — queue while busy). False when the user inverted the setting so
     /// ⏎ steers; the placeholder reverses accordingly while busy.
     let sendOnEnter: Bool
+    let typography: ACPChatTypography
     /// Persists the current composer draft after text storage changes.
     let onDraftChange: (ACPComposerDraft) -> Void
     /// Clears the persisted draft after an accepted submission.
@@ -41,7 +42,7 @@ struct ACPInputField: NSViewRepresentable {
         let textView = ACPNSTextView()
         textView.delegate = context.coordinator
         textView.coordinator = context.coordinator
-        textView.font = NSFont.systemFont(ofSize: 13)
+        textView.applyChatTypography(typography)
         textView.isRichText = true
         textView.allowsUndo = true
         textView.textContainerInset = NSSize(width: 6, height: 6)
@@ -86,6 +87,7 @@ struct ACPInputField: NSViewRepresentable {
         context.coordinator.promptSuggestions = session.promptSuggestions
         context.coordinator.theme = context.environment.theme
         context.coordinator.sendOnEnter = sendOnEnter
+        context.coordinator.typography = typography
         if context.coordinator.focusRequest != focusRequest {
             context.coordinator.focusRequest = focusRequest
             if let tv = nsView.documentView as? ACPNSTextView,
@@ -94,6 +96,7 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
         if let tv = nsView.documentView as? ACPNSTextView {
+            tv.applyChatTypography(typography)
             tv.placeholderText = Self.placeholder(for: session.transcript.streamingState, sendOnEnter: sendOnEnter)
             tv.needsDisplay = true
             context.coordinator.syncPersistedDraft(composer.draft, into: tv)
@@ -130,6 +133,7 @@ struct ACPInputField: NSViewRepresentable {
             isFocused: $isFocused,
             focusRequest: focusRequest,
             sendOnEnter: sendOnEnter,
+            typography: typography,
             onDraftChange: onDraftChange,
             onDraftClear: onDraftClear,
             onSubmit: onSubmit,
@@ -150,6 +154,7 @@ struct ACPInputField: NSViewRepresentable {
         /// visible ↑ button always submits with the intent the button's
         /// help text advertises.
         var sendOnEnter: Bool
+        var typography: ACPChatTypography
         let onDraftChange: (ACPComposerDraft) -> Void
         let onDraftClear: () -> Void
         let onSubmit: ACPComposerSubmitHandler
@@ -188,6 +193,7 @@ struct ACPInputField: NSViewRepresentable {
             isFocused: Binding<Bool> = .constant(false),
             focusRequest: Int,
             sendOnEnter: Bool,
+            typography: ACPChatTypography = .default,
             onDraftChange: @escaping (ACPComposerDraft) -> Void,
             onDraftClear: @escaping () -> Void,
             onSubmit: @escaping ACPComposerSubmitHandler,
@@ -198,6 +204,7 @@ struct ACPInputField: NSViewRepresentable {
             self.isFocused = isFocused
             self.focusRequest = focusRequest
             self.sendOnEnter = sendOnEnter
+            self.typography = typography
             self.lastSyncedDraft = initialDraft
             self.onDraftChange = onDraftChange
             self.onDraftClear = onDraftClear
@@ -285,7 +292,11 @@ struct ACPInputField: NSViewRepresentable {
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.pendingRestyleGeneration == generation else { return }
-                ACPMarkdownLiveStyler.restyle(storage, in: self.pendingRestyleRange)
+                ACPMarkdownLiveStyler.restyle(
+                    storage,
+                    in: self.pendingRestyleRange,
+                    typography: self.typography
+                )
                 self.pendingRestyleRange = nil
                 self.pendingRestyleWork = nil
             }
@@ -346,8 +357,8 @@ struct ACPInputField: NSViewRepresentable {
                 tv.dismissSlashPanel()
             }
             restoringDraft = true
-            storage.setAttributedString(Self.attributedString(from: draft))
-            ACPMarkdownLiveStyler.restyle(storage)
+            storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
+            ACPMarkdownLiveStyler.restyle(storage, typography: typography)
             textView.needsDisplay = true
             restoringDraft = false
             lastSyncedDraft = draft
@@ -422,10 +433,13 @@ struct ACPInputField: NSViewRepresentable {
             return ACPComposerDraft(segments: segments)
         }
 
-        static func attributedString(from draft: ACPComposerDraft) -> NSAttributedString {
+        static func attributedString(
+            from draft: ACPComposerDraft,
+            typography: ACPChatTypography = .default
+        ) -> NSAttributedString {
             let result = NSMutableAttributedString(string: "")
             let baseAttributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 13),
+                .font: typography.appKitFont(),
                 .foregroundColor: NSColor.labelColor,
             ]
             for segment in draft.segments {
@@ -503,6 +517,7 @@ extension NSAttributedString.Key {
 
 final class ACPNSTextView: NSTextView {
     weak var coordinator: ACPInputField.Coordinator?
+    private var chatTypography: ACPChatTypography = .default
 
     /// Greyed-out hint drawn when the storage is empty. Matches the Cursor
     /// chat composer's placeholder.
@@ -519,18 +534,29 @@ final class ACPNSTextView: NSTextView {
     private var mentionPanel: ACPMentionPanel?
     private var mentionStart: Int = -1
 
-    private static var baseTypingAttributes: [NSAttributedString.Key: Any] {
+    private var baseTypingAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: NSFont.systemFont(ofSize: 13),
+            .font: chatTypography.appKitFont(),
             .foregroundColor: NSColor.labelColor,
         ]
+    }
+
+    func applyChatTypography(_ typography: ACPChatTypography) {
+        guard chatTypography != typography || font == nil else { return }
+        chatTypography = typography
+        font = typography.appKitFont()
+        typingAttributes = baseTypingAttributes
+        if let textStorage {
+            ACPMarkdownLiveStyler.restyle(textStorage, typography: typography)
+        }
+        needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard (string).isEmpty, !placeholderText.isEmpty else { return }
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.systemFont(ofSize: 13),
+            .font: font ?? chatTypography.appKitFont(),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]
         let origin = NSPoint(
@@ -736,7 +762,7 @@ final class ACPNSTextView: NSTextView {
             // user types right after the chip is the normal label color
             // immediately — otherwise it inherits color-less attributes and
             // renders black until the debounced restyler repaints the line.
-            let baseAttrs = Self.baseTypingAttributes
+            let baseAttrs = baseTypingAttributes
             chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
             let insertAt = selectedRange()
             textStorage?.replaceCharacters(in: insertAt, with: chipString)
@@ -874,7 +900,7 @@ final class ACPNSTextView: NSTextView {
             location: min(replacementRange.location, textStorage.length),
             length: min(replacementRange.length, max(0, textStorage.length - replacementRange.location))
         )
-        let attrs = Self.baseTypingAttributes
+        let attrs = baseTypingAttributes
         typingAttributes = attrs
         insertText(text, replacementRange: boundedRange)
         typingAttributes = attrs
@@ -902,7 +928,7 @@ final class ACPNSTextView: NSTextView {
             .attachmentURI: url.absoluteString,
             .toolTip: url.path,
         ], range: NSRange(location: 0, length: chipString.length))
-        let baseAttrs = Self.baseTypingAttributes
+        let baseAttrs = baseTypingAttributes
         chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
 
         let replacementRange = mentionReplacementRange(in: textStorage)

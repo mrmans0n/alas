@@ -196,12 +196,26 @@ private struct ACPSessionView: View {
         .spring(response: 0.32, dampingFraction: 0.86)
     }
 
+    private var chatTypography: ACPChatTypography {
+        ACPChatTypography(
+            fontFamily: state.config.agents.chatFontFamily,
+            fontSize: state.config.agents.chatFontSize
+        )
+    }
+
     private var transcriptAndComposer: some View {
         GeometryReader { proxy in
+            let chatColumnWidth = ACPChatLayout.chatColumnWidth(
+                forPaneWidth: proxy.size.width,
+                planSidebarVisible: showPlanSidebar
+            )
+            let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
+                forPaneWidth: chatColumnWidth
+            )
             HStack(spacing: 0) {
                 ZStack(alignment: .bottom) {
                     if let phase = firstRunConnectingPhase {
-                        introStateAndComposer {
+                        introStateAndComposer(contentMaxWidth: chatContentMaxWidth) {
                             ACPFirstRunConnectingView(
                                 agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                                 phase: phase,
@@ -209,7 +223,7 @@ private struct ACPSessionView: View {
                             )
                         }
                     } else if isNewEmptySession {
-                        introStateAndComposer {
+                        introStateAndComposer(contentMaxWidth: chatContentMaxWidth) {
                             ACPNewChatEmptyStateView(
                                 agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
                                 bottomInset: 0,
@@ -228,6 +242,8 @@ private struct ACPSessionView: View {
                             ACPMessageList(
                                 session: session,
                                 transcript: session.transcript,
+                                contentMaxWidth: chatContentMaxWidth,
+                                typography: chatTypography,
                                 onOpenDiff: { relativePath in
                                     state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
                                 },
@@ -300,7 +316,11 @@ private struct ACPSessionView: View {
                             .transition(.opacity)
                         }
 
-                        composerView(placement: composerPlacement)
+                        composerView(
+                            placement: composerPlacement,
+                            contentMaxWidth: chatContentMaxWidth,
+                            typography: chatTypography
+                        )
 
                         if let undo = session.steerUndo, !undo.snapshot.isEmpty {
                             VStack {
@@ -349,17 +369,26 @@ private struct ACPSessionView: View {
     }
 
     private func introStateAndComposer<Intro: View>(
+        contentMaxWidth: CGFloat,
         @ViewBuilder intro: () -> Intro
     ) -> some View {
         VStack(spacing: 0) {
             intro()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            composerView(placement: .inFlow)
+            composerView(
+                placement: .inFlow,
+                contentMaxWidth: contentMaxWidth,
+                typography: chatTypography
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func composerView(placement: ACPComposerPlacement) -> some View {
+    private func composerView(
+        placement: ACPComposerPlacement,
+        contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth,
+        typography: ACPChatTypography? = nil
+    ) -> some View {
         ACPComposer(
             session: session,
             manager: manager,
@@ -368,6 +397,8 @@ private struct ACPSessionView: View {
             sendOnEnter: state.config.harness.acpSendOnEnter,
             focusRequest: composerFocusRequest,
             placement: placement,
+            contentMaxWidth: contentMaxWidth,
+            typography: typography ?? chatTypography,
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
                 async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)

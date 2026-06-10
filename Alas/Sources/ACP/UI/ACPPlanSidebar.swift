@@ -12,6 +12,8 @@ import SwiftUI
 ///
 /// Spec: `docs/superpowers/specs/2026-05-29-acp-plan-sidebar-design.md` (§3)
 struct ACPPlanSidebar: View {
+    static let width: CGFloat = 320
+
     @ObservedObject var transcript: ACPTranscript
     let onMinimize: () -> Void
     @Environment(\.theme) private var theme
@@ -36,7 +38,7 @@ struct ACPPlanSidebar: View {
                 Color.clear.frame(height: 1)
             }
         }
-        .frame(width: 320)
+        .frame(width: Self.width)
         .frame(maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel(for: items))

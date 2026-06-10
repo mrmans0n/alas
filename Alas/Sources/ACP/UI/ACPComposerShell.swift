@@ -27,6 +27,8 @@ struct ACPComposer: View {
     let sendOnEnter: Bool
     let focusRequest: Int
     let placement: ACPComposerPlacement
+    let contentMaxWidth: CGFloat
+    let typography: ACPChatTypography
     let onSubmit: ACPComposerSubmitHandler
     let filesProvider: (@Sendable () async -> [URL])?
 
@@ -44,6 +46,8 @@ struct ACPComposer: View {
         sendOnEnter: Bool,
         focusRequest: Int = 0,
         placement: ACPComposerPlacement = .bottom,
+        contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth,
+        typography: ACPChatTypography = .default,
         filesProvider: (@Sendable () async -> [URL])? = nil,
         onSubmit: @escaping ACPComposerSubmitHandler
     ) {
@@ -55,6 +59,8 @@ struct ACPComposer: View {
         self.sendOnEnter = sendOnEnter
         self.focusRequest = focusRequest
         self.placement = placement
+        self.contentMaxWidth = contentMaxWidth
+        self.typography = typography
         self.filesProvider = filesProvider
         self.onSubmit = onSubmit
     }
@@ -84,7 +90,7 @@ struct ACPComposer: View {
     private var composerRow: some View {
         HStack {
             Spacer(minLength: 0)
-            pill.frame(maxWidth: 720)
+            pill.frame(maxWidth: contentMaxWidth)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)
@@ -134,6 +140,7 @@ struct ACPComposer: View {
                 isFocused: $inputFocused,
                 focusRequest: focusRequest,
                 sendOnEnter: sendOnEnter,
+                typography: typography,
                 onDraftChange: { draft in
                     manager.persistComposerDraft(draft, for: session)
                     hasText = draft.hasContent

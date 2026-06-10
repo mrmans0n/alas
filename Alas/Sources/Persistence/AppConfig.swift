@@ -326,9 +326,12 @@ struct AppConfig: Codable, Equatable {
         /// segmented control inside the launcher; this just picks the
         /// starting mode.
         var defaultLauncherMode: LauncherMode
+        var chatFontFamily: String
+        var chatFontSize: Int
 
         enum CodingKeys: String, CodingKey {
-            case builtinState, custom, worktreeAutoLaunch, defaultLauncherMode
+            case builtinState, custom, worktreeAutoLaunch, defaultLauncherMode,
+                 chatFontFamily, chatFontSize
         }
     }
 
@@ -432,7 +435,9 @@ struct AppConfig: Codable, Equatable {
                 agentId: nil,
                 useBypassPermissions: false
             ),
-            defaultLauncherMode: .terminal
+            defaultLauncherMode: .terminal,
+            chatFontFamily: "JetBrainsMono Nerd Font",
+            chatFontSize: 13
         ),
         files: Files(showIgnored: true),
         recentProjectIds: [],
@@ -680,11 +685,20 @@ extension AppConfig {
             let defaultMode = (try? agentsContainer.decode(
                 LauncherMode.self, forKey: .defaultLauncherMode
             )) ?? .terminal
+            let chatFontFamily = (try? agentsContainer.decode(
+                String.self, forKey: .chatFontFamily
+            )) ?? "JetBrainsMono Nerd Font"
+            let rawChatFontSize = (try? agentsContainer.decode(
+                Int.self, forKey: .chatFontSize
+            )) ?? 13
+            let chatFontSize = max(8, min(64, rawChatFontSize))
             agents = Agents(
                 builtinState: state,
                 custom: custom,
                 worktreeAutoLaunch: autoLaunch,
-                defaultLauncherMode: defaultMode
+                defaultLauncherMode: defaultMode,
+                chatFontFamily: chatFontFamily,
+                chatFontSize: chatFontSize
             )
         } else {
             agents = Agents(
@@ -693,7 +707,9 @@ extension AppConfig {
                 worktreeAutoLaunch: WorktreeAutoLaunch(
                     agentId: nil, useBypassPermissions: false
                 ),
-                defaultLauncherMode: .terminal
+                defaultLauncherMode: .terminal,
+                chatFontFamily: "JetBrainsMono Nerd Font",
+                chatFontSize: 13
             )
         }
         if let filesContainer = try? c.nestedContainer(

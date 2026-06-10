@@ -5,12 +5,20 @@ struct ACPSyntaxHighlightCacheKey: Equatable {
     let text: String
     let resolvedExtension: String?
     let themeKey: String
+    let fontFamily: String
     let fontSize: CGFloat
 
-    init(text: String, resolvedExtension: String?, theme: Theme, fontSize: CGFloat) {
+    init(
+        text: String,
+        resolvedExtension: String?,
+        theme: Theme,
+        fontFamily: String = ACPChatTypography.default.fontFamily,
+        fontSize: CGFloat
+    ) {
         self.text = text
         self.resolvedExtension = resolvedExtension
         self.themeKey = Self.themeKey(theme)
+        self.fontFamily = fontFamily
         self.fontSize = fontSize
     }
 
@@ -51,6 +59,7 @@ private final class ACPSyntaxHighlightedTextCache: ObservableObject {
         explicitLanguage: String?,
         sourcePath: String?,
         theme: Theme,
+        fontFamily: String,
         fontSize: CGFloat
     ) -> AttributedString {
         let resolvedExtension = explicitLanguage.flatMap(ACPCodeLanguage.highlighterExtension(for:))
@@ -59,6 +68,7 @@ private final class ACPSyntaxHighlightedTextCache: ObservableObject {
             text: text,
             resolvedExtension: resolvedExtension,
             theme: theme,
+            fontFamily: fontFamily,
             fontSize: fontSize
         )
         if key == nextKey, let value {
@@ -69,6 +79,7 @@ private final class ACPSyntaxHighlightedTextCache: ObservableObject {
             code: text,
             language: resolvedExtension,
             theme: theme,
+            fontFamily: fontFamily,
             fontSize: fontSize
         ))
         key = nextKey
@@ -81,6 +92,7 @@ struct ACPSyntaxHighlightedText: View {
     let text: String
     var explicitLanguage: String? = nil
     var sourcePath: String? = nil
+    var fontFamily: String = ACPChatTypography.default.fontFamily
     var fontSize: CGFloat = 12
     var lineSpacing: CGFloat = 2
 
@@ -93,9 +105,10 @@ struct ACPSyntaxHighlightedText: View {
             explicitLanguage: explicitLanguage,
             sourcePath: sourcePath,
             theme: theme,
+            fontFamily: fontFamily,
             fontSize: fontSize
         ))
-        .font(.system(size: fontSize, design: .monospaced))
+        .font(Font(CenterTypography.resolveCodeFont(family: fontFamily, size: fontSize)))
         .foregroundStyle(theme.color("fg"))
         .lineSpacing(lineSpacing)
         .textSelection(.enabled)

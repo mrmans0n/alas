@@ -198,11 +198,12 @@ enum ACPCodeBlockHighlighter {
         code: String,
         language: String?,
         theme: Theme,
+        fontFamily: String = ACPChatTypography.default.fontFamily,
         fontSize: CGFloat = 12
     ) -> NSAttributedString {
         let editorTheme = EditorTheme(theme: theme)
         let baseAttributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
+            .font: CenterTypography.resolveCodeFont(family: fontFamily, size: fontSize),
             .foregroundColor: editorTheme.defaultFG,
         ]
         let attributed = NSMutableAttributedString(string: code, attributes: baseAttributes)

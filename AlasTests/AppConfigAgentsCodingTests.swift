@@ -10,6 +10,11 @@ struct AppConfigAgentsCodingTests {
         #expect(AppConfig.defaults.agents.worktreeAutoLaunch.useBypassPermissions == false)
     }
 
+    @Test func defaultsHaveChatAppearance() {
+        #expect(AppConfig.defaults.agents.chatFontFamily == "JetBrainsMono Nerd Font")
+        #expect(AppConfig.defaults.agents.chatFontSize == 13)
+    }
+
     @Test func decodesLegacyConfigWithoutAgentsKey() throws {
         let json = """
         {
@@ -127,5 +132,68 @@ struct AppConfigAgentsCodingTests {
         #expect(cfg.agents.custom.isEmpty)
         #expect(cfg.agents.worktreeAutoLaunch.agentId == nil)
         #expect(cfg.agents.worktreeAutoLaunch.useBypassPermissions == false)
+    }
+
+    @Test func decodesPartialAgentsBlockWithMissingChatAppearance() throws {
+        let json = """
+        {
+          "themeId": "cool-slate",
+          "accent": "teal",
+          "matchSystemTheme": false,
+          "sidebarWidth": 244,
+          "rightPaneWidth": 320,
+          "rightPaneVisible": true,
+          "general": {
+            "launchAtLogin": false, "closeToTray": true, "confirmQuit": true,
+            "autoUpdate": true, "updateChannel": "Stable",
+            "crashReports": false, "usageAnalytics": false
+          },
+          "worktrees": {
+            "rootPath": "~/.alas/worktrees",
+            "pathTemplate": "{worktreeRoot}/{repo}/{branch}",
+            "branchPrefix": "feature/", "baseBranch": "main",
+            "trackUpstream": true, "deleteBranchOnRemove": true,
+            "autoFetch": true, "fetchIntervalMinutes": 5, "pruneStale": false
+          },
+          "terminal": {
+            "shell": "/bin/zsh", "workingDirectory": "worktreeRoot",
+            "startupScript": "", "worktreeCreateScript": "",
+            "inheritParentEnv": true, "fontFamily": "JetBrains Mono",
+            "fontSize": 13, "cursorStyle": "beam", "cursorBlink": true,
+            "scrollbackLines": 10000, "bell": "visual"
+          },
+          "harness": {"notifyOnFinish": true, "notifyOnAwaiting": true},
+          "agents": {}
+        }
+        """
+        let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(cfg.agents.chatFontFamily == "JetBrainsMono Nerd Font")
+        #expect(cfg.agents.chatFontSize == 13)
+    }
+
+    @Test func decodesChatFontSizeWithClamp() throws {
+        var low = AppConfig.defaults
+        low.agents.chatFontSize = 2
+        let lowData = try JSONEncoder().encode(low)
+        let lowDecoded = try JSONDecoder().decode(AppConfig.self, from: lowData)
+        #expect(lowDecoded.agents.chatFontSize == 8)
+
+        var high = AppConfig.defaults
+        high.agents.chatFontSize = 200
+        let highData = try JSONEncoder().encode(high)
+        let highDecoded = try JSONDecoder().decode(AppConfig.self, from: highData)
+        #expect(highDecoded.agents.chatFontSize == 64)
+    }
+
+    @Test func roundTripsChatAppearance() throws {
+        var cfg = AppConfig.defaults
+        cfg.agents.chatFontFamily = "SF Mono"
+        cfg.agents.chatFontSize = 16
+
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+
+        #expect(decoded.agents.chatFontFamily == "SF Mono")
+        #expect(decoded.agents.chatFontSize == 16)
     }
 }

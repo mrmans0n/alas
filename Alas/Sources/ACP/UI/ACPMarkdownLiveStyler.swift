@@ -13,25 +13,18 @@ enum ACPMarkdownLiveStyler {
     private static let italicUnder = try! NSRegularExpression(pattern: "(?<!_)_([^_\\n]+?)_(?!_)")
     private static let code = try! NSRegularExpression(pattern: "`([^`\\n]+?)`")
 
-    // Fonts cached once. Every restyle() call previously asked
-    // NSFontManager.shared for the italic variant — that's a global
-    // lock acquire per keystroke, and the two italic spellings shared
-    // the same lookup. baseFont/boldFont/codeFont were also being
-    // re-allocated per call.
-    private static let baseFont: NSFont = .systemFont(ofSize: 13)
-    private static let boldFont: NSFont = .boldSystemFont(ofSize: 13)
-    private static let codeFont: NSFont = .monospacedSystemFont(ofSize: 12, weight: .regular)
-    private static let italicFont: NSFont = {
-        let family = NSFont.systemFont(ofSize: 13).familyName ?? "System"
-        return NSFontManager.shared.font(withFamily: family, traits: .italicFontMask, weight: 5, size: 13)
-            ?? NSFont.systemFont(ofSize: 13)
-    }()
-
-    static func restyle(_ storage: NSTextStorage) {
-        restyle(storage, in: nil)
+    static func restyle(
+        _ storage: NSTextStorage,
+        typography: ACPChatTypography = .default
+    ) {
+        restyle(storage, in: nil, typography: typography)
     }
 
-    static func restyle(_ storage: NSTextStorage, in requestedRange: NSRange?) {
+    static func restyle(
+        _ storage: NSTextStorage,
+        in requestedRange: NSRange?,
+        typography: ACPChatTypography = .default
+    ) {
         guard storage.length > 0 else { return }
 
         // Restrict the styling work to the line(s) touched by the latest
@@ -54,6 +47,11 @@ enum ACPMarkdownLiveStyler {
 
         storage.beginEditing()
         defer { storage.endEditing() }
+
+        let baseFont = typography.appKitFont()
+        let boldFont = typography.appKitFont(traits: .boldFontMask)
+        let italicFont = typography.appKitFont(traits: .italicFontMask)
+        let codeFont = typography.appKitFont(size: typography.codeSize)
 
         // Reset to defaults — but preserve our chip attributes so existing
         // mention AND image chips don't get bulldozed (their `.attachment`

@@ -13,6 +13,7 @@ import AppKit
 struct ACPMarkdownText: View {
     let raw: String
     var cache: ACPMarkdownBlockCache? = nil
+    var typography: ACPChatTypography = .default
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -37,13 +38,17 @@ struct ACPMarkdownText: View {
         switch block {
         case .heading(let level, let text):
             Text(ACPMarkdownText.inlineMarkdown(text))
-                .font(.system(size: headingSize(level), weight: .bold))
+                .font(typography.swiftUIFont(
+                    size: typography.headingSize(level: level),
+                    weight: .bold,
+                    traits: .boldFontMask
+                ))
                 .foregroundStyle(theme.color("fg"))
                 .textSelection(.enabled)
                 .padding(.top, level == 1 ? 4 : 2)
         case .paragraph(let text):
             Text(ACPMarkdownText.inlineMarkdown(text))
-                .font(.system(size: 13.5))
+                .font(typography.swiftUIFont(size: typography.paragraphSize))
                 .foregroundStyle(theme.color("fg"))
                 .lineSpacing(3)
                 .textSelection(.enabled)
@@ -54,14 +59,17 @@ struct ACPMarkdownText: View {
                     .fill(theme.color("accent").opacity(0.55))
                     .frame(width: 2)
                 Text(ACPMarkdownText.inlineMarkdown(text))
-                    .font(.system(size: 13).italic())
+                    .font(typography.swiftUIFont(
+                        size: typography.quoteSize,
+                        traits: .italicFontMask
+                    ))
                     .foregroundStyle(theme.color("fg-muted"))
                     .lineSpacing(2)
                     .textSelection(.enabled)
                 Spacer(minLength: 0)
             }
         case .code(let lang, let body):
-            CodeBlockView(language: lang, code: body)
+            CodeBlockView(language: lang, code: body, typography: typography)
         case .table(let header, let rows):
             tableView(header: header, rows: rows)
         }
@@ -91,7 +99,11 @@ struct ACPMarkdownText: View {
             ForEach(0..<columnCount, id: \.self) { i in
                 let value = i < cells.count ? cells[i] : ""
                 Text(ACPMarkdownText.inlineMarkdown(value))
-                    .font(.system(size: isHeader ? 11.5 : 12, weight: isHeader ? .semibold : .regular))
+                    .font(typography.swiftUIFont(
+                        size: isHeader ? typography.tableHeaderSize : typography.tableBodySize,
+                        weight: isHeader ? .semibold : .regular,
+                        traits: isHeader ? .boldFontMask : []
+                    ))
                     .foregroundStyle(isHeader ? theme.color("fg-muted") : theme.color("fg"))
                     .frame(minWidth: 80, alignment: .leading)
                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -101,15 +113,6 @@ struct ACPMarkdownText: View {
             }
         }
         .background(isHeader ? theme.color("bg-2").opacity(0.5) : Color.clear)
-    }
-
-    private func headingSize(_ level: Int) -> CGFloat {
-        switch level {
-        case 1: return 19
-        case 2: return 17
-        case 3: return 15
-        default: return 14
-        }
     }
 
     // MARK: - Inline memoization
@@ -289,6 +292,7 @@ struct ACPMarkdownText: View {
 private struct CodeBlockView: View {
     let language: String?
     let code: String
+    let typography: ACPChatTypography
     @Environment(\.theme) private var theme
     @State private var copied = false
 
@@ -299,7 +303,8 @@ private struct CodeBlockView: View {
                 ACPSyntaxHighlightedText(
                     text: code,
                     explicitLanguage: language,
-                    fontSize: 12
+                    fontFamily: typography.fontFamily,
+                    fontSize: typography.codeSize
                 )
                 .padding(.horizontal, 10).padding(.vertical, 8)
             }
@@ -314,7 +319,11 @@ private struct CodeBlockView: View {
         HStack(spacing: 8) {
             if let lang = language, !lang.isEmpty {
                 Text(lang)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .font(typography.swiftUIFont(
+                        size: typography.labelSize,
+                        weight: .semibold,
+                        traits: .boldFontMask
+                    ))
                     .tracking(0.4)
                     .textCase(.uppercase)
                     .foregroundStyle(theme.color("fg-faint"))
@@ -336,9 +345,9 @@ private struct CodeBlockView: View {
         Button(action: copy) {
             HStack(spacing: 4) {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .font(.system(size: 10, weight: copied ? .bold : .regular))
+                    .font(.system(size: typography.labelSize, weight: copied ? .bold : .regular))
                 Text(copied ? "Copied" : "Copy")
-                    .font(.system(size: 10, weight: .medium))
+                    .font(.system(size: typography.labelSize, weight: .medium))
             }
             .foregroundStyle(copied ? theme.color("add") : theme.color("fg-muted"))
             .padding(.horizontal, 6).padding(.vertical, 2)

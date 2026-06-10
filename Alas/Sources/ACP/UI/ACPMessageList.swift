@@ -4,6 +4,8 @@ import SwiftUI
 struct ACPMessageList: View {
     @ObservedObject var session: ACPSession
     @ObservedObject var transcript: ACPTranscript
+    let contentMaxWidth: CGFloat
+    let typography: ACPChatTypography
     let onOpenDiff: (String) -> Void
     let policy: ACPPermissionPolicy?
     let scopeKey: String
@@ -138,6 +140,8 @@ struct ACPMessageList: View {
                             if Self.shouldRenderQueueBubble(status: item.status) {
                                 ACPQueuedBubble(
                                     item: item,
+                                    contentMaxWidth: contentMaxWidth,
+                                    typography: typography,
                                     onForceSend: { onQueueForceSend(item.id) },
                                     onEdit: { onQueueEdit(item) },
                                     onRemove: { onQueueRemove(item.id) },
@@ -169,7 +173,7 @@ struct ACPMessageList: View {
                             .frame(height: composerSpacerHeight)
                             .id("__composer_spacer__")
                     }
-                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: contentMaxWidth, alignment: .leading)
                     .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
                     .padding(.top, 24)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -477,11 +481,21 @@ struct ACPMessageList: View {
         switch m {
         case .user(_, let text, let attachments):
             ACPMessageGutter(markdown: { text }) {
-                UserMessageRow(text: text, attachments: attachments)
+                UserMessageRow(
+                    text: text,
+                    attachments: attachments,
+                    contentMaxWidth: contentMaxWidth,
+                    typography: typography
+                )
             }
         case .agent(let id, let buf):
             ACPMessageGutter(markdown: { buf.value }) {
-                AgentMessageRow(messageId: id.uuidString, transcript: transcript, buffer: buf)
+                AgentMessageRow(
+                    messageId: id.uuidString,
+                    transcript: transcript,
+                    buffer: buf,
+                    typography: typography
+                )
             }
         case .thought(_, let buf):
             ACPThoughtView(buffer: buf)
@@ -762,6 +776,8 @@ final class ACPDelayedHoverVisibility: ObservableObject {
 private struct UserMessageRow: View {
     let text: String
     let attachments: [ACPMessage.Attachment]
+    let contentMaxWidth: CGFloat
+    let typography: ACPChatTypography
     @Environment(\.theme) private var theme
     var body: some View {
         HStack {
@@ -790,7 +806,7 @@ private struct UserMessageRow: View {
                         }
                     }
                 }
-                ACPMarkdownText(raw: text)
+                ACPMarkdownText(raw: text, typography: typography)
                     .padding(.vertical, 9)
                     .padding(.horizontal, 13)
                     .background(
@@ -815,7 +831,7 @@ private struct UserMessageRow: View {
                     )
                     .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
             }
-            .frame(maxWidth: 540, alignment: .trailing)
+            .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
         }
         .frame(maxWidth: .infinity)
     }
@@ -827,8 +843,13 @@ private struct AgentMessageRow: View {
     let messageId: String
     let transcript: ACPTranscript
     @ObservedObject var buffer: StreamingText
+    let typography: ACPChatTypography
     var body: some View {
-        ACPMarkdownText(raw: buffer.value, cache: transcript.markdownCache(forMessage: messageId))
+        ACPMarkdownText(
+            raw: buffer.value,
+            cache: transcript.markdownCache(forMessage: messageId),
+            typography: typography
+        )
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

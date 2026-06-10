@@ -27,28 +27,44 @@ enum CenterTypography {
         guard !family.isEmpty else {
             return .monospacedSystemFont(ofSize: size, weight: .regular)
         }
+        let fixedFontNames = Set(NSFontManager.shared.availableFontNames(with: .fixedPitchFontMask) ?? [])
+
+        func fixedPitchFont(named name: String) -> NSFont? {
+            guard fixedFontNames.contains(name),
+                  let font = NSFont(name: name, size: size),
+                  font.isFixedPitch
+            else { return nil }
+            return font
+        }
+
         // The picker stores family names (e.g. "JetBrains Mono"), but
         // NSFont(name:size:) requires the PostScript name of a specific
         // face ("JetBrainsMono-Regular"). Walk the family's members and
         // pick the face closest to regular weight (NSFontManager weight 5).
         let members = NSFontManager.shared.availableMembers(ofFontFamily: family) ?? []
         if !members.isEmpty {
-            let sorted = members.sorted { lhs, rhs in
+            let fixedMembers = members.filter { row in
+                guard let psName = row.first as? String else { return false }
+                return fixedFontNames.contains(psName)
+            }
+            let sorted = fixedMembers.sorted { lhs, rhs in
                 let lw = (lhs.count > 2 ? lhs[2] as? Int : nil) ?? 5
                 let rw = (rhs.count > 2 ? rhs[2] as? Int : nil) ?? 5
                 return abs(lw - 5) < abs(rw - 5)
             }
             if let psName = sorted.first?.first as? String,
-               let font = NSFont(name: psName, size: size) {
+               let font = fixedPitchFont(named: psName) {
                 return font
             }
         }
         if let font = NSFont(name: family, size: size),
+           font.isFixedPitch,
            font.familyName == family || font.fontName == family {
             return font
         }
         let descriptor = NSFontDescriptor(fontAttributes: [.family: family])
         if let font = NSFont(descriptor: descriptor, size: size),
+           font.isFixedPitch,
            font.familyName == family {
             return font
         }
