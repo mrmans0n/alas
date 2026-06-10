@@ -46,6 +46,28 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         try c.encodeIfPresent(currentValue, forKey: .currentValue)
         try c.encode(options, forKey: .options)
     }
+
+    static func mergingSuccessfulSetResponse(
+        _ configOptions: [ACPConfigOption],
+        configId: String,
+        selectedValue: String,
+        currentConfigOptions: [ACPConfigOption]
+    ) -> [ACPConfigOption]? {
+        guard currentConfigOptions.first(where: { $0.id == configId })?.currentValue == selectedValue else {
+            return nil
+        }
+
+        return configOptions.map { option in
+            guard option.id == configId else { return option }
+            return ACPConfigOption(
+                id: option.id,
+                name: option.name,
+                type: option.type,
+                category: option.category,
+                currentValue: selectedValue,
+                options: option.options)
+        }
+    }
 }
 
 struct ACPConfigOptionItem: Codable, Equatable, Identifiable, Hashable {

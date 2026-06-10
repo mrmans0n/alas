@@ -69,4 +69,54 @@ struct ACPConfigOptionTests {
         #expect(s.contains("\"configId\":\"effort\""))
         #expect(s.contains("\"value\":\"high\""))
     }
+
+    @Test("successful set response preserves the selected config value")
+    func mergeSuccessfulSetResponsePreservesSelectedValue() throws {
+        let staleFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "false",
+            options: [
+                ACPConfigOptionItem(id: "false", name: "Off"),
+                ACPConfigOptionItem(id: "true", name: "On"),
+            ])
+        let refreshedContext = ACPConfigOption(
+            id: "context", name: "Context", type: "select", currentValue: "1m",
+            options: [
+                ACPConfigOptionItem(id: "272k", name: "272k"),
+                ACPConfigOptionItem(id: "1m", name: "1m"),
+            ])
+        let currentFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: staleFast.options)
+
+        let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [staleFast, refreshedContext],
+            configId: "fast",
+            selectedValue: "true",
+            currentConfigOptions: [currentFast, refreshedContext]))
+
+        #expect(merged.map(\.id) == ["fast", "context"])
+        #expect(merged.first(where: { $0.id == "fast" })?.currentValue == "true")
+        #expect(merged.first(where: { $0.id == "context" })?.currentValue == "1m")
+    }
+
+    @Test("stale set response is ignored after a newer local selection")
+    func staleSetResponseIsIgnoredAfterNewerSelection() {
+        let oldResponse = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "true",
+            options: [
+                ACPConfigOptionItem(id: "false", name: "Off"),
+                ACPConfigOptionItem(id: "true", name: "On"),
+            ])
+        let currentFast = ACPConfigOption(
+            id: "fast", name: "Fast", type: "select", currentValue: "false",
+            options: oldResponse.options)
+
+        let merged = ACPConfigOption.mergingSuccessfulSetResponse(
+            [oldResponse],
+            configId: "fast",
+            selectedValue: "true",
+            currentConfigOptions: [currentFast])
+
+        #expect(merged == nil)
+    }
 }

@@ -454,15 +454,21 @@ struct ACPComposer: View {
             case .model:
                 try? await runner.connection.setModel(sessionId: remoteId, modelId: selectedId)
             case .configOption(let id):
-                // The agent's response carries the refreshed configOptions
-                // (including dependent updates — e.g. switching reasoning
-                // effort can reshape available model variants). Overwrite
-                // the optimistic local update so dependent chips stay in
-                // sync. Empty response → keep the optimistic state.
+                // The agent's response carries refreshed configOptions
+                // (including dependent updates), but some agents echo a stale
+                // value for the option just set. Keep the successful selection
+                // for that option while still accepting dependent updates.
                 if let updated = try? await runner.connection.setConfigOption(
                     sessionId: remoteId, configId: id, value: selectedId),
                    !updated.isEmpty {
-                    session.availableConfigOptions = updated
+                    guard let merged = ACPConfigOption.mergingSuccessfulSetResponse(
+                        updated,
+                        configId: id,
+                        selectedValue: selectedId,
+                        currentConfigOptions: session.availableConfigOptions) else {
+                        return
+                    }
+                    session.availableConfigOptions = merged
                     manager.persist(session)
                 }
             }
