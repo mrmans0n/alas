@@ -1033,6 +1033,7 @@ function markdownDestinationEnd(text, start) {
   let depth = 1;
   let isEscaped = false;
   let quote = null;
+  let isAngleBracketDestination = false;
   let hasDestinationContent = false;
   let canStartTitleQuote = false;
 
@@ -1044,8 +1045,16 @@ function markdownDestinationEnd(text, start) {
       isEscaped = true;
     } else if (quote) {
       if (ch === quote) quote = null;
+    } else if (isAngleBracketDestination) {
+      if (ch === ">") isAngleBracketDestination = false;
+      hasDestinationContent = true;
+      canStartTitleQuote = false;
     } else if (canStartTitleQuote && (ch === "\"" || ch === "'")) {
       quote = ch;
+      canStartTitleQuote = false;
+    } else if (ch === "<" && !hasDestinationContent && depth === 1) {
+      isAngleBracketDestination = true;
+      hasDestinationContent = true;
       canStartTitleQuote = false;
     } else if (ch === "(") {
       depth += 1;

@@ -207,6 +207,26 @@ struct ACPBareURLLinkifierTests {
         #expect(output == input)
     }
 
+    @Test("preserves inline links with angle bracket destination containing space")
+    func preservesInlineLinksWithAngleBracketDestinationContainingSpace() {
+        let input = "See [doc](<https://example.com/a b>)"
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == input)
+    }
+
+    @Test("preserves inline links with angle bracket destination containing space and URL title")
+    func preservesInlineLinksWithAngleBracketDestinationContainingSpaceAndURLTitle() {
+        let input = #"See [doc](<https://example.com/a b> "https://title.example")"#
+        let output = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            input,
+            preserveFencedCodeBlocks: true
+        )
+        #expect(output == input)
+    }
+
     @Test("linkifies URL inside invalid inline link destination")
     func linkifiesURLInsideInvalidInlineLinkDestination() {
         let input = "See [note](not really https://example.com)."

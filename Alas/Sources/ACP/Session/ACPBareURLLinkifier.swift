@@ -743,6 +743,7 @@ enum ACPBareURLLinkifier {
         var depth = 1
         var isEscaped = false
         var quote: Character?
+        var isAngleBracketDestination = false
         var hasDestinationContent = false
         var canStartTitleQuote = false
         var index = text.index(after: start)
@@ -756,8 +757,18 @@ enum ACPBareURLLinkifier {
                 if character == currentQuote {
                     quote = nil
                 }
+            } else if isAngleBracketDestination {
+                if character == ">" {
+                    isAngleBracketDestination = false
+                }
+                hasDestinationContent = true
+                canStartTitleQuote = false
             } else if canStartTitleQuote, character == "\"" || character == "'" {
                 quote = character
+                canStartTitleQuote = false
+            } else if character == "<", !hasDestinationContent, depth == 1 {
+                isAngleBracketDestination = true
+                hasDestinationContent = true
                 canStartTitleQuote = false
             } else if character == "(" {
                 depth += 1
