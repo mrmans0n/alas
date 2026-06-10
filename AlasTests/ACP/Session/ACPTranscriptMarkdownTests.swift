@@ -46,7 +46,51 @@ struct ACPTranscriptMarkdownTests {
         #expect(md == "# T\n\n## A\n\n\(raw)\n")
     }
 
-    @Test("messageBody returns raw text for user/agent, nil otherwise")
+    @Test("document autolinks bare prose URLs")
+    func documentAutolinksBareProseURLs() {
+        let messages: [ACPMessage] = [
+            .agent(id: UUID(), StreamingText("See https://example.com/path."))
+        ]
+        let md = ACPTranscriptMarkdown.document(title: "T", agentName: "A", messages: messages)
+        #expect(md == "# T\n\n## A\n\nSee <https://example.com/path>.\n")
+    }
+
+    @Test("document does not autolink fenced code URLs")
+    func documentSkipsFencedCodeURLs() {
+        let raw = """
+        Before https://example.com/start.
+
+        ```sh
+        curl https://example.com/api
+        ```
+        """
+        let messages: [ACPMessage] = [.agent(id: UUID(), StreamingText(raw))]
+        let md = ACPTranscriptMarkdown.document(title: "T", agentName: "A", messages: messages)
+        #expect(md == """
+        # T
+
+        ## A
+
+        Before <https://example.com/start>.
+
+        ```sh
+        curl https://example.com/api
+        ```
+
+        """)
+    }
+
+    @Test("messageBody returns serialized Markdown with bare URL autolinks")
+    func messageBodyAutolinksBareURLs() {
+        #expect(ACPTranscriptMarkdown.messageBody(
+            .user(id: UUID(), text: "Open https://example.com/docs.", attachments: [])
+        ) == "Open <https://example.com/docs>.")
+        #expect(ACPTranscriptMarkdown.messageBody(
+            .agent(id: UUID(), StreamingText("Use `https://example.com/api`."))
+        ) == "Use `https://example.com/api`.")
+    }
+
+    @Test("messageBody returns serialized text for user/agent, nil otherwise")
     func messageBody() {
         #expect(ACPTranscriptMarkdown.messageBody(
             .user(id: UUID(), text: "u", attachments: [])) == "u")
