@@ -31,14 +31,38 @@ struct ACPChatTypography: Equatable {
         }
     }
 
-    func swiftUIFont(size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        Font(appKitFont(size: size)).weight(weight)
+    func swiftUIFont(
+        size: CGFloat,
+        weight: Font.Weight = .regular,
+        traits: NSFontTraitMask = []
+    ) -> Font {
+        Font(appKitFont(size: size, traits: traits)).weight(weight)
     }
 
-    func appKitFont(size: CGFloat? = nil) -> NSFont {
-        CenterTypography.resolveCodeFont(
+    func appKitFont(size: CGFloat? = nil, traits: NSFontTraitMask = []) -> NSFont {
+        var font = CenterTypography.resolveCodeFont(
             family: fontFamily,
             size: size ?? baseSize
         )
+        guard !traits.isEmpty else { return font }
+
+        if traits.contains(.boldFontMask) {
+            font = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        }
+        if traits.contains(.italicFontMask) {
+            font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
+        }
+
+        var symbolicTraits = font.fontDescriptor.symbolicTraits
+        if traits.contains(.boldFontMask) {
+            symbolicTraits.insert(.bold)
+        }
+        if traits.contains(.italicFontMask) {
+            symbolicTraits.insert(.italic)
+        }
+        let descriptor = font.fontDescriptor.withSymbolicTraits(symbolicTraits)
+        guard let traitFont = NSFont(descriptor: descriptor, size: size ?? baseSize)
+        else { return font }
+        return traitFont
     }
 }

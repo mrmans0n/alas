@@ -196,6 +196,13 @@ private struct ACPSessionView: View {
         .spring(response: 0.32, dampingFraction: 0.86)
     }
 
+    private var chatTypography: ACPChatTypography {
+        ACPChatTypography(
+            fontFamily: state.config.agents.chatFontFamily,
+            fontSize: state.config.agents.chatFontSize
+        )
+    }
+
     private var transcriptAndComposer: some View {
         GeometryReader { proxy in
             let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
@@ -232,6 +239,7 @@ private struct ACPSessionView: View {
                                 session: session,
                                 transcript: session.transcript,
                                 contentMaxWidth: chatContentMaxWidth,
+                                typography: chatTypography,
                                 onOpenDiff: { relativePath in
                                     state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
                                 },
@@ -306,7 +314,8 @@ private struct ACPSessionView: View {
 
                         composerView(
                             placement: composerPlacement,
-                            contentMaxWidth: chatContentMaxWidth
+                            contentMaxWidth: chatContentMaxWidth,
+                            typography: chatTypography
                         )
 
                         if let undo = session.steerUndo, !undo.snapshot.isEmpty {
@@ -368,7 +377,8 @@ private struct ACPSessionView: View {
 
     private func composerView(
         placement: ACPComposerPlacement,
-        contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth
+        contentMaxWidth: CGFloat = ACPChatLayout.defaultContentMaxWidth,
+        typography: ACPChatTypography? = nil
     ) -> some View {
         ACPComposer(
             session: session,
@@ -379,6 +389,7 @@ private struct ACPSessionView: View {
             focusRequest: composerFocusRequest,
             placement: placement,
             contentMaxWidth: contentMaxWidth,
+            typography: typography ?? chatTypography,
             filesProvider: { [state, worktree] in
                 await state.fileIndex.invalidate(forWorktreePath: worktree.path)
                 async let entries = try? state.fileIndex.entries(forWorktreePath: worktree.path)
