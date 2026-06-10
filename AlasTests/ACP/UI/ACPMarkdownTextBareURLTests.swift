@@ -5,6 +5,18 @@ import Testing
 
 @Suite("ACPMarkdownText bare URL links")
 struct ACPMarkdownTextBareURLTests {
+    @Test("tilde fenced URL parses as code block")
+    func tildeFencedURLParsesAsCodeBlock() {
+        let blocks = ACPMarkdownText.parse("""
+        ~~~sh
+        curl https://example.com/api
+        ~~~
+        """)
+        #expect(blocks == [
+            .code(language: "sh", body: "curl https://example.com/api"),
+        ])
+    }
+
     @Test("bare https URL carries a link attribute")
     func bareURLCarriesLinkAttribute() throws {
         let attributed = NSAttributedString(

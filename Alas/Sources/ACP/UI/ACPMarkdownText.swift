@@ -214,6 +214,25 @@ struct ACPMarkdownText: View {
         return (level, String(body))
     }
 
+    private struct FenceDelimiter {
+        let marker: Character
+        let length: Int
+        let language: String?
+    }
+
+    private static func matchFence(_ trimmedLine: String) -> FenceDelimiter? {
+        guard let marker = trimmedLine.first, marker == "`" || marker == "~" else { return nil }
+        let length = trimmedLine.prefix(while: { $0 == marker }).count
+        guard length >= 3 else { return nil }
+        let language = trimmedLine.dropFirst(length).trimmingCharacters(in: .whitespaces)
+        return FenceDelimiter(marker: marker, length: length, language: language.isEmpty ? nil : language)
+    }
+
+    private static func closesFence(_ trimmedLine: String, _ openingFence: FenceDelimiter) -> Bool {
+        guard trimmedLine.first == openingFence.marker else { return false }
+        return trimmedLine.prefix(while: { $0 == openingFence.marker }).count >= openingFence.length
+    }
+
     static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0
@@ -224,16 +243,15 @@ struct ACPMarkdownText: View {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             // Fenced code block.
-            if trimmed.hasPrefix("```") {
-                let lang = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+            if let fence = matchFence(trimmed) {
                 i += 1
                 var body: [String] = []
-                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                while i < lines.count, !closesFence(lines[i].trimmingCharacters(in: .whitespaces), fence) {
                     body.append(lines[i])
                     i += 1
                 }
                 if i < lines.count { i += 1 } // skip closing fence
-                blocks.append(.code(language: lang.isEmpty ? nil : lang, body: body.joined(separator: "\n")))
+                blocks.append(.code(language: fence.language, body: body.joined(separator: "\n")))
                 continue
             }
 
@@ -277,7 +295,7 @@ struct ACPMarkdownText: View {
             while i < lines.count {
                 let next = lines[i].trimmingCharacters(in: .whitespaces)
                 if next.isEmpty { break }
-                if next.hasPrefix("```") || next.hasPrefix(">") || matchHeading(next) != nil { break }
+                if matchFence(next) != nil || next.hasPrefix(">") || matchHeading(next) != nil { break }
                 para.append(lines[i])
                 i += 1
             }
