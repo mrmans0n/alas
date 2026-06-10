@@ -5,7 +5,8 @@ import Foundation
 /// Conversation-only: renders `.user` and `.agent` messages and omits
 /// every other kind (thought, tool call, file edit, plan, system notice).
 /// This is the single source of truth for formatting so whole-session
-/// export and per-message copy render identically.
+/// export/context and per-message copy render identically. Bare prose
+/// web URLs are serialized as Markdown autolinks.
 ///
 /// Reading an agent message's text touches `StreamingText.value`, which is
 /// `@MainActor`-isolated, so the rendering entry points are `@MainActor`.
@@ -22,9 +23,9 @@ enum ACPTranscriptMarkdown {
         for message in messages {
             switch message {
             case .user(_, let text, _):
-                sections.append("## You\n\n\(text)")
+                sections.append("## You\n\n\(serializedBody(text))")
             case .agent(_, let buffer):
-                sections.append("## \(agentHeading)\n\n\(buffer.value)")
+                sections.append("## \(agentHeading)\n\n\(serializedBody(buffer.value))")
             default:
                 continue
             }
@@ -32,12 +33,12 @@ enum ACPTranscriptMarkdown {
         return sections.joined(separator: "\n\n") + "\n"
     }
 
-    /// One message's raw Markdown source, or nil for non-conversation kinds.
+    /// One message's serialized Markdown source, or nil for non-conversation kinds.
     @MainActor
     static func messageBody(_ message: ACPMessage) -> String? {
         switch message {
-        case .user(_, let text, _): return text
-        case .agent(_, let buffer): return buffer.value
+        case .user(_, let text, _): return serializedBody(text)
+        case .agent(_, let buffer): return serializedBody(buffer.value)
         default: return nil
         }
     }
@@ -55,6 +56,13 @@ enum ACPTranscriptMarkdown {
     }
 
     // MARK: - Helpers
+
+    private static func serializedBody(_ text: String) -> String {
+        ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            text,
+            preserveFencedCodeBlocks: true
+        )
+    }
 
     private static func headerTitle(_ title: String) -> String {
         trimmedNonEmpty(title).flatMap { $0 == "New session" ? nil : $0 } ?? "ACP session"

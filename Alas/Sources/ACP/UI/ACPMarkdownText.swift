@@ -131,9 +131,13 @@ struct ACPMarkdownText: View {
         if let hit = inlineCache.object(forKey: key) {
             return AttributedString(hit)
         }
+        let renderSource = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
+            s,
+            preserveFencedCodeBlocks: false
+        )
         let attr: AttributedString
         if let parsed = try? AttributedString(
-            markdown: s,
+            markdown: renderSource,
             options: AttributedString.MarkdownParsingOptions(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace
             )
@@ -213,6 +217,44 @@ struct ACPMarkdownText: View {
         return (level, String(body))
     }
 
+    private struct FenceDelimiter {
+        let marker: Character
+        let length: Int
+        let language: String?
+    }
+
+    private static func matchFence(_ line: String) -> FenceDelimiter? {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return nil }
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex else { return nil }
+        let fenceText = line[index...]
+        guard let marker = fenceText.first, marker == "`" || marker == "~" else { return nil }
+        let length = fenceText.prefix(while: { $0 == marker }).count
+        guard length >= 3 else { return nil }
+        let language = fenceText.dropFirst(length).trimmingCharacters(in: .whitespaces)
+        return FenceDelimiter(marker: marker, length: length, language: language.isEmpty ? nil : language)
+    }
+
+    private static func closesFence(_ line: String, _ openingFence: FenceDelimiter) -> Bool {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return false }
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex, line[index] == openingFence.marker else { return false }
+        let markerCount = line[index...].prefix(while: { $0 == openingFence.marker }).count
+        guard markerCount >= openingFence.length else { return false }
+        let afterMarker = line.index(index, offsetBy: markerCount)
+        return line[afterMarker...].allSatisfy(\.isWhitespace)
+    }
+
     static func parse(_ text: String) -> [Block] {
         var blocks: [Block] = []
         var i = 0
@@ -223,16 +265,15 @@ struct ACPMarkdownText: View {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             // Fenced code block.
-            if trimmed.hasPrefix("```") {
-                let lang = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+            if let fence = matchFence(line) {
                 i += 1
                 var body: [String] = []
-                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                while i < lines.count, !closesFence(lines[i], fence) {
                     body.append(lines[i])
                     i += 1
                 }
                 if i < lines.count { i += 1 } // skip closing fence
-                blocks.append(.code(language: lang.isEmpty ? nil : lang, body: body.joined(separator: "\n")))
+                blocks.append(.code(language: fence.language, body: body.joined(separator: "\n")))
                 continue
             }
 
@@ -276,7 +317,7 @@ struct ACPMarkdownText: View {
             while i < lines.count {
                 let next = lines[i].trimmingCharacters(in: .whitespaces)
                 if next.isEmpty { break }
-                if next.hasPrefix("```") || next.hasPrefix(">") || matchHeading(next) != nil { break }
+                if matchFence(lines[i]) != nil || next.hasPrefix(">") || matchHeading(next) != nil { break }
                 para.append(lines[i])
                 i += 1
             }

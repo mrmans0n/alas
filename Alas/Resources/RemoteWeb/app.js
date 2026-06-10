@@ -1,5 +1,9 @@
 const tokenKey = "alas.remote.token";
 const $ = (id) => document.getElementById(id);
+function listen(id, event, handler) {
+  const element = $(id);
+  if (element && typeof element.addEventListener === "function") element.addEventListener(event, handler);
+}
 let ws, currentSession = null, messages = new Map();
 let sessionTitles = new Map();
 let canDrive = false, canDriveKnown = false;
@@ -298,6 +302,811 @@ function renderMessages(forceBottom) {
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 function jparse(s) { try { return JSON.parse(s); } catch { return null; } }
+
+function linkifyBareUrls(text) {
+  if (!text || (!text.includes("http://") && !text.includes("https://"))) return text || "";
+  return rewriteMarkdownBareUrls(text, true);
+}
+
+function rewriteMarkdownBareUrls(text, preserveFencedCodeBlocks) {
+  if (!preserveFencedCodeBlocks) return rewriteInlineBareUrls(text);
+
+  let out = "";
+  let lineStart = 0;
+  let openingFence = null;
+  let openingHtmlBlockTag = null;
+  let allowsIndentedCodeBlock = true;
+  let referenceDefinitionContinuation = null;
+  const inlineState = {
+    codeSpanDelimiterLength: null,
+    referenceLabels: markdownReferenceLabels(text),
+  };
+
+  while (lineStart < text.length) {
+    const newline = text.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? text.length : newline + 1;
+    const line = text.slice(lineStart, lineEnd);
+
+    if (openingFence) {
+      out += line;
+      const closingFence = closingCodeFenceDelimiter(line);
+      const closedFence = closingFence && closesCodeFence(closingFence, openingFence);
+      if (closedFence) openingFence = null;
+      allowsIndentedCodeBlock = !!closedFence;
+    } else if (openingHtmlBlockTag) {
+      out += line;
+      const closedHtmlBlock = closingRawHtmlBlockTag(line, openingHtmlBlockTag) ||
+        rawHtmlBlockEndsAtBlankLine(line, openingHtmlBlockTag);
+      if (closedHtmlBlock) openingHtmlBlockTag = null;
+      allowsIndentedCodeBlock = closedHtmlBlock;
+    } else if (inlineState.codeSpanDelimiterLength == null &&
+               referenceDefinitionContinuation === "destination" &&
+               markdownReferenceDefinitionDestinationContinuationLine(line)) {
+      out += line;
+      referenceDefinitionContinuation = "title";
+      allowsIndentedCodeBlock = false;
+    } else if (inlineState.codeSpanDelimiterLength == null &&
+               referenceDefinitionContinuation === "title" &&
+               markdownReferenceDefinitionTitleContinuationLine(line)) {
+      out += line;
+      referenceDefinitionContinuation = null;
+      allowsIndentedCodeBlock = false;
+    } else if (inlineState.codeSpanDelimiterLength == null) {
+      const referenceDefinition = markdownReferenceDefinition(line);
+      if (referenceDefinition) {
+        out += line;
+        referenceDefinitionContinuation = referenceDefinition.hasDestination ? "title" : "destination";
+        allowsIndentedCodeBlock = false;
+      } else {
+        referenceDefinitionContinuation = null;
+        const lineFence = openingCodeFenceDelimiter(line);
+        if (lineFence) {
+          out += line;
+          openingFence = lineFence;
+          allowsIndentedCodeBlock = false;
+        } else {
+          const htmlBlockTag = openingRawHtmlBlockTag(line);
+          if (htmlBlockTag) {
+            out += line;
+            if (!closingRawHtmlBlockTag(line, htmlBlockTag)) openingHtmlBlockTag = htmlBlockTag;
+            allowsIndentedCodeBlock = !openingHtmlBlockTag;
+          } else if (allowsIndentedCodeBlock && markdownIndentedCodeBlockLine(line)) {
+            out += line;
+            allowsIndentedCodeBlock = true;
+          } else {
+            out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
+            allowsIndentedCodeBlock = markdownAllowsIndentedCodeBlockAfterLine(line);
+          }
+        }
+      }
+    } else {
+      out += rewriteInlineBareUrls(line, inlineState, text, lineEnd);
+      allowsIndentedCodeBlock = markdownAllowsIndentedCodeBlockAfterLine(line);
+    }
+
+    lineStart = lineEnd;
+  }
+
+  return out;
+}
+
+function rewriteInlineBareUrls(text, state, remainingTextSource, remainingTextStart) {
+  const inlineState = state || { codeSpanDelimiterLength: null };
+  let out = "";
+  let i = 0;
+
+  while (i < text.length) {
+    if (inlineState.codeSpanDelimiterLength != null) {
+      if (text[i] === "`") {
+        const closingLength = repeatedCharacterRunLength(text, i, "`");
+        if (closingLength === inlineState.codeSpanDelimiterLength) {
+          out += text.slice(i, i + closingLength);
+          i += closingLength;
+          inlineState.codeSpanDelimiterLength = null;
+          continue;
+        }
+      }
+
+      out += text[i];
+      i += 1;
+      continue;
+    }
+
+    if (text[i] === "`") {
+      const delimiterLength = repeatedCharacterRunLength(text, i, "`");
+      if (isFenceLikeBacktickDelimiterLine(text, i, delimiterLength)) {
+        out += text.slice(i, i + delimiterLength);
+        i += delimiterLength;
+        continue;
+      }
+
+      const end = codeSpanEnd(text, i);
+      if (end !== -1) {
+        out += text.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
+
+      out += text.slice(i, i + delimiterLength);
+      i += delimiterLength;
+      const remainingTextAfterSegment = remainingTextSource == null ? text.slice(i) : remainingTextSource.slice(remainingTextStart);
+      if (hasCodeSpanEnd(remainingTextAfterSegment, delimiterLength)) {
+        inlineState.codeSpanDelimiterLength = delimiterLength;
+      }
+      continue;
+    }
+
+    if (text[i] === "<" && startsWithWebScheme(text, i + 1)) {
+      const end = text.indexOf(">", i + 1);
+      if (end !== -1) {
+        out += text.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
+    }
+
+    if (text[i] === "<") {
+      const end = rawHtmlTagEnd(text, i);
+      if (end !== -1) {
+        out += text.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
+    }
+
+    if (text[i] === "[") {
+      const end = markdownBracketedLinkEnd(text, i, inlineState.referenceLabels);
+      if (end !== -1) {
+        out += text.slice(i, end + 1);
+        i = end + 1;
+        continue;
+      }
+    }
+
+    if (startsWithWebScheme(text, i) && hasValidBoundaryBefore(text, i)) {
+      const rawEnd = rawUrlEnd(text, i);
+      const trimmedEnd = trimmedUrlEnd(text, i, rawEnd);
+      if (trimmedEnd > i) {
+        const urlText = text.slice(i, trimmedEnd);
+        if (isValidBareWebURL(urlText)) {
+          out += "<" + urlText + ">";
+          out += text.slice(trimmedEnd, rawEnd);
+          i = rawEnd;
+          continue;
+        }
+      }
+    }
+
+    out += text[i];
+    i += 1;
+  }
+
+  return out;
+}
+
+function openingCodeFenceDelimiter(line) {
+  return codeFenceDelimiter(line, true);
+}
+
+function closingCodeFenceDelimiter(line) {
+  return codeFenceDelimiter(line, false);
+}
+
+function codeFenceDelimiter(line, allowsTrailingText) {
+  let contentEnd = line.length;
+  while (contentEnd > 0 && /\s/.test(line[contentEnd - 1])) contentEnd -= 1;
+
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < contentEnd && line[i] === " ") {
+    leadingSpaces += 1;
+    i += 1;
+  }
+  if (leadingSpaces > 3 || i >= contentEnd) return null;
+
+  const marker = line[i];
+  if (marker !== "`" && marker !== "~") return null;
+
+  const length = repeatedCharacterRunLength(line, i, marker);
+  i += length;
+
+  if (!allowsTrailingText && i !== contentEnd) return null;
+  if (marker === "`" && line.slice(i, contentEnd).includes("`")) return null;
+  return length >= 3 ? { marker, length } : null;
+}
+
+function closesCodeFence(candidate, openingFence) {
+  return candidate.marker === openingFence.marker && candidate.length >= openingFence.length;
+}
+
+function markdownBlankLine(line) {
+  return /^[\s]*$/.test(line);
+}
+
+function markdownAllowsIndentedCodeBlockAfterLine(line) {
+  return markdownBlankLine(line) || markdownAtxHeadingLine(line) || markdownThematicBreakLine(line);
+}
+
+function markdownAtxHeadingLine(line) {
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < line.length && line[i] === " ") {
+    leadingSpaces += 1;
+    if (leadingSpaces > 3) return false;
+    i += 1;
+  }
+
+  let markerCount = 0;
+  while (i < line.length && line[i] === "#" && markerCount < 6) {
+    markerCount += 1;
+    i += 1;
+  }
+  if (markerCount === 0) return false;
+  if (i >= line.length) return true;
+  return /\s/.test(line[i]);
+}
+
+function markdownThematicBreakLine(line) {
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < line.length && line[i] === " ") {
+    leadingSpaces += 1;
+    if (leadingSpaces > 3) return false;
+    i += 1;
+  }
+
+  let marker = null;
+  let markerCount = 0;
+  while (i < line.length) {
+    const ch = line[i];
+    if (ch === "\n" || ch === "\r") break;
+    if (ch === " " || ch === "\t") {
+      i += 1;
+      continue;
+    }
+    if (marker === null) {
+      if (ch !== "-" && ch !== "_" && ch !== "*") return false;
+      marker = ch;
+    }
+    if (ch !== marker) return false;
+    markerCount += 1;
+    i += 1;
+  }
+
+  return markerCount >= 3;
+}
+
+function markdownIndentedCodeBlockLine(line) {
+  let leadingSpaces = 0;
+  for (let i = 0; i < line.length; i += 1) {
+    if (line[i] === "\t") return true;
+    if (line[i] !== " ") return false;
+    leadingSpaces += 1;
+    if (leadingSpaces >= 4) return true;
+  }
+  return false;
+}
+
+const rawHtmlBlockTags = new Set([
+  "address", "article", "aside", "base", "basefont", "blockquote", "body",
+  "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+  "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+  "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header",
+  "hr", "html", "iframe", "legend", "li", "link", "main", "menu", "menuitem",
+  "nav", "noframes", "ol", "optgroup", "option", "p", "param", "section",
+  "summary", "table", "tbody", "td", "tfoot", "th", "thead", "title", "tr",
+  "track", "ul", "pre", "script", "style",
+]);
+
+const rawHtmlVoidBlockTags = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta",
+  "param", "source", "track", "wbr",
+]);
+
+const rawHtmlExplicitCloseBlockTags = new Set(["pre", "script", "style"]);
+
+function openingRawHtmlBlockTag(line) {
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < line.length && line[i] === " ") {
+    leadingSpaces += 1;
+    i += 1;
+  }
+  if (leadingSpaces > 3 || line[i] !== "<") return null;
+
+  const rest = line.slice(i);
+  if (rest.startsWith("<!--")) return "#comment";
+  if (rest.startsWith("<?")) return "#processing-instruction";
+  if (rest.startsWith("<![CDATA[")) return "#cdata";
+  if (/^<![A-Z]/.test(rest)) return "#declaration";
+
+  const match = rest.match(/^<([A-Za-z][A-Za-z0-9-]*)(?:\s|>|\/>)/);
+  if (!match) return null;
+
+  const tag = match[1].toLowerCase();
+  if (!rawHtmlBlockTags.has(tag) || rawHtmlVoidBlockTags.has(tag)) return null;
+  return tag;
+}
+
+function rawHtmlBlockEndsAtBlankLine(line, tag) {
+  return !tag.startsWith("#") && !rawHtmlExplicitCloseBlockTags.has(tag) && markdownBlankLine(line);
+}
+
+function closingRawHtmlBlockTag(line, tag) {
+  if (tag === "#comment") return line.includes("-->");
+  if (tag === "#processing-instruction") return line.includes("?>");
+  if (tag === "#cdata") return line.includes("]]>");
+  if (tag === "#declaration") return line.includes(">");
+  return new RegExp("</\\s*" + escapeRegExp(tag) + "\\s*>", "i").test(line);
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function repeatedCharacterRunLength(text, start, character) {
+  let count = 0;
+  let i = start;
+  while (i < text.length && text[i] === character) {
+    count += 1;
+    i += 1;
+  }
+  return count;
+}
+
+function isFenceLikeBacktickDelimiterLine(text, start, delimiterLength) {
+  if (delimiterLength < 3) return false;
+
+  let lineStart = start;
+  while (lineStart > 0 && text[lineStart - 1] !== "\n") lineStart -= 1;
+  for (let i = lineStart; i < start; i += 1) {
+    if (text[i] !== " ") return false;
+  }
+
+  let lineEnd = start;
+  while (lineEnd < text.length && text[lineEnd] !== "\n") lineEnd += 1;
+  return !text.slice(start + delimiterLength, lineEnd).includes("`");
+}
+
+function codeSpanEnd(text, start) {
+  const delimiterLength = repeatedCharacterRunLength(text, start, "`");
+  let i = start + delimiterLength;
+  let currentLineIsBlank = false;
+
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\n") {
+      if (currentLineIsBlank) return -1;
+      currentLineIsBlank = true;
+      i += 1;
+    } else if (/\s/.test(ch)) {
+      i += 1;
+    } else if (ch === "`") {
+      currentLineIsBlank = false;
+      const closingLength = repeatedCharacterRunLength(text, i, "`");
+      if (closingLength === delimiterLength) return i + closingLength - 1;
+      i += closingLength;
+    } else {
+      currentLineIsBlank = false;
+      i += 1;
+    }
+  }
+
+  return -1;
+}
+
+function hasCodeSpanEnd(text, delimiterLength) {
+  let i = 0;
+  let currentLineIsBlank = true;
+
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\n") {
+      if (currentLineIsBlank) return false;
+      currentLineIsBlank = true;
+      i += 1;
+    } else if (/\s/.test(ch)) {
+      i += 1;
+    } else if (ch === "`") {
+      currentLineIsBlank = false;
+      const closingLength = repeatedCharacterRunLength(text, i, "`");
+      if (closingLength === delimiterLength) return true;
+      i += closingLength;
+    } else {
+      currentLineIsBlank = false;
+      i += 1;
+    }
+  }
+
+  return false;
+}
+
+function rawHtmlTagEnd(text, start) {
+  if (!isRawHtmlTagStart(text, start)) return -1;
+
+  let quote = null;
+  for (let i = start + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === "\"" || ch === "'") {
+      quote = ch;
+    } else if (ch === ">") {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+function isRawHtmlTagStart(text, start) {
+  if (start >= text.length || text[start] !== "<" || start + 1 >= text.length) return false;
+  const next = text[start + 1];
+  return /[A-Za-z!/]/.test(next) || next === "?";
+}
+
+function startsWithWebScheme(text, i) {
+  return text.startsWith("https://", i) || text.startsWith("http://", i);
+}
+
+function hasValidBoundaryBefore(text, i) {
+  if (i === 0) return true;
+  const previous = text[i - 1];
+  if (/[*_~]/.test(previous)) {
+    let delimiterRunStart = i - 1;
+    while (delimiterRunStart > 0 && text[delimiterRunStart - 1] === previous) delimiterRunStart -= 1;
+    if (delimiterRunStart === 0) return true;
+    return /\s|[\(\[\{"']/.test(text[delimiterRunStart - 1]);
+  }
+  return /\s|[\(\[\{"']/.test(previous);
+}
+
+function rawUrlEnd(text, start) {
+  let i = start;
+  while (i < text.length && !/[\s<>\x00-\x1F\x7F]/.test(text[i])) {
+    if (text[i] === "]" && text[i + 1] === "[") break;
+    i += 1;
+  }
+  return i;
+}
+
+function trimmedUrlEnd(text, start, rawEnd) {
+  let end = rawEnd;
+  const surplusClosings = unbalancedClosingSurplus(text, start, rawEnd);
+  const emphasisDelimiterRun = markdownEmphasisDelimiterRunBeforeUrlStart(text, start);
+  let remainingEmphasisDelimitersToTrim = emphasisDelimiterRun ? emphasisDelimiterRun.length : 0;
+  while (end > start) {
+    const ch = text[end - 1];
+    if (emphasisDelimiterRun &&
+        remainingEmphasisDelimitersToTrim > 0 &&
+        ch === emphasisDelimiterRun.delimiter) {
+      remainingEmphasisDelimitersToTrim -= 1;
+      end -= 1;
+      continue;
+    }
+    if (".,;:!?\"'".includes(ch)) {
+      end -= 1;
+      continue;
+    }
+    if (surplusClosings[ch] > 0) {
+      surplusClosings[ch] -= 1;
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+  return end;
+}
+
+function markdownEmphasisDelimiterRunBeforeUrlStart(text, start) {
+  if (start === 0) return null;
+  const delimiter = text[start - 1];
+  if (!/[*_~]/.test(delimiter)) return null;
+  let length = 1;
+  for (let i = start - 2; i >= 0 && text[i] === delimiter; i -= 1) length += 1;
+  return { delimiter, length };
+}
+
+function unbalancedClosingSurplus(text, start, end) {
+  const counts = {
+    "(": 0, ")": 0,
+    "[": 0, "]": 0,
+    "{": 0, "}": 0,
+    "<": 0, ">": 0,
+  };
+  for (let i = start; i < end; i += 1) {
+    if (counts[text[i]] != null) counts[text[i]] += 1;
+  }
+  return {
+    ")": Math.max(0, counts[")"] - counts["("]),
+    "]": Math.max(0, counts["]"] - counts["["]),
+    "}": Math.max(0, counts["}"] - counts["{"]),
+    ">": Math.max(0, counts[">"] - counts["<"]),
+  };
+}
+
+function isValidBareWebURL(text) {
+  let hostStart;
+  if (text.startsWith("https://")) {
+    hostStart = "https://".length;
+  } else if (text.startsWith("http://")) {
+    hostStart = "http://".length;
+  } else {
+    return false;
+  }
+
+  if (hostStart >= text.length) return false;
+  let hostEnd = text.length;
+  for (const marker of ["/", "?", "#"]) {
+    const markerIndex = text.indexOf(marker, hostStart);
+    if (markerIndex !== -1) hostEnd = Math.min(hostEnd, markerIndex);
+  }
+  return /[A-Za-z0-9]/.test(text.slice(hostStart, hostEnd));
+}
+
+function markdownBracketedLinkEnd(text, start, referenceLabels) {
+  const labelEnd = markdownLabelEnd(text, start);
+  if (labelEnd === -1) return -1;
+
+  const label = normalizeMarkdownReferenceLabel(text.slice(start + 1, labelEnd));
+  if (referenceLabels && referenceLabels.has(label)) return labelEnd;
+
+  const next = labelEnd + 1;
+  if (next >= text.length || text.slice(next).trim() === "") {
+    return referenceLabels && referenceLabels.has(label) ? labelEnd : -1;
+  }
+
+  if (text[next] === "(") {
+    const destinationEnd = markdownDestinationEnd(text, next);
+    if (destinationEnd !== -1) return destinationEnd;
+  }
+
+  if (text[next] === "[") {
+    const referenceEnd = markdownLabelEnd(text, next);
+    if (referenceEnd !== -1) {
+      const referenceLabel = text.slice(next + 1, referenceEnd);
+      const normalizedReference = normalizeMarkdownReferenceLabel(referenceLabel) || label;
+      return referenceLabels && referenceLabels.has(normalizedReference) ? referenceEnd : -1;
+    }
+  }
+
+  return -1;
+}
+
+function markdownReferenceLabels(text) {
+  const labels = new Set();
+  let lineStart = 0;
+  let openingFence = null;
+  let openingHtmlBlockTag = null;
+  let pendingDefinitionLabel = null;
+
+  while (lineStart < text.length) {
+    const newline = text.indexOf("\n", lineStart);
+    const lineEnd = newline === -1 ? text.length : newline + 1;
+    const line = text.slice(lineStart, lineEnd);
+
+    if (openingFence) {
+      const closingFence = closingCodeFenceDelimiter(line);
+      if (closingFence && closesCodeFence(closingFence, openingFence)) openingFence = null;
+    } else if (openingHtmlBlockTag) {
+      if (closingRawHtmlBlockTag(line, openingHtmlBlockTag) ||
+          rawHtmlBlockEndsAtBlankLine(line, openingHtmlBlockTag)) {
+        openingHtmlBlockTag = null;
+      }
+    } else if (pendingDefinitionLabel !== null) {
+      if (markdownReferenceDefinitionDestinationContinuationLine(line)) {
+        labels.add(normalizeMarkdownReferenceLabel(pendingDefinitionLabel));
+      }
+      pendingDefinitionLabel = null;
+    } else {
+      const lineFence = openingCodeFenceDelimiter(line);
+      if (lineFence) {
+        openingFence = lineFence;
+      } else {
+        const htmlBlockTag = openingRawHtmlBlockTag(line);
+        if (htmlBlockTag) {
+          if (!closingRawHtmlBlockTag(line, htmlBlockTag)) openingHtmlBlockTag = htmlBlockTag;
+          lineStart = lineEnd;
+          continue;
+        }
+
+        const definition = markdownReferenceDefinition(line);
+        if (definition) {
+          if (definition.hasDestination) {
+            labels.add(normalizeMarkdownReferenceLabel(definition.label));
+          } else {
+            pendingDefinitionLabel = definition.label;
+          }
+        }
+      }
+    }
+
+    lineStart = lineEnd;
+  }
+
+  return labels;
+}
+
+function markdownReferenceDefinitionLabel(line) {
+  const definition = markdownReferenceDefinition(line);
+  return definition ? definition.label : null;
+}
+
+function markdownReferenceDefinition(line) {
+  let i = 0;
+  let leadingSpaces = 0;
+  while (i < line.length && line[i] === " ") {
+    leadingSpaces += 1;
+    i += 1;
+  }
+  if (leadingSpaces > 3 || line[i] !== "[") return null;
+
+  const labelEnd = markdownLabelEnd(line, i);
+  if (labelEnd === -1 || line[labelEnd + 1] !== ":") return null;
+
+  const label = line.slice(i + 1, labelEnd);
+  if (!normalizeMarkdownReferenceLabel(label)) return null;
+
+  const afterColon = line.slice(labelEnd + 2).trim();
+  if (afterColon.length === 0) return { label, hasDestination: false };
+  if (!markdownReferenceDefinitionDestinationContent(afterColon)) return null;
+  return { label, hasDestination: true };
+}
+
+function markdownReferenceDefinitionDestinationContinuationLine(line) {
+  return markdownReferenceDefinitionDestinationContent(line.trim());
+}
+
+function markdownReferenceDefinitionTitleContinuationLine(line) {
+  const content = indentedReferenceDefinitionContinuationContent(line);
+  if (content === null) return false;
+
+  return markdownReferenceDefinitionTitleContent(content.trim());
+}
+
+function markdownReferenceDefinitionDestinationContent(content) {
+  if (!content) return false;
+
+  let i = 0;
+  if (content[i] === "<") {
+    i += 1;
+    let isEscaped = false;
+    while (i < content.length) {
+      const ch = content[i];
+      if (isEscaped) {
+        isEscaped = false;
+      } else if (ch === "\\") {
+        isEscaped = true;
+      } else if (ch === ">") {
+        const rest = content.slice(i + 1).trim();
+        return rest.length === 0 || markdownReferenceDefinitionTitleContent(rest);
+      } else if (ch === "\n" || ch === "\r") {
+        return false;
+      }
+      i += 1;
+    }
+    return false;
+  }
+
+  while (i < content.length && !/\s/.test(content[i])) i += 1;
+  if (i === 0) return false;
+
+  const rest = content.slice(i).trim();
+  return rest.length === 0 || markdownReferenceDefinitionTitleContent(rest);
+}
+
+function markdownReferenceDefinitionTitleContent(content) {
+  if (!content) return false;
+
+  const opener = content[0];
+  const closer = opener === "(" ? ")" : opener;
+  if (opener !== "\"" && opener !== "'" && opener !== "(") return false;
+
+  let isEscaped = false;
+  for (let j = 1; j < content.length; j += 1) {
+    const ch = content[j];
+    if (isEscaped) {
+      isEscaped = false;
+    } else if (ch === "\\") {
+      isEscaped = true;
+    } else if (ch === closer) {
+      return j === content.length - 1;
+    }
+  }
+
+  return false;
+}
+
+function indentedReferenceDefinitionContinuationContent(line) {
+  let contentEnd = line.length;
+  while (contentEnd > 0 && /\s/.test(line[contentEnd - 1])) contentEnd -= 1;
+
+  let i = 0;
+  let leadingWhitespace = 0;
+  while (i < contentEnd && (line[i] === " " || line[i] === "\t")) {
+    leadingWhitespace += 1;
+    i += 1;
+  }
+  if (leadingWhitespace === 0 || i >= contentEnd) return null;
+  return line.slice(i, contentEnd);
+}
+
+function normalizeMarkdownReferenceLabel(label) {
+  return label.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function markdownLabelEnd(text, start) {
+  if (start >= text.length || text[start] !== "[") return -1;
+
+  let depth = 0;
+  let isEscaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (isEscaped) {
+      isEscaped = false;
+    } else if (ch === "\\") {
+      isEscaped = true;
+    } else if (ch === "[") {
+      depth += 1;
+    } else if (ch === "]") {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+
+  return -1;
+}
+
+function markdownDestinationEnd(text, start) {
+  if (start >= text.length || text[start] !== "(") return -1;
+
+  let depth = 1;
+  let isEscaped = false;
+  let quote = null;
+  let isAngleBracketDestination = false;
+  let hasDestinationContent = false;
+  let canStartTitleQuote = false;
+
+  for (let i = start + 1; i < text.length; i += 1) {
+    const ch = text[i];
+    if (isEscaped) {
+      isEscaped = false;
+    } else if (ch === "\\") {
+      isEscaped = true;
+    } else if (quote) {
+      if (ch === quote) quote = null;
+    } else if (isAngleBracketDestination) {
+      if (ch === ">") isAngleBracketDestination = false;
+      hasDestinationContent = true;
+      canStartTitleQuote = false;
+    } else if (canStartTitleQuote && (ch === "\"" || ch === "'")) {
+      quote = ch;
+      canStartTitleQuote = false;
+    } else if (ch === "<" && !hasDestinationContent && depth === 1) {
+      isAngleBracketDestination = true;
+      hasDestinationContent = true;
+      canStartTitleQuote = false;
+    } else if (ch === "(") {
+      depth += 1;
+      hasDestinationContent = true;
+      canStartTitleQuote = false;
+    } else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return i;
+      hasDestinationContent = true;
+      canStartTitleQuote = false;
+    } else if (/\s/.test(ch)) {
+      if (hasDestinationContent && depth === 1) canStartTitleQuote = true;
+    } else {
+      if (canStartTitleQuote) return -1;
+      hasDestinationContent = true;
+      canStartTitleQuote = false;
+    }
+  }
+
+  return -1;
+}
+
 // Render markdown to sanitized HTML (agent/user prose is untrusted — DOMPurify
 // strips any script/event-handler injection). Falls back to escaped plain text
 // if the libraries didn't load.
@@ -305,7 +1114,7 @@ function md(text) {
   if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
     const d = document.createElement("div"); d.textContent = text || ""; return d.innerHTML;
   }
-  return DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: true }));
+  return DOMPurify.sanitize(marked.parse(linkifyBareUrls(text), { gfm: true, breaks: true }));
 }
 function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
@@ -682,7 +1491,7 @@ $("detail-rename").onclick = () => { if (currentSession) showRenameSheet(current
 $("rename-submit").onclick = submitRename;
 $("rename-cancel").onclick = hideRenameSheet;
 $("rename-sheet").onclick = (e) => { if (e.target.id === "rename-sheet") hideRenameSheet(); };
-$("rename-input").addEventListener("keydown", (e) => {
+listen("rename-input", "keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); submitRename(); }
   if (e.key === "Escape") { e.preventDefault(); hideRenameSheet(); }
 });
@@ -696,8 +1505,8 @@ $("file").onchange = async (e) => {
 $("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };
 $("send").onclick = sendPrompt;
 $("stop").onclick = () => { if (!currentSession) return; ensureWriter(); send({ type: "stop", sessionId: currentSession }); };
-$("prompt").addEventListener("input", autoGrowPrompt);
-$("prompt").addEventListener("keydown", (e) => {
+listen("prompt", "input", autoGrowPrompt);
+listen("prompt", "keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
 });
 

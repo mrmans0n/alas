@@ -2,7 +2,7 @@ import Foundation
 
 /// Incrementally parses streaming markdown. Promotes already-completed
 /// prefix into `stableBlocks` at every blank line that lies outside a
-/// fenced code block (fence depth zero). Only the un-promoted tail is
+/// fenced code block. Only the un-promoted tail is
 /// re-parsed on each streaming chunk.
 ///
 /// Behavior-preserving: `stableBlocks + ACPMarkdownText.parse(tailUnparsed)`
@@ -35,8 +35,8 @@ final class ACPMarkdownBlockCache {
         promoteIfPossible()
     }
 
-    /// Walk tailUnparsed; find the latest blank line at fence depth zero
-    /// (counting ```-fenced blocks). Everything up to and including that
+    /// Walk tailUnparsed; find the latest blank line outside fenced code
+    /// blocks. Everything up to and including that
     /// blank line gets parsed once and frozen.
     private func promoteIfPossible() {
         guard let safeEnd = ACPMarkdownBlockCache.lastSafePromotionIndex(in: tailUnparsed) else {
@@ -55,17 +55,20 @@ final class ACPMarkdownBlockCache {
     /// stable prefix; for streaming, "fence at start of tail" implies
     /// the prior stable parse closed any earlier fences.
     static func lastSafePromotionIndex(in text: String) -> Int? {
-        var fenceDepth = 0
+        var openingFence: FenceDelimiter?
         var lastSafeEnd: Int? = nil
         var line = ""
         var idx = 0
         for ch in text {
             if ch == "\n" {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("```") {
-                    fenceDepth = (fenceDepth == 0) ? 1 : 0
+                if let currentFence = openingFence {
+                    if closesFence(line, currentFence) {
+                        openingFence = nil
+                    }
+                } else if let fence = matchFence(line) {
+                    openingFence = fence
                 }
-                if trimmed.isEmpty && fenceDepth == 0 {
+                if line.trimmingCharacters(in: .whitespaces).isEmpty && openingFence == nil {
                     lastSafeEnd = idx + 1 // include the newline
                 }
                 line = ""
@@ -75,5 +78,41 @@ final class ACPMarkdownBlockCache {
             idx += 1
         }
         return lastSafeEnd
+    }
+
+    private struct FenceDelimiter {
+        let marker: Character
+        let length: Int
+    }
+
+    private static func matchFence(_ line: String) -> FenceDelimiter? {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return nil }
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex else { return nil }
+        let fenceText = line[index...]
+        guard let marker = fenceText.first, marker == "`" || marker == "~" else { return nil }
+        let length = fenceText.prefix(while: { $0 == marker }).count
+        guard length >= 3 else { return nil }
+        return FenceDelimiter(marker: marker, length: length)
+    }
+
+    private static func closesFence(_ line: String, _ openingFence: FenceDelimiter) -> Bool {
+        var index = line.startIndex
+        var leadingSpaces = 0
+        while index < line.endIndex, line[index] == " " {
+            leadingSpaces += 1
+            guard leadingSpaces <= 3 else { return false }
+            index = line.index(after: index)
+        }
+        guard index < line.endIndex, line[index] == openingFence.marker else { return false }
+        let markerCount = line[index...].prefix(while: { $0 == openingFence.marker }).count
+        guard markerCount >= openingFence.length else { return false }
+        let afterMarker = line.index(index, offsetBy: markerCount)
+        return line[afterMarker...].allSatisfy(\.isWhitespace)
     }
 }
