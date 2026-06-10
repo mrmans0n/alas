@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-06-10
+
+### 🐛 Fixes
+
+- Fix remote tool call cards (#501).
+
 ## [0.7.4] - 2026-06-09
 
 ### ✨ Features
