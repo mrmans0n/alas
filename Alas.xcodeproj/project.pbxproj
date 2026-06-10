@@ -136,6 +136,7 @@
 		2434A66A45EDF2609BA9F1D3 /* session-update-config-options.json in Resources */ = {isa = PBXBuildFile; fileRef = 97DA8F50DDCDAA15CCEA2004 /* session-update-config-options.json */; };
 		24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9E6D61B213F3378243B4A26 /* AlasField.swift */; };
 		250F0E2CB26CC16D2FFDB9DD /* DiffSelectableTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23FECFF5D8673A3A8E7A1431 /* DiffSelectableTextView.swift */; };
+		25311FAD068B5590F459CED9 /* ACPChatLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D8E02BB3FEB3C71AEEBBE6F /* ACPChatLayout.swift */; };
 		25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */; };
 		255E9EAE89D521E08EB90918 /* JSONHookSettingsFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 137F79BD0DEB96B6F756ABD4 /* JSONHookSettingsFile.swift */; };
 		2584552219DE6987E1E6AF36 /* AgentRunError.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BF2F213480B30034B25B2B8 /* AgentRunError.swift */; };
@@ -658,6 +659,7 @@
 		ADAE65B8D982CD4411235D32 /* CodeHostRemoteDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E98F9835497D830C12AA8F /* CodeHostRemoteDetector.swift */; };
 		ADF6D3B634D9CCA17D7884EC /* PiACPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6641006D2208E28C46AAB2 /* PiACPInstallerTests.swift */; };
 		AE179E24A9E308150D1FD1D5 /* CommitPromptStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E40B5F193E3CB5EB5BA945A /* CommitPromptStatusTests.swift */; };
+		AEB565CDE2F5AEAE088A1A79 /* ACPChatLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */; };
 		AF2263B61D95A8BFF0972E93 /* AgentHookEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */; };
 		AFD24C0A5D5625A1843751C1 /* ACPFirstRunConnectingPhase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73539FDFE4BDBD4D3B4DE546 /* ACPFirstRunConnectingPhase.swift */; };
 		B055F47062645975A500E2EF /* ACPPlanPill.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7AAAEB5A9C69FC459AAD70B /* ACPPlanPill.swift */; };
@@ -1393,6 +1395,7 @@
 		6D1AAAE396590865426C592A /* ACPSessionManagerRetentionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerRetentionTests.swift; sourceTree = "<group>"; };
 		6D46BDE72E52818061452ECB /* CommitRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitRowTests.swift; sourceTree = "<group>"; };
 		6D788808DF3BE405143F91F7 /* ReleaseInfoTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReleaseInfoTests.swift; sourceTree = "<group>"; };
+		6D8E02BB3FEB3C71AEEBBE6F /* ACPChatLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChatLayout.swift; sourceTree = "<group>"; };
 		6DF0AEE54BDB4FC4FD5E02F4 /* GitServiceStagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceStagingTests.swift; sourceTree = "<group>"; };
 		6DF51E6FAFBB47E2F31DA287 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6E8B52175A7F6144B4C52010 /* EditorTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTabView.swift; sourceTree = "<group>"; };
@@ -1506,6 +1509,7 @@
 		8EDED937A8E8340D6E685A6E /* GitNameValidatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitNameValidatorTests.swift; sourceTree = "<group>"; };
 		8EF52FE71B7FB41328859734 /* MarkdownRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownRenderer.swift; sourceTree = "<group>"; };
 		906D92F7AD84F313508D9CFD /* ACPComposerShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPComposerShell.swift; sourceTree = "<group>"; };
+		90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChatLayoutTests.swift; sourceTree = "<group>"; };
 		90817EC3BAA727EF6D9FBD97 /* GitService+Discard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+Discard.swift"; sourceTree = "<group>"; };
 		90D74C28EB7B8C3CBC53994D /* MergeAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeAgent.swift; sourceTree = "<group>"; };
 		90F0CBE40E2CF0251ABE72AE /* GitLFSBlobResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitLFSBlobResolver.swift; sourceTree = "<group>"; };
@@ -2683,6 +2687,7 @@
 		4A87288C819AD4B9E41D1858 /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */,
 				81773A01826A91080F5A2E95 /* ACPCodeBlockHighlighterTests.swift */,
 				2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */,
 				B9454F0214E21F91473C96F6 /* ACPComposerDraftBridgeTests.swift */,
@@ -2914,6 +2919,7 @@
 			children = (
 				CE2AD8D0539591C434F51418 /* ACPAuthNudgeBanner.swift */,
 				D3EDEEB00185F9C717205540 /* ACPAutoRunToggle.swift */,
+				6D8E02BB3FEB3C71AEEBBE6F /* ACPChatLayout.swift */,
 				530767799372FE03C3695656 /* ACPCodeBlockHighlighter.swift */,
 				C496549308D5C3DD20E988AD /* ACPComposer.swift */,
 				E69452CB123EB0AABB632F03 /* ACPComposerActionButton.swift */,
@@ -3905,6 +3911,7 @@
 				6E66AD13D1763D61F619F3D1 /* ACPAuthNudgeBanner.swift in Sources */,
 				56B6EF95B863B557992AE9DA /* ACPAutoRunToggle.swift in Sources */,
 				88A139C7B3C3C9F20EF5945A /* ACPChangeNotifier.swift in Sources */,
+				25311FAD068B5590F459CED9 /* ACPChatLayout.swift in Sources */,
 				C00E549FA69AB3D3C55B85EB /* ACPChipState.swift in Sources */,
 				A70A62FDF7EA38F99D9E2B06 /* ACPClient.swift in Sources */,
 				EACD40C757361FC2C78F912A /* ACPCodeBlockHighlighter.swift in Sources */,
@@ -4415,6 +4422,7 @@
 				D95A7FAF0B955642ED9D7521 /* ACPAuthFailureTests.swift in Sources */,
 				4151B68B1CF0A947AEC4C00A /* ACPAuthNudgeBannerTests.swift in Sources */,
 				AC2EA26D999115E66DF40142 /* ACPChangeNotifierTests.swift in Sources */,
+				AEB565CDE2F5AEAE088A1A79 /* ACPChatLayoutTests.swift in Sources */,
 				5E5600E6451068BCBF732ABD /* ACPChipStateTests.swift in Sources */,
 				238BBB5FC59949CE6ABAFBEF /* ACPCodeBlockHighlighterTests.swift in Sources */,
 				33A0FC862C45CDFF47053A04 /* ACPComposerActionButtonMetricsTests.swift in Sources */,
