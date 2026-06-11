@@ -1,5 +1,13 @@
 import Foundation
 
+private struct ACPTranscriptScrollMemory: Equatable {
+    var anchorMessageId: String?
+    /// ACP view ids for persisted text rows are regenerated during hydration;
+    /// the transcript index is the durable restore target across eviction.
+    var anchorMessageIndex: Int?
+    var followsTail: Bool
+}
+
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
@@ -167,6 +175,12 @@ final class ACPSessionManager: ObservableObject {
     /// evict and later recreate the session object without losing whether
     /// the plan was last rendered inline or in the toolbar pill.
     private var planSidebarVisibility: [ACPSession.ID: Bool] = [:]
+    /// Runtime-only transcript scroll memory. Kept on the manager for the
+    /// same reason as `planSidebarVisibility`: idle ACP sessions can be
+    /// evicted on tab switches, but returning to the tab should not reset
+    /// a user-paused transcript to the top of whatever render window hydrates
+    /// first.
+    private var transcriptScrollMemory: [ACPSession.ID: ACPTranscriptScrollMemory] = [:]
     /// Set to true by `shutdownBackgroundTasks` so any in-flight `attach`
     /// coroutine that resumes after dispose aborts at the pre-commit guard
     /// rather than registering a runner for a session whose manager is dead.
@@ -253,6 +267,9 @@ final class ACPSessionManager: ObservableObject {
             title: row.title, titleSource: row.titleSource, hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
+        if let memory = transcriptScrollMemory[id] {
+            session.followsTranscriptTail = memory.followsTail
+        }
         sessions[id] = session
         return session
     }
@@ -384,6 +401,7 @@ final class ACPSessionManager: ObservableObject {
         }
         session.replaceTranscriptMessages(tail)
         session.transcript.visibleHead = 0
+        applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
@@ -510,6 +528,7 @@ final class ACPSessionManager: ObservableObject {
                   self.sessions[sessionId] === session
             else { return }
             session.prependTranscriptMessages(older)
+            self.applyRememberedTranscriptScrollWindow(to: session)
         }
         handle.task = task
         inFlightBackfills[sessionId] = task
@@ -526,6 +545,7 @@ final class ACPSessionManager: ObservableObject {
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
         planSidebarVisibility.removeValue(forKey: id)
+        transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
     }
@@ -538,6 +558,7 @@ final class ACPSessionManager: ObservableObject {
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
         planSidebarVisibility.removeValue(forKey: id)
+        transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
         try? store.deleteSession(id: id)
@@ -573,6 +594,46 @@ final class ACPSessionManager: ObservableObject {
 
     func rememberPlanSidebarVisibility(_ visible: Bool, for id: ACPSession.ID) {
         planSidebarVisibility[id] = visible
+    }
+
+    func rememberedTranscriptScrollAnchor(for id: ACPSession.ID) -> String? {
+        guard transcriptScrollMemory[id]?.followsTail == false else { return nil }
+        return transcriptScrollMemory[id]?.anchorMessageId
+    }
+
+    func rememberTranscriptScrollAnchor(
+        sessionId id: ACPSession.ID,
+        anchorMessageId: String?,
+        anchorMessageIndex: Int? = nil,
+        followsTail: Bool
+    ) {
+        if followsTail {
+            transcriptScrollMemory.removeValue(forKey: id)
+        } else {
+            transcriptScrollMemory[id] = ACPTranscriptScrollMemory(
+                anchorMessageId: anchorMessageId,
+                anchorMessageIndex: anchorMessageIndex,
+                followsTail: false
+            )
+        }
+        sessions[id]?.followsTranscriptTail = followsTail
+    }
+
+    private func applyRememberedTranscriptScrollWindow(
+        to session: ACPSession,
+        messageIndexOffset: Int = 0
+    ) {
+        guard let memory = transcriptScrollMemory[session.id], !memory.followsTail else { return }
+        if let index = memory.anchorMessageIndex {
+            let localIndex = index - messageIndexOffset
+            guard localIndex >= 0, localIndex < session.transcript.messages.count else { return }
+            session.transcript.setVisibleHead(localIndex)
+            return
+        }
+        guard let anchor = memory.anchorMessageId,
+              let index = session.transcript.messages.firstIndex(where: { $0.stableId == anchor })
+        else { return }
+        session.transcript.setVisibleHead(index)
     }
 
     /// Drops the cached `ACPSession` when its refcount is zero AND no live
@@ -1201,6 +1262,8 @@ extension ACPSessionManager {
         // but only when the session is following the tail (user hasn't scrolled up).
         if session.followsTranscriptTail {
             session.transcript.resetWindowToTail()
+        } else {
+            applyRememberedTranscriptScrollWindow(to: session)
         }
     }
 }
@@ -1366,6 +1429,14 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          onResumeTranscriptTail: { [weak self] in
+                                              self?.rememberTranscriptScrollAnchor(
+                                                sessionId: sessionId,
+                                                anchorMessageId: nil,
+                                                anchorMessageIndex: nil,
+                                                followsTail: true
+                                              )
+                                          },
                                           ownerInstanceId: instanceId)
             var runnerStarted = false
             func startRunnerIfNeeded() {

@@ -95,4 +95,86 @@ struct ACPMessageListPaginationTests {
             followsTranscriptTail: true
         ))
     }
+
+    @Test("top visible anchor prefers the row crossing the viewport top")
+    func topVisibleAnchorPrefersRowCrossingTop() {
+        let frames: [String: CGRect] = [
+            "above": CGRect(x: 0, y: -90, width: 100, height: 50),
+            "crossing": CGRect(x: 0, y: -40, width: 100, height: 80),
+            "below": CGRect(x: 0, y: 48, width: 100, height: 80)
+        ]
+
+        #expect(ACPMessageList.topVisibleAnchorID(in: frames) == "crossing")
+    }
+
+    @Test("top visible anchor uses first row below top when no row crosses")
+    func topVisibleAnchorUsesFirstRowBelowTop() {
+        let frames: [String: CGRect] = [
+            "above": CGRect(x: 0, y: -90, width: 100, height: 50),
+            "first": CGRect(x: 0, y: 16, width: 100, height: 80),
+            "second": CGRect(x: 0, y: 120, width: 100, height: 80)
+        ]
+
+        #expect(ACPMessageList.topVisibleAnchorID(in: frames) == "first")
+    }
+
+    @Test("top visible scroll target ignores non-message targets")
+    func topVisibleScrollTargetIgnoresNonMessageTargets() {
+        #expect(ACPMessageList.topVisibleScrollTargetID(
+            in: ["__pending_perm__", "message-2", "message-3"],
+            visibleMessageIds: ["message-1", "message-2", "message-3"]
+        ) == "message-2")
+    }
+
+    @Test("top visible scroll target returns nil without visible messages")
+    func topVisibleScrollTargetReturnsNilWithoutMessages() {
+        #expect(ACPMessageList.topVisibleScrollTargetID(
+            in: ["__pending_question__", "__composer_spacer__"],
+            visibleMessageIds: ["message-1"]
+        ) == nil)
+    }
+
+    @Test("visible anchor memory accepts live anchors when the remembered id is stale")
+    func visibleAnchorMemoryAcceptsStaleRememberedIDReplacement() {
+        #expect(ACPMessageList.shouldRememberVisibleAnchor(
+            "regenerated-2",
+            rememberedAnchor: "old-2",
+            restoredRememberedAnchor: nil,
+            visibleMessageIds: ["regenerated-1", "regenerated-2", "regenerated-3"],
+            isBackfillingOlderMessages: false
+        ))
+    }
+
+    @Test("visible anchor memory waits while the remembered id is still rendered")
+    func visibleAnchorMemoryWaitsForRenderedRememberedID() {
+        #expect(!ACPMessageList.shouldRememberVisibleAnchor(
+            "message-1",
+            rememberedAnchor: "message-2",
+            restoredRememberedAnchor: nil,
+            visibleMessageIds: ["message-1", "message-2", "message-3"],
+            isBackfillingOlderMessages: false
+        ))
+    }
+
+    @Test("visible anchor memory accepts refreshed anchors after restoration")
+    func visibleAnchorMemoryAcceptsAfterRestoration() {
+        #expect(ACPMessageList.shouldRememberVisibleAnchor(
+            "message-3",
+            rememberedAnchor: "message-2",
+            restoredRememberedAnchor: "message-2",
+            visibleMessageIds: ["message-1", "message-2", "message-3"],
+            isBackfillingOlderMessages: false
+        ))
+    }
+
+    @Test("visible anchor memory waits while older messages are backfilling")
+    func visibleAnchorMemoryWaitsDuringBackfill() {
+        #expect(!ACPMessageList.shouldRememberVisibleAnchor(
+            "tail-2",
+            rememberedAnchor: "old-2",
+            restoredRememberedAnchor: nil,
+            visibleMessageIds: ["tail-1", "tail-2", "tail-3"],
+            isBackfillingOlderMessages: true
+        ))
+    }
 }

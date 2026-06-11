@@ -548,18 +548,23 @@ struct ACPSessionRunnerTests {
         mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.followsTranscriptTail = false
+        var didResumeTail = false
         let runner = ACPSessionRunner(
             session: session,
             connection: ACPConnection(client: mock),
             store: store,
             sessionId: "s",
-            worktreePath: FileManager.default.temporaryDirectory.path
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onResumeTranscriptTail: {
+                didResumeTail = true
+            }
         )
 
         runner.send(text: "new turn", attachments: [])
         try await Task.sleep(nanoseconds: 50_000_000)
 
         #expect(session.followsTranscriptTail)
+        #expect(didResumeTail)
         #expect(session.transcript.messages.count == 1)
         #expect(mock.sent.contains { $0.method == "session/prompt" })
     }

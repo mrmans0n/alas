@@ -308,6 +308,17 @@ private struct ACPSessionView: View {
                                         agentName: state.agent(id: session.agentId)?.displayName
                                     )
                                 },
+                                rememberedScrollAnchor: {
+                                    manager.rememberedTranscriptScrollAnchor(for: sessionId)
+                                },
+                                onRememberScrollAnchor: { anchor, index, followsTail in
+                                    manager.rememberTranscriptScrollAnchor(
+                                        sessionId: sessionId,
+                                        anchorMessageId: anchor,
+                                        anchorMessageIndex: index,
+                                        followsTail: followsTail
+                                    )
+                                },
                                 onLoadFullToolCallContent: { toolCallId in
                                     manager.reloadFullToolCallContent(
                                         sessionId: sessionId, toolCallId: toolCallId)
