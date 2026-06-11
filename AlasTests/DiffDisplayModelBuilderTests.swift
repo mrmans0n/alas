@@ -74,6 +74,34 @@ struct DiffDisplayModelBuilderTests {
         #expect(rows[2].collapsedLineCount == 8)
     }
 
+    @Test func collapsedRowsCarryHiddenContextRowsWithStableAnchors() throws {
+        let context = (1...12).map { (number: Int) in
+            ParsedDiff.Hunk.Line(kind: .context, text: "line \(number)", oldNumber: number, newNumber: number)
+        }
+        let hunk = ParsedDiff.Hunk(header: "@@ -1,12 +1,12 @@", oldStart: 1, newStart: 1, lines: context)
+        let collapsed = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [hunk]),
+            filePath: "a.txt",
+            collapseContextThreshold: 6,
+            contextEdgeCount: 2
+        )
+        let expanded = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [hunk]),
+            filePath: "a.txt",
+            collapseContextThreshold: 99,
+            contextEdgeCount: 2
+        )
+
+        let collapsedRow = try #require(collapsed.groups[0].rows.first { $0.kind == .collapsed })
+        #expect(collapsedRow.collapsedRows.map { $0.old?.text } == (3...10).map { "line \($0)" })
+
+        for hiddenRow in collapsedRow.collapsedRows {
+            let expandedRow = try #require(expanded.groups[0].rows.first { $0.old?.text == hiddenRow.old?.text })
+            #expect(hiddenRow.old?.anchor == expandedRow.old?.anchor)
+            #expect(hiddenRow.new?.anchor == expandedRow.new?.anchor)
+        }
+    }
+
     @Test func contextAnchorsRemainStableAcrossCollapsedAndExpandedBuilds() throws {
         let context = (1...12).map { (number: Int) in
             ParsedDiff.Hunk.Line(kind: .context, text: "line \(number)", oldNumber: number, newNumber: number)

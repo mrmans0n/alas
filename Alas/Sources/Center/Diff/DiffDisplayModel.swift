@@ -94,6 +94,23 @@ struct DiffDisplayRow: Identifiable, Equatable {
     let old: DiffDisplayLine?
     let new: DiffDisplayLine?
     let collapsedLineCount: Int
+    let collapsedRows: [DiffDisplayRow]
+
+    init(
+        id: String,
+        kind: Kind,
+        old: DiffDisplayLine?,
+        new: DiffDisplayLine?,
+        collapsedLineCount: Int,
+        collapsedRows: [DiffDisplayRow] = []
+    ) {
+        self.id = id
+        self.kind = kind
+        self.old = old
+        self.new = new
+        self.collapsedLineCount = collapsedLineCount
+        self.collapsedRows = collapsedRows
+    }
 }
 
 struct DiffDisplayGroup: Identifiable, Equatable {

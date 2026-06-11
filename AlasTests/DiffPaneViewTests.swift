@@ -86,4 +86,39 @@ struct DiffPaneViewTests {
         #expect((rendered.string as NSString).length == ("\tlet b = 3" as NSString).length)
         #expect(rendered.attribute(.backgroundColor, at: 9, effectiveRange: nil) != nil)
     }
+
+    @Test func stackedProjectionRendersContextRowsOnce() throws {
+        let row = try #require(model().groups[0].rows.first)
+        #expect(row.kind == .context)
+        #expect(row.old?.text == row.new?.text)
+
+        let lines = DiffPaneRowProjection.stackedLines(for: row)
+
+        #expect(lines.map(\.text) == ["let a = 1"])
+        #expect(lines.map(\.anchor.side) == [.new])
+    }
+
+    @Test func selectionReducerExtendsRangeOnShiftClick() throws {
+        let rows = model().groups[0].rows
+        let firstAnchor = try #require(rows[0].new?.anchor)
+        let lastAnchor = try #require(rows[1].new?.anchor)
+
+        let firstSelection = DiffSelectionController.selection(
+            current: nil,
+            clicked: firstAnchor,
+            extend: false
+        )
+        #expect(firstSelection.first == firstAnchor)
+        #expect(firstSelection.last == firstAnchor)
+
+        let extended = DiffSelectionController.selection(
+            current: firstSelection,
+            clicked: lastAnchor,
+            extend: true
+        )
+        #expect(extended.first == firstAnchor)
+        #expect(extended.last == lastAnchor)
+        #expect(extended.normalized.contains(firstAnchor))
+        #expect(extended.normalized.contains(lastAnchor))
+    }
 }

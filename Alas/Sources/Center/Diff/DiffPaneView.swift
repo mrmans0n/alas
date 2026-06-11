@@ -1,9 +1,46 @@
+import AppKit
 import SwiftUI
 
 struct DiffPaneHunkActions {
     var stage: (() -> Void)?
     var discard: (() -> Void)?
     var dropFromCommit: (() -> Void)?
+}
+
+enum DiffSelectionController {
+    static func selection(
+        current: DiffSelectionRange?,
+        clicked anchor: DiffLineAnchor,
+        extend: Bool
+    ) -> DiffSelectionRange {
+        guard extend, let current else {
+            return DiffSelectionRange(first: anchor, last: anchor)
+        }
+        return DiffSelectionRange(first: current.first, last: anchor)
+    }
+}
+
+enum DiffPaneRowProjection {
+    static func visibleRows(
+        in group: DiffDisplayGroup,
+        expandedCollapsedRowIDs: Set<String>
+    ) -> [DiffDisplayRow] {
+        group.rows.flatMap { row in
+            guard row.kind == .collapsed, expandedCollapsedRowIDs.contains(row.id) else {
+                return [row]
+            }
+            return [row] + row.collapsedRows
+        }
+    }
+
+    static func stackedLines(for row: DiffDisplayRow) -> [DiffDisplayLine] {
+        if row.kind == .context {
+            if let new = row.new { return [new] }
+            if let old = row.old { return [old] }
+            return []
+        }
+        return [row.old, row.new].compactMap { $0 }
+    }
 }
 
 struct DiffPaneView: View {
@@ -19,22 +56,42 @@ struct DiffPaneView: View {
     @Environment(\.theme) private var theme
     @State private var selection: DiffSelectionRange?
     @State private var draftAnchor: DiffLineAnchor?
+    @State private var expandedCollapsedRowIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.groups) { group in
-                        hunk(group)
-                    }
-                }
-                .padding(.vertical, 8)
-            }
-            .defaultScrollAnchor(.topLeading)
+            diffBody
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
+    }
+
+    private var diffBody: some View {
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                if wrapLines {
+                    rowsStack
+                        .frame(minWidth: proxy.size.width, alignment: .topLeading)
+                } else {
+                    ScrollView(.horizontal) {
+                        rowsStack
+                            .frame(minWidth: proxy.size.width, alignment: .topLeading)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+            }
+            .defaultScrollAnchor(.topLeading)
+        }
+    }
+
+    private var rowsStack: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(model.groups) { group in
+                hunk(group)
+            }
+        }
+        .padding(.vertical, 8)
     }
 
     private var toolbar: some View {
@@ -86,7 +143,10 @@ struct DiffPaneView: View {
     private func hunk(_ group: DiffDisplayGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             hunkHeader(group)
-            ForEach(group.rows) { row in
+            ForEach(DiffPaneRowProjection.visibleRows(
+                in: group,
+                expandedCollapsedRowIDs: expandedCollapsedRowIDs
+            )) { row in
                 switch row.kind {
                 case .collapsed:
                     collapsedRow(row)
@@ -168,11 +228,8 @@ struct DiffPaneView: View {
 
     private func stackedRow(_ row: DiffDisplayRow) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let old = row.old {
-                lineCell(old, side: .old)
-            }
-            if let new = row.new {
-                lineCell(new, side: .new)
+            ForEach(DiffPaneRowProjection.stackedLines(for: row)) { line in
+                lineCell(line, side: line.anchor.side)
             }
         }
     }
@@ -213,7 +270,11 @@ struct DiffPaneView: View {
         .overlay(selectionOverlay(for: line.anchor))
         .contentShape(Rectangle())
         .onTapGesture {
-            selection = DiffSelectionRange(first: line.anchor, last: line.anchor)
+            selection = DiffSelectionController.selection(
+                current: selection,
+                clicked: line.anchor,
+                extend: NSEvent.modifierFlags.contains(.shift)
+            )
         }
         .contextMenu {
             Button("Add Note") {
@@ -238,10 +299,16 @@ struct DiffPaneView: View {
     }
 
     private func collapsedRow(_ row: DiffDisplayRow) -> some View {
-        Button {
+        let isExpanded = expandedCollapsedRowIDs.contains(row.id)
+        return Button {
+            if isExpanded {
+                expandedCollapsedRowIDs.remove(row.id)
+            } else {
+                expandedCollapsedRowIDs.insert(row.id)
+            }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "ellipsis")
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                 Text("\(row.collapsedLineCount) unchanged lines")
                     .font(.system(size: 11.5, weight: .medium))

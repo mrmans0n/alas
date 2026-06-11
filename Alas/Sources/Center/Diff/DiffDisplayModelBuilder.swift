@@ -114,13 +114,18 @@ enum DiffDisplayModelBuilder {
             appendContextRow($0, to: &rows, filePath: filePath, hunkIndex: hunkIndex)
         }
 
+        let hiddenRows = lines
+            .dropFirst(contextEdgeCount)
+            .dropLast(contextEdgeCount)
+            .map { contextRow($0, filePath: filePath, hunkIndex: hunkIndex) }
         rows.append(
             DiffDisplayRow(
                 id: "hunk-\(hunkIndex)-row-\(rows.count)-collapsed",
                 kind: .collapsed,
                 old: nil,
                 new: nil,
-                collapsedLineCount: lines.count - (contextEdgeCount * 2)
+                collapsedLineCount: hiddenRows.count,
+                collapsedRows: hiddenRows
             )
         )
 
@@ -143,30 +148,36 @@ enum DiffDisplayModelBuilder {
         filePath: String,
         hunkIndex: Int
     ) {
+        rows.append(contextRow(source, filePath: filePath, hunkIndex: hunkIndex))
+    }
+
+    private static func contextRow(
+        _ source: IndexedLine,
+        filePath: String,
+        hunkIndex: Int
+    ) -> DiffDisplayRow {
         let line = source.line
         let rowIndex = source.index
-        rows.append(
-            DiffDisplayRow(
-                id: "hunk-\(hunkIndex)-row-\(rowIndex)-context-\(line.oldNumber ?? 0)-\(line.newNumber ?? 0)",
-                kind: .context,
-                old: displayLine(
-                    line,
-                    filePath: filePath,
-                    hunkIndex: hunkIndex,
-                    rowIndex: rowIndex,
-                    side: .old,
-                    inlineSpans: []
-                ),
-                new: displayLine(
-                    line,
-                    filePath: filePath,
-                    hunkIndex: hunkIndex,
-                    rowIndex: rowIndex,
-                    side: .new,
-                    inlineSpans: []
-                ),
-                collapsedLineCount: 0
-            )
+        return DiffDisplayRow(
+            id: "hunk-\(hunkIndex)-row-\(rowIndex)-context-\(line.oldNumber ?? 0)-\(line.newNumber ?? 0)",
+            kind: .context,
+            old: displayLine(
+                line,
+                filePath: filePath,
+                hunkIndex: hunkIndex,
+                rowIndex: rowIndex,
+                side: .old,
+                inlineSpans: []
+            ),
+            new: displayLine(
+                line,
+                filePath: filePath,
+                hunkIndex: hunkIndex,
+                rowIndex: rowIndex,
+                side: .new,
+                inlineSpans: []
+            ),
+            collapsedLineCount: 0
         )
     }
 
