@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-06-12
+
+### ✨ Features
+
+- Build a review-ready diff pane for clearer file change inspection (#512).
+
+### 🐛 Fixes
+
+- Restore chat scroll position when returning to a tab (#509).
+- Speed up worktree selection (#510).
+- Keep the ACP composer font stable while typing (#508).
+- Bound retained ACP terminal output to reduce memory growth (#507).
+
 ## [0.7.7] - 2026-06-11
 
 ### 🐛 Fixes
