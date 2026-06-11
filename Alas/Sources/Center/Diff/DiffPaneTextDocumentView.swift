@@ -31,49 +31,28 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
 }
 
 final class DiffPaneTextDocumentContainerView: NSView {
-    private static let unwrappedTextContainerWidth: CGFloat = 1_000_000
-
-    private let oldGutterView = DiffPaneTextDocumentContainerView.makeTextView(selectable: false)
-    private let oldCodeView = DiffPaneTextDocumentContainerView.makeTextView(selectable: true)
-    private let newGutterView = DiffPaneTextDocumentContainerView.makeTextView(selectable: false)
-    private let newCodeView = DiffPaneTextDocumentContainerView.makeTextView(selectable: true)
-    private let stackedGutterView = DiffPaneTextDocumentContainerView.makeTextView(selectable: false)
-    private let stackedCodeView = DiffPaneTextDocumentContainerView.makeTextView(selectable: true)
+    private let oldPane = DiffPaneTextScrollView()
+    private let newPane = DiffPaneTextScrollView()
+    private let stackedPane = DiffPaneTextScrollView()
     private let dividerView = NSView()
 
     private var layoutMode: DiffLayoutMode = .split
-    private var wrapLines = false
-    private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
-    private var splitLineCount = 0
-    private var stackedLineCount = 0
     private var measuredHeight: CGFloat = 0
-    private var measuredStackedWidth: CGFloat = 0
 
-    private let horizontalPadding: CGFloat = 12
-    private let gutterWidth: CGFloat = 48
-    private let columnGap: CGFloat = 10
-    private let codeGap: CGFloat = 8
     private let dividerWidth: CGFloat = 1
-    private let verticalInset = CenterTypography.rowVerticalPadding + 5
 
     override var isFlipped: Bool { true }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(
-            width: layoutMode == .stacked && !wrapLines ? intrinsicStackedWidth : NSView.noIntrinsicMetric,
-            height: intrinsicHeight
-        )
+        NSSize(width: NSView.noIntrinsicMetric, height: measuredHeight)
     }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        addSubview(oldGutterView)
-        addSubview(oldCodeView)
-        addSubview(newGutterView)
-        addSubview(newCodeView)
-        addSubview(stackedGutterView)
-        addSubview(stackedCodeView)
+        addSubview(oldPane)
+        addSubview(newPane)
+        addSubview(stackedPane)
         addSubview(dividerView)
     }
 
@@ -92,11 +71,9 @@ final class DiffPaneTextDocumentContainerView: NSView {
         theme: Theme
     ) {
         self.layoutMode = layoutMode
-        self.wrapLines = wrapLines
-        self.font = font
         layer?.backgroundColor = NSColor(theme.color("bg-1")).cgColor
-        dividerView.layer?.backgroundColor = NSColor(theme.color("line")).cgColor
         dividerView.wantsLayer = true
+        dividerView.layer?.backgroundColor = NSColor(theme.color("line")).cgColor
 
         switch layoutMode {
         case .split:
@@ -108,12 +85,21 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 showWhitespace: showWhitespace,
                 theme: theme
             )
-            oldCodeView.textStorage?.setAttributedString(result.oldCode.attributedString)
-            oldGutterView.textStorage?.setAttributedString(result.oldGutter)
-            newCodeView.textStorage?.setAttributedString(result.newCode.attributedString)
-            newGutterView.textStorage?.setAttributedString(result.newGutter)
-            splitLineCount = max(result.oldCode.lines.count, result.newCode.lines.count)
-            stackedLineCount = 0
+            oldPane.update(
+                document: result.oldCode,
+                lineLabels: lineLabels(from: result.oldGutter),
+                wraps: wrapLines,
+                font: font,
+                theme: theme
+            )
+            newPane.update(
+                document: result.newCode,
+                lineLabels: lineLabels(from: result.newGutter),
+                wraps: wrapLines,
+                font: font,
+                theme: theme
+            )
+            measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
             let result = DiffPaneTextDocumentBuilder.buildStacked(
                 group: group,
@@ -123,15 +109,16 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 showWhitespace: showWhitespace,
                 theme: theme
             )
-            stackedCodeView.textStorage?.setAttributedString(result.code.attributedString)
-            stackedGutterView.textStorage?.setAttributedString(result.gutter)
-            stackedLineCount = result.code.lines.count
-            splitLineCount = 0
+            stackedPane.update(
+                document: result.code,
+                lineLabels: lineLabels(from: result.gutter),
+                wraps: wrapLines,
+                font: font,
+                theme: theme
+            )
+            measuredHeight = stackedPane.documentHeight
         }
 
-        oldCodeView.insertionPointColor = NSColor(theme.color("fg"))
-        newCodeView.insertionPointColor = NSColor(theme.color("fg"))
-        stackedCodeView.insertionPointColor = NSColor(theme.color("fg"))
         updateVisibility()
         needsLayout = true
         invalidateIntrinsicContentSize()
@@ -150,128 +137,59 @@ final class DiffPaneTextDocumentContainerView: NSView {
     }
 
     private func layoutSplit() {
-        let availableWidth = max(bounds.width - horizontalPadding * 2 - columnGap - dividerWidth, 240)
-        let columnWidth = floor(availableWidth / 2)
-        let codeWidth = max(columnWidth - gutterWidth - codeGap, 40)
-        let oldX = horizontalPadding
-        let newX = horizontalPadding + columnWidth + columnGap + dividerWidth
-        let preferredHeight = lineCountHeight(splitLineCount)
+        let width = max(bounds.width, 1)
+        let paneWidth = floor((width - dividerWidth) / 2)
+        oldPane.frame = NSRect(x: 0, y: 0, width: paneWidth, height: max(bounds.height, measuredHeight))
+        dividerView.frame = NSRect(x: paneWidth, y: 0, width: dividerWidth, height: max(bounds.height, measuredHeight))
+        newPane.frame = NSRect(x: paneWidth + dividerWidth, y: 0, width: width - paneWidth - dividerWidth, height: max(bounds.height, measuredHeight))
 
-        configureTextView(oldGutterView, wraps: false, width: gutterWidth)
-        configureTextView(oldCodeView, wraps: false, width: codeWidth)
-        configureTextView(newGutterView, wraps: false, width: gutterWidth)
-        configureTextView(newCodeView, wraps: false, width: codeWidth)
-
-        let contentHeight = max(
-            preferredHeight,
-            measuredTextHeight(oldCodeView),
-            measuredTextHeight(newCodeView),
-            measuredTextHeight(oldGutterView),
-            measuredTextHeight(newGutterView)
-        )
-
-        oldGutterView.frame = NSRect(x: oldX, y: verticalInset, width: gutterWidth, height: contentHeight)
-        oldCodeView.frame = NSRect(x: oldX + gutterWidth + codeGap, y: verticalInset, width: codeWidth, height: contentHeight)
-        dividerView.frame = NSRect(
-            x: horizontalPadding + columnWidth + floor(columnGap / 2),
-            y: 0,
-            width: dividerWidth,
-            height: contentHeight + verticalInset * 2
-        )
-        newGutterView.frame = NSRect(x: newX, y: verticalInset, width: gutterWidth, height: contentHeight)
-        newCodeView.frame = NSRect(x: newX + gutterWidth + codeGap, y: verticalInset, width: codeWidth, height: contentHeight)
-        measuredHeight = contentHeight + verticalInset * 2
-        measuredStackedWidth = 0
+        oldPane.layoutSubtreeIfNeeded()
+        newPane.layoutSubtreeIfNeeded()
+        measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
+        oldPane.frame.size.height = measuredHeight
+        newPane.frame.size.height = measuredHeight
+        dividerView.frame.size.height = measuredHeight
     }
 
     private func layoutStacked() {
-        let codeX = horizontalPadding + gutterWidth + codeGap
-        let codeWidth = max(bounds.width - codeX - horizontalPadding, 80)
-        let wraps = wrapLines
-
-        configureTextView(stackedGutterView, wraps: false, width: gutterWidth)
-        configureTextView(stackedCodeView, wraps: wraps, width: codeWidth)
-
-        let contentHeight = max(
-            lineCountHeight(stackedLineCount),
-            measuredTextHeight(stackedCodeView),
-            measuredTextHeight(stackedGutterView)
-        )
-        let measuredCodeWidth = measuredTextWidth(stackedCodeView)
-
-        stackedGutterView.frame = NSRect(x: horizontalPadding, y: verticalInset, width: gutterWidth, height: contentHeight)
-        stackedCodeView.frame = NSRect(
-            x: codeX,
-            y: verticalInset,
-            width: wraps ? codeWidth : max(codeWidth, measuredCodeWidth),
-            height: contentHeight
-        )
-        measuredHeight = contentHeight + verticalInset * 2
-        measuredStackedWidth = codeX + (wraps ? codeWidth : measuredCodeWidth) + horizontalPadding
-    }
-
-    private func configureTextView(_ textView: NSTextView, wraps: Bool, width: CGFloat) {
-        textView.font = font
-        textView.isHorizontallyResizable = !wraps
-        textView.isVerticallyResizable = true
-        textView.minSize = .zero
-        textView.maxSize = NSSize(
-            width: wraps ? width : Self.unwrappedTextContainerWidth,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        textView.textContainer?.widthTracksTextView = wraps
-        textView.textContainer?.heightTracksTextView = false
-        textView.textContainer?.containerSize = NSSize(
-            width: wraps ? width : Self.unwrappedTextContainerWidth,
-            height: CGFloat.greatestFiniteMagnitude
-        )
+        stackedPane.frame = NSRect(x: 0, y: 0, width: max(bounds.width, 1), height: max(bounds.height, measuredHeight))
+        stackedPane.layoutSubtreeIfNeeded()
+        measuredHeight = stackedPane.documentHeight
+        stackedPane.frame.size.height = measuredHeight
     }
 
     private func updateVisibility() {
         let split = layoutMode == .split
-        oldGutterView.isHidden = !split
-        oldCodeView.isHidden = !split
-        newGutterView.isHidden = !split
-        newCodeView.isHidden = !split
+        oldPane.isHidden = !split
+        newPane.isHidden = !split
         dividerView.isHidden = !split
-        stackedGutterView.isHidden = split
-        stackedCodeView.isHidden = split
+        stackedPane.isHidden = split
     }
 
-    private var intrinsicHeight: CGFloat {
-        max(measuredHeight, lineCountHeight(max(splitLineCount, stackedLineCount)) + verticalInset * 2)
+    private func lineLabels(from attributedString: NSAttributedString) -> [String] {
+        attributedString.string.components(separatedBy: "\n")
+    }
+}
+
+final class DiffPaneTextScrollView: NSScrollView {
+    private static let unwrappedTextContainerWidth: CGFloat = 1_000_000
+
+    private let textView: NSTextView
+    private var lineLabels: [String] = []
+    private var rowKinds: [DiffDisplayRow.Kind] = []
+    private var wraps = false
+    private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
+    private var theme: Theme?
+
+    var documentHeight: CGFloat {
+        max(measuredTextHeight() + textView.textContainerInset.height * 2, fallbackTextHeight())
     }
 
-    private var intrinsicStackedWidth: CGFloat {
-        max(measuredStackedWidth, bounds.width)
-    }
-
-    private func lineCountHeight(_ count: Int) -> CGFloat {
-        guard count > 0 else { return 0 }
-        return CGFloat(count) * NSLayoutManager().defaultLineHeight(for: font)
-    }
-
-    private func measuredTextHeight(_ textView: NSTextView) -> CGFloat {
-        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else {
-            return 0
-        }
-        layoutManager.ensureLayout(for: textContainer)
-        return ceil(layoutManager.usedRect(for: textContainer).height)
-    }
-
-    private func measuredTextWidth(_ textView: NSTextView) -> CGFloat {
-        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else {
-            return 0
-        }
-        layoutManager.ensureLayout(for: textContainer)
-        return ceil(layoutManager.usedRect(for: textContainer).width)
-    }
-
-    private static func makeTextView(selectable: Bool) -> NSTextView {
+    override init(frame frameRect: NSRect) {
         let storage = NSTextStorage()
         let layoutManager = NSLayoutManager()
         let container = NSTextContainer(size: NSSize(
-            width: unwrappedTextContainerWidth,
+            width: Self.unwrappedTextContainerWidth,
             height: CGFloat.greatestFiniteMagnitude
         ))
         container.lineFragmentPadding = 0
@@ -280,13 +198,28 @@ final class DiffPaneTextDocumentContainerView: NSView {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
 
-        let textView = NSTextView(frame: .zero, textContainer: container)
+        textView = NSTextView(frame: .zero, textContainer: container)
+        super.init(frame: frameRect)
+
+        drawsBackground = false
+        borderType = .noBorder
+        hasVerticalScroller = false
+        hasHorizontalScroller = true
+        autohidesScrollers = true
+        scrollerStyle = .overlay
+        documentView = textView
+        hasVerticalRuler = true
+        rulersVisible = true
+        verticalRulerView = DiffPaneLineNumberRulerView(scrollView: self)
+
         textView.isEditable = false
-        textView.isSelectable = selectable
+        textView.isSelectable = true
         textView.isRichText = false
-        textView.drawsBackground = false
-        textView.backgroundColor = .clear
-        textView.textContainerInset = .zero
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = true
+        textView.drawsBackground = true
+        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.autoresizingMask = [.width]
         textView.allowsUndo = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -295,6 +228,226 @@ final class DiffPaneTextDocumentContainerView: NSView {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isGrammarCheckingEnabled = false
         textView.smartInsertDeleteEnabled = false
-        return textView
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    func update(
+        document: DiffPaneTextDocumentBuilder.CodeDocument,
+        lineLabels: [String],
+        wraps: Bool,
+        font: NSFont,
+        theme: Theme
+    ) {
+        self.lineLabels = lineLabels
+        self.rowKinds = document.lines.map(\.kind)
+        self.wraps = wraps
+        self.font = font
+        self.theme = theme
+
+        textView.textStorage?.setAttributedString(document.attributedString)
+        textView.font = font
+        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.insertionPointColor = NSColor(theme.color("fg"))
+
+        if let ruler = verticalRulerView as? DiffPaneLineNumberRulerView {
+            ruler.update(
+                labels: lineLabels,
+                rowKinds: rowKinds,
+                rowHeight: lineHeight(),
+                contentTopInset: textView.textContainerInset.height,
+                theme: theme
+            )
+        }
+
+        needsLayout = true
+        invalidateIntrinsicContentSize()
+    }
+
+    override func layout() {
+        super.layout()
+        configureTextContainer()
+        textView.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: textViewWidth(),
+            height: documentHeight
+        )
+        (verticalRulerView as? DiffPaneLineNumberRulerView)?.rowHeight = lineHeight()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        if abs(event.scrollingDeltaY) > abs(event.scrollingDeltaX) {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    private func configureTextContainer() {
+        let contentWidth = max(contentView.bounds.width - textView.textContainerInset.width * 2, 1)
+        textView.isHorizontallyResizable = !wraps
+        textView.minSize = .zero
+        textView.maxSize = NSSize(
+            width: wraps ? contentWidth : Self.unwrappedTextContainerWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.textContainer?.widthTracksTextView = wraps
+        textView.textContainer?.heightTracksTextView = false
+        textView.textContainer?.containerSize = NSSize(
+            width: wraps ? contentWidth : Self.unwrappedTextContainerWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+    }
+
+    private func textViewWidth() -> CGFloat {
+        let contentWidth = max(contentView.bounds.width, 1)
+        if wraps {
+            return contentWidth
+        }
+        return max(contentWidth, measuredTextWidth() + textView.textContainerInset.width * 2)
+    }
+
+    private func measuredTextHeight() -> CGFloat {
+        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else {
+            return 0
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        return ceil(layoutManager.usedRect(for: textContainer).height)
+    }
+
+    private func measuredTextWidth() -> CGFloat {
+        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else {
+            return 0
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        return ceil(layoutManager.usedRect(for: textContainer).width)
+    }
+
+    private func fallbackTextHeight() -> CGFloat {
+        CGFloat(max(lineLabels.count, 1)) * lineHeight() + textView.textContainerInset.height * 2
+    }
+
+    private func lineHeight() -> CGFloat {
+        ceil(font.ascender + abs(font.descender) + font.leading)
+    }
+}
+
+final class DiffPaneLineNumberRulerView: NSRulerView {
+    private var labels: [String] = []
+    private var rowKinds: [DiffDisplayRow.Kind] = []
+    private var theme: Theme?
+    var rowHeight: CGFloat = 16
+    private var contentTopInset: CGFloat = 6
+    private var boundsObserver: NSObjectProtocol?
+
+    private let minimumThickness: CGFloat = 42
+    private let horizontalPadding: CGFloat = 8
+
+    init(scrollView: NSScrollView) {
+        super.init(scrollView: scrollView, orientation: .verticalRuler)
+        ruleThickness = minimumThickness
+        reservedThicknessForMarkers = 0
+        reservedThicknessForAccessoryView = 0
+        observe(scrollView: scrollView)
+    }
+
+    required init(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    override var isFlipped: Bool { true }
+
+    func update(
+        labels: [String],
+        rowKinds: [DiffDisplayRow.Kind],
+        rowHeight: CGFloat,
+        contentTopInset: CGFloat,
+        theme: Theme
+    ) {
+        self.labels = labels
+        self.rowKinds = rowKinds
+        self.rowHeight = rowHeight
+        self.contentTopInset = contentTopInset
+        self.theme = theme
+        updateThickness()
+        needsDisplay = true
+    }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        guard let theme else { return }
+        NSColor(theme.color("bg-2")).setFill()
+        bounds.fill()
+
+        guard let scrollView, rowHeight > 0, !labels.isEmpty else { return }
+        let visible = scrollView.contentView.bounds
+        let firstRow = max(0, Int(floor((visible.minY - contentTopInset) / rowHeight)))
+        let lastRow = min(labels.count - 1, Int(ceil((visible.maxY - contentTopInset) / rowHeight)))
+        guard firstRow <= lastRow else { return }
+
+        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
+        for index in firstRow...lastRow {
+            let label = labels[index]
+            guard !label.isEmpty else { continue }
+            let y = contentTopInset + CGFloat(index) * rowHeight - visible.minY
+            let drawRect = NSRect(
+                x: 0,
+                y: y + max((rowHeight - textHeight) / 2, 0),
+                width: ruleThickness - horizontalPadding,
+                height: textHeight
+            )
+            NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label))
+        }
+    }
+
+    private func observe(scrollView: NSScrollView) {
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.needsDisplay = true
+        }
+    }
+
+    private func updateThickness() {
+        let maxDigits = labels
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "+- ")) }
+            .map(\.count)
+            .max() ?? 1
+        let sample = String(repeating: "8", count: max(maxDigits, 1)) as NSString
+        let width = ceil(sample.size(withAttributes: labelAttributes(for: "")).width)
+        ruleThickness = max(minimumThickness, width + horizontalPadding * 2)
+    }
+
+    private func labelAttributes(for label: String) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .right
+        let color: NSColor
+        if let theme {
+            if label.hasPrefix("+") {
+                color = NSColor(theme.color("add"))
+            } else if label.hasPrefix("-") {
+                color = NSColor(theme.color("del"))
+            } else {
+                color = NSColor(theme.color("fg-faint"))
+            }
+        } else {
+            color = .secondaryLabelColor
+        }
+        return [
+            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+            .foregroundColor: color,
+            .paragraphStyle: paragraph,
+        ]
+    }
+
+    deinit {
+        if let boundsObserver {
+            NotificationCenter.default.removeObserver(boundsObserver)
+        }
     }
 }

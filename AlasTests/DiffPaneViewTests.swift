@@ -70,7 +70,7 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
-    @Test func diffPaneHostsNativeSelectableCodeTextViewsWithSeparateGutters() throws {
+    @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
         var layout = DiffLayoutMode.split
         var wrap = false
         var whitespace = false
@@ -90,16 +90,28 @@ struct DiffPaneViewTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
         controller.view.layoutSubtreeIfNeeded()
 
-        let textViews = allSubviews(of: controller.view)
-            .compactMap { $0 as? NSTextView }
+        let splitScrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
             .filter { !$0.isHidden }
+        let allHaveRulers = splitScrollViews.allSatisfy { scrollView in
+            scrollView.verticalRulerView is DiffPaneLineNumberRulerView
+        }
+        let allRulersVisible = splitScrollViews.allSatisfy { scrollView in
+            scrollView.rulersVisible
+        }
+        let allHorizontallyScrollable = splitScrollViews.allSatisfy { scrollView in
+            scrollView.hasHorizontalScroller
+        }
+        #expect(splitScrollViews.count == 2)
+        #expect(allHaveRulers)
+        #expect(allRulersVisible)
+        #expect(allHorizontallyScrollable)
+
+        let textViews = splitScrollViews.compactMap { $0.documentView as? NSTextView }
         let selectableTextViews = textViews.filter(\.isSelectable)
-        let gutterTextViews = textViews.filter { !$0.isSelectable }
 
         #expect(selectableTextViews.count == 2)
-        #expect(gutterTextViews.count == 2)
         #expect(selectableTextViews.allSatisfy { !$0.isEditable })
-        #expect(gutterTextViews.allSatisfy { !$0.isEditable })
 
         let selectableText = selectableTextViews.map(\.string).joined(separator: "\n")
         #expect(selectableText.contains("let b = 2"))
@@ -107,10 +119,6 @@ struct DiffPaneViewTests {
         #expect(!selectableText.contains("|"))
         #expect(!selectableText.contains("+2"))
         #expect(!selectableText.contains("-2"))
-
-        let gutterText = gutterTextViews.map(\.string).joined(separator: "\n")
-        #expect(gutterText.contains("-2"))
-        #expect(gutterText.contains("+2"))
     }
 
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
