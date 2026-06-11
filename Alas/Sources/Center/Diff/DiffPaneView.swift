@@ -20,6 +20,30 @@ enum DiffSelectionController {
     }
 }
 
+enum DiffCollapsedContextController {
+    static func collapsedRowIDs(in group: DiffDisplayGroup) -> Set<String> {
+        Set(group.rows.filter { $0.kind == .collapsed }.map(\.id))
+    }
+
+    static func isExpanded(_ group: DiffDisplayGroup, expandedIDs: Set<String>) -> Bool {
+        let ids = collapsedRowIDs(in: group)
+        return !ids.isEmpty && ids.isSubset(of: expandedIDs)
+    }
+
+    static func toggled(_ group: DiffDisplayGroup, expandedIDs: Set<String>) -> Set<String> {
+        let ids = collapsedRowIDs(in: group)
+        guard !ids.isEmpty else { return expandedIDs }
+
+        var updated = expandedIDs
+        if ids.isSubset(of: expandedIDs) {
+            updated.subtract(ids)
+        } else {
+            updated.formUnion(ids)
+        }
+        return updated
+    }
+}
+
 enum DiffPaneRowProjection {
     static func visibleRows(
         in group: DiffDisplayGroup,
@@ -196,6 +220,18 @@ struct DiffPaneView: View {
                 .foregroundColor(theme.color("fg-muted"))
                 .lineLimit(1)
             Spacer(minLength: 12)
+            if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
+                let expanded = DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedCollapsedRowIDs)
+                hunkActionButton(
+                    systemName: expanded ? "minus.square" : "plus.square",
+                    tooltip: expanded ? "Collapse context" : "Expand context"
+                ) {
+                    expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
+                        group,
+                        expandedIDs: expandedCollapsedRowIDs
+                    )
+                }
+            }
             if let stage = actions.stage {
                 hunkActionButton(systemName: "plus.square", tooltip: "Stage hunk", action: stage)
             }

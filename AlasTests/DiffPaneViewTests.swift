@@ -26,6 +26,22 @@ struct DiffPaneViewTests {
         )
     }
 
+    private func collapsedContextModel() -> DiffDisplayModel {
+        DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,15 +1,15 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: (1...15).map {
+                        .init(kind: .context, text: "let value\($0) = \($0)", oldNumber: $0, newNumber: $0)
+                    }
+                )
+            ]),
+            filePath: "a.swift"
+        )
+    }
+
     @Test func splitModeHostsRendererWithoutCrashing() {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -188,6 +204,45 @@ struct DiffPaneViewTests {
                 #expect(abs(codeRows[index].height - rulerRows[index].height) < 0.5)
             }
         }
+    }
+
+    @Test func collapsedContextControllerTogglesHiddenRows() throws {
+        let group = try #require(collapsedContextModel().groups.first)
+        let collapsedIDs = DiffCollapsedContextController.collapsedRowIDs(in: group)
+        #expect(collapsedIDs.isEmpty == false)
+
+        let expandedIDs = DiffCollapsedContextController.toggled(group, expandedIDs: [])
+        #expect(collapsedIDs.isSubset(of: expandedIDs))
+        #expect(DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedIDs))
+        #expect(DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: expandedIDs).count > group.rows.count)
+
+        let collapsedAgain = DiffCollapsedContextController.toggled(group, expandedIDs: expandedIDs)
+        #expect(collapsedAgain.intersection(collapsedIDs).isEmpty)
+    }
+
+    @Test func collapsedContextControlRendersInPaneHeader() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: collapsedContextModel(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let buttons = allSubviews(of: controller.view).compactMap { $0 as? NSButton }
+        let helpTexts = buttons.compactMap { $0.toolTip }
+        #expect(helpTexts.contains("Expand context"))
     }
 
     @Test func leadingEmptyCounterpartRowsAlignWithCodeRowsInSplitPane() throws {
