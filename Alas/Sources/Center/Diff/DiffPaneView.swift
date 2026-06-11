@@ -43,40 +43,6 @@ enum DiffPaneRowProjection {
     }
 }
 
-enum DiffPaneScrollPolicy {
-    static func axes(layoutMode: DiffLayoutMode, wrapLines: Bool) -> Axis.Set {
-        if wrapLines {
-            return [.vertical]
-        }
-
-        switch layoutMode {
-        case .split:
-            return [.vertical]
-        case .stacked:
-            return [.vertical, .horizontal]
-        }
-    }
-
-    static func usesIntrinsicContentWidth(layoutMode: DiffLayoutMode, wrapLines: Bool) -> Bool {
-        !wrapLines && layoutMode == .stacked
-    }
-}
-
-enum DiffPaneHitArea {
-    case gutter
-    case code
-}
-
-enum DiffPaneInteractionPolicy {
-    static func allowsNativeTextSelection(from hitArea: DiffPaneHitArea) -> Bool {
-        hitArea == .code
-    }
-
-    static func startsLineSelection(from hitArea: DiffPaneHitArea) -> Bool {
-        hitArea == .gutter
-    }
-}
-
 struct DiffPaneView: View {
     let model: DiffDisplayModel
     let fileExtension: String
@@ -88,8 +54,6 @@ struct DiffPaneView: View {
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
-    @State private var selection: DiffSelectionRange?
-    @State private var draftAnchor: DiffLineAnchor?
     @State private var expandedCollapsedRowIDs: Set<String> = []
 
     var body: some View {
@@ -103,16 +67,9 @@ struct DiffPaneView: View {
 
     private var diffBody: some View {
         GeometryReader { proxy in
-            ScrollView(DiffPaneScrollPolicy.axes(layoutMode: layoutMode, wrapLines: wrapLines)) {
+            ScrollView(.vertical) {
                 rowsStack
                     .frame(minWidth: proxy.size.width, alignment: .topLeading)
-                    .fixedSize(
-                        horizontal: DiffPaneScrollPolicy.usesIntrinsicContentWidth(
-                            layoutMode: layoutMode,
-                            wrapLines: wrapLines
-                        ),
-                        vertical: false
-                    )
             }
             .defaultScrollAnchor(.topLeading)
         }
@@ -125,7 +82,6 @@ struct DiffPaneView: View {
             }
         }
         .padding(.vertical, 8)
-        .textSelection(.enabled)
     }
 
     private var toolbar: some View {
@@ -177,22 +133,18 @@ struct DiffPaneView: View {
     private func hunk(_ group: DiffDisplayGroup) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             hunkHeader(group)
-            ForEach(DiffPaneRowProjection.visibleRows(
-                in: group,
-                expandedCollapsedRowIDs: expandedCollapsedRowIDs
-            )) { row in
-                switch row.kind {
-                case .collapsed:
-                    collapsedRow(row)
-                case .context, .add, .delete, .replacement:
-                    switch layoutMode {
-                    case .split:
-                        splitRow(row)
-                    case .stacked:
-                        stackedRow(row)
-                    }
-                }
-            }
+            DiffPaneTextDocumentView(
+                group: group,
+                expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                layoutMode: layoutMode,
+                wrapLines: wrapLines,
+                showWhitespace: showWhitespace,
+                fileExtension: fileExtension,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                theme: theme
+            )
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -227,186 +179,6 @@ struct DiffPaneView: View {
     ) -> some View {
         DiffPaneActionButton(systemName: systemName, tooltip: tooltip, action: action)
             .frame(width: 22, height: 20)
-    }
-
-    private func splitRow(_ row: DiffDisplayRow) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            splitCell(line: row.old, rowKind: row.kind, side: .old)
-            Rectangle()
-                .fill(theme.color("line"))
-                .frame(width: 0.5)
-            splitCell(line: row.new, rowKind: row.kind, side: .new)
-        }
-    }
-
-    private func splitCell(
-        line: DiffDisplayLine?,
-        rowKind: DiffDisplayRow.Kind,
-        side: DiffLineSide
-    ) -> some View {
-        Group {
-            if let line {
-                lineCell(line, side: side)
-            } else {
-                emptyCell(rowKind: rowKind, side: side)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    private func stackedRow(_ row: DiffDisplayRow) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(DiffPaneRowProjection.stackedLines(for: row)) { line in
-                lineCell(line, side: line.anchor.side)
-            }
-        }
-    }
-
-    private func lineCell(_ line: DiffDisplayLine, side: DiffLineSide) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            lineNumberCell(line)
-            DiffCodeText(
-                text: line.text,
-                fileExtension: fileExtension,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                wrapLines: wrapLines,
-                allowHorizontalExpansion: DiffPaneScrollPolicy.usesIntrinsicContentWidth(
-                    layoutMode: layoutMode,
-                    wrapLines: wrapLines
-                ),
-                showWhitespace: showWhitespace,
-                inlineSpans: line.inlineSpans,
-                inlineTone: inlineTone(for: line.kind)
-            )
-            if draftAnchor == line.anchor {
-                Text("Draft note")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(theme.color("accent"))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(theme.color("accent-soft"))
-                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                    .textSelection(.disabled)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, CenterTypography.rowVerticalPadding)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(lineBackground(for: line, side: side))
-        .overlay(selectionOverlay(for: line.anchor))
-        .contextMenu {
-            Button("Add Note") {
-                draftAnchor = line.anchor
-            }
-            Button("Copy Line") {
-                Clipboard.copy(line.text)
-            }
-        }
-    }
-
-    private func lineNumberCell(_ line: DiffDisplayLine) -> some View {
-        Text(line.lineNumber.map(String.init) ?? "")
-            .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
-            .foregroundColor(theme.color("fg-faint"))
-            .frame(width: 44, alignment: .trailing)
-            .textSelection(.disabled)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                guard DiffPaneInteractionPolicy.startsLineSelection(from: .gutter) else { return }
-                selection = DiffSelectionController.selection(
-                    current: selection,
-                    clicked: line.anchor,
-                    extend: NSEvent.modifierFlags.contains(.shift)
-                )
-            }
-    }
-
-    private func emptyCell(rowKind: DiffDisplayRow.Kind, side: DiffLineSide) -> some View {
-        HStack(spacing: 8) {
-            Text("")
-                .frame(width: 44)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, CenterTypography.rowVerticalPadding)
-        .frame(maxWidth: .infinity, minHeight: codeFontSize * 1.25, alignment: .topLeading)
-        .background(emptyBackground(for: rowKind, side: side))
-    }
-
-    private func collapsedRow(_ row: DiffDisplayRow) -> some View {
-        let isExpanded = expandedCollapsedRowIDs.contains(row.id)
-        return Button {
-            if isExpanded {
-                expandedCollapsedRowIDs.remove(row.id)
-            } else {
-                expandedCollapsedRowIDs.insert(row.id)
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("\(row.collapsedLineCount) unchanged lines")
-                    .font(.system(size: 11.5, weight: .medium))
-                Spacer()
-            }
-            .foregroundColor(theme.color("fg-dim"))
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.color("bg-2"))
-            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func selectionOverlay(for anchor: DiffLineAnchor) -> some View {
-        if selection?.contains(anchor) == true {
-            Rectangle()
-                .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
-                .allowsHitTesting(false)
-        }
-    }
-
-    private func lineBackground(for line: DiffDisplayLine, side: DiffLineSide) -> Color {
-        let base: Color
-        switch line.kind {
-        case .add:
-            base = theme.color("add").opacity(0.14)
-        case .delete:
-            base = theme.color("del").opacity(0.14)
-        case .context:
-            base = theme.color("bg-1")
-        }
-
-        if selection?.contains(line.anchor) == true {
-            return theme.color("accent-soft")
-        }
-        return base
-    }
-
-    private func emptyBackground(for rowKind: DiffDisplayRow.Kind, side: DiffLineSide) -> Color {
-        switch (rowKind, side) {
-        case (.add, .old), (.replacement, .old):
-            return theme.color("bg-2").opacity(0.55)
-        case (.delete, .new), (.replacement, .new):
-            return theme.color("bg-2").opacity(0.55)
-        default:
-            return theme.color("bg-1")
-        }
-    }
-
-    private func inlineTone(for kind: ParsedDiff.Hunk.Line.Kind) -> DiffInlineTone {
-        switch kind {
-        case .add:
-            return .add
-        case .delete:
-            return .del
-        case .context:
-            return .accent
-        }
     }
 }
 

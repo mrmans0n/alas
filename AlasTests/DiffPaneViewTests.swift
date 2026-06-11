@@ -70,30 +70,64 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
-    @Test func splitModeKeepsColumnsInViewportWhenWrappingIsOff() {
-        let axes = DiffPaneScrollPolicy.axes(layoutMode: .split, wrapLines: false)
+    @Test func diffPaneHostsNativeSelectableTextView() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
 
-        #expect(axes.contains(.vertical))
-        #expect(!axes.contains(.horizontal))
-        #expect(!DiffPaneScrollPolicy.usesIntrinsicContentWidth(layoutMode: .split, wrapLines: false))
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let textView = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSTextView }.first)
+        #expect(textView.isSelectable)
+        #expect(!textView.isEditable)
+        #expect(textView.string.contains("let b = 2"))
+        #expect(textView.string.contains("let b = 3"))
     }
 
-    @Test func stackedModeKeepsHorizontalScrollWhenWrappingIsOff() {
-        let axes = DiffPaneScrollPolicy.axes(layoutMode: .stacked, wrapLines: false)
+    @Test func splitDocumentKeepsReplacementSidesOnOneVisualRow() throws {
+        let result = DiffPaneTextDocumentBuilder.build(
+            group: try #require(model().groups.first),
+            expandedCollapsedRowIDs: [],
+            layoutMode: .split,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
 
-        #expect(axes.contains(.vertical))
-        #expect(axes.contains(.horizontal))
-        #expect(DiffPaneScrollPolicy.usesIntrinsicContentWidth(layoutMode: .stacked, wrapLines: false))
+        let rows = result.attributedString.string.components(separatedBy: "\n")
+        #expect(rows.contains { $0.contains("let b = 2") && $0.contains("\t") && $0.contains("let b = 3") })
+        #expect(result.lines.contains { $0.kind == .replacement })
     }
 
-    @Test func codeAreaKeepsNativeTextSelectionAvailable() {
-        #expect(DiffPaneInteractionPolicy.allowsNativeTextSelection(from: .code))
-        #expect(!DiffPaneInteractionPolicy.startsLineSelection(from: .code))
-    }
+    @Test func stackedDocumentProjectsReplacementSidesOntoSeparateRows() throws {
+        let result = DiffPaneTextDocumentBuilder.build(
+            group: try #require(model().groups.first),
+            expandedCollapsedRowIDs: [],
+            layoutMode: .stacked,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
 
-    @Test func gutterStartsDiffLineSelection() {
-        #expect(!DiffPaneInteractionPolicy.allowsNativeTextSelection(from: .gutter))
-        #expect(DiffPaneInteractionPolicy.startsLineSelection(from: .gutter))
+        let rows = result.attributedString.string.components(separatedBy: "\n")
+        #expect(rows.contains { $0.contains("let b = 2") })
+        #expect(rows.contains { $0.contains("let b = 3") })
+        #expect(!rows.contains { $0.contains("let b = 2\t") && $0.contains("let b = 3") })
     }
 
     @Test func hunkActionsRenderInPaneHeader() {
