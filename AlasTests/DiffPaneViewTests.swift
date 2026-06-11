@@ -70,7 +70,7 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
-    @Test func diffPaneHostsNativeSelectableTextView() throws {
+    @Test func diffPaneHostsNativeSelectableCodeTextViewsWithSeparateGutters() throws {
         var layout = DiffLayoutMode.split
         var wrap = false
         var whitespace = false
@@ -90,44 +90,70 @@ struct DiffPaneViewTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
         controller.view.layoutSubtreeIfNeeded()
 
-        let textView = try #require(allSubviews(of: controller.view).compactMap { $0 as? NSTextView }.first)
-        #expect(textView.isSelectable)
-        #expect(!textView.isEditable)
-        #expect(textView.string.contains("let b = 2"))
-        #expect(textView.string.contains("let b = 3"))
+        let textViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? NSTextView }
+            .filter { !$0.isHidden }
+        let selectableTextViews = textViews.filter(\.isSelectable)
+        let gutterTextViews = textViews.filter { !$0.isSelectable }
+
+        #expect(selectableTextViews.count == 2)
+        #expect(gutterTextViews.count == 2)
+        #expect(selectableTextViews.allSatisfy { !$0.isEditable })
+        #expect(gutterTextViews.allSatisfy { !$0.isEditable })
+
+        let selectableText = selectableTextViews.map(\.string).joined(separator: "\n")
+        #expect(selectableText.contains("let b = 2"))
+        #expect(selectableText.contains("let b = 3"))
+        #expect(!selectableText.contains("|"))
+        #expect(!selectableText.contains("+2"))
+        #expect(!selectableText.contains("-2"))
+
+        let gutterText = gutterTextViews.map(\.string).joined(separator: "\n")
+        #expect(gutterText.contains("-2"))
+        #expect(gutterText.contains("+2"))
     }
 
-    @Test func splitDocumentKeepsReplacementSidesOnOneVisualRow() throws {
-        let result = DiffPaneTextDocumentBuilder.build(
+    @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),
             expandedCollapsedRowIDs: [],
-            layoutMode: .split,
             fileExtension: "swift",
             font: CenterTypography.resolveCodeFont(family: "", size: 13),
             showWhitespace: false,
             theme: theme()
         )
 
-        let rows = result.attributedString.string.components(separatedBy: "\n")
-        #expect(rows.contains { $0.contains("let b = 2") && $0.contains("\t") && $0.contains("let b = 3") })
-        #expect(result.lines.contains { $0.kind == .replacement })
+        #expect(result.oldCode.attributedString.string.components(separatedBy: "\n") == [
+            "let a = 1",
+            "let b = 2",
+        ])
+        #expect(result.newCode.attributedString.string.components(separatedBy: "\n") == [
+            "let a = 1",
+            "let b = 3",
+        ])
+        #expect(result.oldGutter.string.components(separatedBy: "\n") == [" 1", "-2"])
+        #expect(result.newGutter.string.components(separatedBy: "\n") == [" 1", "+2"])
+        #expect(!result.oldCode.attributedString.string.contains("|"))
+        #expect(!result.newCode.attributedString.string.contains("|"))
+        #expect(result.oldCode.lines.contains { $0.kind == .replacement })
+        #expect(result.newCode.lines.contains { $0.kind == .replacement })
     }
 
-    @Test func stackedDocumentProjectsReplacementSidesOntoSeparateRows() throws {
-        let result = DiffPaneTextDocumentBuilder.build(
+    @Test func stackedDocumentBuildsCodeOnlyTextAndSeparateGutter() throws {
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
             group: try #require(model().groups.first),
             expandedCollapsedRowIDs: [],
-            layoutMode: .stacked,
             fileExtension: "swift",
             font: CenterTypography.resolveCodeFont(family: "", size: 13),
             showWhitespace: false,
             theme: theme()
         )
 
-        let rows = result.attributedString.string.components(separatedBy: "\n")
-        #expect(rows.contains { $0.contains("let b = 2") })
-        #expect(rows.contains { $0.contains("let b = 3") })
-        #expect(!rows.contains { $0.contains("let b = 2\t") && $0.contains("let b = 3") })
+        let rows = result.code.attributedString.string.components(separatedBy: "\n")
+        #expect(rows == ["let a = 1", "let b = 2", "let b = 3"])
+        #expect(result.gutter.string.components(separatedBy: "\n") == [" 1", "-2", "+2"])
+        #expect(!result.code.attributedString.string.contains("|"))
+        #expect(result.code.lines.contains { $0.kind == .replacement })
     }
 
     @Test func hunkActionsRenderInPaneHeader() {

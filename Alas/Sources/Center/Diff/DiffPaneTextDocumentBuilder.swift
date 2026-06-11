@@ -7,9 +7,129 @@ struct DiffPaneTextDocumentBuilder {
         let range: NSRange
     }
 
+    struct CodeDocument {
+        let attributedString: NSAttributedString
+        let lines: [LineMetadata]
+    }
+
+    struct SplitResult {
+        let oldCode: CodeDocument
+        let oldGutter: NSAttributedString
+        let newCode: CodeDocument
+        let newGutter: NSAttributedString
+    }
+
+    struct StackedResult {
+        let code: CodeDocument
+        let gutter: NSAttributedString
+    }
+
     struct Result {
         let attributedString: NSAttributedString
         let lines: [LineMetadata]
+    }
+
+    static func buildSplit(
+        group: DiffDisplayGroup,
+        expandedCollapsedRowIDs: Set<String>,
+        fileExtension: String,
+        font: NSFont,
+        showWhitespace: Bool,
+        theme: Theme
+    ) -> SplitResult {
+        var oldColumn = ColumnAccumulator(font: font, theme: theme)
+        var newColumn = ColumnAccumulator(font: font, theme: theme)
+        let oldGutter = NSMutableAttributedString()
+        let newGutter = NSMutableAttributedString()
+        let rows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
+
+        for row in rows {
+            appendGutterLine(marker(for: row.old, emptyKind: row.kind, side: .old), to: oldGutter, font: font, theme: theme, side: .old)
+            appendGutterLine(marker(for: row.new, emptyKind: row.kind, side: .new), to: newGutter, font: font, theme: theme, side: .new)
+
+            if row.kind == .collapsed {
+                oldColumn.append(
+                    collapsedCodeText(row, font: font, theme: theme),
+                    kind: row.kind
+                )
+                newColumn.append(NSAttributedString(string: "", attributes: baseAttributes(font: font, theme: theme)), kind: row.kind)
+                continue
+            }
+
+            oldColumn.append(
+                code(
+                    row.old?.text ?? "",
+                    line: row.old,
+                    fileExtension: fileExtension,
+                    font: font,
+                    showWhitespace: showWhitespace,
+                    theme: theme
+                ),
+                kind: row.kind
+            )
+            newColumn.append(
+                code(
+                    row.new?.text ?? "",
+                    line: row.new,
+                    fileExtension: fileExtension,
+                    font: font,
+                    showWhitespace: showWhitespace,
+                    theme: theme
+                ),
+                kind: row.kind
+            )
+        }
+
+        return SplitResult(
+            oldCode: oldColumn.document,
+            oldGutter: oldGutter,
+            newCode: newColumn.document,
+            newGutter: newGutter
+        )
+    }
+
+    static func buildStacked(
+        group: DiffDisplayGroup,
+        expandedCollapsedRowIDs: Set<String>,
+        fileExtension: String,
+        font: NSFont,
+        showWhitespace: Bool,
+        theme: Theme
+    ) -> StackedResult {
+        var codeColumn = ColumnAccumulator(font: font, theme: theme)
+        let gutter = NSMutableAttributedString()
+        let rows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
+
+        for row in rows {
+            if row.kind == .collapsed {
+                appendGutterLine("", to: gutter, font: font, theme: theme, side: .paired)
+                codeColumn.append(collapsedCodeText(row, font: font, theme: theme), kind: row.kind)
+                continue
+            }
+
+            for line in DiffPaneRowProjection.stackedLines(for: row) {
+                appendGutterLine(marker(for: line, emptyKind: row.kind, side: line.anchor.side), to: gutter, font: font, theme: theme, side: line.anchor.side)
+                codeColumn.append(
+                    code(
+                        line.text,
+                        line: line,
+                        fileExtension: fileExtension,
+                        font: font,
+                        showWhitespace: showWhitespace,
+                        theme: theme
+                    ),
+                    kind: row.kind
+                )
+            }
+        }
+
+        return StackedResult(code: codeColumn.document, gutter: gutter)
     }
 
     static func build(
@@ -168,6 +288,22 @@ struct DiffPaneTextDocumentBuilder {
         )
     }
 
+    private static func collapsedCodeText(
+        _ row: DiffDisplayRow,
+        font: NSFont,
+        theme: Theme
+    ) -> NSAttributedString {
+        NSAttributedString(
+            string: "... \(row.collapsedLineCount) unchanged lines",
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor(theme.color("fg-dim")),
+                .backgroundColor: NSColor(theme.color("bg-2")),
+                .paragraphStyle: CenterTypography.paragraphStyle(),
+            ]
+        )
+    }
+
     private static func code(
         _ text: String,
         line: DiffDisplayLine?,
@@ -191,6 +327,19 @@ struct DiffPaneTextDocumentBuilder {
         )
     }
 
+    private static func appendGutterLine(
+        _ text: String,
+        to output: NSMutableAttributedString,
+        font: NSFont,
+        theme: Theme,
+        side: DiffLineSide
+    ) {
+        if output.length > 0 {
+            output.append(NSAttributedString(string: "\n", attributes: baseAttributes(font: font, theme: theme)))
+        }
+        output.append(marker(text, font: font, theme: theme, side: side))
+    }
+
     private static func marker(
         _ text: String,
         font: NSFont,
@@ -205,6 +354,27 @@ struct DiffPaneTextDocumentBuilder {
                 .paragraphStyle: CenterTypography.paragraphStyle(),
             ]
         )
+    }
+
+    private static func marker(
+        for line: DiffDisplayLine?,
+        emptyKind: DiffDisplayRow.Kind,
+        side: DiffLineSide
+    ) -> String {
+        guard let line else {
+            return ""
+        }
+        let number = line.lineNumber.map(String.init) ?? ""
+        let sign: String
+        switch line.kind {
+        case .add:
+            sign = "+"
+        case .delete:
+            sign = "-"
+        case .context:
+            sign = " "
+        }
+        return "\(sign)\(number)"
     }
 
     private static func prefix(
@@ -291,6 +461,39 @@ struct DiffPaneTextDocumentBuilder {
         case .context:
             return theme.color("bg-1")
         }
+    }
+}
+
+private struct ColumnAccumulator {
+    private let output = NSMutableAttributedString()
+    private var metadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
+    private let newlineAttributes: [NSAttributedString.Key: Any]
+
+    init(font: NSFont, theme: Theme) {
+        newlineAttributes = [
+            .font: font,
+            .foregroundColor: NSColor(theme.color("fg")),
+            .paragraphStyle: CenterTypography.paragraphStyle(),
+        ]
+    }
+
+    var document: DiffPaneTextDocumentBuilder.CodeDocument {
+        DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: output,
+            lines: metadata
+        )
+    }
+
+    mutating func append(_ line: NSAttributedString, kind: DiffDisplayRow.Kind) {
+        if output.length > 0 {
+            output.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
+        }
+        let start = output.length
+        output.append(line)
+        metadata.append(DiffPaneTextDocumentBuilder.LineMetadata(
+            kind: kind,
+            range: NSRange(location: start, length: line.length)
+        ))
     }
 }
 
