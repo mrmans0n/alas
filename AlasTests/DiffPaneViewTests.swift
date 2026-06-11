@@ -121,6 +121,83 @@ struct DiffPaneViewTests {
         #expect(!selectableText.contains("-2"))
     }
 
+    @Test func splitPaneExposesDiffLineTonesForRailsAndPlaceholders() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let codeViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter { !$0.isHidden }
+            .compactMap { $0.documentView as? DiffPaneCodeTextView }
+        #expect(codeViews.count == 2)
+        let tones = codeViews.flatMap(\.lineTones)
+        #expect(tones.contains(.delete))
+        #expect(tones.contains(.add))
+        #expect(tones.contains(.context))
+    }
+
+    @Test func gutterRowsAlignWithCodeRowsInSplitPane() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let splitScrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter { !$0.isHidden }
+
+        for scrollView in splitScrollViews {
+            let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+            let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+            let codeRows = codeView.diffRowRects()
+            let rulerRows = ruler.diffRowRects()
+
+            #expect(codeRows.count == rulerRows.count)
+            for index in 0..<min(codeRows.count, rulerRows.count) {
+                #expect(abs(codeRows[index].minY - rulerRows[index].minY) < 0.5)
+                #expect(abs(codeRows[index].height - rulerRows[index].height) < 0.5)
+            }
+        }
+    }
+
+    @Test func diffLineToneClassifiesRailsAndEmptyCounterparts() {
+        #expect(DiffPaneLineTone(label: "-12", rowKind: .delete) == .delete)
+        #expect(DiffPaneLineTone(label: "+13", rowKind: .add) == .add)
+        #expect(DiffPaneLineTone(label: "", rowKind: .add) == .placeholder)
+        #expect(DiffPaneLineTone(label: "", rowKind: .collapsed) == .collapsed)
+        #expect(DiffPaneLineTone(label: " 8", rowKind: .context) == .context)
+    }
+
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
         let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),

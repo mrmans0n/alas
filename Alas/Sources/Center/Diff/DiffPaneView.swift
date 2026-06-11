@@ -81,15 +81,13 @@ struct DiffPaneView: View {
                 hunk(group)
             }
         }
-        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
     }
 
     private var toolbar: some View {
         HStack(spacing: 8) {
-            Seg(
-                value: $layoutMode,
-                options: DiffLayoutMode.allCases.map { ($0, $0.title) }
-            )
+            layoutSwitcher
             Spacer()
             toolbarButton(
                 systemName: wrapLines ? "text.justify.left" : "text.alignleft",
@@ -106,10 +104,45 @@ struct DiffPaneView: View {
                 showWhitespace.toggle()
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(theme.color("bg-2"))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(theme.color("bg-1"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+    }
+
+    private var layoutSwitcher: some View {
+        HStack(spacing: 0) {
+            layoutButton(.split, systemName: "rectangle.split.2x1")
+            layoutButton(.stacked, systemName: "rectangle.split.1x2")
+        }
+        .padding(3)
+        .background(theme.color("bg-3"))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(theme.color("line"), lineWidth: 0.75)
+        )
+    }
+
+    private func layoutButton(_ mode: DiffLayoutMode, systemName: String) -> some View {
+        let active = layoutMode == mode
+        return Button {
+            layoutMode = mode
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: systemName)
+                    .font(.system(size: 11, weight: .semibold))
+                Text(mode.title)
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(active ? theme.color("bg-1") : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(mode.title)
     }
 
     private func toolbarButton(
@@ -146,6 +179,13 @@ struct DiffPaneView: View {
             )
             .fixedSize(horizontal: false, vertical: true)
         }
+        .background(theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(theme.color("line"), lineWidth: 0.75)
+        )
+        .padding(.bottom, 10)
     }
 
     private func hunkHeader(_ group: DiffDisplayGroup) -> some View {
@@ -166,8 +206,8 @@ struct DiffPaneView: View {
                 hunkActionButton(systemName: "minus.circle", tooltip: "Drop from commit", action: dropFromCommit)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }

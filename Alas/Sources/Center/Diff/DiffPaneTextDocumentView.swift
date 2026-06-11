@@ -174,9 +174,10 @@ final class DiffPaneTextDocumentContainerView: NSView {
 final class DiffPaneTextScrollView: NSScrollView {
     private static let unwrappedTextContainerWidth: CGFloat = 1_000_000
 
-    private let textView: NSTextView
+    private let textView: DiffPaneCodeTextView
     private var lineLabels: [String] = []
     private var rowKinds: [DiffDisplayRow.Kind] = []
+    private var lineTones: [DiffPaneLineTone] = []
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
@@ -198,7 +199,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         layoutManager.addTextContainer(container)
         storage.addLayoutManager(layoutManager)
 
-        textView = NSTextView(frame: .zero, textContainer: container)
+        textView = DiffPaneCodeTextView(frame: .zero, textContainer: container)
         super.init(frame: frameRect)
 
         drawsBackground = false
@@ -217,8 +218,9 @@ final class DiffPaneTextScrollView: NSScrollView {
         textView.isRichText = false
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
-        textView.drawsBackground = true
-        textView.textContainerInset = NSSize(width: 6, height: 6)
+        textView.drawsBackground = false
+        textView.backgroundColor = .clear
+        textView.textContainerInset = NSSize(width: 10, height: 8)
         textView.autoresizingMask = [.width]
         textView.allowsUndo = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -243,19 +245,23 @@ final class DiffPaneTextScrollView: NSScrollView {
     ) {
         self.lineLabels = lineLabels
         self.rowKinds = document.lines.map(\.kind)
+        self.lineTones = zip(lineLabels, rowKinds).map { label, kind in
+            DiffPaneLineTone(label: label, rowKind: kind)
+        }
         self.wraps = wraps
         self.font = font
         self.theme = theme
 
         textView.textStorage?.setAttributedString(document.attributedString)
         textView.font = font
-        textView.backgroundColor = NSColor(theme.color("bg-1"))
+        textView.lineTones = lineTones
+        textView.theme = theme
         textView.insertionPointColor = NSColor(theme.color("fg"))
 
         if let ruler = verticalRulerView as? DiffPaneLineNumberRulerView {
             ruler.update(
                 labels: lineLabels,
-                rowKinds: rowKinds,
+                lineTones: lineTones,
                 rowHeight: lineHeight(),
                 contentTopInset: textView.textContainerInset.height,
                 theme: theme
@@ -335,9 +341,159 @@ final class DiffPaneTextScrollView: NSScrollView {
     }
 }
 
+enum DiffPaneLineTone: Equatable {
+    case context
+    case add
+    case delete
+    case placeholder
+    case collapsed
+
+    init(label: String, rowKind: DiffDisplayRow.Kind) {
+        if rowKind == .collapsed {
+            self = .collapsed
+        } else if label.hasPrefix("+") {
+            self = .add
+        } else if label.hasPrefix("-") {
+            self = .delete
+        } else if label.isEmpty, rowKind != .context {
+            self = .placeholder
+        } else {
+            self = .context
+        }
+    }
+}
+
+final class DiffPaneCodeTextView: NSTextView {
+    var lineTones: [DiffPaneLineTone] = [] {
+        didSet { needsDisplay = true }
+    }
+    var theme: Theme? {
+        didSet { needsDisplay = true }
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        drawLineBackgrounds(in: dirtyRect)
+        super.draw(dirtyRect)
+    }
+
+    func diffRowRects() -> [NSRect] {
+        guard let layoutManager, let textContainer else { return [] }
+        layoutManager.ensureLayout(for: textContainer)
+        let paragraphRanges = paragraphRanges(lineCount: lineTones.count)
+        return paragraphRanges.enumerated().map { index, range in
+            var rowRect = NSRect.null
+            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            if glyphRange.length > 0 {
+                layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
+                    rowRect = rowRect.union(lineFragmentRect)
+                }
+            }
+            if rowRect.isNull {
+                rowRect = fallbackRowRect(at: index, layoutManager: layoutManager)
+            }
+            rowRect.origin.x = 0
+            rowRect.origin.y += textContainerOrigin.y
+            rowRect.size.width = max(bounds.width, visibleRect.width)
+            rowRect.size.height = max(rowRect.height, layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)))
+            return rowRect
+        }
+    }
+
+    private func drawLineBackgrounds(in dirtyRect: NSRect) {
+        guard let theme else { return }
+        let rowRects = diffRowRects()
+        for (index, rowRect) in rowRects.enumerated() {
+            guard lineTones.indices.contains(index) else { continue }
+            let tone = lineTones[index]
+            guard tone != .context else { continue }
+            guard rowRect.intersects(dirtyRect) else { continue }
+
+            rowFill(for: tone, theme: theme).setFill()
+            rowRect.fill()
+            drawRail(for: tone, rowRect: rowRect, theme: theme)
+            if tone == .placeholder {
+                drawPlaceholderHatch(in: rowRect, theme: theme)
+            }
+        }
+    }
+
+    private func paragraphRanges(lineCount: Int) -> [NSRange] {
+        let ns = string as NSString
+        var ranges: [NSRange] = []
+        var location = 0
+        for _ in 0..<lineCount {
+            if location >= ns.length {
+                ranges.append(NSRange(location: ns.length, length: 0))
+                continue
+            }
+            let searchRange = NSRange(location: location, length: ns.length - location)
+            let newline = ns.range(of: "\n", options: [], range: searchRange)
+            if newline.location == NSNotFound {
+                ranges.append(NSRange(location: location, length: ns.length - location))
+                location = ns.length
+            } else {
+                ranges.append(NSRange(location: location, length: newline.location - location))
+                location = NSMaxRange(newline)
+            }
+        }
+        return ranges
+    }
+
+    private func fallbackRowRect(at index: Int, layoutManager: NSLayoutManager) -> NSRect {
+        let lineHeight = layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular))
+        return NSRect(x: 0, y: CGFloat(index) * lineHeight, width: bounds.width, height: lineHeight)
+    }
+
+    private func rowFill(for tone: DiffPaneLineTone, theme: Theme) -> NSColor {
+        switch tone {
+        case .add:
+            return NSColor(theme.color("add")).withAlphaComponent(0.18)
+        case .delete:
+            return NSColor(theme.color("del")).withAlphaComponent(0.18)
+        case .placeholder:
+            return NSColor(theme.color("bg-2")).withAlphaComponent(0.55)
+        case .collapsed:
+            return NSColor(theme.color("bg-3")).withAlphaComponent(0.72)
+        case .context:
+            return .clear
+        }
+    }
+
+    private func drawRail(for tone: DiffPaneLineTone, rowRect: NSRect, theme: Theme) {
+        let color: NSColor?
+        switch tone {
+        case .add:
+            color = NSColor(theme.color("add"))
+        case .delete:
+            color = NSColor(theme.color("del"))
+        default:
+            color = nil
+        }
+        guard let color else { return }
+        color.setFill()
+        NSRect(x: rowRect.minX, y: rowRect.minY, width: 3, height: rowRect.height).fill()
+    }
+
+    private func drawPlaceholderHatch(in rect: NSRect, theme: Theme) {
+        let path = NSBezierPath()
+        let spacing: CGFloat = 8
+        var x = rect.minX - rect.height
+        while x < rect.maxX {
+            path.move(to: NSPoint(x: x, y: rect.maxY))
+            path.line(to: NSPoint(x: x + rect.height, y: rect.minY))
+            x += spacing
+        }
+        path.lineWidth = 1
+        NSColor(theme.color("line")).withAlphaComponent(0.35).setStroke()
+        path.stroke()
+    }
+}
+
 final class DiffPaneLineNumberRulerView: NSRulerView {
     private var labels: [String] = []
-    private var rowKinds: [DiffDisplayRow.Kind] = []
+    private var lineTones: [DiffPaneLineTone] = []
     private var theme: Theme?
     var rowHeight: CGFloat = 16
     private var contentTopInset: CGFloat = 6
@@ -362,13 +518,13 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
     func update(
         labels: [String],
-        rowKinds: [DiffDisplayRow.Kind],
+        lineTones: [DiffPaneLineTone],
         rowHeight: CGFloat,
         contentTopInset: CGFloat,
         theme: Theme
     ) {
         self.labels = labels
-        self.rowKinds = rowKinds
+        self.lineTones = lineTones
         self.rowHeight = rowHeight
         self.contentTopInset = contentTopInset
         self.theme = theme
@@ -378,27 +534,46 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
         guard let theme else { return }
-        NSColor(theme.color("bg-2")).setFill()
+        NSColor(theme.color("bg-0")).setFill()
         bounds.fill()
 
-        guard let scrollView, rowHeight > 0, !labels.isEmpty else { return }
+        guard let scrollView, !labels.isEmpty else { return }
         let visible = scrollView.contentView.bounds
-        let firstRow = max(0, Int(floor((visible.minY - contentTopInset) / rowHeight)))
-        let lastRow = min(labels.count - 1, Int(ceil((visible.maxY - contentTopInset) / rowHeight)))
-        guard firstRow <= lastRow else { return }
+        let rowRects = diffRowRects()
+        guard !rowRects.isEmpty else { return }
 
         let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
-        for index in firstRow...lastRow {
+        for index in rowRects.indices {
             let label = labels[index]
+            let sourceRowRect = rowRects[index]
+            guard sourceRowRect.intersects(visible) else { continue }
+            let y = sourceRowRect.minY - visible.minY
+            let rowRect = NSRect(x: 0, y: y, width: ruleThickness, height: sourceRowRect.height)
+            drawRowBackground(index: index, rowRect: rowRect, theme: theme)
             guard !label.isEmpty else { continue }
-            let y = contentTopInset + CGFloat(index) * rowHeight - visible.minY
             let drawRect = NSRect(
                 x: 0,
-                y: y + max((rowHeight - textHeight) / 2, 0),
+                y: y + max((sourceRowRect.height - textHeight) / 2, 0),
                 width: ruleThickness - horizontalPadding,
                 height: textHeight
             )
             NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label))
+        }
+    }
+
+    func diffRowRects() -> [NSRect] {
+        if let textView = scrollView?.documentView as? DiffPaneCodeTextView {
+            return textView.diffRowRects().prefix(labels.count).map { rect in
+                NSRect(x: 0, y: rect.minY, width: ruleThickness, height: rect.height)
+            }
+        }
+        return labels.indices.map { index in
+            NSRect(
+                x: 0,
+                y: contentTopInset + CGFloat(index) * rowHeight,
+                width: ruleThickness,
+                height: rowHeight
+            )
         }
     }
 
@@ -443,6 +618,40 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ]
+    }
+
+    private func drawRowBackground(index: Int, rowRect: NSRect, theme: Theme) {
+        guard lineTones.indices.contains(index) else { return }
+        let tone = lineTones[index]
+        let fill: NSColor
+        switch tone {
+        case .add:
+            fill = NSColor(theme.color("add")).withAlphaComponent(0.16)
+        case .delete:
+            fill = NSColor(theme.color("del")).withAlphaComponent(0.16)
+        case .placeholder:
+            fill = NSColor(theme.color("bg-2")).withAlphaComponent(0.55)
+        case .collapsed:
+            fill = NSColor(theme.color("bg-3")).withAlphaComponent(0.72)
+        case .context:
+            fill = .clear
+        }
+        fill.setFill()
+        rowRect.fill()
+
+        let railColor: NSColor?
+        switch tone {
+        case .add:
+            railColor = NSColor(theme.color("add"))
+        case .delete:
+            railColor = NSColor(theme.color("del"))
+        default:
+            railColor = nil
+        }
+        if let railColor {
+            railColor.setFill()
+            NSRect(x: 0, y: rowRect.minY, width: 3, height: rowRect.height).fill()
+        }
     }
 
     deinit {
