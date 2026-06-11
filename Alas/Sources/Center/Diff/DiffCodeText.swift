@@ -25,7 +25,6 @@ struct DiffCodeText: View {
             .lineSpacing(CenterTypography.textLineSpacing(forFontSize: codeFontSize))
             .lineLimit(wrapLines ? nil : 1)
             .fixedSize(horizontal: allowHorizontalExpansion && !wrapLines, vertical: true)
-            .textSelection(.enabled)
     }
 
     private var attributedText: AttributedString {

@@ -62,6 +62,21 @@ enum DiffPaneScrollPolicy {
     }
 }
 
+enum DiffPaneHitArea {
+    case gutter
+    case code
+}
+
+enum DiffPaneInteractionPolicy {
+    static func allowsNativeTextSelection(from hitArea: DiffPaneHitArea) -> Bool {
+        hitArea == .code
+    }
+
+    static func startsLineSelection(from hitArea: DiffPaneHitArea) -> Bool {
+        hitArea == .gutter
+    }
+}
+
 struct DiffPaneView: View {
     let model: DiffDisplayModel
     let fileExtension: String
@@ -110,6 +125,7 @@ struct DiffPaneView: View {
             }
         }
         .padding(.vertical, 8)
+        .textSelection(.enabled)
     }
 
     private var toolbar: some View {
@@ -248,11 +264,7 @@ struct DiffPaneView: View {
 
     private func lineCell(_ line: DiffDisplayLine, side: DiffLineSide) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Text(line.lineNumber.map(String.init) ?? "")
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
-                .foregroundColor(theme.color("fg-faint"))
-                .frame(width: 44, alignment: .trailing)
-                .textSelection(.disabled)
+            lineNumberCell(line)
             DiffCodeText(
                 text: line.text,
                 fileExtension: fileExtension,
@@ -284,14 +296,6 @@ struct DiffPaneView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(lineBackground(for: line, side: side))
         .overlay(selectionOverlay(for: line.anchor))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            selection = DiffSelectionController.selection(
-                current: selection,
-                clicked: line.anchor,
-                extend: NSEvent.modifierFlags.contains(.shift)
-            )
-        }
         .contextMenu {
             Button("Add Note") {
                 draftAnchor = line.anchor
@@ -300,6 +304,23 @@ struct DiffPaneView: View {
                 Clipboard.copy(line.text)
             }
         }
+    }
+
+    private func lineNumberCell(_ line: DiffDisplayLine) -> some View {
+        Text(line.lineNumber.map(String.init) ?? "")
+            .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
+            .foregroundColor(theme.color("fg-faint"))
+            .frame(width: 44, alignment: .trailing)
+            .textSelection(.disabled)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard DiffPaneInteractionPolicy.startsLineSelection(from: .gutter) else { return }
+                selection = DiffSelectionController.selection(
+                    current: selection,
+                    clicked: line.anchor,
+                    extend: NSEvent.modifierFlags.contains(.shift)
+                )
+            }
     }
 
     private func emptyCell(rowKind: DiffDisplayRow.Kind, side: DiffLineSide) -> some View {
@@ -345,6 +366,7 @@ struct DiffPaneView: View {
         if selection?.contains(anchor) == true {
             Rectangle()
                 .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
+                .allowsHitTesting(false)
         }
     }
 

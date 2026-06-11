@@ -86,6 +86,16 @@ struct DiffPaneViewTests {
         #expect(DiffPaneScrollPolicy.usesIntrinsicContentWidth(layoutMode: .stacked, wrapLines: false))
     }
 
+    @Test func codeAreaKeepsNativeTextSelectionAvailable() {
+        #expect(DiffPaneInteractionPolicy.allowsNativeTextSelection(from: .code))
+        #expect(!DiffPaneInteractionPolicy.startsLineSelection(from: .code))
+    }
+
+    @Test func gutterStartsDiffLineSelection() {
+        #expect(!DiffPaneInteractionPolicy.allowsNativeTextSelection(from: .gutter))
+        #expect(DiffPaneInteractionPolicy.startsLineSelection(from: .gutter))
+    }
+
     @Test func hunkActionsRenderInPaneHeader() {
         var layout = DiffLayoutMode.split
         var wrap = false
