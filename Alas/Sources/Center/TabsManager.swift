@@ -629,6 +629,27 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusReviewChanges(worktreeId: String) -> Tab {
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: {
+               if case .reviewChanges(let state) = $0 {
+                   return state.worktreeId == worktreeId
+               }
+               return false
+           }) {
+            let tab = file.tabs[idx]
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+
+        let tab = Tab.reviewChanges(ReviewChangesTabState(worktreeId: worktreeId))
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusDraftCommit(worktreeId: String) -> Tab {
         let baseState = DraftCommitTabState(worktreeId: worktreeId)
         if var file = byWorktree[worktreeId],

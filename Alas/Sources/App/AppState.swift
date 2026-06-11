@@ -3262,6 +3262,11 @@ final class AppState {
         openACPHandoff(agentID: agentID, initialPrompt: prompt)
     }
 
+    @discardableResult
+    func openReviewChangesTab(for worktree: Worktree) -> Tab {
+        tabs.openOrFocusReviewChanges(worktreeId: worktree.id)
+    }
+
     nonisolated static func reviewLoopHandoffActionKind(for request: ReviewRequest?) -> ReviewLoopActionKind {
         if request?.hasActionableFeedback == true {
             return .prepareReviewHandoff

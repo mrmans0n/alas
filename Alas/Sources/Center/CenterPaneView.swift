@@ -235,6 +235,13 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(evidenceState.id)
+                    case .reviewChanges(let reviewState):
+                        ReviewChangesTabView(
+                            worktree: worktree,
+                            tabState: reviewState,
+                            appState: state
+                        )
+                        .id(reviewState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,
