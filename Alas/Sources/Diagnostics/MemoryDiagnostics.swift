@@ -30,6 +30,7 @@ final class MemoryDiagnostics: ObservableObject {
         var perSession: [MemorySnapshot.PerSession] = []
         var transcriptBytes: UInt64 = 0
         var markdownCacheBytes: UInt64 = 0
+        var terminalBytes: UInt64 = 0
         var sessionCount = 0
         var runnerCount = 0
         for (worktreeId, manager) in managers {
@@ -37,8 +38,10 @@ final class MemoryDiagnostics: ObservableObject {
             for session in manager.sessions.values {
                 let tx = session.transcriptByteEstimate()
                 let md = session.markdownCacheByteEstimate()
+                let term = session.terminalHost.retainedByteEstimate
                 transcriptBytes &+= tx
                 markdownCacheBytes &+= md
+                terminalBytes &+= term
                 sessionCount += 1
                 perSession.append(.init(
                     sessionId: session.id,
@@ -49,7 +52,6 @@ final class MemoryDiagnostics: ObservableObject {
                     attached: Self.isAttached(state: session.agentState)))
             }
         }
-        let terminalBytes: UInt64 = 0
         return MemorySnapshot(
             timestamp: Date(),
             physFootprint: ProcessMemoryProbe.physFootprint(),

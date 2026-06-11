@@ -23,6 +23,7 @@ final class ACPTerminal: ObservableObject {
     /// `terminal/*` protocol calls against this id while still letting
     /// the UI render the retained buffer.
     private(set) var released: Bool = false
+    var onExit: (() -> Void)?
 
     private let process: Process
     private let pipe: Pipe
@@ -413,6 +414,7 @@ final class ACPTerminal: ObservableObject {
         }
         pipe.fileHandleForReading.readabilityHandler = nil
         exitStatus = status
+        onExit?()
         let waiters = exitWaiters
         exitWaiters.removeAll()
         for c in waiters { c.resume(returning: status) }
