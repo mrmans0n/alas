@@ -33,4 +33,9 @@ struct ChatPaneTests {
             "⚡ Auto-run",
         ])
     }
+
+    @Test func chatPaneUsesSystemFontPickerDefaults() {
+        #expect(ChatPane.FontPickerDefaults.defaultLabel == "System")
+        #expect(ChatPane.FontPickerDefaults.emptyCatalogMessage == "No fonts found")
+    }
 }

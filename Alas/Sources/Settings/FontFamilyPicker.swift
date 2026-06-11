@@ -1,15 +1,29 @@
 import SwiftUI
 import AppKit
 
-/// Popover-based picker that shows a monospace font list with per-row preview.
+/// Popover-based picker that shows a font list with per-row preview.
 /// The trigger renders the currently-selected family in that family.
 struct FontFamilyPicker: View {
     @Binding var family: String
     let catalog: [String]
+    let defaultLabel: String?
+    let emptyCatalogMessage: String
 
     @Environment(\.theme) var theme
     @State private var open = false
     @State private var search = ""
+
+    init(
+        family: Binding<String>,
+        catalog: [String],
+        defaultLabel: String? = nil,
+        emptyCatalogMessage: String = "No monospace fonts found"
+    ) {
+        self._family = family
+        self.catalog = catalog
+        self.defaultLabel = defaultLabel
+        self.emptyCatalogMessage = emptyCatalogMessage
+    }
 
     var body: some View {
         Button(action: { open.toggle() }) {
@@ -42,7 +56,10 @@ struct FontFamilyPicker: View {
     private var isInstalled: Bool { catalog.contains(family) }
 
     private var triggerLabel: String {
-        isInstalled || family.isEmpty ? family : "\(family) (not installed)"
+        if family.isEmpty, let defaultLabel {
+            return defaultLabel
+        }
+        return isInstalled || family.isEmpty ? family : "\(family) (not installed)"
     }
 
     private var triggerFont: Font {
@@ -65,17 +82,27 @@ struct FontFamilyPicker: View {
 
             Divider().background(theme.color("line"))
 
-            if catalog.isEmpty {
-                Text("No monospace fonts found")
+            if catalog.isEmpty, defaultLabel == nil {
+                Text(emptyCatalogMessage)
                     .font(.system(size: 12))
                     .foregroundColor(theme.color("fg-dim"))
                     .padding(12)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if let defaultLabel {
+                            row(name: "", displayName: defaultLabel, missing: false)
+                            Divider().background(theme.color("line"))
+                        }
                         if !isInstalled, !family.isEmpty {
                             row(name: family, missing: true)
                             Divider().background(theme.color("line"))
+                        }
+                        if catalog.isEmpty {
+                            Text(emptyCatalogMessage)
+                                .font(.system(size: 12))
+                                .foregroundColor(theme.color("fg-dim"))
+                                .padding(12)
                         }
                         ForEach(filteredCatalog, id: \.self) { name in
                             row(name: name, missing: false)
@@ -89,7 +116,7 @@ struct FontFamilyPicker: View {
     }
 
     @ViewBuilder
-    private func row(name: String, missing: Bool) -> some View {
+    private func row(name: String, displayName: String? = nil, missing: Bool) -> some View {
         Button(action: {
             family = name
             open = false
@@ -99,8 +126,8 @@ struct FontFamilyPicker: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(theme.color("fg"))
                     .opacity(name == family ? 1 : 0)
-                Text(missing ? "\(name) (not installed)" : name)
-                    .font(missing ? .system(size: 13) : .custom(name, size: 14))
+                Text(missing ? "\(name) (not installed)" : (displayName ?? name))
+                    .font(name.isEmpty || missing ? .system(size: 13) : .custom(name, size: 14))
                     .foregroundColor(missing ? theme.color("fg-dim") : theme.color("fg"))
                     .lineLimit(1)
                 Spacer()

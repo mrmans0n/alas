@@ -436,7 +436,7 @@ struct AppConfig: Codable, Equatable {
                 useBypassPermissions: false
             ),
             defaultLauncherMode: .terminal,
-            chatFontFamily: "JetBrainsMono Nerd Font",
+            chatFontFamily: "",
             chatFontSize: 13
         ),
         files: Files(showIgnored: true),
@@ -687,7 +687,7 @@ extension AppConfig {
             )) ?? .terminal
             let chatFontFamily = (try? agentsContainer.decode(
                 String.self, forKey: .chatFontFamily
-            )) ?? "JetBrainsMono Nerd Font"
+            )) ?? ""
             let rawChatFontSize = (try? agentsContainer.decode(
                 Int.self, forKey: .chatFontSize
             )) ?? 13
@@ -708,7 +708,7 @@ extension AppConfig {
                     agentId: nil, useBypassPermissions: false
                 ),
                 defaultLauncherMode: .terminal,
-                chatFontFamily: "JetBrainsMono Nerd Font",
+                chatFontFamily: "",
                 chatFontSize: 13
             )
         }

@@ -1,3 +1,5 @@
+import AppKit
+import Foundation
 import Testing
 @testable import Alas
 
@@ -28,5 +30,24 @@ struct ACPChatTypographyTests {
         #expect(typography.headingSize(level: 3) == 15)
         #expect(typography.headingSize(level: 4) == 14)
         #expect(typography.headingSize(level: 99) == 14)
+    }
+
+    @Test func semanticDefaultUsesSystemFont() {
+        let typography = ACPChatTypography(fontFamily: "", fontSize: 13)
+        let font = typography.appKitFont()
+
+        #expect(font.familyName == NSFont.systemFont(ofSize: 13).familyName)
+        #expect(font.pointSize == 13)
+    }
+
+    @Test func missingFamilyFallsBackToSystemFont() {
+        let typography = ACPChatTypography(
+            fontFamily: "Missing Chat Font \(UUID().uuidString)",
+            fontSize: 15
+        )
+        let font = typography.appKitFont()
+
+        #expect(font.familyName == NSFont.systemFont(ofSize: 15).familyName)
+        #expect(font.pointSize == 15)
     }
 }
