@@ -86,6 +86,34 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
+    @Test func embeddedModeHidesDiffToolbar() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let buttonTitles = allSubviews(of: controller.view)
+            .compactMap { $0 as? NSButton }
+            .map(\.title)
+        #expect(!buttonTitles.contains("Split"))
+        #expect(!buttonTitles.contains("Stacked"))
+    }
+
     @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
         var layout = DiffLayoutMode.split
         var wrap = false

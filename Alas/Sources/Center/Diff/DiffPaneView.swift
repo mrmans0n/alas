@@ -75,6 +75,7 @@ struct DiffPaneView: View {
     @Binding var showWhitespace: Bool
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    var showsToolbar: Bool = true
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -82,7 +83,9 @@ struct DiffPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
+            if showsToolbar {
+                toolbar
+            }
             diffBody
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
