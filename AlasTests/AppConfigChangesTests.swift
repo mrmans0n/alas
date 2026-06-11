@@ -166,4 +166,67 @@ struct AppConfigChangesTests {
         let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
         #expect(decoded.changes.trackUpstreamForCommits == true)
     }
+
+    @Test func defaultsHaveDiffDisplayPreferences() {
+        #expect(AppConfig.defaults.changes.diffLayoutMode == .split)
+        #expect(AppConfig.defaults.changes.diffWrapLines == false)
+        #expect(AppConfig.defaults.changes.diffShowWhitespace == false)
+    }
+
+    @Test func decodesLegacyChangesWithoutDiffDisplayPreferences() throws {
+        let json = """
+        {
+          "themeId": "cool-slate",
+          "accent": "teal",
+          "matchSystemTheme": false,
+          "sidebarWidth": 244,
+          "rightPaneWidth": 320,
+          "rightPaneVisible": true,
+          "general": {
+            "launchAtLogin": false, "closeToTray": true, "confirmQuit": true,
+            "autoUpdate": true, "updateChannel": "Stable",
+            "crashReports": false, "usageAnalytics": false
+          },
+          "worktrees": {
+            "rootPath": "~/.alas/worktrees",
+            "pathTemplate": "{worktreeRoot}/{repo}/{branch}",
+            "branchPrefix": "feature/", "baseBranch": "main",
+            "trackUpstream": true, "deleteBranchOnRemove": true,
+            "autoFetch": true, "fetchIntervalMinutes": 5, "pruneStale": false
+          },
+          "terminal": {
+            "shell": "/bin/zsh", "workingDirectory": "worktreeRoot",
+            "startupScript": "", "worktreeCreateScript": "",
+            "inheritParentEnv": true, "fontFamily": "JetBrains Mono",
+            "fontSize": 13, "cursorStyle": "beam", "cursorBlink": true,
+            "scrollbackLines": 10000, "bell": "visual"
+          },
+          "harness": {"notifyOnFinish": true, "notifyOnAwaiting": true},
+          "changes": {
+            "aiToolId": "claude",
+            "prompt": "p",
+            "reviewRequestPrompt": "r",
+            "mergeBulkResolvePrompt": "b",
+            "mergeSingleResolvePrompt": "s",
+            "trackUpstreamForCommits": true
+          }
+        }
+        """
+        let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        #expect(cfg.changes.diffLayoutMode == .split)
+        #expect(cfg.changes.diffWrapLines == false)
+        #expect(cfg.changes.diffShowWhitespace == false)
+    }
+
+    @Test func roundTripsDiffDisplayPreferences() throws {
+        var cfg = AppConfig.defaults
+        cfg.changes.diffLayoutMode = .stacked
+        cfg.changes.diffWrapLines = true
+        cfg.changes.diffShowWhitespace = true
+        let data = try JSONEncoder().encode(cfg)
+        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
+        #expect(decoded.changes.diffLayoutMode == .stacked)
+        #expect(decoded.changes.diffWrapLines == true)
+        #expect(decoded.changes.diffShowWhitespace == true)
+    }
 }
