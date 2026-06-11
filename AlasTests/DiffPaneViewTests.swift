@@ -95,7 +95,17 @@ struct DiffPaneViewTests {
         let lines = DiffPaneRowProjection.stackedLines(for: row)
 
         #expect(lines.map(\.text) == ["let a = 1"])
-        #expect(lines.map(\.anchor.side) == [.new])
+        #expect(lines.map(\.anchor.side) == [.paired])
+    }
+
+    @Test func contextSelectionSurvivesStackedProjection() throws {
+        let row = try #require(model().groups[0].rows.first)
+        let splitOldContextAnchor = try #require(row.old?.anchor)
+        let stackedContextAnchor = try #require(DiffPaneRowProjection.stackedLines(for: row).first?.anchor)
+
+        let selection = DiffSelectionRange(first: splitOldContextAnchor, last: splitOldContextAnchor)
+
+        #expect(selection.contains(stackedContextAnchor))
     }
 
     @Test func selectionReducerExtendsRangeOnShiftClick() throws {

@@ -167,6 +167,7 @@ enum DiffDisplayModelBuilder {
                 hunkIndex: hunkIndex,
                 rowIndex: rowIndex,
                 side: .old,
+                anchorSide: .paired,
                 inlineSpans: []
             ),
             new: displayLine(
@@ -175,6 +176,7 @@ enum DiffDisplayModelBuilder {
                 hunkIndex: hunkIndex,
                 rowIndex: rowIndex,
                 side: .new,
+                anchorSide: .paired,
                 inlineSpans: []
             ),
             collapsedLineCount: 0
@@ -268,6 +270,7 @@ enum DiffDisplayModelBuilder {
         hunkIndex: Int,
         rowIndex: Int,
         side: DiffLineSide,
+        anchorSide: DiffLineSide? = nil,
         inlineSpans: [DiffInlineSpan]
     ) -> DiffDisplayLine {
         let lineNumber: Int?
@@ -280,13 +283,14 @@ enum DiffDisplayModelBuilder {
             lineNumber = line.newNumber ?? line.oldNumber
         }
 
+        let anchorSide = anchorSide ?? side
         let anchor = DiffLineAnchor(
             filePath: filePath,
             hunkIndex: hunkIndex,
             rowIndex: rowIndex,
-            side: side,
-            oldLine: side == .new ? nil : line.oldNumber,
-            newLine: side == .old ? nil : line.newNumber
+            side: anchorSide,
+            oldLine: anchorSide == .new ? nil : line.oldNumber,
+            newLine: anchorSide == .old ? nil : line.newNumber
         )
 
         return DiffDisplayLine(

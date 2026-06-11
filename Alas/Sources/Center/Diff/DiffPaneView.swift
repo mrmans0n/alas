@@ -69,20 +69,17 @@ struct DiffPaneView: View {
 
     private var diffBody: some View {
         GeometryReader { proxy in
-            ScrollView(.vertical) {
-                if wrapLines {
-                    rowsStack
-                        .frame(minWidth: proxy.size.width, alignment: .topLeading)
-                } else {
-                    ScrollView(.horizontal) {
-                        rowsStack
-                            .frame(minWidth: proxy.size.width, alignment: .topLeading)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
+            ScrollView(scrollAxes) {
+                rowsStack
+                    .frame(minWidth: proxy.size.width, alignment: .topLeading)
+                    .fixedSize(horizontal: !wrapLines, vertical: false)
             }
             .defaultScrollAnchor(.topLeading)
         }
+    }
+
+    private var scrollAxes: Axis.Set {
+        wrapLines ? [.vertical] : [.vertical, .horizontal]
     }
 
     private var rowsStack: some View {

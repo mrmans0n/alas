@@ -57,6 +57,28 @@ struct DiffDisplayModelBuilderTests {
         #expect(model.groups[0].sourceHunk == diff.hunks[0])
     }
 
+    @Test func contextRowsUseLayoutNeutralPairedAnchorsWhileKeepingSideLineNumbers() throws {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -100,1 +10,1 @@",
+            oldStart: 100,
+            newStart: 10,
+            lines: [
+                .init(kind: .context, text: "let value = 1", oldNumber: 100, newNumber: 10),
+            ]
+        )
+        let model = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [hunk]), filePath: "a.swift")
+        let row = try #require(model.groups[0].rows.first)
+        let old = try #require(row.old)
+        let new = try #require(row.new)
+
+        #expect(old.lineNumber == 100)
+        #expect(new.lineNumber == 10)
+        #expect(old.anchor == new.anchor)
+        #expect(old.anchor.side == .paired)
+        #expect(old.anchor.oldLine == 100)
+        #expect(old.anchor.newLine == 10)
+    }
+
     @Test func collapsesLargeContextRunsInsideHunk() {
         let context = (1...12).map { (number: Int) in
             ParsedDiff.Hunk.Line(kind: .context, text: "line \(number)", oldNumber: number, newNumber: number)
