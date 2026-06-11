@@ -478,6 +478,7 @@ private struct RootBaseHandlers: ViewModifier {
             }
         return r
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                state.flushScheduledSpacesSave()
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()
                 state.flushAllACPComposerDrafts()

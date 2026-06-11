@@ -417,6 +417,8 @@ final class AppState {
     private let persistenceErrorHandler: (String, String) -> Void
     @ObservationIgnored
     private let fileActionErrorHandler: (String, String) -> Void
+    @ObservationIgnored
+    private var scheduledSpacesSave: Task<Void, Never>?
 
     /// One FSEvents watcher per project, watching `<repo>/.git` to auto-refresh
     /// the sidebar when branches flip or worktrees appear/disappear externally.
@@ -655,6 +657,12 @@ final class AppState {
 
     @discardableResult
     func saveSpaces() -> Bool {
+        scheduledSpacesSave?.cancel()
+        scheduledSpacesSave = nil
+        return writeSpaces()
+    }
+
+    private func writeSpaces() -> Bool {
         do {
             try store.write(spacesManager.file, to: Paths.spacesFile)
             return true
@@ -664,11 +672,30 @@ final class AppState {
         }
     }
 
+    private func scheduleSpacesSave() {
+        scheduledSpacesSave?.cancel()
+        scheduledSpacesSave = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 200_000_000)
+            } catch {
+                return
+            }
+            guard let self else { return }
+            self.scheduledSpacesSave = nil
+            _ = self.writeSpaces()
+        }
+    }
+
+    func flushScheduledSpacesSave() {
+        guard scheduledSpacesSave != nil else { return }
+        _ = saveSpaces()
+    }
+
     func selectWorktree(id: String?) {
         guard selectedWorktreeId != id || spacesManager.activeSpace?.lastSelectedWorktreeId != id else { return }
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
-        saveSpaces()
+        scheduleSpacesSave()
     }
 
     @discardableResult
@@ -679,7 +706,7 @@ final class AppState {
         let selection = resolvedSelectionForActiveSpace()
         selectedWorktreeId = selection
         spacesManager.setLastSelectedWorktree(selection)
-        saveSpaces()
+        scheduleSpacesSave()
         return true
     }
 

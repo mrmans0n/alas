@@ -112,6 +112,58 @@ struct AppStateSpacesTests {
         #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt1")
     }
 
+    @Test func selectingWorktreeDefersAndCoalescesSpacePersistence() async throws {
+        var spaceWriteCount = 0
+        var persistedSelection: String?
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [project("p1")]),
+            writes: { value, url in
+                guard url == Paths.spacesFile else { return }
+                spaceWriteCount += 1
+                persistedSelection = (value as? SpacesFile)?
+                    .spaces
+                    .first?
+                    .lastSelectedWorktreeId
+            }
+        ))
+
+        state.selectWorktree(id: "wt1")
+        state.selectWorktree(id: "wt2")
+
+        #expect(state.selectedWorktreeId == "wt2")
+        #expect(state.spacesManager.activeSpace?.lastSelectedWorktreeId == "wt2")
+        #expect(spaceWriteCount == 0)
+
+        try await Task.sleep(nanoseconds: 350_000_000)
+
+        #expect(spaceWriteCount == 1)
+        #expect(persistedSelection == "wt2")
+    }
+
+    @Test func flushScheduledSpacesSavePersistsPendingSelectionImmediately() {
+        var spaceWriteCount = 0
+        var persistedSelection: String?
+        let state = AppState(store: MemoryStore(
+            projectsFile: ProjectsFile(projects: [project("p1")]),
+            writes: { value, url in
+                guard url == Paths.spacesFile else { return }
+                spaceWriteCount += 1
+                persistedSelection = (value as? SpacesFile)?
+                    .spaces
+                    .first?
+                    .lastSelectedWorktreeId
+            }
+        ))
+
+        state.selectWorktree(id: "wt1")
+        #expect(spaceWriteCount == 0)
+
+        state.flushScheduledSpacesSave()
+
+        #expect(spaceWriteCount == 1)
+        #expect(persistedSelection == "wt1")
+    }
+
     @Test func startupSelectionUsesRememberedActiveSpaceWorktreeBeforeFirstVisible() {
         let p1 = project("p1")
         let spaces = SpacesFile(
