@@ -9,6 +9,7 @@ enum ACPTerminalHostError: Error, Equatable {
 @MainActor
 final class ACPTerminalHost: ObservableObject {
     static let maxLiveTerminals = 32
+    static let maxRetainedFinishedTerminals = 64
 
     private(set) var sessionCwd: String
     private(set) var sessionEnv: [String: String]
@@ -48,6 +49,9 @@ final class ACPTerminalHost: ObservableObject {
                 env: env,
                 cwd: cwd,
                 outputByteLimit: limit)
+            term.onExit = { [weak self] in
+                self?.pruneFinishedTerminals()
+            }
             terminals[id] = term
             return ACPTerminalCreateResult(terminalId: id)
         } catch {
@@ -98,6 +102,10 @@ final class ACPTerminalHost: ObservableObject {
         for term in terminals.values { term.kill() }
     }
 
+    var retainedByteEstimate: UInt64 {
+        terminals.values.reduce(0) { $0 &+ UInt64($1.buffer.count) }
+    }
+
     func updateContext(sessionCwd: String, sessionEnv: [String: String]) {
         self.sessionCwd = sessionCwd
         self.sessionEnv = sessionEnv
@@ -116,5 +124,16 @@ final class ACPTerminalHost: ObservableObject {
         var out = sessionEnv
         for v in overlay ?? [] { out[v.name] = v.value }
         return out
+    }
+
+    private func pruneFinishedTerminals() {
+        let finished = terminals.values
+            .filter { $0.exitStatus != nil }
+            .sorted { $0.createdAt < $1.createdAt }
+        let overflow = finished.count - Self.maxRetainedFinishedTerminals
+        guard overflow > 0 else { return }
+        for term in finished.prefix(overflow) {
+            terminals.removeValue(forKey: term.id)
+        }
     }
 }

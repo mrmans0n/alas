@@ -107,6 +107,42 @@ struct ACPTerminalHostTests {
         #expect(status.exitCode != 0 || status.signal != nil)
     }
 
+    @Test("finished terminal retention is capped")
+    func finishedTerminalRetentionIsCapped() async throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+        for i in 0 ... ACPTerminalHost.maxRetainedFinishedTerminals {
+            let r = try host.create(.init(
+                sessionId: "s",
+                command: "/bin/echo",
+                args: ["terminal-\(i)"],
+                env: nil,
+                cwd: nil,
+                outputByteLimit: nil
+            ))
+            _ = await host.terminal(id: r.terminalId)?.waitForExit()
+        }
+
+        #expect(host.terminals.count == ACPTerminalHost.maxRetainedFinishedTerminals)
+    }
+
+    #if DEBUG
+    @Test("retained byte estimate includes terminal buffers")
+    func retainedByteEstimateIncludesTerminalBuffers() async throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+        let r = try host.create(.init(
+            sessionId: "s",
+            command: "/bin/echo",
+            args: ["retained-output"],
+            env: nil,
+            cwd: nil,
+            outputByteLimit: nil
+        ))
+        _ = await host.terminal(id: r.terminalId)?.waitForExit()
+
+        #expect(host.retainedByteEstimate > 0)
+    }
+    #endif
+
     @Test("create errors after 32 live terminals")
     func tooManyLive() async throws {
         let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
