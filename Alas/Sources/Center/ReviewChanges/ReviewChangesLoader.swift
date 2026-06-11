@@ -29,7 +29,7 @@ struct ReviewChangesLoader {
             )
             try Task.checkCancellation()
 
-            files.append(fileSection(for: change, diff: diff))
+            files.append(try await fileSection(for: change, diff: diff))
         }
 
         return ReviewChangesLoadedSession(
@@ -51,15 +51,16 @@ struct ReviewChangesLoader {
             }
     }
 
-    private func fileSection(for change: ChangedFile, diff: ParsedDiff) -> ReviewChangesFileSectionModel {
+    private func fileSection(for change: ChangedFile, diff: ParsedDiff) async throws -> ReviewChangesFileSectionModel {
         let source = ReviewChangesSource(stage: change.stage)
         let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: change.path)
+        let counts = lineCounts(in: diff)
         let summary = ReviewChangesFileSummary(
             path: change.path,
             source: source,
             status: ReviewChangesFileStatus(gitStatus: change.status, conflict: change.conflict),
-            additions: change.add,
-            deletions: change.del,
+            additions: counts.additions,
+            deletions: counts.deletions,
             isRenderable: canRender,
             originalPath: change.renameFrom
         )
@@ -68,10 +69,34 @@ struct ReviewChangesLoader {
             summary: summary,
             parsedDiff: diff,
             displayModel: canRender
-                ? DiffDisplayModelBuilder.build(diff: diff, filePath: change.path)
+                ? try await buildDisplayModel(diff: diff, filePath: change.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: change, diff: diff)
         )
+    }
+
+    private func buildDisplayModel(diff: ParsedDiff, filePath: String) async throws -> DiffDisplayModel {
+        try Task.checkCancellation()
+        let model = await Task.detached(priority: .userInitiated) {
+            DiffDisplayModelBuilder.build(diff: diff, filePath: filePath)
+        }.value
+        try Task.checkCancellation()
+        return model
+    }
+
+    private func lineCounts(in diff: ParsedDiff) -> (additions: Int, deletions: Int) {
+        diff.hunks.reduce(into: (additions: 0, deletions: 0)) { counts, hunk in
+            for line in hunk.lines {
+                switch line.kind {
+                case .add:
+                    counts.additions += 1
+                case .delete:
+                    counts.deletions += 1
+                case .context:
+                    break
+                }
+            }
+        }
     }
 
     private func placeholderMessage(for change: ChangedFile, diff: ParsedDiff) -> String {

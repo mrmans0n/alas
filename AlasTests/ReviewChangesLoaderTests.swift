@@ -62,6 +62,66 @@ struct ReviewChangesLoaderTests {
         #expect(file.summary.isRenderable == false)
         #expect(file.placeholderMessage != nil)
     }
+
+    @Test func derivesCountsFromSideSpecificDiffsForSamePathChanges() async throws {
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "a.swift", status: "M", stage: .staged, add: 99, del: 88, renameFrom: nil),
+                ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 99, del: 88, renameFrom: nil),
+            ],
+            diffs: [
+                .init(path: "a.swift", staged: false): diff(lines: [
+                    .init(kind: .delete, text: "let oldUnstaged = 1", oldNumber: 1, newNumber: nil),
+                    .init(kind: .add, text: "let newUnstaged = 1", oldNumber: nil, newNumber: 1),
+                    .init(kind: .add, text: "let otherUnstaged = 2", oldNumber: nil, newNumber: 2),
+                ]),
+                .init(path: "a.swift", staged: true): diff(lines: [
+                    .init(kind: .delete, text: "let oldStaged = 1", oldNumber: 1, newNumber: nil),
+                    .init(kind: .delete, text: "let olderStaged = 0", oldNumber: 2, newNumber: nil),
+                    .init(kind: .add, text: "let newStaged = 1", oldNumber: nil, newNumber: 1),
+                ]),
+            ]
+        )
+        let loader = ReviewChangesLoader(git: git)
+
+        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+
+        #expect(session.files.map(\.id.rawValue) == ["unstaged:a.swift", "staged:a.swift"])
+        #expect(session.files.map(\.summary.additions) == [2, 1])
+        #expect(session.files.map(\.summary.deletions) == [1, 2])
+        #expect(session.summary.totalAdditions == 3)
+        #expect(session.summary.totalDeletions == 3)
+    }
+
+    @Test func propagatesRenameMetadataToSummary() async throws {
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "new.swift", status: "R", stage: .unstaged, add: 42, del: 24, renameFrom: "old.swift"),
+            ],
+            diffs: [
+                .init(path: "new.swift", staged: false): diff(lines: [
+                    .init(kind: .add, text: "let renamed = true", oldNumber: nil, newNumber: 1),
+                ]),
+            ]
+        )
+        let loader = ReviewChangesLoader(git: git)
+
+        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.originalPath == "old.swift")
+    }
+
+    private func diff(lines: [ParsedDiff.Hunk.Line]) -> ParsedDiff {
+        ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,\(lines.count) +1,\(lines.count) @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: lines
+            ),
+        ])
+    }
 }
 
 private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
