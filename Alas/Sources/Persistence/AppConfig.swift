@@ -310,10 +310,14 @@ struct AppConfig: Codable, Equatable {
         /// (default), it always compares against `worktrees.baseBranch`,
         /// so the list stays stable across pushes.
         var trackUpstreamForCommits: Bool
+        var diffLayoutMode: DiffLayoutMode
+        var diffWrapLines: Bool
+        var diffShowWhitespace: Bool
 
         enum CodingKeys: String, CodingKey {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
-                 mergeSingleResolvePrompt, trackUpstreamForCommits
+                 mergeSingleResolvePrompt, trackUpstreamForCommits,
+                 diffLayoutMode, diffWrapLines, diffShowWhitespace
         }
     }
 
@@ -426,7 +430,10 @@ struct AppConfig: Codable, Equatable {
             reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
             mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
             mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
-            trackUpstreamForCommits: false
+            trackUpstreamForCommits: false,
+            diffLayoutMode: .split,
+            diffWrapLines: false,
+            diffShowWhitespace: false
         ),
         agents: Agents(
             builtinState: [:],
@@ -652,13 +659,19 @@ extension AppConfig {
             let singleResolve = (try? changesContainer.decode(String.self, forKey: .mergeSingleResolvePrompt))
                 ?? AppConfig.defaultMergeSingleResolvePrompt
             let trackUpstream = (try? changesContainer.decode(Bool.self, forKey: .trackUpstreamForCommits)) ?? false
+            let diffLayoutMode = (try? changesContainer.decode(DiffLayoutMode.self, forKey: .diffLayoutMode)) ?? .split
+            let diffWrapLines = (try? changesContainer.decode(Bool.self, forKey: .diffWrapLines)) ?? false
+            let diffShowWhitespace = (try? changesContainer.decode(Bool.self, forKey: .diffShowWhitespace)) ?? false
             changes = Changes(
                 aiToolId: toolId,
                 prompt: prompt,
                 reviewRequestPrompt: reviewRequestPrompt,
                 mergeBulkResolvePrompt: bulkResolve,
                 mergeSingleResolvePrompt: singleResolve,
-                trackUpstreamForCommits: trackUpstream
+                trackUpstreamForCommits: trackUpstream,
+                diffLayoutMode: diffLayoutMode,
+                diffWrapLines: diffWrapLines,
+                diffShowWhitespace: diffShowWhitespace
             )
         } else {
             changes = Changes(
@@ -667,7 +680,10 @@ extension AppConfig {
                 reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
                 mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
                 mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
-                trackUpstreamForCommits: false
+                trackUpstreamForCommits: false,
+                diffLayoutMode: .split,
+                diffWrapLines: false,
+                diffShowWhitespace: false
             )
         }
         if let agentsContainer = try? c.nestedContainer(
