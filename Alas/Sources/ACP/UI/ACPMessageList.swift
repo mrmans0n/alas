@@ -19,6 +19,8 @@ struct ACPMessageList: View {
     let onQueueReorder: (Int, Int) -> Void
     let onQueueClearAll: () -> Void
     let onRetryContextRecovery: () -> Void
+    let rememberedScrollAnchor: () -> String?
+    let onRememberScrollAnchor: (String?, Int?, Bool) -> Void
     /// Resolves the full persisted content of a tool call by id when an
     /// expanded card's in-memory content was truncated. Wired by the host
     /// to `ACPSessionManager.reloadFullToolCallContent`. Returns nil when
@@ -29,6 +31,8 @@ struct ACPMessageList: View {
     @State private var headFrame: CGRect = .zero
     @State private var lastHeadStepAt: Date = .distantPast
     @State private var scrollViewRef = ACPWeakScrollViewRef()
+    @State private var latestTopVisibleAnchor: String?
+    @State private var restoredRememberedAnchor: String?
 
     /// Height of an invisible spacer at the tail of the VStack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -50,10 +54,15 @@ struct ACPMessageList: View {
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
     private var visibleMessages: [ACPMessage] {
+        visibleRows.map(\.message)
+    }
+
+    private var visibleRows: [(index: Int, message: ACPMessage)] {
         let head = min(transcript.visibleHead, transcript.messages.count)
-        return transcript.messages[head...].filter {
-            if case .plan = $0 { return false }
-            return true
+        return (head..<transcript.messages.count).compactMap { index in
+            let message = transcript.messages[index]
+            if case .plan = message { return nil }
+            return (index, message)
         }
     }
 
@@ -114,8 +123,9 @@ struct ACPMessageList: View {
                                 .padding(.bottom, 4)
                                 .background(topPaginationSentinel)
                         }
-                        ForEach(visibleMessages, id: \.stableId) { message in
-                            row(for: message)
+                        ForEach(visibleRows, id: \.message.stableId) { item in
+                            row(for: item.message)
+                                .background(rowFrameReporter(id: item.message.stableId))
                         }
                         if transcript.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
@@ -177,6 +187,7 @@ struct ACPMessageList: View {
                     .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
                     .padding(.top, 24)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .modifier(ACPScrollTargetLayoutTracking())
                 }
                 .coordinateSpace(name: scrollSpaceName)
                 .modifier(ACPTranscriptScrollTracking(
@@ -195,21 +206,33 @@ struct ACPMessageList: View {
                             proxy: proxy)
                     }
                 ))
+                .modifier(ACPScrollTargetVisibilityTracking(
+                    onVisibleTargetIDs: handleVisibleTargetIDs
+                ))
                 .onAppear {
                     restoreTailIfNeeded(proxy: proxy, animated: false)
+                    restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
+                    restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
                         scrollToTail(proxy: proxy, animated: true)
                     }
+                    restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onChange(of: transcript.streamingState) { _, new in
                     if session.followsTranscriptTail && (new == .streaming || new == .sending) {
                         scrollToTail(proxy: proxy, animated: true)
                     }
+                }
+                .onChange(of: transcript.visibleHead) { _, _ in
+                    restoreRememberedAnchorIfNeeded(proxy: proxy)
+                }
+                .onPreferenceChange(ACPRowFramesPreferenceKey.self) { frames in
+                    handleRowFramePreference(frames, proxy: proxy)
                 }
             }
         }
@@ -224,6 +247,21 @@ struct ACPMessageList: View {
     private func restoreTailIfNeeded(proxy: ScrollViewProxy, animated: Bool) {
         guard session.followsTranscriptTail else { return }
         scrollToTail(proxy: proxy, animated: animated)
+    }
+
+    private func restoreRememberedAnchorIfNeeded(proxy: ScrollViewProxy) {
+        guard !session.followsTranscriptTail else {
+            restoredRememberedAnchor = nil
+            return
+        }
+        guard let anchor = rememberedScrollAnchor(), restoredRememberedAnchor != anchor else { return }
+        guard visibleMessages.contains(where: { $0.stableId == anchor }) else { return }
+        isRestoringTail = true
+        proxy.scrollTo(anchor, anchor: .top)
+        restoredRememberedAnchor = anchor
+        DispatchQueue.main.async {
+            isRestoringTail = false
+        }
     }
 
     private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
@@ -308,6 +346,61 @@ struct ACPMessageList: View {
     private func setFollowsTranscriptTail(_ follows: Bool) {
         guard session.followsTranscriptTail != follows else { return }
         session.followsTranscriptTail = follows
+        if follows {
+            onRememberScrollAnchor(nil, nil, true)
+        } else {
+            onRememberScrollAnchor(
+                latestTopVisibleAnchor,
+                transcriptIndex(forStableId: latestTopVisibleAnchor),
+                false
+            )
+            restoredRememberedAnchor = latestTopVisibleAnchor
+        }
+    }
+
+    private func handleRowFramePreference(_ frames: [String: CGRect], proxy: ScrollViewProxy) {
+        restoreRememberedAnchorIfNeeded(proxy: proxy)
+        guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
+        latestTopVisibleAnchor = anchor
+        guard !isRestoringTail else { return }
+        guard !session.followsTranscriptTail else { return }
+        if !Self.shouldRememberVisibleAnchor(
+            anchor,
+            rememberedAnchor: rememberedScrollAnchor(),
+            restoredRememberedAnchor: restoredRememberedAnchor,
+            visibleMessageIds: Set(visibleMessages.map(\.stableId)),
+            isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
+        ) {
+            return
+        }
+        onRememberScrollAnchor(anchor, transcriptIndex(forStableId: anchor), false)
+        restoredRememberedAnchor = anchor
+    }
+
+    private func handleVisibleTargetIDs(_ ids: [String]) {
+        guard let anchor = Self.topVisibleScrollTargetID(
+            in: ids,
+            visibleMessageIds: Set(visibleMessages.map(\.stableId))
+        ) else { return }
+        latestTopVisibleAnchor = anchor
+        guard !isRestoringTail, !session.followsTranscriptTail else { return }
+        guard !transcript.isBackfillingOlderMessages else { return }
+        onRememberScrollAnchor(anchor, transcriptIndex(forStableId: anchor), false)
+        restoredRememberedAnchor = anchor
+    }
+
+    private func rowFrameReporter(id: String) -> some View {
+        GeometryReader { rowGeometry in
+            Color.clear.preference(
+                key: ACPRowFramesPreferenceKey.self,
+                value: [id: rowGeometry.frame(in: .named(scrollSpaceName))]
+            )
+        }
+    }
+
+    private func transcriptIndex(forStableId id: String?) -> Int? {
+        guard let id else { return nil }
+        return transcript.messages.firstIndex(where: { $0.stableId == id })
     }
 
     private var topPaginationSentinel: some View {
@@ -364,6 +457,40 @@ struct ACPMessageList: View {
         }
         let distanceFromBottom = max(0, newContentHeight - viewportHeight - newMinY)
         return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
+    }
+
+    nonisolated static func topVisibleAnchorID(in frames: [String: CGRect]) -> String? {
+        frames
+            .filter { _, frame in frame.height > 0 && frame.maxY > 0 }
+            .min { lhs, rhs in
+                let lhsDistance = lhs.value.minY <= 0 ? CGFloat.zero : lhs.value.minY
+                let rhsDistance = rhs.value.minY <= 0 ? CGFloat.zero : rhs.value.minY
+                if lhsDistance != rhsDistance { return lhsDistance < rhsDistance }
+                if lhs.value.maxY != rhs.value.maxY { return lhs.value.maxY < rhs.value.maxY }
+                return lhs.key < rhs.key
+            }?
+            .key
+    }
+
+    nonisolated static func topVisibleScrollTargetID(
+        in ids: [String],
+        visibleMessageIds: Set<String>
+    ) -> String? {
+        ids.first { visibleMessageIds.contains($0) }
+    }
+
+    nonisolated static func shouldRememberVisibleAnchor(
+        _ anchor: String,
+        rememberedAnchor: String?,
+        restoredRememberedAnchor: String?,
+        visibleMessageIds: Set<String>,
+        isBackfillingOlderMessages: Bool
+    ) -> Bool {
+        guard !isBackfillingOlderMessages else { return false }
+        guard let rememberedAnchor else { return true }
+        if restoredRememberedAnchor == rememberedAnchor { return true }
+        if anchor == rememberedAnchor { return true }
+        return !visibleMessageIds.contains(rememberedAnchor)
     }
 
     /// macOS 14 fallback path. The Tahoe (macOS 15+) ScrollView is no longer
@@ -524,6 +651,39 @@ private struct ACPHeadFramePreferenceKey: PreferenceKey {
     static let defaultValue: CGRect = .zero
     static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
         value = nextValue()
+    }
+}
+
+private struct ACPRowFramesPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct ACPScrollTargetLayoutTracking: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.scrollTargetLayout()
+        } else {
+            content
+        }
+    }
+}
+
+private struct ACPScrollTargetVisibilityTracking: ViewModifier {
+    let onVisibleTargetIDs: ([String]) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+                onVisibleTargetIDs(ids)
+            }
+        } else {
+            content
+        }
     }
 }
 

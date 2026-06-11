@@ -228,6 +228,97 @@ struct ACPSessionManagerHydrationTests {
         }
     }
 
+    @Test("remembered absolute index before tail slice waits for full backfill")
+    func rememberedAbsoluteIndexBeforeTailSliceWaitsForBackfill() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        for i in 0..<100 {
+            let m: ACPMessage = .user(id: UUID(), text: "m\(i)", attachments: [])
+            let payload = try ACPMessageCodec.encode(m)
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: "user",
+                                    seq: Int64(i), payload: payload, createdAt: 0)
+        }
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+        mgr.rememberTranscriptScrollAnchor(
+            sessionId: "s",
+            anchorMessageId: nil,
+            anchorMessageIndex: 5,
+            followsTail: false
+        )
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.transcript.messages.count == ACPTranscript.tailWindow)
+        #expect(s.transcript.visibleHead == 0)
+        if case .user(_, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
+            #expect(text == "m70")
+        } else {
+            #expect(Bool(false), "expected first tail message before backfill")
+        }
+
+        await mgr.awaitBackfill(id: "s")
+
+        #expect(s.transcript.messages.count == 100)
+        #expect(s.transcript.visibleHead == 5)
+        if case .user(_, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
+            #expect(text == "m5")
+        } else {
+            #expect(Bool(false), "expected remembered absolute index after backfill")
+        }
+    }
+
+    @Test("remembered non-tail scroll anchor survives eviction and reopens around the anchor")
+    func rememberedScrollAnchorSurvivesEviction() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var anchorId = ""
+        for i in 0..<100 {
+            let id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", i))!
+            if i == 40 { anchorId = id.uuidString }
+            let m: ACPMessage = .user(id: id, text: "m\(i)", attachments: [])
+            let payload = try ACPMessageCodec.encode(m)
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: "user",
+                                    seq: Int64(i), payload: payload, createdAt: 0)
+        }
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let first = try #require(mgr.placeholderSession(id: "s"))
+        mgr.rememberTranscriptScrollAnchor(
+            sessionId: "s",
+            anchorMessageId: anchorId,
+            anchorMessageIndex: 40,
+            followsTail: false
+        )
+        mgr.retainSession(id: "s")
+        mgr.releaseSession(id: "s")
+        #expect(mgr.sessions["s"] == nil)
+
+        let reopened = try #require(mgr.placeholderSession(id: "s"))
+        #expect(reopened !== first)
+        #expect(!reopened.followsTranscriptTail)
+
+        await mgr.hydrateIfNeeded(id: "s")
+        await mgr.awaitBackfill(id: "s")
+
+        if case .user(_, let text, _) = reopened.transcript.messages[reopened.transcript.visibleHead] {
+            #expect(text == "m40")
+        } else {
+            #expect(Bool(false), "expected remembered anchor row to be a user message")
+        }
+    }
+
     @Test("contextRestoreWarning sees the full transcript even when only tail is in memory")
     func contextRestoreWarningComputedFromFullWires() async throws {
         let path = tmpStorePath()

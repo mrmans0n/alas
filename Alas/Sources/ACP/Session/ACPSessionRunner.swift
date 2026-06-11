@@ -30,6 +30,10 @@ final class ACPSessionRunner {
     /// contents for an open dirty buffer, falling back to disk when the
     /// closure returns `nil`. Lets the agent see what the user sees.
     private let onLiveBufferRead: ((String) -> String?)?
+    /// Called when the runner forces transcript tail-follow before recording
+    /// a user prompt, so manager-owned scroll memory stays in sync with the
+    /// runtime session state.
+    private let onResumeTranscriptTail: (() -> Void)?
     /// The sanitized + extras-merged env the agent process itself was
     /// launched with. Used to seed the terminal host so agent-spawned
     /// commands inherit exactly the same view — including the stripped
@@ -78,6 +82,7 @@ final class ACPSessionRunner {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onResumeTranscriptTail: (() -> Void)? = nil,
          ownerInstanceId: String? = nil)
     {
         self.session = session
@@ -92,6 +97,7 @@ final class ACPSessionRunner {
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.onResumeTranscriptTail = onResumeTranscriptTail
         self.persistedMessageCount = (try? store.messageCount(sessionId: sessionId)) ?? 0
         self.seq = Int64(persistedMessageCount)
         // Capture the three values holdsLeaseForWrite() reads so the closure
@@ -1016,6 +1022,7 @@ extension ACPSessionRunner {
                     let titleBefore = self.session.title
                     if !self.session.followsTranscriptTail {
                         self.session.followsTranscriptTail = true
+                        self.onResumeTranscriptTail?()
                     }
                     self.session.recordUserPrompt(text: Self.textPreview(of: blocks),
                                                   attachments: Self.attachments(of: blocks))
