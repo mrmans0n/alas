@@ -3,7 +3,7 @@ import SwiftUI
 
 struct ACPChatTypography: Equatable {
     static let `default` = ACPChatTypography(
-        fontFamily: "JetBrainsMono Nerd Font",
+        fontFamily: "",
         fontSize: 13
     )
 
@@ -40,10 +40,7 @@ struct ACPChatTypography: Equatable {
     }
 
     func appKitFont(size: CGFloat? = nil, traits: NSFontTraitMask = []) -> NSFont {
-        var font = CenterTypography.resolveCodeFont(
-            family: fontFamily,
-            size: size ?? baseSize
-        )
+        var font = resolveChatFont(size: size ?? baseSize)
         guard !traits.isEmpty else { return font }
 
         if traits.contains(.boldFontMask) {
@@ -64,5 +61,42 @@ struct ACPChatTypography: Equatable {
         guard let traitFont = NSFont(descriptor: descriptor, size: size ?? baseSize)
         else { return font }
         return traitFont
+    }
+
+    private func resolveChatFont(size: CGFloat) -> NSFont {
+        let trimmed = fontFamily.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return NSFont.systemFont(ofSize: size)
+        }
+
+        let manager = NSFontManager.shared
+        if let members = manager.availableMembers(ofFontFamily: trimmed),
+           !members.isEmpty {
+            let regularMember = members.first { row in
+                guard row.count > 3 else { return false }
+                let rawTraits: UInt
+                if let traits = row[3] as? UInt {
+                    rawTraits = traits
+                } else if let traits = row[3] as? Int {
+                    rawTraits = UInt(traits)
+                } else {
+                    return false
+                }
+                return NSFontTraitMask(rawValue: rawTraits)
+                    .intersection([.boldFontMask, .italicFontMask])
+                    .isEmpty
+            }
+            let chosen = regularMember ?? members.first
+            if let name = chosen?.first as? String,
+               let font = NSFont(name: name, size: size) {
+                return font
+            }
+        }
+
+        if let font = NSFont(name: trimmed, size: size) {
+            return font
+        }
+
+        return NSFont.systemFont(ofSize: size)
     }
 }

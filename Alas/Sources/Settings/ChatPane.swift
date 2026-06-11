@@ -20,6 +20,11 @@ struct ChatPane: View {
         static let autoRun = "⚡ Auto-run"
     }
 
+    enum FontPickerDefaults {
+        static let defaultLabel = "System"
+        static let emptyCatalogMessage = "No fonts found"
+    }
+
     static let groupTitles = [
         GroupTitles.appearance,
         GroupTitles.launcher,
@@ -48,7 +53,9 @@ struct ChatPane: View {
                     SettingsRow(name: RowLabels.fontFamily) {
                         FontFamilyPicker(
                             family: state.bind(\.agents.chatFontFamily),
-                            catalog: MonospaceFontCatalog.families()
+                            catalog: ChatFontCatalog.families(),
+                            defaultLabel: FontPickerDefaults.defaultLabel,
+                            emptyCatalogMessage: FontPickerDefaults.emptyCatalogMessage
                         )
                     }
                     SettingsRow(name: RowLabels.fontSize) {

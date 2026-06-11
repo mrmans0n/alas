@@ -11,7 +11,7 @@ struct AppConfigAgentsCodingTests {
     }
 
     @Test func defaultsHaveChatAppearance() {
-        #expect(AppConfig.defaults.agents.chatFontFamily == "JetBrainsMono Nerd Font")
+        #expect(AppConfig.defaults.agents.chatFontFamily == "")
         #expect(AppConfig.defaults.agents.chatFontSize == 13)
     }
 
@@ -167,7 +167,7 @@ struct AppConfigAgentsCodingTests {
         }
         """
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
-        #expect(cfg.agents.chatFontFamily == "JetBrainsMono Nerd Font")
+        #expect(cfg.agents.chatFontFamily == "")
         #expect(cfg.agents.chatFontSize == 13)
     }
 
