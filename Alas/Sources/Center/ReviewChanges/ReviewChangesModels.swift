@@ -87,6 +87,62 @@ struct ReviewChangesFileSummary: Codable, Equatable, Identifiable {
     let isRenderable: Bool
     var originalPath: String? = nil
 
+    init(
+        path: String,
+        source: ReviewChangesSource,
+        status: ReviewChangesFileStatus,
+        additions: Int,
+        deletions: Int,
+        isRenderable: Bool,
+        originalPath: String? = nil
+    ) {
+        self.id = ReviewChangesFileID(source: source, path: path)
+        self.path = path
+        self.source = source
+        self.status = status
+        self.additions = additions
+        self.deletions = deletions
+        self.isRenderable = isRenderable
+        self.originalPath = originalPath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case source
+        case status
+        case additions
+        case deletions
+        case isRenderable
+        case originalPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let path = try container.decode(String.self, forKey: .path)
+        let source = try container.decode(ReviewChangesSource.self, forKey: .source)
+
+        self.init(
+            path: path,
+            source: source,
+            status: try container.decode(ReviewChangesFileStatus.self, forKey: .status),
+            additions: try container.decode(Int.self, forKey: .additions),
+            deletions: try container.decode(Int.self, forKey: .deletions),
+            isRenderable: try container.decode(Bool.self, forKey: .isRenderable),
+            originalPath: try container.decodeIfPresent(String.self, forKey: .originalPath)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(path, forKey: .path)
+        try container.encode(source, forKey: .source)
+        try container.encode(status, forKey: .status)
+        try container.encode(additions, forKey: .additions)
+        try container.encode(deletions, forKey: .deletions)
+        try container.encode(isRenderable, forKey: .isRenderable)
+        try container.encodeIfPresent(originalPath, forKey: .originalPath)
+    }
+
     var basename: String {
         (path as NSString).lastPathComponent
     }
@@ -177,7 +233,6 @@ enum ReviewChangesFileTreeBuilder {
             guard !normalizedPath.isEmpty else { continue }
 
             let normalizedFile = ReviewChangesFileSummary(
-                id: ReviewChangesFileID(source: file.source, path: normalizedPath),
                 path: normalizedPath,
                 source: file.source,
                 status: file.status,
@@ -294,6 +349,25 @@ enum ReviewChangesFileTreeBuilder {
         if lhs.kind != rhs.kind {
             return lhs.kind == .directory
         }
-        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+
+        let nameComparison = lhs.name.localizedStandardCompare(rhs.name)
+        if nameComparison != .orderedSame {
+            return nameComparison == .orderedAscending
+        }
+
+        if let lhsFile = lhs.file, let rhsFile = rhs.file {
+            if lhsFile.source != rhsFile.source {
+                return lhsFile.source < rhsFile.source
+            }
+            if lhsFile.id.rawValue != rhsFile.id.rawValue {
+                return lhsFile.id.rawValue < rhsFile.id.rawValue
+            }
+        }
+
+        if lhs.path != rhs.path {
+            return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+        }
+
+        return lhs.id < rhs.id
     }
 }

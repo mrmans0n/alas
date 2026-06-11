@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -14,7 +15,6 @@ struct ReviewChangesModelsTests {
     @Test func buildsFlattenedDirectoryTreeWithDirectoriesBeforeFiles() {
         let files = [
             ReviewChangesFileSummary(
-                id: .init(source: .unstaged, path: "Sources/Center/DiffPaneView.swift"),
                 path: "Sources/Center/DiffPaneView.swift",
                 source: .unstaged,
                 status: .modified,
@@ -23,7 +23,6 @@ struct ReviewChangesModelsTests {
                 isRenderable: true
             ),
             ReviewChangesFileSummary(
-                id: .init(source: .unstaged, path: "README.md"),
                 path: "README.md",
                 source: .unstaged,
                 status: .added,
@@ -45,7 +44,6 @@ struct ReviewChangesModelsTests {
     @Test func sessionTotalsIncludeAllFiles() {
         let files = [
             ReviewChangesFileSummary(
-                id: .init(source: .unstaged, path: "a.swift"),
                 path: "a.swift",
                 source: .unstaged,
                 status: .modified,
@@ -54,7 +52,6 @@ struct ReviewChangesModelsTests {
                 isRenderable: true
             ),
             ReviewChangesFileSummary(
-                id: .init(source: .staged, path: "b.swift"),
                 path: "b.swift",
                 source: .staged,
                 status: .deleted,
@@ -70,5 +67,58 @@ struct ReviewChangesModelsTests {
         #expect(session.totalAdditions == 3)
         #expect(session.totalDeletions == 6)
         #expect(session.sections.map(\.source) == [.unstaged, .staged])
+    }
+
+    @Test func fileSummaryDecodingDerivesIdentityFromSourceAndPath() throws {
+        let data = Data("""
+        {
+          "id": {
+            "source": "staged",
+            "path": "Other.swift"
+          },
+          "path": "Sources/App.swift",
+          "source": "unstaged",
+          "status": "modified",
+          "additions": 8,
+          "deletions": 2,
+          "isRenderable": true
+        }
+        """.utf8)
+
+        let summary = try JSONDecoder().decode(ReviewChangesFileSummary.self, from: data)
+
+        #expect(summary.id == ReviewChangesFileID(source: .unstaged, path: "Sources/App.swift"))
+        #expect(summary.path == "Sources/App.swift")
+        #expect(summary.source == .unstaged)
+    }
+
+    @Test func duplicatePathTreeFilesOrderUnstagedBeforeStaged() {
+        let files = [
+            ReviewChangesFileSummary(
+                path: "Sources/App.swift",
+                source: .staged,
+                status: .modified,
+                additions: 1,
+                deletions: 0,
+                isRenderable: true
+            ),
+            ReviewChangesFileSummary(
+                path: "Sources/App.swift",
+                source: .unstaged,
+                status: .modified,
+                additions: 2,
+                deletions: 1,
+                isRenderable: true
+            ),
+        ]
+
+        let tree = ReviewChangesFileTreeBuilder.build(files: files)
+
+        #expect(tree.count == 1)
+        #expect(tree[0].name == "Sources")
+        #expect(tree[0].children?.map(\.file?.id.rawValue) == [
+            "unstaged:Sources/App.swift",
+            "staged:Sources/App.swift",
+        ])
     }
 }
