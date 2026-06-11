@@ -69,4 +69,21 @@ struct DiffPaneViewTests {
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view.subviews.isEmpty == false)
     }
+
+    @Test func visibleWhitespacePreservesInlineBackgrounds() {
+        let rendered = DiffCodeText.attributedString(
+            text: "\tlet b = 3",
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showWhitespace: true,
+            inlineSpans: [DiffInlineSpan(start: 9, length: 1)],
+            inlineTone: .add,
+            theme: theme()
+        )
+
+        #expect(rendered.string == "→let·b·=·3")
+        #expect((rendered.string as NSString).length == ("\tlet b = 3" as NSString).length)
+        #expect(rendered.attribute(.backgroundColor, at: 9, effectiveRange: nil) != nil)
+    }
 }

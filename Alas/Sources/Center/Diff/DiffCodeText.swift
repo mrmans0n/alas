@@ -28,28 +28,58 @@ struct DiffCodeText: View {
     }
 
     private var attributedText: AttributedString {
-        AttributedString(attributedString())
+        AttributedString(Self.attributedString(
+            text: text,
+            fileExtension: fileExtension,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            showWhitespace: showWhitespace,
+            inlineSpans: inlineSpans,
+            inlineTone: inlineTone,
+            theme: theme
+        ))
     }
 
-    private func attributedString() -> NSAttributedString {
-        let visibleText = Self.visibleWhitespaceText(text, enabled: showWhitespace)
+    static func attributedString(
+        text: String,
+        fileExtension: String,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        showWhitespace: Bool,
+        inlineSpans: [DiffInlineSpan],
+        inlineTone: DiffInlineTone,
+        theme: Theme
+    ) -> NSAttributedString {
+        let visibleText = visibleWhitespaceText(text, enabled: showWhitespace)
         let output = NSMutableAttributedString(
             string: visibleText,
-            attributes: baseAttributes
+            attributes: baseAttributes(codeFontFamily: codeFontFamily, codeFontSize: codeFontSize, theme: theme)
         )
         let visibleLength = (visibleText as NSString).length
-        let originalLength = (text as NSString).length
-        let canApplyOriginalOffsets = visibleLength == originalLength
 
-        if canApplyOriginalOffsets {
-            applySyntaxSpans(to: output, visibleLength: visibleLength)
-            applyInlineSpans(to: output, visibleLength: visibleLength)
-        }
+        applySyntaxSpans(
+            to: output,
+            text: text,
+            fileExtension: fileExtension,
+            theme: theme,
+            visibleLength: visibleLength
+        )
+        applyInlineSpans(
+            to: output,
+            inlineSpans: inlineSpans,
+            inlineTone: inlineTone,
+            theme: theme,
+            visibleLength: visibleLength
+        )
 
         return output
     }
 
-    private var baseAttributes: [NSAttributedString.Key: Any] {
+    private static func baseAttributes(
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        theme: Theme
+    ) -> [NSAttributedString.Key: Any] {
         [
             .font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             .foregroundColor: NSColor(theme.color("fg")),
@@ -57,7 +87,13 @@ struct DiffCodeText: View {
         ]
     }
 
-    private func applySyntaxSpans(to output: NSMutableAttributedString, visibleLength: Int) {
+    private static func applySyntaxSpans(
+        to output: NSMutableAttributedString,
+        text: String,
+        fileExtension: String,
+        theme: Theme,
+        visibleLength: Int
+    ) {
         let spans = TreeSitterHighlighter.tokenize(line: text, fileExtension: fileExtension)
             .filter { isValid($0.range, in: visibleLength) }
             .sorted { $0.range.location < $1.range.location }
@@ -67,31 +103,37 @@ struct DiffCodeText: View {
             guard span.range.location >= cursor else { continue }
             output.addAttribute(
                 .foregroundColor,
-                value: NSColor(syntaxColor(for: span.capture)),
+                value: NSColor(syntaxColor(for: span.capture, theme: theme)),
                 range: span.range
             )
             cursor = NSMaxRange(span.range)
         }
     }
 
-    private func applyInlineSpans(to output: NSMutableAttributedString, visibleLength: Int) {
+    private static func applyInlineSpans(
+        to output: NSMutableAttributedString,
+        inlineSpans: [DiffInlineSpan],
+        inlineTone: DiffInlineTone,
+        theme: Theme,
+        visibleLength: Int
+    ) {
         for span in inlineSpans {
             let range = NSRange(location: span.start, length: span.length)
             guard isValid(range, in: visibleLength) else { continue }
             output.addAttribute(
                 .backgroundColor,
-                value: NSColor(inlineColor.opacity(0.24)),
+                value: NSColor(inlineColor(for: inlineTone, theme: theme).opacity(0.24)),
                 range: range
             )
         }
     }
 
-    private func isValid(_ range: NSRange, in length: Int) -> Bool {
+    private static func isValid(_ range: NSRange, in length: Int) -> Bool {
         range.location >= 0 && range.length >= 0 && NSMaxRange(range) <= length
     }
 
-    private var inlineColor: Color {
-        switch inlineTone {
+    private static func inlineColor(for tone: DiffInlineTone, theme: Theme) -> Color {
+        switch tone {
         case .add:
             return theme.color("add")
         case .del:
@@ -101,7 +143,7 @@ struct DiffCodeText: View {
         }
     }
 
-    private func syntaxColor(for capture: HighlightCapture) -> Color {
+    private static func syntaxColor(for capture: HighlightCapture, theme: Theme) -> Color {
         switch capture {
         case .keyword:
             return theme.color("syntax-keyword")
@@ -126,6 +168,6 @@ struct DiffCodeText: View {
         guard enabled else { return text }
         return text
             .replacingOccurrences(of: " ", with: "·")
-            .replacingOccurrences(of: "\t", with: "→   ")
+            .replacingOccurrences(of: "\t", with: "→")
     }
 }
