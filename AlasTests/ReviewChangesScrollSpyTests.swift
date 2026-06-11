@@ -39,6 +39,18 @@ struct ReviewChangesScrollSpyTests {
         #expect(activeFile == nil)
     }
 
+    @Test func breaksEqualMinYTiesByFileID() {
+        let expectedID = ReviewChangesFileID(source: .unstaged, path: "a.swift")
+        let frames = [
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "b.swift"), minY: 24, maxY: 280),
+            ReviewChangesSectionFrame(id: expectedID, minY: 24, maxY: 320),
+        ]
+
+        let activeFile = ReviewChangesScrollSpy.activeFile(in: frames, viewportMinY: 0, viewportMaxY: 500)
+
+        #expect(activeFile == expectedID)
+    }
+
     @Test func suppressionIgnoresUpdatesUntilReleased() {
         let first = ReviewChangesFileID(source: .unstaged, path: "first.swift")
         let second = ReviewChangesFileID(source: .staged, path: "second.swift")
@@ -47,13 +59,35 @@ struct ReviewChangesScrollSpyTests {
         #expect(controller.acceptsScrollSpyUpdate(for: first))
         #expect(controller.acceptsScrollSpyUpdate(for: second))
 
-        controller.beginProgrammaticScroll(to: second)
+        let token = controller.beginProgrammaticScroll(to: second)
 
         #expect(!controller.acceptsScrollSpyUpdate(for: first))
         #expect(controller.acceptsScrollSpyUpdate(for: second))
 
-        controller.finishProgrammaticScroll()
+        controller.finishProgrammaticScroll(token)
 
+        #expect(controller.acceptsScrollSpyUpdate(for: first))
+    }
+
+    @Test func staleProgrammaticScrollFinishDoesNotReleaseNewerSuppression() {
+        let first = ReviewChangesFileID(source: .unstaged, path: "first.swift")
+        let second = ReviewChangesFileID(source: .staged, path: "second.swift")
+        var controller = ReviewChangesProgrammaticScrollController()
+
+        let tokenA = controller.beginProgrammaticScroll(to: first)
+        let tokenB = controller.beginProgrammaticScroll(to: second)
+
+        controller.finishProgrammaticScroll(tokenA)
+
+        #expect(controller.isSuppressing)
+        #expect(controller.target == second)
+        #expect(!controller.acceptsScrollSpyUpdate(for: first))
+        #expect(controller.acceptsScrollSpyUpdate(for: second))
+
+        controller.finishProgrammaticScroll(tokenB)
+
+        #expect(!controller.isSuppressing)
+        #expect(controller.target == nil)
         #expect(controller.acceptsScrollSpyUpdate(for: first))
     }
 }
