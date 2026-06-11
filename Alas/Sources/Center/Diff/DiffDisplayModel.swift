@@ -94,7 +94,7 @@ struct DiffDisplayRow: Identifiable, Equatable {
 
 struct DiffDisplayGroup: Identifiable, Equatable {
     let id: String
-    let hunkHeader: String
+    let header: String
     let sourceHunk: ParsedDiff.Hunk
     let rows: [DiffDisplayRow]
 }

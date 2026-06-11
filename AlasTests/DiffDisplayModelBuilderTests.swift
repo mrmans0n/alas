@@ -22,6 +22,7 @@ struct DiffDisplayModelBuilderTests {
         let model = DiffDisplayModelBuilder.build(diff: sampleDiff(), filePath: "Sources/Foo.swift")
         #expect(model.filePath == "Sources/Foo.swift")
         #expect(model.groups.count == 1)
+        #expect(model.groups[0].header == "@@ -10,4 +10,4 @@")
         #expect(model.groups[0].rows.count == 3)
 
         let replacement = model.groups[0].rows[1]

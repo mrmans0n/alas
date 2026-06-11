@@ -10,7 +10,7 @@ enum DiffDisplayModelBuilder {
         let groups = diff.hunks.enumerated().map { hunkIndex, hunk in
             DiffDisplayGroup(
                 id: "hunk-\(hunkIndex)-\(hunk.header)",
-                hunkHeader: hunk.header,
+                header: hunk.header,
                 sourceHunk: hunk,
                 rows: buildRows(
                     hunk: hunk,
