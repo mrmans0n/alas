@@ -584,6 +584,8 @@ final class ACPNSTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        typingAttributes = baseTypingAttributes
+
         // ⌃V parity with agent CLIs — paste an image when one is on the
         // clipboard. Only intercept when there IS an image, so Cocoa's
         // default ⌃V (page down / emacs binding) is otherwise preserved.
@@ -624,6 +626,7 @@ final class ACPNSTextView: NSTextView {
         }
 
         super.keyDown(with: event)
+        typingAttributes = baseTypingAttributes
 
         // After the keystroke is applied to the storage, re-evaluate
         // whether we're sitting on a `/foo…` token. This is what makes
