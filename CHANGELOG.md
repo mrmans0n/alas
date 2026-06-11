@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-06-11
+
+### 🐛 Fixes
+
+- Restore proportional chat fonts in ACP chat and Chat settings (#506).
+
 ## [0.7.6] - 2026-06-10
 
 ### ✨ Features
