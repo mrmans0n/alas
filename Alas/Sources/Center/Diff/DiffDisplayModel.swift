@@ -12,6 +12,8 @@ enum DiffLineSide: Int, Codable, Equatable, Comparable, Hashable {
 
 struct DiffLineAnchor: Codable, Equatable, Comparable, Hashable {
     let filePath: String
+    let hunkIndex: Int
+    let rowIndex: Int
     let side: DiffLineSide
     let oldLine: Int?
     let newLine: Int?
@@ -21,10 +23,12 @@ struct DiffLineAnchor: Codable, Equatable, Comparable, Hashable {
             return lhs.filePath < rhs.filePath
         }
 
-        let lhsEffectiveLine = lhs.newLine ?? lhs.oldLine ?? 0
-        let rhsEffectiveLine = rhs.newLine ?? rhs.oldLine ?? 0
-        if lhsEffectiveLine != rhsEffectiveLine {
-            return lhsEffectiveLine < rhsEffectiveLine
+        if lhs.hunkIndex != rhs.hunkIndex {
+            return lhs.hunkIndex < rhs.hunkIndex
+        }
+
+        if lhs.rowIndex != rhs.rowIndex {
+            return lhs.rowIndex < rhs.rowIndex
         }
 
         if lhs.side != rhs.side {

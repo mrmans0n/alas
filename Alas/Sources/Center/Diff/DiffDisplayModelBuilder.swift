@@ -138,12 +138,27 @@ enum DiffDisplayModelBuilder {
         filePath: String,
         hunkIndex: Int
     ) {
+        let rowIndex = rows.count
         rows.append(
             DiffDisplayRow(
-                id: "hunk-\(hunkIndex)-row-\(rows.count)-context-\(line.oldNumber ?? 0)-\(line.newNumber ?? 0)",
+                id: "hunk-\(hunkIndex)-row-\(rowIndex)-context-\(line.oldNumber ?? 0)-\(line.newNumber ?? 0)",
                 kind: .context,
-                old: displayLine(line, filePath: filePath, side: .old, inlineSpans: []),
-                new: displayLine(line, filePath: filePath, side: .new, inlineSpans: []),
+                old: displayLine(
+                    line,
+                    filePath: filePath,
+                    hunkIndex: hunkIndex,
+                    rowIndex: rowIndex,
+                    side: .old,
+                    inlineSpans: []
+                ),
+                new: displayLine(
+                    line,
+                    filePath: filePath,
+                    hunkIndex: hunkIndex,
+                    rowIndex: rowIndex,
+                    side: .new,
+                    inlineSpans: []
+                ),
                 collapsedLineCount: 0
             )
         )
@@ -161,23 +176,46 @@ enum DiffDisplayModelBuilder {
             let deleteLine = deletes[offset]
             let addLine = adds[offset]
             let highlight = DiffInlineHighlighter.highlightDeleteAdd(old: deleteLine.text, new: addLine.text)
+            let rowIndex = rows.count
             rows.append(
                 DiffDisplayRow(
-                    id: "hunk-\(hunkIndex)-row-\(rows.count)-replacement-\(deleteLine.oldNumber ?? 0)-\(addLine.newNumber ?? 0)",
+                    id: "hunk-\(hunkIndex)-row-\(rowIndex)-replacement-\(deleteLine.oldNumber ?? 0)-\(addLine.newNumber ?? 0)",
                     kind: .replacement,
-                    old: displayLine(deleteLine, filePath: filePath, side: .old, inlineSpans: highlight.oldSpans),
-                    new: displayLine(addLine, filePath: filePath, side: .new, inlineSpans: highlight.newSpans),
+                    old: displayLine(
+                        deleteLine,
+                        filePath: filePath,
+                        hunkIndex: hunkIndex,
+                        rowIndex: rowIndex,
+                        side: .old,
+                        inlineSpans: highlight.oldSpans
+                    ),
+                    new: displayLine(
+                        addLine,
+                        filePath: filePath,
+                        hunkIndex: hunkIndex,
+                        rowIndex: rowIndex,
+                        side: .new,
+                        inlineSpans: highlight.newSpans
+                    ),
                     collapsedLineCount: 0
                 )
             )
         }
 
         deletes.dropFirst(replacementCount).forEach { line in
+            let rowIndex = rows.count
             rows.append(
                 DiffDisplayRow(
-                    id: "hunk-\(hunkIndex)-row-\(rows.count)-delete-\(line.oldNumber ?? 0)",
+                    id: "hunk-\(hunkIndex)-row-\(rowIndex)-delete-\(line.oldNumber ?? 0)",
                     kind: .delete,
-                    old: displayLine(line, filePath: filePath, side: .old, inlineSpans: []),
+                    old: displayLine(
+                        line,
+                        filePath: filePath,
+                        hunkIndex: hunkIndex,
+                        rowIndex: rowIndex,
+                        side: .old,
+                        inlineSpans: []
+                    ),
                     new: nil,
                     collapsedLineCount: 0
                 )
@@ -185,12 +223,20 @@ enum DiffDisplayModelBuilder {
         }
 
         adds.dropFirst(replacementCount).forEach { line in
+            let rowIndex = rows.count
             rows.append(
                 DiffDisplayRow(
-                    id: "hunk-\(hunkIndex)-row-\(rows.count)-add-\(line.newNumber ?? 0)",
+                    id: "hunk-\(hunkIndex)-row-\(rowIndex)-add-\(line.newNumber ?? 0)",
                     kind: .add,
                     old: nil,
-                    new: displayLine(line, filePath: filePath, side: .new, inlineSpans: []),
+                    new: displayLine(
+                        line,
+                        filePath: filePath,
+                        hunkIndex: hunkIndex,
+                        rowIndex: rowIndex,
+                        side: .new,
+                        inlineSpans: []
+                    ),
                     collapsedLineCount: 0
                 )
             )
@@ -200,6 +246,8 @@ enum DiffDisplayModelBuilder {
     private static func displayLine(
         _ line: ParsedDiff.Hunk.Line,
         filePath: String,
+        hunkIndex: Int,
+        rowIndex: Int,
         side: DiffLineSide,
         inlineSpans: [DiffInlineSpan]
     ) -> DiffDisplayLine {
@@ -215,6 +263,8 @@ enum DiffDisplayModelBuilder {
 
         let anchor = DiffLineAnchor(
             filePath: filePath,
+            hunkIndex: hunkIndex,
+            rowIndex: rowIndex,
             side: side,
             oldLine: side == .new ? nil : line.oldNumber,
             newLine: side == .old ? nil : line.newNumber

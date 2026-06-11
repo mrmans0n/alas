@@ -14,9 +14,8 @@ enum DiffInlineHighlighter {
             return Result(oldSpans: [], newSpans: [])
         }
 
-        guard oldTokens.contains(where: { oldToken in
-            newTokens.contains(where: { $0.text == oldToken.text })
-        }) else {
+        let newTokenTexts = Set(newTokens.map(\.text))
+        guard oldTokens.contains(where: { newTokenTexts.contains($0.text) }) else {
             return Result(
                 oldSpans: fullLineSpan(for: oldText),
                 newSpans: fullLineSpan(for: newText)
@@ -51,17 +50,14 @@ enum DiffInlineHighlighter {
     }
 
     private static func tokenize(_ text: String) -> [Token] {
-        let pattern = #"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return []
-        }
-
         let nsText = text as NSString
         let fullRange = NSRange(location: 0, length: nsText.length)
-        return regex.matches(in: text, range: fullRange).map { match in
+        return tokenRegex.matches(in: text, range: fullRange).map { match in
             Token(text: nsText.substring(with: match.range), range: match.range)
         }
     }
+
+    private static let tokenRegex = try! NSRegularExpression(pattern: #"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]"#)
 
     private static func fullLineSpan(for text: String) -> [DiffInlineSpan] {
         let length = (text as NSString).length

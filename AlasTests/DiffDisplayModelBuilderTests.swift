@@ -27,8 +27,26 @@ struct DiffDisplayModelBuilderTests {
 
         let replacement = model.groups[0].rows[1]
         #expect(replacement.kind == .replacement)
-        #expect(replacement.old?.anchor == DiffLineAnchor(filePath: "Sources/Foo.swift", side: .old, oldLine: 11, newLine: nil))
-        #expect(replacement.new?.anchor == DiffLineAnchor(filePath: "Sources/Foo.swift", side: .new, oldLine: nil, newLine: 11))
+        #expect(
+            replacement.old?.anchor == DiffLineAnchor(
+                filePath: "Sources/Foo.swift",
+                hunkIndex: 0,
+                rowIndex: 1,
+                side: .old,
+                oldLine: 11,
+                newLine: nil
+            )
+        )
+        #expect(
+            replacement.new?.anchor == DiffLineAnchor(
+                filePath: "Sources/Foo.swift",
+                hunkIndex: 0,
+                rowIndex: 1,
+                side: .new,
+                oldLine: nil,
+                newLine: 11
+            )
+        )
         #expect(replacement.old?.inlineSpans.map { $0.text(in: replacement.old?.text ?? "") } == ["\"unified\""])
         #expect(replacement.new?.inlineSpans.map { $0.text(in: replacement.new?.text ?? "") } == ["layout"])
     }
@@ -57,10 +75,44 @@ struct DiffDisplayModelBuilderTests {
     }
 
     @Test func selectionRangeNormalizesAnchorOrder() {
-        let a = DiffLineAnchor(filePath: "a.txt", side: .new, oldLine: nil, newLine: 4)
-        let b = DiffLineAnchor(filePath: "a.txt", side: .new, oldLine: nil, newLine: 2)
+        let a = DiffLineAnchor(filePath: "a.txt", hunkIndex: 0, rowIndex: 4, side: .new, oldLine: nil, newLine: 4)
+        let b = DiffLineAnchor(filePath: "a.txt", hunkIndex: 0, rowIndex: 2, side: .new, oldLine: nil, newLine: 2)
         let range = DiffSelectionRange(first: a, last: b)
         #expect(range.normalized.lowerBound == b)
         #expect(range.normalized.upperBound == a)
+    }
+
+    @Test func selectionRangeUsesDisplayOrderWhenOldAndNewLineSpacesDiverge() {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -100,3 +10,3 @@",
+            oldStart: 100,
+            newStart: 10,
+            lines: [
+                .init(kind: .context, text: "before", oldNumber: 100, newNumber: 10),
+                .init(kind: .delete, text: "old value", oldNumber: 101, newNumber: nil),
+                .init(kind: .add, text: "new value", oldNumber: nil, newNumber: 11),
+                .init(kind: .context, text: "after", oldNumber: 102, newNumber: 12),
+            ]
+        )
+
+        let model = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [hunk]), filePath: "a.txt")
+        let rows = model.groups[0].rows
+        let first = rows[0].old!.anchor
+        let replacementOld = rows[1].old!.anchor
+        let replacementNew = rows[1].new!.anchor
+        let last = rows[2].new!.anchor
+
+        #expect(replacementOld.hunkIndex == replacementNew.hunkIndex)
+        #expect(replacementOld.rowIndex == replacementNew.rowIndex)
+
+        let sameRowRange = DiffSelectionRange(first: replacementNew, last: replacementOld)
+        #expect(sameRowRange.normalized.lowerBound == replacementOld)
+        #expect(sameRowRange.normalized.upperBound == replacementNew)
+
+        let multiRowRange = DiffSelectionRange(first: first, last: last)
+        #expect(multiRowRange.normalized.lowerBound == first)
+        #expect(multiRowRange.normalized.upperBound == last)
+        #expect(multiRowRange.contains(replacementOld))
+        #expect(multiRowRange.contains(replacementNew))
     }
 }
