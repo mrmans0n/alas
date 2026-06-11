@@ -4,6 +4,7 @@ struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
     let staged: Bool
+    let appState: AppState
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
     let onOpenFile: (() -> Void)?
@@ -11,6 +12,7 @@ struct DiffTabView: View {
     @Environment(\.theme) var theme
 
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
+    @State private var displayModel: DiffDisplayModel?
     @State private var totalAdd = 0
     @State private var totalDel = 0
     @State private var loaded = false
@@ -90,31 +92,31 @@ struct DiffTabView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(theme.color("bg-2"))
             }
-            ScrollView(.vertical) {
-                if !loaded {
-                    Spinner()
-                        .frame(width: 16, height: 16)
-                        .padding()
-                } else if diff.hunks.isEmpty {
-                    Text("No changes for \(relativePath)").foregroundColor(theme.color("fg-dim")).padding()
-                } else {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                            let actions = stagedHunkActions(hunk: hunk)
-                            HunkView(
-                                hunk: hunk,
-                                fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
-                                codeFontFamily: codeFontFamily,
-                                codeFontSize: codeFontSize,
-                                onStage: actions.stage,
-                                onDiscard: actions.discard
-                            )
-                        }
+            if !loaded {
+                Spinner()
+                    .frame(width: 16, height: 16)
+                    .padding()
+            } else if diff.hunks.isEmpty {
+                Text("No changes for \(relativePath)").foregroundColor(theme.color("fg-dim")).padding()
+            } else if let displayModel {
+                DiffPaneView(
+                    model: displayModel,
+                    fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
+                    layoutMode: diffLayoutBinding,
+                    wrapLines: diffWrapBinding,
+                    showWhitespace: diffWhitespaceBinding,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    hunkActions: { hunk in
+                        let actions = stagedHunkActions(hunk: hunk)
+                        return DiffPaneHunkActions(stage: actions.stage, discard: actions.discard)
                     }
-                    .padding(.vertical, 8)
-                }
+                )
+            } else {
+                Spinner()
+                    .frame(width: 16, height: 16)
+                    .padding()
             }
-            .defaultScrollAnchor(.topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
@@ -142,6 +144,36 @@ struct DiffTabView: View {
 
     private var loadKey: String {
         "\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)"
+    }
+
+    private var diffLayoutBinding: Binding<DiffLayoutMode> {
+        Binding(
+            get: { appState.config.changes.diffLayoutMode },
+            set: {
+                appState.config.changes.diffLayoutMode = $0
+                appState.saveConfig()
+            }
+        )
+    }
+
+    private var diffWrapBinding: Binding<Bool> {
+        Binding(
+            get: { appState.config.changes.diffWrapLines },
+            set: {
+                appState.config.changes.diffWrapLines = $0
+                appState.saveConfig()
+            }
+        )
+    }
+
+    private var diffWhitespaceBinding: Binding<Bool> {
+        Binding(
+            get: { appState.config.changes.diffShowWhitespace },
+            set: {
+                appState.config.changes.diffShowWhitespace = $0
+                appState.saveConfig()
+            }
+        )
     }
 
     private var header: some View {
@@ -188,12 +220,16 @@ struct DiffTabView: View {
         activeLoadKey = requestedLoadKey
         loaded = false
         diff = ParsedDiff(hunks: [])
+        displayModel = nil
         totalAdd = 0
         totalDel = 0
         error = nil
 
         do {
             let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
+            let loadedDisplayModel = await Task.detached(priority: .userInitiated) {
+                DiffDisplayModelBuilder.build(diff: loadedDiff, filePath: relativePath)
+            }.value
             // Single off-main pass instead of two `.flatMap.filter.count`
             // allocations on MainActor — for big diffs each pass copies the
             // full line array, which would stall the UI right after parse.
@@ -225,6 +261,7 @@ struct DiffTabView: View {
 
             guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
             diff = loadedDiff
+            displayModel = loadedDisplayModel
             totalAdd = loadedTotalAdd
             totalDel = loadedTotalDel
             isFileTracked = tracked

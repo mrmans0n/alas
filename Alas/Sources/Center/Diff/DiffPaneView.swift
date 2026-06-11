@@ -188,14 +188,8 @@ struct DiffPaneView: View {
         tooltip: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundColor(theme.color("fg-muted"))
-                .frame(width: 22, height: 20)
-        }
-        .buttonStyle(.plain)
-        .help(tooltip)
+        DiffPaneActionButton(systemName: systemName, tooltip: tooltip, action: action)
+            .frame(width: 22, height: 20)
     }
 
     private func splitRow(_ row: DiffDisplayRow) -> some View {
@@ -365,6 +359,54 @@ struct DiffPaneView: View {
             return .del
         case .context:
             return .accent
+        }
+    }
+}
+
+private struct DiffPaneActionButton: NSViewRepresentable {
+    let systemName: String
+    let tooltip: String
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(
+            image: image(),
+            target: context.coordinator,
+            action: #selector(Coordinator.fire)
+        )
+        button.bezelStyle = .accessoryBar
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.contentTintColor = .secondaryLabelColor
+        button.toolTip = tooltip
+        button.setAccessibilityLabel(tooltip)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        button.image = image()
+        button.toolTip = tooltip
+        button.setAccessibilityLabel(tooltip)
+    }
+
+    private func image() -> NSImage {
+        NSImage(systemSymbolName: systemName, accessibilityDescription: tooltip) ?? NSImage()
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func fire() {
+            action()
         }
     }
 }

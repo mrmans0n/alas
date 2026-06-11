@@ -70,6 +70,33 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
+    @Test func hunkActionsRenderInPaneHeader() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in
+                DiffPaneHunkActions(stage: {}, discard: {}, dropFromCommit: nil)
+            }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+        let buttons = allSubviews(of: controller.view).compactMap { $0 as? NSButton }
+        let helpTexts = buttons.compactMap { $0.toolTip }
+        #expect(helpTexts.contains("Stage hunk"))
+        #expect(helpTexts.contains("Discard hunk"))
+    }
+
     @Test func visibleWhitespacePreservesInlineBackgrounds() {
         let rendered = DiffCodeText.attributedString(
             text: "\tlet b = 3",
@@ -130,5 +157,9 @@ struct DiffPaneViewTests {
         #expect(extended.last == lastAnchor)
         #expect(extended.normalized.contains(firstAnchor))
         #expect(extended.normalized.contains(lastAnchor))
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
 }
