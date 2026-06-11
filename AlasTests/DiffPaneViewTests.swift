@@ -309,6 +309,16 @@ struct DiffPaneViewTests {
         #expect(DiffPaneLineTone(label: " 8", rowKind: .context) == .context)
     }
 
+    @Test func placeholderHatchIsInsetInsideRowRect() {
+        let rowRect = NSRect(x: 0, y: 8, width: 240, height: 22)
+        let hatchRect = DiffPaneCodeTextView.placeholderHatchRect(in: rowRect)
+
+        #expect(hatchRect.minY > rowRect.minY)
+        #expect(hatchRect.maxY < rowRect.maxY)
+        #expect(hatchRect.minX == rowRect.minX)
+        #expect(hatchRect.maxX == rowRect.maxX)
+    }
+
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
         let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),

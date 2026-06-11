@@ -429,6 +429,10 @@ enum DiffPaneLineTone: Equatable {
 }
 
 final class DiffPaneCodeTextView: NSTextView {
+    static func placeholderHatchRect(in rowRect: NSRect) -> NSRect {
+        rowRect.insetBy(dx: 0, dy: 1)
+    }
+
     var lineTones: [DiffPaneLineTone] = [] {
         didSet { needsDisplay = true }
     }
@@ -542,12 +546,17 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     private func drawPlaceholderHatch(in rect: NSRect, theme: Theme) {
+        let hatchRect = Self.placeholderHatchRect(in: rect)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: hatchRect).addClip()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
         let path = NSBezierPath()
         let spacing: CGFloat = 8
-        var x = rect.minX - rect.height
-        while x < rect.maxX {
-            path.move(to: NSPoint(x: x, y: rect.maxY))
-            path.line(to: NSPoint(x: x + rect.height, y: rect.minY))
+        var x = hatchRect.minX - hatchRect.height
+        while x < hatchRect.maxX {
+            path.move(to: NSPoint(x: x, y: hatchRect.maxY))
+            path.line(to: NSPoint(x: x + hatchRect.height, y: hatchRect.minY))
             x += spacing
         }
         path.lineWidth = 1
