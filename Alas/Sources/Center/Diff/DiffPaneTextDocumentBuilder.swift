@@ -39,23 +39,23 @@ struct DiffPaneTextDocumentBuilder {
     ) -> SplitResult {
         var oldColumn = ColumnAccumulator(font: font, theme: theme)
         var newColumn = ColumnAccumulator(font: font, theme: theme)
-        let oldGutter = NSMutableAttributedString()
-        let newGutter = NSMutableAttributedString()
+        var oldGutter = GutterAccumulator(font: font, theme: theme)
+        var newGutter = GutterAccumulator(font: font, theme: theme)
         let rows = DiffPaneRowProjection.visibleRows(
             in: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
         )
 
         for row in rows {
-            appendGutterLine(marker(for: row.old, emptyKind: row.kind, side: .old), to: oldGutter, font: font, theme: theme, side: .old)
-            appendGutterLine(marker(for: row.new, emptyKind: row.kind, side: .new), to: newGutter, font: font, theme: theme, side: .new)
+            oldGutter.append(marker(for: row.old, emptyKind: row.kind, side: .old), side: .old)
+            newGutter.append(marker(for: row.new, emptyKind: row.kind, side: .new), side: .new)
 
             if row.kind == .collapsed {
                 oldColumn.append(
                     collapsedCodeText(row, font: font, theme: theme),
                     kind: row.kind
                 )
-                newColumn.append(NSAttributedString(string: "", attributes: baseAttributes(font: font, theme: theme)), kind: row.kind)
+                newColumn.append(emptyLayoutGlyph(font: font, theme: theme), kind: row.kind)
                 continue
             }
 
@@ -85,9 +85,9 @@ struct DiffPaneTextDocumentBuilder {
 
         return SplitResult(
             oldCode: oldColumn.document,
-            oldGutter: oldGutter,
+            oldGutter: oldGutter.attributedString,
             newCode: newColumn.document,
-            newGutter: newGutter
+            newGutter: newGutter.attributedString
         )
     }
 
@@ -100,7 +100,7 @@ struct DiffPaneTextDocumentBuilder {
         theme: Theme
     ) -> StackedResult {
         var codeColumn = ColumnAccumulator(font: font, theme: theme)
-        let gutter = NSMutableAttributedString()
+        var gutter = GutterAccumulator(font: font, theme: theme)
         let rows = DiffPaneRowProjection.visibleRows(
             in: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
@@ -108,13 +108,13 @@ struct DiffPaneTextDocumentBuilder {
 
         for row in rows {
             if row.kind == .collapsed {
-                appendGutterLine("", to: gutter, font: font, theme: theme, side: .paired)
+                gutter.append("", side: .paired)
                 codeColumn.append(collapsedCodeText(row, font: font, theme: theme), kind: row.kind)
                 continue
             }
 
             for line in DiffPaneRowProjection.stackedLines(for: row) {
-                appendGutterLine(marker(for: line, emptyKind: row.kind, side: line.anchor.side), to: gutter, font: font, theme: theme, side: line.anchor.side)
+                gutter.append(marker(for: line, emptyKind: row.kind, side: line.anchor.side), side: line.anchor.side)
                 codeColumn.append(
                     code(
                         line.text,
@@ -129,7 +129,7 @@ struct DiffPaneTextDocumentBuilder {
             }
         }
 
-        return StackedResult(code: codeColumn.document, gutter: gutter)
+        return StackedResult(code: codeColumn.document, gutter: gutter.attributedString)
     }
 
     static func build(
@@ -313,6 +313,9 @@ struct DiffPaneTextDocumentBuilder {
         theme: Theme
     ) -> NSAttributedString {
         guard let line else {
+            if text.isEmpty {
+                return emptyLayoutGlyph(font: font, theme: theme)
+            }
             return NSAttributedString(string: text, attributes: baseAttributes(font: font, theme: theme))
         }
         return DiffCodeText.attributedString(
@@ -327,20 +330,7 @@ struct DiffPaneTextDocumentBuilder {
         )
     }
 
-    private static func appendGutterLine(
-        _ text: String,
-        to output: NSMutableAttributedString,
-        font: NSFont,
-        theme: Theme,
-        side: DiffLineSide
-    ) {
-        if output.length > 0 {
-            output.append(NSAttributedString(string: "\n", attributes: baseAttributes(font: font, theme: theme)))
-        }
-        output.append(marker(text, font: font, theme: theme, side: side))
-    }
-
-    private static func marker(
+    fileprivate static func marker(
         _ text: String,
         font: NSFont,
         theme: Theme,
@@ -413,6 +403,17 @@ struct DiffPaneTextDocumentBuilder {
             .foregroundColor: NSColor(theme.color("fg")),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
+    }
+
+    private static func emptyLayoutGlyph(font: NSFont, theme: Theme) -> NSAttributedString {
+        NSAttributedString(
+            string: " ",
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.clear,
+                .paragraphStyle: CenterTypography.paragraphStyle(),
+            ]
+        )
     }
 
     private static func inlineTone(for kind: ParsedDiff.Hunk.Line.Kind) -> DiffInlineTone {
@@ -494,6 +495,36 @@ private struct ColumnAccumulator {
             kind: kind,
             range: NSRange(location: start, length: line.length)
         ))
+    }
+}
+
+private struct GutterAccumulator {
+    private let output = NSMutableAttributedString()
+    private let font: NSFont
+    private let theme: Theme
+    private let newlineAttributes: [NSAttributedString.Key: Any]
+    private var lineCount = 0
+
+    init(font: NSFont, theme: Theme) {
+        self.font = font
+        self.theme = theme
+        newlineAttributes = [
+            .font: font,
+            .foregroundColor: NSColor(theme.color("fg")),
+            .paragraphStyle: CenterTypography.paragraphStyle(),
+        ]
+    }
+
+    var attributedString: NSAttributedString {
+        output
+    }
+
+    mutating func append(_ text: String, side: DiffLineSide) {
+        if lineCount > 0 {
+            output.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
+        }
+        output.append(DiffPaneTextDocumentBuilder.marker(text, font: font, theme: theme, side: side))
+        lineCount += 1
     }
 }
 

@@ -145,10 +145,26 @@ final class DiffPaneTextDocumentContainerView: NSView {
 
         oldPane.layoutSubtreeIfNeeded()
         newPane.layoutSubtreeIfNeeded()
+        synchronizeSplitRowHeights()
         measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         oldPane.frame.size.height = measuredHeight
         newPane.frame.size.height = measuredHeight
         dividerView.frame.size.height = measuredHeight
+    }
+
+    private func synchronizeSplitRowHeights() {
+        let oldRows = oldPane.diffRowRects()
+        let newRows = newPane.diffRowRects()
+        let count = min(oldRows.count, newRows.count)
+        guard count > 0 else { return }
+
+        let rowHeights = (0..<count).map { index in
+            max(oldRows[index].height, newRows[index].height)
+        }
+        oldPane.synchronizeRowHeights(rowHeights)
+        newPane.synchronizeRowHeights(rowHeights)
+        oldPane.layoutSubtreeIfNeeded()
+        newPane.layoutSubtreeIfNeeded()
     }
 
     private func layoutStacked() {
@@ -178,6 +194,8 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var lineLabels: [String] = []
     private var rowKinds: [DiffDisplayRow.Kind] = []
     private var lineTones: [DiffPaneLineTone] = []
+    private var baseDocument: DiffPaneTextDocumentBuilder.CodeDocument?
+    private var synchronizedRowHeights: [CGFloat] = []
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
@@ -248,6 +266,8 @@ final class DiffPaneTextScrollView: NSScrollView {
         self.lineTones = zip(lineLabels, rowKinds).map { label, kind in
             DiffPaneLineTone(label: label, rowKind: kind)
         }
+        self.baseDocument = document
+        self.synchronizedRowHeights = []
         self.wraps = wraps
         self.font = font
         self.theme = theme
@@ -270,6 +290,51 @@ final class DiffPaneTextScrollView: NSScrollView {
 
         needsLayout = true
         invalidateIntrinsicContentSize()
+    }
+
+    func diffRowRects() -> [NSRect] {
+        textView.diffRowRects()
+    }
+
+    func synchronizeRowHeights(_ rowHeights: [CGFloat]) {
+        guard let baseDocument else { return }
+        guard rowHeights.count > 0 else { return }
+        guard rowHeights.count != synchronizedRowHeights.count
+            || zip(rowHeights, synchronizedRowHeights).contains(where: { abs($0.0 - $0.1) > 0.5 })
+        else {
+            return
+        }
+
+        let currentRows = textView.diffRowRects()
+        let synchronized = NSMutableAttributedString(attributedString: baseDocument.attributedString)
+        for index in 0..<min(rowHeights.count, baseDocument.lines.count, currentRows.count) {
+            let targetHeight = rowHeights[index]
+            let currentHeight = currentRows[index].height
+            guard targetHeight > currentHeight + 0.5 else { continue }
+
+            let range = baseDocument.lines[index].range
+            guard range.location < synchronized.length else { continue }
+            let paragraphRange = NSRange(location: range.location, length: max(range.length, 1))
+            let lineCount = max(1, Int(round(currentHeight / max(lineHeight(), 1))))
+            let targetLineHeight = targetHeight / CGFloat(lineCount)
+            let paragraph = NSMutableParagraphStyle()
+            if let existing = synchronized.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle {
+                paragraph.setParagraphStyle(existing)
+            } else {
+                paragraph.setParagraphStyle(CenterTypography.paragraphStyle())
+            }
+            paragraph.minimumLineHeight = targetLineHeight
+            paragraph.maximumLineHeight = targetLineHeight
+            synchronized.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
+        }
+
+        synchronizedRowHeights = rowHeights
+        textView.textStorage?.setAttributedString(synchronized)
+        textView.lineTones = lineTones
+        textView.theme = theme
+        needsLayout = true
+        invalidateIntrinsicContentSize()
+        (verticalRulerView as? DiffPaneLineNumberRulerView)?.needsDisplay = true
     }
 
     override func layout() {
