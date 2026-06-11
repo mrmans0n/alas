@@ -13,6 +13,7 @@ struct DiffCodeText: View {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let wrapLines: Bool
+    let allowHorizontalExpansion: Bool
     let showWhitespace: Bool
     let inlineSpans: [DiffInlineSpan]
     let inlineTone: DiffInlineTone
@@ -23,7 +24,7 @@ struct DiffCodeText: View {
         Text(attributedText)
             .lineSpacing(CenterTypography.textLineSpacing(forFontSize: codeFontSize))
             .lineLimit(wrapLines ? nil : 1)
-            .fixedSize(horizontal: !wrapLines, vertical: true)
+            .fixedSize(horizontal: allowHorizontalExpansion && !wrapLines, vertical: true)
             .textSelection(.enabled)
     }
 

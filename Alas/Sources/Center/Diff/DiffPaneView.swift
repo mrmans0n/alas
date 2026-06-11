@@ -43,6 +43,25 @@ enum DiffPaneRowProjection {
     }
 }
 
+enum DiffPaneScrollPolicy {
+    static func axes(layoutMode: DiffLayoutMode, wrapLines: Bool) -> Axis.Set {
+        if wrapLines {
+            return [.vertical]
+        }
+
+        switch layoutMode {
+        case .split:
+            return [.vertical]
+        case .stacked:
+            return [.vertical, .horizontal]
+        }
+    }
+
+    static func usesIntrinsicContentWidth(layoutMode: DiffLayoutMode, wrapLines: Bool) -> Bool {
+        !wrapLines && layoutMode == .stacked
+    }
+}
+
 struct DiffPaneView: View {
     let model: DiffDisplayModel
     let fileExtension: String
@@ -69,17 +88,19 @@ struct DiffPaneView: View {
 
     private var diffBody: some View {
         GeometryReader { proxy in
-            ScrollView(scrollAxes) {
+            ScrollView(DiffPaneScrollPolicy.axes(layoutMode: layoutMode, wrapLines: wrapLines)) {
                 rowsStack
                     .frame(minWidth: proxy.size.width, alignment: .topLeading)
-                    .fixedSize(horizontal: !wrapLines, vertical: false)
+                    .fixedSize(
+                        horizontal: DiffPaneScrollPolicy.usesIntrinsicContentWidth(
+                            layoutMode: layoutMode,
+                            wrapLines: wrapLines
+                        ),
+                        vertical: false
+                    )
             }
             .defaultScrollAnchor(.topLeading)
         }
-    }
-
-    private var scrollAxes: Axis.Set {
-        wrapLines ? [.vertical] : [.vertical, .horizontal]
     }
 
     private var rowsStack: some View {
@@ -238,6 +259,10 @@ struct DiffPaneView: View {
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 wrapLines: wrapLines,
+                allowHorizontalExpansion: DiffPaneScrollPolicy.usesIntrinsicContentWidth(
+                    layoutMode: layoutMode,
+                    wrapLines: wrapLines
+                ),
                 showWhitespace: showWhitespace,
                 inlineSpans: line.inlineSpans,
                 inlineTone: inlineTone(for: line.kind)

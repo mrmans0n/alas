@@ -70,6 +70,22 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
+    @Test func splitModeKeepsColumnsInViewportWhenWrappingIsOff() {
+        let axes = DiffPaneScrollPolicy.axes(layoutMode: .split, wrapLines: false)
+
+        #expect(axes.contains(.vertical))
+        #expect(!axes.contains(.horizontal))
+        #expect(!DiffPaneScrollPolicy.usesIntrinsicContentWidth(layoutMode: .split, wrapLines: false))
+    }
+
+    @Test func stackedModeKeepsHorizontalScrollWhenWrappingIsOff() {
+        let axes = DiffPaneScrollPolicy.axes(layoutMode: .stacked, wrapLines: false)
+
+        #expect(axes.contains(.vertical))
+        #expect(axes.contains(.horizontal))
+        #expect(DiffPaneScrollPolicy.usesIntrinsicContentWidth(layoutMode: .stacked, wrapLines: false))
+    }
+
     @Test func hunkActionsRenderInPaneHeader() {
         var layout = DiffLayoutMode.split
         var wrap = false
