@@ -159,6 +159,22 @@ struct DiffPaneViewTests {
         #expect(extended.normalized.contains(lastAnchor))
     }
 
+    @Test func diffLoadTokenInvalidatesOlderLoadForSameKey() {
+        let key = "/repo\u{0}Sources/File.swift\u{0}false"
+        let first = DiffLoadToken.next(key: key)
+        var activeKey: String? = first.key
+        var activeID = first.id
+
+        #expect(first.isActive(activeKey: activeKey, activeID: activeID))
+
+        let second = DiffLoadToken.next(key: key)
+        activeKey = second.key
+        activeID = second.id
+
+        #expect(!first.isActive(activeKey: activeKey, activeID: activeID))
+        #expect(second.isActive(activeKey: activeKey, activeID: activeID))
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }

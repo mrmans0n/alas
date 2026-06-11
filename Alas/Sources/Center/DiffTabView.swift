@@ -1,5 +1,18 @@
 import SwiftUI
 
+struct DiffLoadToken: Equatable {
+    let key: String
+    let id: UUID
+
+    static func next(key: String) -> DiffLoadToken {
+        DiffLoadToken(key: key, id: UUID())
+    }
+
+    func isActive(activeKey: String?, activeID: UUID) -> Bool {
+        activeKey == key && activeID == id
+    }
+}
+
 struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
@@ -18,6 +31,7 @@ struct DiffTabView: View {
     @State private var loaded = false
     @State private var error: String?
     @State private var activeLoadKey: String?
+    @State private var activeLoadID = UUID()
     @State private var confirmingDiscardHunk: ParsedDiff.Hunk? = nil
     @State private var isFileTracked: Bool = true
     @State private var isFileDeleted: Bool = false
@@ -217,7 +231,9 @@ struct DiffTabView: View {
 
     private func load() async {
         let requestedLoadKey = loadKey
-        activeLoadKey = requestedLoadKey
+        let requestedLoadToken = DiffLoadToken.next(key: requestedLoadKey)
+        activeLoadKey = requestedLoadToken.key
+        activeLoadID = requestedLoadToken.id
         loaded = false
         diff = ParsedDiff(hunks: [])
         displayModel = nil
@@ -227,9 +243,13 @@ struct DiffTabView: View {
 
         do {
             let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
+            guard isActiveLoad(requestedLoadToken) else { return }
+
             let loadedDisplayModel = await Task.detached(priority: .userInitiated) {
                 DiffDisplayModelBuilder.build(diff: loadedDiff, filePath: relativePath)
             }.value
+            guard isActiveLoad(requestedLoadToken) else { return }
+
             // Single off-main pass instead of two `.flatMap.filter.count`
             // allocations on MainActor — for big diffs each pass copies the
             // full line array, which would stall the UI right after parse.
@@ -247,10 +267,14 @@ struct DiffTabView: View {
                 }
                 return (add, del)
             }.value
+            guard isActiveLoad(requestedLoadToken) else { return }
+
             let tracked = (try? await Process.git(
                 ["ls-files", "--error-unmatch", "--", relativePath],
                 cwd: worktreePath
             ))?.exitCode == 0
+            guard isActiveLoad(requestedLoadToken) else { return }
+
             // A tracked file that's gone from disk is an unstaged deletion.
             // The diff for it has `+++ /dev/null`, so reverse-applying a
             // per-hunk patch (which uses `+++ b/<path>`) would fail — hide
@@ -259,7 +283,7 @@ struct DiffTabView: View {
                 atPath: worktreePath.appendingPathComponent(relativePath).path
             )
 
-            guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
+            guard isActiveLoad(requestedLoadToken) else { return }
             diff = loadedDiff
             displayModel = loadedDisplayModel
             totalAdd = loadedTotalAdd
@@ -268,10 +292,14 @@ struct DiffTabView: View {
             isFileDeleted = deleted
             loaded = true
         } catch {
-            guard !Task.isCancelled, activeLoadKey == requestedLoadKey else { return }
+            guard isActiveLoad(requestedLoadToken) else { return }
             self.error = error.localizedDescription
             loaded = true
         }
+    }
+
+    private func isActiveLoad(_ token: DiffLoadToken) -> Bool {
+        !Task.isCancelled && token.isActive(activeKey: activeLoadKey, activeID: activeLoadID)
     }
 
     private func stageHunk(_ hunk: ParsedDiff.Hunk) {
