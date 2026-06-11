@@ -58,8 +58,8 @@ struct DiffDisplayModelBuilderTests {
     }
 
     @Test func collapsesLargeContextRunsInsideHunk() {
-        let context = (1...12).map {
-            ParsedDiff.Hunk.Line(kind: .context, text: "line \($0)", oldNumber: $0, newNumber: $0)
+        let context = (1...12).map { (number: Int) in
+            ParsedDiff.Hunk.Line(kind: .context, text: "line \(number)", oldNumber: number, newNumber: number)
         }
         let hunk = ParsedDiff.Hunk(header: "@@ -1,12 +1,12 @@", oldStart: 1, newStart: 1, lines: context)
         let model = DiffDisplayModelBuilder.build(
@@ -72,6 +72,37 @@ struct DiffDisplayModelBuilderTests {
         let rows = model.groups[0].rows
         #expect(rows.map(\.kind) == [.context, .context, .collapsed, .context, .context])
         #expect(rows[2].collapsedLineCount == 8)
+    }
+
+    @Test func contextAnchorsRemainStableAcrossCollapsedAndExpandedBuilds() throws {
+        let context = (1...12).map { (number: Int) in
+            ParsedDiff.Hunk.Line(kind: .context, text: "line \(number)", oldNumber: number, newNumber: number)
+        }
+        let hunk = ParsedDiff.Hunk(header: "@@ -1,12 +1,12 @@", oldStart: 1, newStart: 1, lines: context)
+        let collapsed = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [hunk]),
+            filePath: "a.txt",
+            collapseContextThreshold: 6,
+            contextEdgeCount: 2
+        )
+        let expanded = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [hunk]),
+            filePath: "a.txt",
+            collapseContextThreshold: 99,
+            contextEdgeCount: 2
+        )
+
+        func contextAnchors(in model: DiffDisplayModel, text: String) throws -> (old: DiffLineAnchor, new: DiffLineAnchor) {
+            let row = try #require(model.groups[0].rows.first { $0.kind == .context && $0.old?.text == text })
+            return (old: try #require(row.old?.anchor), new: try #require(row.new?.anchor))
+        }
+
+        for text in ["line 1", "line 2", "line 11", "line 12"] {
+            let collapsedAnchors = try contextAnchors(in: collapsed, text: text)
+            let expandedAnchors = try contextAnchors(in: expanded, text: text)
+            #expect(collapsedAnchors.old == expandedAnchors.old)
+            #expect(collapsedAnchors.new == expandedAnchors.new)
+        }
     }
 
     @Test func selectionRangeNormalizesAnchorOrder() {

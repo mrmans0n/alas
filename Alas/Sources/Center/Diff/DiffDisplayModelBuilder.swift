@@ -1,6 +1,11 @@
 import Foundation
 
 enum DiffDisplayModelBuilder {
+    private struct IndexedLine {
+        let index: Int
+        let line: ParsedDiff.Hunk.Line
+    }
+
     static func build(
         diff: ParsedDiff,
         filePath: String,
@@ -36,15 +41,15 @@ enum DiffDisplayModelBuilder {
         var index = 0
 
         while index < hunk.lines.count {
-            let line = hunk.lines[index]
-            switch line.kind {
+            let line = IndexedLine(index: index, line: hunk.lines[index])
+            switch line.line.kind {
             case .context:
                 let start = index
                 while index < hunk.lines.count, hunk.lines[index].kind == .context {
                     index += 1
                 }
                 appendContextRows(
-                    Array(hunk.lines[start..<index]),
+                    (start..<index).map { IndexedLine(index: $0, line: hunk.lines[$0]) },
                     to: &rows,
                     filePath: filePath,
                     hunkIndex: hunkIndex,
@@ -56,13 +61,13 @@ enum DiffDisplayModelBuilder {
                 while index < hunk.lines.count, hunk.lines[index].kind == .delete {
                     index += 1
                 }
-                let deletes = Array(hunk.lines[deleteStart..<index])
+                let deletes = (deleteStart..<index).map { IndexedLine(index: $0, line: hunk.lines[$0]) }
 
                 let addStart = index
                 while index < hunk.lines.count, hunk.lines[index].kind == .add {
                     index += 1
                 }
-                let adds = Array(hunk.lines[addStart..<index])
+                let adds = (addStart..<index).map { IndexedLine(index: $0, line: hunk.lines[$0]) }
 
                 appendChangedRows(
                     deletes: deletes,
@@ -76,7 +81,7 @@ enum DiffDisplayModelBuilder {
                 while index < hunk.lines.count, hunk.lines[index].kind == .add {
                     index += 1
                 }
-                let adds = Array(hunk.lines[addStart..<index])
+                let adds = (addStart..<index).map { IndexedLine(index: $0, line: hunk.lines[$0]) }
                 appendChangedRows(
                     deletes: [],
                     adds: adds,
@@ -91,7 +96,7 @@ enum DiffDisplayModelBuilder {
     }
 
     private static func appendContextRows(
-        _ lines: [ParsedDiff.Hunk.Line],
+        _ lines: [IndexedLine],
         to rows: inout [DiffDisplayRow],
         filePath: String,
         hunkIndex: Int,
@@ -125,7 +130,7 @@ enum DiffDisplayModelBuilder {
     }
 
     private static func shouldCollapse(
-        _ lines: [ParsedDiff.Hunk.Line],
+        _ lines: [IndexedLine],
         threshold: Int,
         edgeCount: Int
     ) -> Bool {
@@ -133,12 +138,13 @@ enum DiffDisplayModelBuilder {
     }
 
     private static func appendContextRow(
-        _ line: ParsedDiff.Hunk.Line,
+        _ source: IndexedLine,
         to rows: inout [DiffDisplayRow],
         filePath: String,
         hunkIndex: Int
     ) {
-        let rowIndex = rows.count
+        let line = source.line
+        let rowIndex = source.index
         rows.append(
             DiffDisplayRow(
                 id: "hunk-\(hunkIndex)-row-\(rowIndex)-context-\(line.oldNumber ?? 0)-\(line.newNumber ?? 0)",
@@ -165,8 +171,8 @@ enum DiffDisplayModelBuilder {
     }
 
     private static func appendChangedRows(
-        deletes: [ParsedDiff.Hunk.Line],
-        adds: [ParsedDiff.Hunk.Line],
+        deletes: [IndexedLine],
+        adds: [IndexedLine],
         to rows: inout [DiffDisplayRow],
         filePath: String,
         hunkIndex: Int
@@ -175,14 +181,14 @@ enum DiffDisplayModelBuilder {
         for offset in 0..<replacementCount {
             let deleteLine = deletes[offset]
             let addLine = adds[offset]
-            let highlight = DiffInlineHighlighter.highlightDeleteAdd(old: deleteLine.text, new: addLine.text)
-            let rowIndex = rows.count
+            let highlight = DiffInlineHighlighter.highlightDeleteAdd(old: deleteLine.line.text, new: addLine.line.text)
+            let rowIndex = deleteLine.index
             rows.append(
                 DiffDisplayRow(
-                    id: "hunk-\(hunkIndex)-row-\(rowIndex)-replacement-\(deleteLine.oldNumber ?? 0)-\(addLine.newNumber ?? 0)",
+                    id: "hunk-\(hunkIndex)-row-\(rowIndex)-replacement-\(deleteLine.line.oldNumber ?? 0)-\(addLine.line.newNumber ?? 0)",
                     kind: .replacement,
                     old: displayLine(
-                        deleteLine,
+                        deleteLine.line,
                         filePath: filePath,
                         hunkIndex: hunkIndex,
                         rowIndex: rowIndex,
@@ -190,7 +196,7 @@ enum DiffDisplayModelBuilder {
                         inlineSpans: highlight.oldSpans
                     ),
                     new: displayLine(
-                        addLine,
+                        addLine.line,
                         filePath: filePath,
                         hunkIndex: hunkIndex,
                         rowIndex: rowIndex,
@@ -202,8 +208,9 @@ enum DiffDisplayModelBuilder {
             )
         }
 
-        deletes.dropFirst(replacementCount).forEach { line in
-            let rowIndex = rows.count
+        deletes.dropFirst(replacementCount).forEach { source in
+            let line = source.line
+            let rowIndex = source.index
             rows.append(
                 DiffDisplayRow(
                     id: "hunk-\(hunkIndex)-row-\(rowIndex)-delete-\(line.oldNumber ?? 0)",
@@ -222,8 +229,9 @@ enum DiffDisplayModelBuilder {
             )
         }
 
-        adds.dropFirst(replacementCount).forEach { line in
-            let rowIndex = rows.count
+        adds.dropFirst(replacementCount).forEach { source in
+            let line = source.line
+            let rowIndex = source.index
             rows.append(
                 DiffDisplayRow(
                     id: "hunk-\(hunkIndex)-row-\(rowIndex)-add-\(line.newNumber ?? 0)",
