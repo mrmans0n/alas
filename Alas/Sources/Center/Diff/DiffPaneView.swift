@@ -133,6 +133,8 @@ struct DiffPaneView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
+        .accessibilityIdentifier("diff-pane-toolbar")
+        .background(DiffPaneToolbarMarker())
         .background(theme.color("bg-1"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
@@ -259,6 +261,16 @@ struct DiffPaneView: View {
         DiffPaneActionButton(systemName: systemName, tooltip: tooltip, action: action)
             .frame(width: 22, height: 20)
     }
+}
+
+private struct DiffPaneToolbarMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setAccessibilityIdentifier("diff-pane-toolbar")
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 private struct DiffPaneActionButton: NSViewRepresentable {

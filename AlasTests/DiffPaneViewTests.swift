@@ -86,6 +86,29 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
+    @Test func defaultModeShowsDiffToolbar() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) != nil)
+    }
+
     @Test func embeddedModeHidesDiffToolbar() {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -107,11 +130,7 @@ struct DiffPaneViewTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
         controller.view.layoutSubtreeIfNeeded()
 
-        let buttonTitles = allSubviews(of: controller.view)
-            .compactMap { $0 as? NSButton }
-            .map(\.title)
-        #expect(!buttonTitles.contains("Split"))
-        #expect(!buttonTitles.contains("Stacked"))
+        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
     }
 
     @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
@@ -583,6 +602,13 @@ struct DiffPaneViewTests {
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+        if view.accessibilityIdentifier() == identifier {
+            return view
+        }
+        return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
     }
 
     private func isEffectivelyVisible(_ view: NSView) -> Bool {
