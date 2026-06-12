@@ -61,6 +61,53 @@ struct DiffPaneLSPLineMapTests {
         #expect(result == LSPPosition(line: 39, character: 12))
     }
 
+    @MainActor
+    @Test func mapsPrefixedStackedRowsFromSourceCodeColumn() throws {
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,1 +1,2 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [
+                    .init(kind: .context, text: "let context = value", oldNumber: 1, newNumber: 1),
+                    .init(kind: .add, text: "let inserted = value", oldNumber: nil, newNumber: 2),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let group = try #require(model.groups.first)
+        let document = DiffPaneTextDocumentBuilder.build(
+            group: group,
+            expandedCollapsedRowIDs: [],
+            layoutMode: .stacked,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+        let rendered = document.attributedString.string as NSString
+        let contextStart = rendered.range(of: "let context").location
+        let insertStart = rendered.range(of: "let inserted").location
+
+        #expect(contextStart != NSNotFound)
+        #expect(insertStart != NSNotFound)
+        #expect(DiffPaneLSPLineMap.position(
+            at: contextStart,
+            metadata: document.lines,
+            allowedSide: .new
+        ) == LSPPosition(line: 0, character: 0))
+        #expect(DiffPaneLSPLineMap.position(
+            at: insertStart,
+            metadata: document.lines,
+            allowedSide: .new
+        ) == LSPPosition(line: 1, character: 0))
+        #expect(DiffPaneLSPLineMap.position(
+            at: insertStart - 1,
+            metadata: document.lines,
+            allowedSide: .new
+        ) == nil)
+    }
+
     @Test func rejectsOldSideLine() {
         let line = DiffDisplayLine(
             id: "file:old:0:0",
@@ -222,5 +269,9 @@ struct DiffPaneLSPLineMapTests {
         #expect(controller.lspPosition(forCharacterIndex: 14) == nil)
 
         controller.tearDown()
+    }
+
+    private func theme() -> Theme {
+        try! ThemeStore().current
     }
 }

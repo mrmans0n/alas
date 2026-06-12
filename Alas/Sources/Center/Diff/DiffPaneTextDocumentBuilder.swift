@@ -7,6 +7,7 @@ struct DiffPaneTextDocumentBuilder {
         let range: NSRange
         var tone: DiffPaneLineTone? = nil
         var sourceLine: DiffDisplayLine? = nil
+        var sourceRange: NSRange? = nil
     }
 
     struct CodeDocument {
@@ -225,10 +226,12 @@ struct DiffPaneTextDocumentBuilder {
                 showWhitespace: showWhitespace,
                 theme: theme
             ))
+            let prefixLength = (prefix(for: line, emptyKind: .context, side: line.anchor.side) as NSString).length
             lines.append(LineMetadata(
                 kind: row.kind,
                 range: NSRange(location: start, length: output.length - start),
-                sourceLine: line
+                sourceLine: line,
+                sourceRange: NSRange(location: start + prefixLength, length: (line.text as NSString).length)
             ))
         }
     }
@@ -523,7 +526,8 @@ private struct ColumnAccumulator {
             kind: kind,
             range: NSRange(location: start, length: line.length),
             tone: tone,
-            sourceLine: sourceLine
+            sourceLine: sourceLine,
+            sourceRange: sourceLine.map { _ in NSRange(location: start, length: line.length) }
         ))
     }
 }

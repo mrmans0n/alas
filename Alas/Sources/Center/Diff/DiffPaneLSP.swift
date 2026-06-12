@@ -38,7 +38,11 @@ enum DiffPaneLSPLineMap {
             return nil
         }
 
-        let character = characterIndex - line.range.location
+        let sourceRange = line.sourceRange ?? line.range
+        guard NSLocationInRange(characterIndex, sourceRange) else {
+            return nil
+        }
+        let character = characterIndex - sourceRange.location
         guard character >= 0, character < source.text.utf16.count else {
             return nil
         }
