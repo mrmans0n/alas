@@ -721,7 +721,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
               let holder = holders[key] else { return false }
-        return holder.openedURIs.contains(uri)
+        return holder.openedURIs.contains(uri) && normalRefCount(forURI: uri, in: holder) > 0
     }
 
     /// Locates the holder currently tracking `uri` (regardless of which
