@@ -579,6 +579,7 @@ struct ReviewEvidenceTabView: View {
 
     private func emptyText(for section: ReviewEvidenceSection) -> String {
         switch section {
+        case .files: "No changed files"
         case .ci: "No failed checks"
         case .feedback: "No actionable feedback"
         }

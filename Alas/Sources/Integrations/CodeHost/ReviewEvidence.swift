@@ -1,11 +1,13 @@
 import Foundation
 
 enum ReviewEvidenceSection: String, Codable, Equatable, Sendable, CaseIterable {
+    case files
     case ci
     case feedback
 
     var displayName: String {
         switch self {
+        case .files: "Files"
         case .ci: "CI"
         case .feedback: "Feedback"
         }

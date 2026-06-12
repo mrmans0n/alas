@@ -4,7 +4,7 @@ import Testing
 
 @MainActor
 struct ReviewEvidenceModelTests {
-    @Test func genericInspectSelectsFailedCIBeforeFeedback() async {
+    @Test func defaultLoadSelectsFilesAndLoadsEvidenceWithoutDetailCalls() async {
         let recorder = EvidenceProviderRecorder()
         let model = ReviewEvidenceModel(
             snapshot: Self.snapshot(),
@@ -15,10 +15,65 @@ struct ReviewEvidenceModelTests {
 
         await model.load()
 
-        #expect(model.selectedSection == .ci)
-        #expect(model.selectedItem?.id == "ci:test")
+        #expect(model.selectedSection == .files)
+        #expect(model.selectedItem == nil)
+        #expect(model.fileSession?.files.map(\.summary.path) == ["Sources/App.swift"])
         #expect(model.ciItems.count == 1)
         #expect(model.feedbackItems.count == 1)
+        let counts = await recorder.detailCounts()
+        #expect(counts.ci == 0)
+        #expect(counts.feedback == 0)
+    }
+
+    @Test func fileLoaderFailureLeavesEvidenceLoadedAndSetsFileError() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(diffError: TestError(message: "diff unavailable")),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.fileSession == nil)
+        #expect(model.fileErrorMessage == "diff unavailable")
+        #expect(model.errorMessage == nil)
+        #expect(model.ciItems.map(\.id) == ["ci:test"])
+        #expect(model.feedbackItems.map(\.id) == ["feedback:thread-1"])
+    }
+
+    @Test func evidenceFailureLeavesLoadedFileSessionAndSetsError() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(ciError: TestError(message: "checks unavailable")),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.fileSession?.files.map(\.summary.path) == ["Sources/App.swift"])
+        #expect(model.fileErrorMessage == nil)
+        #expect(model.errorMessage == "checks unavailable")
+        #expect(model.ciItems.isEmpty)
+        #expect(model.feedbackItems.isEmpty)
+    }
+
+    @Test func loadingSelectedDetailForFilesClearsDetailWithoutProviderCalls() async {
+        let recorder = EvidenceProviderRecorder()
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(recorder: recorder),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+        await model.loadSelectedDetail()
+
+        #expect(model.selectedSection == .files)
+        #expect(model.selectedDetail == nil)
+        #expect(!model.isLoadingDetail)
         let counts = await recorder.detailCounts()
         #expect(counts.ci == 0)
         #expect(counts.feedback == 0)
@@ -84,7 +139,7 @@ struct ReviewEvidenceModelTests {
             snapshot: Self.snapshot(),
             provider: provider,
             cwd: URL(fileURLWithPath: "/tmp/alas"),
-            initialSection: nil
+            initialSection: .ci
         )
 
         await model.load()
@@ -111,6 +166,7 @@ struct ReviewEvidenceModelTests {
         await model.load()
 
         #expect(model.errorMessage == "Review request not found.")
+        #expect(model.fileSession == nil)
         #expect(model.ciItems.isEmpty)
         #expect(model.feedbackItems.isEmpty)
     }
@@ -201,10 +257,20 @@ private actor EvidenceProviderRecorder {
     }
 }
 
+private struct TestError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? { message }
+}
+
 private struct FakeCodeHostProvider: CodeHostProvider {
     let recorder: EvidenceProviderRecorder?
     let ciItems: [ReviewEvidenceItem]
     let feedbackItems: [ReviewEvidenceItem]
+    let diff: String
+    let diffError: TestError?
+    let ciError: TestError?
+    let feedbackError: TestError?
 
     init(
         recorder: EvidenceProviderRecorder? = nil,
@@ -227,11 +293,27 @@ private struct FakeCodeHostProvider: CodeHostProvider {
                 status: .actionable,
                 providerURL: URL(string: "https://github.com/discussion")
             ),
-        ]
+        ],
+        diff: String = """
+        diff --git a/Sources/App.swift b/Sources/App.swift
+        index 111..222 100644
+        --- a/Sources/App.swift
+        +++ b/Sources/App.swift
+        @@ -1 +1 @@
+        -let old = true
+        +let new = true
+        """,
+        diffError: TestError? = nil,
+        ciError: TestError? = nil,
+        feedbackError: TestError? = nil
     ) {
         self.recorder = recorder
         self.ciItems = ciItems
         self.feedbackItems = feedbackItems
+        self.diff = diff
+        self.diffError = diffError
+        self.ciError = ciError
+        self.feedbackError = feedbackError
     }
 
     var kind: CodeHostKind { .github }
@@ -268,8 +350,18 @@ private struct FakeCodeHostProvider: CodeHostProvider {
         []
     }
 
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        if let diffError {
+            throw diffError
+        }
+        return diff
+    }
+
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        ciItems
+        if let ciError {
+            throw ciError
+        }
+        return ciItems
     }
 
     func checkEvidenceDetail(
@@ -289,7 +381,10 @@ private struct FakeCodeHostProvider: CodeHostProvider {
     }
 
     func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        feedbackItems
+        if let feedbackError {
+            throw feedbackError
+        }
+        return feedbackItems
     }
 
     func feedbackEvidenceDetail(
@@ -348,6 +443,18 @@ private actor SuspendedDetailProvider: CodeHostProvider {
     func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL) async throws -> ReviewRequest? { nil }
     func createReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, title: String, body: String, isDraft: Bool, cwd: URL) async throws -> URL { remote.webURL }
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        """
+        diff --git a/Sources/App.swift b/Sources/App.swift
+        index 111..222 100644
+        --- a/Sources/App.swift
+        +++ b/Sources/App.swift
+        @@ -1 +1 @@
+        -let old = true
+        +let new = true
+        """
+    }
 
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         [Self.makeCIItem()]
