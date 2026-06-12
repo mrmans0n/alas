@@ -12,6 +12,8 @@ struct CommitEditorTabView: View {
 
     @State private var selectedPath: String?
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
+    @State private var displayModel: DiffDisplayModel?
+    @State private var displayModelKey: String?
     @State private var loadingDiff = false
     @State private var activeDiffKey: String?
 
@@ -28,6 +30,9 @@ struct CommitEditorTabView: View {
     private let git = GitService()
 
     private static let minPaneWidth: CGFloat = 140
+    private var diffPreferences: DiffPreferenceBindings {
+        DiffPreferenceBindings(appState: appState)
+    }
 
     private var dirty: Bool {
         subject != savedSubject || bodyText != savedBodyText
@@ -132,6 +137,8 @@ struct CommitEditorTabView: View {
                 Group {
                     if let path = selectedPath,
                        let file = details.files.first(where: { $0.path == path }) {
+                        let selectedDiffKey = "\(tabState.currentSha):\(path)"
+                        let selectedDisplayModel = displayModelKey == selectedDiffKey ? displayModel : nil
                         let openAvailable = DiffOpenFileAvailability.isAvailable(
                             worktreePath: worktreePath, relativePath: path
                         )
@@ -141,10 +148,14 @@ struct CommitEditorTabView: View {
                             file: file,
                             path: path,
                             diff: diff,
+                            displayModel: selectedDisplayModel,
                             loading: loadingDiff,
                             error: error,
                             codeFontFamily: appState.config.code.fontFamily,
                             codeFontSize: CGFloat(appState.config.code.fontSize),
+                            layoutMode: diffPreferences.layoutMode,
+                            wrapLines: diffPreferences.wrapLines,
+                            showWhitespace: diffPreferences.showWhitespace,
                             onOpenFile: openAvailable
                                 ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
                                 : nil,
@@ -170,6 +181,8 @@ struct CommitEditorTabView: View {
         activeDiffKey = nil
         selectedPath = nil
         diff = ParsedDiff(hunks: [])
+        displayModel = nil
+        displayModelKey = nil
         loadingDiff = false
         defer {
             if activeDetailsKey == requestedKey { loadingDetails = false }
@@ -195,11 +208,18 @@ struct CommitEditorTabView: View {
 
     private func loadDiffIfNeeded() async {
         guard let path = selectedPath,
-              let file = details?.files.first(where: { $0.path == path }) else { return }
+              let file = details?.files.first(where: { $0.path == path }) else {
+            diff = ParsedDiff(hunks: [])
+            displayModel = nil
+            displayModelKey = nil
+            return
+        }
         let requestedKey = "\(tabState.currentSha):\(path)"
         activeDiffKey = requestedKey
         loadingDiff = true
         error = nil
+        displayModel = nil
+        displayModelKey = nil
         defer {
             if activeDiffKey == requestedKey { loadingDiff = false }
         }
@@ -211,7 +231,13 @@ struct CommitEditorTabView: View {
                 originalPath: file.originalPath
             )
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
+            let loadedModel = await Task.detached(priority: .userInitiated) {
+                DiffDisplayModelBuilder.build(diff: loaded, filePath: path)
+            }.value
+            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             diff = loaded
+            displayModel = loadedModel
+            displayModelKey = requestedKey
         } catch {
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             self.error = (error as NSError).localizedDescription

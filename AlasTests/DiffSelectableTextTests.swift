@@ -27,6 +27,10 @@ struct DiffSelectableTextTests {
         )
     }
 
+    private func sampleDisplayModel(path: String = "Sources/App.swift") -> DiffDisplayModel {
+        DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [sampleHunk()]), filePath: path)
+    }
+
     @Test func diffSelectableTextBuilderPlainStringExcludesGutters() {
         let text = DiffSelectableTextBuilder.plainString(for: sampleHunk())
         #expect(text == """
@@ -325,14 +329,75 @@ struct Foo {
             file: sampleFile(),
             path: "Sources/App.swift",
             diff: diff,
+            displayModel: sampleDisplayModel(),
             loading: false,
             error: nil,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
             onOpenFile: nil
         )
             .environment(\.theme, currentTheme())
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    @Test func commitDiffViewRendersTextDiffWithDiffPaneRenderer() throws {
+        let diff = ParsedDiff(hunks: [sampleHunk()])
+        let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp/repo"),
+            sha: "abc123",
+            file: sampleFile(),
+            path: "Sources/App.swift",
+            diff: diff,
+            displayModel: sampleDisplayModel(),
+            loading: false,
+            error: nil,
+            codeFontFamily: "",
+            codeFontSize: 13,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
+            onOpenFile: nil
+        )
+            .environment(\.theme, currentTheme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+    }
+
+    @Test func commitDiffViewMapsEnabledDropHunkToDiffPaneAction() throws {
+        let diff = ParsedDiff(hunks: [sampleHunk()])
+        let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp/repo"),
+            sha: "abc123",
+            file: sampleFile(),
+            path: "Sources/App.swift",
+            diff: diff,
+            displayModel: sampleDisplayModel(),
+            loading: false,
+            error: nil,
+            codeFontFamily: "",
+            codeFontSize: 13,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
+            onOpenFile: nil,
+            onDropHunk: { _ in },
+            dropHunkEnabled: { _, _ in true }
+        )
+            .environment(\.theme, currentTheme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let buttons = allSubviews(of: controller.view).compactMap { $0 as? NSButton }
+        #expect(buttons.contains { $0.toolTip == "Drop from commit" })
     }
 
     @Test func commitDiffViewPinsShortDiffToTopOfViewport() throws {
@@ -343,8 +408,12 @@ struct Foo {
             file: sampleFile(),
             path: "Sources/App.swift",
             diff: diff,
+            displayModel: sampleDisplayModel(),
             loading: false,
             error: nil,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
             onOpenFile: nil
         )
             .environment(\.theme, currentTheme())
@@ -352,10 +421,10 @@ struct Foo {
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
         controller.view.layoutSubtreeIfNeeded()
 
-        let container = try #require(
-            allSubviews(of: controller.view).compactMap { $0 as? DiffSelectableTextContainerView }.first
+        let scrollView = try #require(
+            allSubviews(of: controller.view).compactMap { $0 as? DiffPaneTextScrollView }.first { !$0.isHidden }
         )
-        let containerRect = container.convert(container.bounds, to: controller.view)
+        let containerRect = scrollView.convert(scrollView.bounds, to: controller.view)
         let distanceFromTop = controller.view.isFlipped
             ? containerRect.minY
             : controller.view.bounds.maxY - containerRect.maxY
@@ -370,8 +439,12 @@ struct Foo {
             file: sampleFile(path: "a.txt"),
             path: "a.txt",
             diff: ParsedDiff(hunks: []),
+            displayModel: nil,
             loading: false,
             error: nil,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
             onOpenFile: nil
         )
             .environment(\.theme, currentTheme())
@@ -426,10 +499,14 @@ struct Foo {
             file: sampleFile(),
             path: "Sources/App.swift",
             diff: diff,
+            displayModel: sampleDisplayModel(),
             loading: false,
             error: nil,
             codeFontFamily: "Menlo",
             codeFontSize: 18,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
             onOpenFile: nil
         )
             .environment(\.theme, currentTheme())
