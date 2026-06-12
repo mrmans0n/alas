@@ -282,6 +282,58 @@ struct DiffPaneViewTests {
         }
     }
 
+    @Test func diffTextScrollPaneResetsHorizontalOriginWhenLaidOutForInitialDisplay() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = \"This line is intentionally long enough to make the inner pane horizontally scrollable.\""
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [.init(kind: .context, range: NSRange(location: 0, length: (text as NSString).length))]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 180, height: 80))
+
+        scrollView.update(
+            document: document,
+            lineLabels: [" 1"],
+            wraps: false,
+            font: font,
+            theme: theme
+        )
+        scrollView.layoutSubtreeIfNeeded()
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+
+        scrollView.resetHorizontalOriginToLeading()
+
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+
+        scrollView.update(
+            document: document,
+            lineLabels: [" 1"],
+            wraps: false,
+            font: font,
+            theme: theme
+        )
+
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
     @Test func collapsedContextControllerTogglesHiddenRows() throws {
         let group = try #require(collapsedContextModel().groups.first)
         let collapsedIDs = DiffCollapsedContextController.collapsedRowIDs(in: group)

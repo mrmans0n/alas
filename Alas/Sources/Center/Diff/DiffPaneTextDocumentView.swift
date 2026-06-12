@@ -226,6 +226,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var lineTones: [DiffPaneLineTone] = []
     private var baseDocument: DiffPaneTextDocumentBuilder.CodeDocument?
     private var synchronizedRowHeights: [CGFloat] = []
+    private var shouldResetHorizontalOrigin = false
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
@@ -301,6 +302,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         }
         self.baseDocument = document
         self.synchronizedRowHeights = []
+        self.shouldResetHorizontalOrigin = true
         self.wraps = wraps
         self.font = font
         self.theme = theme
@@ -321,6 +323,7 @@ final class DiffPaneTextScrollView: NSScrollView {
             )
         }
 
+        resetHorizontalOriginToLeading()
         needsLayout = true
         invalidateIntrinsicContentSize()
     }
@@ -382,7 +385,18 @@ final class DiffPaneTextScrollView: NSScrollView {
             width: textViewWidth(),
             height: documentHeight
         )
+        if shouldResetHorizontalOrigin {
+            resetHorizontalOriginToLeading()
+            shouldResetHorizontalOrigin = false
+        }
         (verticalRulerView as? DiffPaneLineNumberRulerView)?.rowHeight = lineHeight()
+    }
+
+    func resetHorizontalOriginToLeading() {
+        let currentY = contentView.bounds.origin.y
+        contentView.scroll(to: NSPoint(x: 0, y: currentY))
+        reflectScrolledClipView(contentView)
+        (verticalRulerView as? DiffPaneLineNumberRulerView)?.needsDisplay = true
     }
 
     override func scrollWheel(with event: NSEvent) {
