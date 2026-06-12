@@ -60,6 +60,46 @@ struct ReviewRequestDiffLoaderTests {
         #expect(file.placeholderMessage == "Image changes are not available in this review view yet.")
     }
 
+    @Test func noHunkPlaceholderFileWithBSlashSegmentKeepsHeaderPath() async throws {
+        let provider = FakeDiffProvider(diff: """
+        diff --git a/foo b/bar.png b/foo b/bar.png
+        index 111..222 100644
+        """)
+        let loader = ReviewRequestDiffLoader(provider: provider)
+
+        let session = try await loader.load(
+            remote: Self.remote(),
+            request: Self.reviewRequest(),
+            cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.path == "foo b/bar.png")
+        #expect(file.summary.isRenderable == false)
+    }
+
+    @Test func quotedPathHeadersDecodeEscapedTab() async throws {
+        let provider = FakeDiffProvider(diff: """
+        diff --git "a/tab\\tfile.swift" "b/tab\\tfile.swift"
+        index 111..222 100644
+        --- "a/tab\\tfile.swift"
+        +++ "b/tab\\tfile.swift"
+        @@ -1 +1 @@
+        -let old = true
+        +let new = true
+        """)
+        let loader = ReviewRequestDiffLoader(provider: provider)
+
+        let session = try await loader.load(
+            remote: Self.remote(),
+            request: Self.reviewRequest(),
+            cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.path == "tab\tfile.swift")
+    }
+
     @Test func gitLabNewFileUsesMergeRequestNamespaceAndAddedStatus() async throws {
         let provider = FakeDiffProvider(
             diff: """

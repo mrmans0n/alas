@@ -189,13 +189,21 @@ private struct ProviderDiffFileSection {
     }
 
     private static func prefixedPaths(from payload: String) -> (old: String, new: String)? {
-        guard payload.hasPrefix("a/"),
-              let delimiter = payload.range(of: " b/")
-        else { return nil }
+        guard payload.hasPrefix("a/") else { return nil }
 
-        let oldPath = String(payload[..<delimiter.lowerBound])
-        let newPath = String(payload[payload.index(after: delimiter.lowerBound)...])
-        return (stripGitPrefix(oldPath), stripGitPrefix(newPath))
+        var candidates: [(old: String, new: String)] = []
+        var searchStart = payload.startIndex
+        while let delimiter = payload.range(of: " b/", range: searchStart..<payload.endIndex) {
+            let oldPath = String(payload[..<delimiter.lowerBound])
+            let newPath = String(payload[payload.index(after: delimiter.lowerBound)...])
+            candidates.append((stripGitPrefix(oldPath), stripGitPrefix(newPath)))
+            searchStart = payload.index(after: delimiter.lowerBound)
+        }
+
+        if let matchingCandidate = candidates.first(where: { $0.old == $0.new }) {
+            return matchingCandidate
+        }
+        return candidates.last
     }
 
     private static func quotedPaths(from payload: String) -> (old: String, new: String)? {
@@ -304,6 +312,10 @@ private struct ProviderDiffFileSection {
     private static func pathHeader(in lines: [String], prefix: String) -> String? {
         guard let rawPath = firstHeaderValue(in: lines, prefix: prefix) else { return nil }
         guard rawPath != "/dev/null" else { return nil }
+        var index = rawPath.startIndex
+        if let quotedPath = quotedPathToken(in: rawPath, index: &index) {
+            return stripGitPrefix(quotedPath)
+        }
         return stripGitPrefix(rawPath)
     }
 
