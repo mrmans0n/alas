@@ -370,6 +370,36 @@ struct Foo {
         #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
     }
 
+    @Test func commitDiffViewUsesInternalVerticalScroll() throws {
+        let diff = ParsedDiff(hunks: [sampleHunk()])
+        let view = CommitDiffView(
+            worktreePath: URL(fileURLWithPath: "/tmp/repo"),
+            sha: "abc123",
+            file: sampleFile(),
+            path: "Sources/App.swift",
+            diff: diff,
+            displayModel: sampleDisplayModel(),
+            loading: false,
+            error: nil,
+            codeFontFamily: "",
+            codeFontSize: 13,
+            layoutMode: .constant(.split),
+            wrapLines: .constant(false),
+            showWhitespace: .constant(false),
+            onOpenFile: nil
+        )
+            .environment(\.theme, currentTheme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let outerScrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? NSScrollView }
+            .filter { !($0 is DiffPaneTextScrollView) }
+        #expect(!outerScrollViews.isEmpty)
+    }
+
     @Test func commitDiffViewMapsEnabledDropHunkToDiffPaneAction() throws {
         let diff = ParsedDiff(hunks: [sampleHunk()])
         let view = CommitDiffView(
