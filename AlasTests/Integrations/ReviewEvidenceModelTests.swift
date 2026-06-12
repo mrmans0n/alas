@@ -175,6 +175,30 @@ struct ReviewEvidenceModelTests {
         #expect(!ReviewEvidenceTabView.shouldShowModelUnavailable(model))
     }
 
+    @Test func evidenceErrorWithFileErrorStillShowsUnavailableForCIAndFeedback() {
+        let ciUnavailable = ReviewEvidenceTabView.shouldShowModelUnavailable(
+            selectedSection: .ci,
+            isLoadingFiles: false,
+            fileErrorMessage: "diff unavailable",
+            fileSession: nil,
+            ciItemsAreEmpty: true,
+            feedbackItemsAreEmpty: true,
+            modelErrorMessage: "checks unavailable"
+        )
+        let feedbackUnavailable = ReviewEvidenceTabView.shouldShowModelUnavailable(
+            selectedSection: .feedback,
+            isLoadingFiles: false,
+            fileErrorMessage: "diff unavailable",
+            fileSession: nil,
+            ciItemsAreEmpty: true,
+            feedbackItemsAreEmpty: true,
+            modelErrorMessage: "feedback unavailable"
+        )
+
+        #expect(ciUnavailable)
+        #expect(feedbackUnavailable)
+    }
+
     @Test func emptyFileSessionChoosesEmptyState() {
         let content = ReviewEvidenceTabView.contentRoute(
             selectedSection: .files,
