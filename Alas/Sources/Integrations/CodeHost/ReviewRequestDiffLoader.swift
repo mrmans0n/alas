@@ -304,9 +304,13 @@ private struct ProviderDiffFileSection {
     }
 
     private static func firstHeaderValue(in lines: [String], prefix: String) -> String? {
-        lines
+        guard let value = (lines
             .first { $0.hasPrefix(prefix) }
-            .map { String($0.dropFirst(prefix.count)) }
+            .map { String($0.dropFirst(prefix.count)) })
+        else { return nil }
+
+        var index = value.startIndex
+        return quotedPathToken(in: value, index: &index) ?? value
     }
 
     private static func pathHeader(in lines: [String], prefix: String) -> String? {

@@ -100,6 +100,32 @@ struct ReviewRequestDiffLoaderTests {
         #expect(file.summary.path == "tab\tfile.swift")
     }
 
+    @Test func quotedRenameHeadersDecodeEscapedPaths() async throws {
+        let provider = FakeDiffProvider(diff: """
+        diff --git "a/old\\tfile.swift" "b/new\\tfile.swift"
+        similarity index 88%
+        rename from "old\\tfile.swift"
+        rename to "new\\tfile.swift"
+        --- "a/old\\tfile.swift"
+        +++ "b/new\\tfile.swift"
+        @@ -1 +1 @@
+        -let oldName = true
+        +let newName = true
+        """)
+        let loader = ReviewRequestDiffLoader(provider: provider)
+
+        let session = try await loader.load(
+            remote: Self.remote(),
+            request: Self.reviewRequest(),
+            cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.path == "new\tfile.swift")
+        #expect(file.summary.originalPath == "old\tfile.swift")
+        #expect(file.summary.status == .renamed)
+    }
+
     @Test func gitLabNewFileUsesMergeRequestNamespaceAndAddedStatus() async throws {
         let provider = FakeDiffProvider(
             diff: """
