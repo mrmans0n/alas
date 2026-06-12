@@ -231,7 +231,10 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var theme: Theme?
 
     var documentHeight: CGFloat {
-        max(measuredTextHeight() + textView.textContainerInset.height * 2, fallbackTextHeight())
+        if let lastRow = textView.diffRowRects().last {
+            return max(ceil(lastRow.maxY + textView.textContainerInset.height), fallbackTextHeight())
+        }
+        return max(measuredTextHeight() + textView.textContainerInset.height * 2, fallbackTextHeight())
     }
 
     override init(frame frameRect: NSRect) {
@@ -344,7 +347,10 @@ final class DiffPaneTextScrollView: NSScrollView {
 
             let range = baseDocument.lines[index].range
             guard range.location < synchronized.length else { continue }
-            let paragraphRange = NSRange(location: range.location, length: max(range.length, 1))
+            let paragraphRange = (synchronized.string as NSString).paragraphRange(for: NSRange(
+                location: range.location,
+                length: max(range.length, 1)
+            ))
             let lineCount = max(1, Int(round(currentHeight / max(lineHeight(), 1))))
             let targetLineHeight = targetHeight / CGFloat(lineCount)
             let paragraph = NSMutableParagraphStyle()
@@ -481,22 +487,16 @@ final class DiffPaneCodeTextView: NSTextView {
         guard let layoutManager, let textContainer else { return [] }
         layoutManager.ensureLayout(for: textContainer)
         let paragraphRanges = paragraphRanges(lineCount: lineTones.count)
-        return paragraphRanges.enumerated().map { index, range in
-            var rowRect = NSRect.null
-            let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-            if glyphRange.length > 0 {
-                layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
-                    rowRect = rowRect.union(lineFragmentRect)
-                }
-            }
-            if rowRect.isNull {
-                rowRect = fallbackRowRect(at: index, layoutManager: layoutManager)
-            }
-            rowRect.origin.x = 0
-            rowRect.origin.y += textContainerOrigin.y
-            rowRect.size.width = max(bounds.width, visibleRect.width)
-            rowRect.size.height = max(rowRect.height, layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular)))
-            return rowRect
+        var nextY = textContainerOrigin.y
+        return paragraphRanges.map { range in
+            let height = measuredRowHeight(for: range, layoutManager: layoutManager)
+            defer { nextY += height }
+            return NSRect(
+                x: 0,
+                y: nextY,
+                width: max(bounds.width, visibleRect.width),
+                height: height
+            )
         }
     }
 
@@ -533,16 +533,26 @@ final class DiffPaneCodeTextView: NSTextView {
                 ranges.append(NSRange(location: location, length: ns.length - location))
                 location = ns.length
             } else {
-                ranges.append(NSRange(location: location, length: newline.location - location))
+                ranges.append(NSRange(location: location, length: NSMaxRange(newline) - location))
                 location = NSMaxRange(newline)
             }
         }
         return ranges
     }
 
-    private func fallbackRowRect(at index: Int, layoutManager: NSLayoutManager) -> NSRect {
-        let lineHeight = layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular))
-        return NSRect(x: 0, y: CGFloat(index) * lineHeight, width: bounds.width, height: lineHeight)
+    private func measuredRowHeight(for range: NSRange, layoutManager: NSLayoutManager) -> CGFloat {
+        let defaultHeight = layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular))
+        guard range.length > 0 else { return defaultHeight }
+
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return defaultHeight }
+
+        var rowRect = NSRect.null
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
+            rowRect = rowRect.union(lineFragmentRect)
+        }
+        guard !rowRect.isNull else { return defaultHeight }
+        return max(ceil(rowRect.height), defaultHeight)
     }
 
     private func rowFill(for tone: DiffPaneLineTone, theme: Theme) -> NSColor {
@@ -655,9 +665,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             let rowRect = NSRect(x: 0, y: y, width: ruleThickness, height: sourceRowRect.height)
             drawRowBackground(index: index, rowRect: rowRect, theme: theme)
             guard !label.isEmpty else { continue }
+            let firstVisualLineHeight = min(sourceRowRect.height, rowHeight)
             let drawRect = NSRect(
                 x: 0,
-                y: y + max((sourceRowRect.height - textHeight) / 2, 0),
+                y: y + max((firstVisualLineHeight - textHeight) / 2, 0),
                 width: ruleThickness - horizontalPadding,
                 height: textHeight
             )

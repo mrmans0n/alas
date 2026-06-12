@@ -378,7 +378,7 @@ struct DiffPaneViewTests {
         let model = DiffDisplayModelBuilder.build(
             diff: ParsedDiff(hunks: [
                 ParsedDiff.Hunk(
-                    header: "@@ -1,1 +1,2 @@",
+                    header: "@@ -1,1 +1,4 @@",
                     oldStart: 1,
                     newStart: 1,
                     lines: [
@@ -388,7 +388,9 @@ struct DiffPaneViewTests {
                             oldNumber: nil,
                             newNumber: 1
                         ),
-                        .init(kind: .context, text: "let c = 3", oldNumber: 1, newNumber: 2),
+                        .init(kind: .add, text: "let second = true", oldNumber: nil, newNumber: 2),
+                        .init(kind: .add, text: "let third = true", oldNumber: nil, newNumber: 3),
+                        .init(kind: .context, text: "let c = 3", oldNumber: 1, newNumber: 4),
                     ]
                 )
             ]),
@@ -425,11 +427,17 @@ struct DiffPaneViewTests {
         let newRows = newCodeView.diffRowRects()
 
         #expect(oldRows.count == newRows.count)
-        #expect(oldRows.count >= 2)
+        #expect(oldRows.count >= 4)
         #expect(abs(oldRows[0].minY - oldCodeView.textContainerInset.height) < 0.5)
         #expect(abs(newRows[0].minY - newCodeView.textContainerInset.height) < 0.5)
-        #expect(abs(oldRows[0].height - newRows[0].height) < 0.5)
-        #expect(abs(oldRows[1].minY - newRows[1].minY) < 0.5)
+        for index in oldRows.indices {
+            #expect(abs(oldRows[index].minY - newRows[index].minY) < 0.5)
+            #expect(abs(oldRows[index].height - newRows[index].height) < 0.5)
+            if index > 0 {
+                #expect(oldRows[index].minY >= oldRows[index - 1].maxY - 0.5)
+                #expect(newRows[index].minY >= newRows[index - 1].maxY - 0.5)
+            }
+        }
     }
 
     @Test func diffLineToneClassifiesRailsAndEmptyCounterparts() {
