@@ -5,6 +5,11 @@ struct ChangedRow: View {
     var depth: Int = 0
     let onSelect: () -> Void
     var onStage: (() -> Void)? = nil
+    var stageState: StageChip.DisplayState? = nil
+    var displayAdd: Int? = nil
+    var displayDel: Int? = nil
+    var onStageEntries: (() -> Void)? = nil
+    var onUnstageEntries: (() -> Void)? = nil
     var onOpenFile:       (() -> Void)? = nil
     var onCopyRelative:   (() -> Void)? = nil
     var onCopyFull:       (() -> Void)? = nil
@@ -17,10 +22,13 @@ struct ChangedRow: View {
 
     var body: some View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
+        let add = displayAdd ?? file.add
+        let del = displayDel ?? file.del
+        let resolvedStageState = stageState ?? (file.stage == .staged ? .staged : .unstaged)
         return Button(action: onSelect) {
             HStack(spacing: 6) {
                 if let onStage {
-                    StageChip(staged: file.stage == .staged, action: onStage)
+                    StageChip(state: resolvedStageState, action: onStage)
                 }
                 FileTypeIconView(filename: basename, size: 18)
                 Text(basename)
@@ -28,8 +36,8 @@ struct ChangedRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer()
-                if file.add > 0 { Text("+\(file.add)").foregroundColor(theme.color("add")) }
-                if file.del > 0 { Text("−\(file.del)").foregroundColor(theme.color("del")) }
+                if add > 0 { Text("+\(add)").foregroundColor(theme.color("add")) }
+                if del > 0 { Text("−\(del)").foregroundColor(theme.color("del")) }
                 StatusBadge(status: file.status)
             }
             .font(.system(size: 11, design: .monospaced))
@@ -49,7 +57,14 @@ struct ChangedRow: View {
             Divider()
             Button("Copy Diff") { onCopyDiff?() }
             Divider()
-            if onStage != nil {
+            if onStageEntries != nil || onUnstageEntries != nil {
+                if let onStageEntries {
+                    Button("Stage") { onStageEntries() }
+                }
+                if let onUnstageEntries {
+                    Button("Unstage") { onUnstageEntries() }
+                }
+            } else if onStage != nil {
                 Button(file.stage == .staged ? "Unstage" : "Stage") { onStage?() }
             }
             Button("Discard Changes...") { onDiscard?() }

@@ -95,7 +95,6 @@ struct ChangesTabView: View {
                 changes: nonConflictChanges,
                 expanded: $rps.workingTreeExpanded,
                 onSelect: onSelect,
-                onToggleStage: { rps.toggleStage($0) },
                 onStageAll: { rps.stageAll($0) },
                 onUnstageAll: { rps.unstageAll($0) },
                 onIgnore: { path, isDir, dest in

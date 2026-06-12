@@ -4,7 +4,6 @@ struct WorkingTreeSectionView: View {
     let changes: [ChangedFile]
     @Binding var expanded: Bool
     let onSelect: (ChangedFile) -> Void
-    var onToggleStage: ((ChangedFile) -> Void)? = nil
     var onStageAll: (([ChangedFile]) -> Void)? = nil
     var onUnstageAll: (([ChangedFile]) -> Void)? = nil
     var onIgnore: ((_ path: String, _ isDirectory: Bool, _ destination: IgnoreDestination) -> Void)? = nil
@@ -20,14 +19,15 @@ struct WorkingTreeSectionView: View {
 
     @Environment(\.theme) private var theme
 
-    @State private var stagedExpanded: Bool = true
-    @State private var unstagedExpanded: Bool = true
     @State private var collapsedChangePaths: Set<String> = []
 
     private var staged:   [ChangedFile] { changes.filter { $0.stage == .staged   } }
     private var unstaged: [ChangedFile] { changes.filter { $0.stage == .unstaged } }
-    private var totalAdd: Int { changes.reduce(0) { $0 + $1.add } }
-    private var totalDel: Int { changes.reduce(0) { $0 + $1.del } }
+    private var changeGroups: [WorkingTreeChangeGroup] {
+        WorkingTreeChangeGroup.group(files: changes)
+    }
+    private var totalAdd: Int { changeGroups.reduce(0) { $0 + $1.add } }
+    private var totalDel: Int { changeGroups.reduce(0) { $0 + $1.del } }
 
     var body: some View {
         Section {
@@ -38,43 +38,32 @@ struct WorkingTreeSectionView: View {
                         .foregroundColor(theme.color("fg-faint"))
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                } else if staged.isEmpty {
-                    flatFileTree(files: unstaged, collapseNamespace: "unstaged")
                 } else {
-                    subsection(
-                        title: "Staged",
-                        files: staged,
-                        expanded: $stagedExpanded,
-                        collapseNamespace: "staged",
-                        actionLabel: "Unstage all",
-                        onAction: { onUnstageAll?(staged) },
-                        staged: true
-                    )
-                    if !unstaged.isEmpty {
-                        subsection(
-                            title: "Changes",
-                            files: unstaged,
-                            expanded: $unstagedExpanded,
-                            collapseNamespace: "unstaged",
-                            actionLabel: "Stage all",
-                            onAction: { onStageAll?(unstaged) }
-                        )
-                    }
+                    flatFileTree(groups: changeGroups)
                 }
             }
         } header: {
             SectionHeader(
                 title: "Working tree",
-                count: changes.count,
+                count: changeGroups.count,
                 expanded: expanded,
                 onToggle: { expanded.toggle() },
                 stats: (add: totalAdd, del: totalDel)
-            ) {
-                if staged.isEmpty, !unstaged.isEmpty {
-                    SectionHeaderActionLink(title: "Stage all", action: { onStageAll?(unstaged) })
-                }
-            }
+            ) { }
             .contextMenu {
+                if !unstaged.isEmpty {
+                    Button("Stage All Changes") {
+                        onStageAll?(unstaged)
+                    }
+                }
+                if !staged.isEmpty {
+                    Button("Unstage All Changes") {
+                        onUnstageAll?(staged)
+                    }
+                }
+                if !changes.isEmpty {
+                    Divider()
+                }
                 Button("Discard all working tree changes...") {
                     onDiscardAll?()
                 }
@@ -84,43 +73,11 @@ struct WorkingTreeSectionView: View {
     }
 
     @ViewBuilder
-    private func flatFileTree(files: [ChangedFile], collapseNamespace: String) -> some View {
-        let filesByPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0) })
+    private func flatFileTree(groups: [WorkingTreeChangeGroup]) -> some View {
+        let groupsByPath = Dictionary(uniqueKeysWithValues: groups.map { ($0.path, $0) })
+        let files = groups.map(\.primaryEntry)
         ForEach(ChangesTreeBuilder.build(files: files)) { node in
-            renderNode(node, filesByPath: filesByPath, depth: 0, collapseNamespace: collapseNamespace)
-        }
-    }
-
-    @ViewBuilder
-    private func subsection(
-        title: String,
-        files: [ChangedFile],
-        expanded: Binding<Bool>,
-        collapseNamespace: String,
-        actionLabel: String?,
-        onAction: (() -> Void)?,
-        staged: Bool = false
-    ) -> some View {
-        let add = files.reduce(0) { $0 + $1.add }
-        let del = files.reduce(0) { $0 + $1.del }
-        SubHeader(
-            title: title,
-            count: files.count,
-            expanded: expanded.wrappedValue,
-            onToggle: { expanded.wrappedValue.toggle() },
-            staged: staged,
-            stats: (add, del),
-            trailing: actionLabel.map { label in
-                AnyView(
-                    SectionHeaderActionLink(title: label, action: { onAction?() })
-                )
-            }
-        )
-        if expanded.wrappedValue {
-            let filesByPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0) })
-            ForEach(ChangesTreeBuilder.build(files: files)) { node in
-                renderNode(node, filesByPath: filesByPath, depth: 0, collapseNamespace: collapseNamespace)
-            }
+            renderNode(node, groups: groups, groupsByPath: groupsByPath, depth: 0)
         }
     }
 
@@ -135,13 +92,13 @@ struct WorkingTreeSectionView: View {
     /// Folders that contain any tracked entry get no Ignore menu.
     private func isUntrackedSubtree(
         _ node: FileTreeNode,
-        filesByPath: [String: ChangedFile]
+        groupsByPath: [String: WorkingTreeChangeGroup]
     ) -> Bool {
         if node.kind == .file {
-            return filesByPath[node.path].map(isUntracked) ?? false
+            return groupsByPath[node.path]?.entries.allSatisfy(isUntracked) ?? false
         }
         guard let kids = node.children, !kids.isEmpty else { return false }
-        return kids.allSatisfy { isUntrackedSubtree($0, filesByPath: filesByPath) }
+        return kids.allSatisfy { isUntrackedSubtree($0, groupsByPath: groupsByPath) }
     }
 
     @ViewBuilder
@@ -161,14 +118,17 @@ struct WorkingTreeSectionView: View {
 
     private func renderNode(
         _ node: FileTreeNode,
-        filesByPath: [String: ChangedFile],
-        depth: Int,
-        collapseNamespace: String
+        groups: [WorkingTreeChangeGroup],
+        groupsByPath: [String: WorkingTreeChangeGroup],
+        depth: Int
     ) -> AnyView {
         if node.kind == .dir {
-            let collapseKey = "\(collapseNamespace):\(node.path)"
+            let collapseKey = "working-tree:\(node.path)"
             let open = !collapsedChangePaths.contains(collapseKey)
-            let folderUntracked = isUntrackedSubtree(node, filesByPath: filesByPath)
+            let folderGroups = groups.groups(under: node.path)
+            let stagedEntries = folderGroups.flatMap(\.stagedEntries)
+            let unstagedEntries = folderGroups.flatMap(\.unstagedEntries)
+            let folderUntracked = isUntrackedSubtree(node, groupsByPath: groupsByPath)
             return AnyView(
                 Group {
                     Button {
@@ -202,6 +162,19 @@ struct WorkingTreeSectionView: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
+                        if !unstagedEntries.isEmpty {
+                            Button("Stage Changes") {
+                                onStageAll?(unstagedEntries)
+                            }
+                        }
+                        if !stagedEntries.isEmpty {
+                            Button("Unstage Changes") {
+                                onUnstageAll?(stagedEntries)
+                            }
+                        }
+                        if !stagedEntries.isEmpty || !unstagedEntries.isEmpty {
+                            Divider()
+                        }
                         Button("Discard Changes...") {
                             onDiscardFolder?(node.path)
                         }
@@ -213,25 +186,33 @@ struct WorkingTreeSectionView: View {
                         ForEach(kids) {
                             renderNode(
                                 $0,
-                                filesByPath: filesByPath,
-                                depth: depth + 1,
-                                collapseNamespace: collapseNamespace
+                                groups: groups,
+                                groupsByPath: groupsByPath,
+                                depth: depth + 1
                             )
                         }
                     }
                 }
             )
-        } else if let file = filesByPath[node.path] {
+        } else if let group = groupsByPath[node.path] {
+            let file = group.primaryEntry
             let fileUntracked = isUntracked(file)
             let ignore: AnyView? = fileUntracked
                 ? AnyView(ignoreMenu(path: file.path, isDirectory: false))
                 : nil
+            let canStage = !group.unstagedEntries.isEmpty
+            let canUnstage = !group.stagedEntries.isEmpty
             return AnyView(
                 ChangedRow(
                     file: file,
                     depth: depth,
                     onSelect: { onSelect(file) },
-                    onStage: onToggleStage.map { fn in { fn(file) } },
+                    onStage: primaryStageAction(for: group),
+                    stageState: stageChipState(for: group.stageState),
+                    displayAdd: group.add,
+                    displayDel: group.del,
+                    onStageEntries: canStage ? { onStageAll?(group.unstagedEntries) } : nil,
+                    onUnstageEntries: canUnstage ? { onUnstageAll?(group.stagedEntries) } : nil,
                     onOpenFile: onOpenFile.map { fn in { fn(file) } },
                     onCopyRelative: onCopyRelative.map { fn in { fn(file) } },
                     onCopyFull: onCopyFull.map { fn in { fn(file) } },
@@ -246,27 +227,23 @@ struct WorkingTreeSectionView: View {
             return AnyView(EmptyView())
         }
     }
-}
 
-/// Compact link-style action used in the trailing slot of section/sub
-/// headers. Avoids AlasButton's 28pt fixed height so headers stay the
-/// same vertical size as the COMMITS header and Draft commit nudge.
-private struct SectionHeaderActionLink: View {
-    let title: String
-    let action: () -> Void
-
-    @Environment(\.theme) private var theme
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.3)
-                .foregroundColor(hovering ? theme.color("accent") : theme.color("fg-muted"))
+    private func primaryStageAction(for group: WorkingTreeChangeGroup) -> (() -> Void)? {
+        switch group.stageState {
+        case .staged:
+            guard !group.stagedEntries.isEmpty else { return nil }
+            return { onUnstageAll?(group.stagedEntries) }
+        case .mixed, .unstaged:
+            guard !group.unstagedEntries.isEmpty else { return nil }
+            return { onStageAll?(group.unstagedEntries) }
         }
-        .buttonStyle(.plain)
-        .pointingHandCursor()
-        .onHover { hovering = $0 }
+    }
+
+    private func stageChipState(for state: WorkingTreeStageState) -> StageChip.DisplayState {
+        switch state {
+        case .staged: return .staged
+        case .mixed: return .mixed
+        case .unstaged: return .unstaged
+        }
     }
 }
