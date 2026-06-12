@@ -15,7 +15,7 @@ final class HoverWindowController {
         size: NSSize,
         theme: Theme,
         anchor: NSRect,
-        in textView: CodeTextView
+        in textView: NSTextView
     ) {
         let root = HoverPopupView(result: result, theme: theme)
         if let hostingController {

@@ -327,6 +327,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         textView.theme = theme
         textView.lspContext = lspContext
         textView.allowedLSPSide = allowedLSPSide
+        textView.updateLSPController()
         textView.insertionPointColor = NSColor(theme.color("fg"))
 
         if let ruler = verticalRulerView as? DiffPaneLineNumberRulerView {
@@ -538,6 +539,7 @@ final class DiffPaneCodeTextView: NSTextView {
 
     private var ownedTextStorage: NSTextStorage?
     private var customTrackingArea: NSTrackingArea?
+    private var lspController: DiffPaneLSPController?
 
     var lineTones: [DiffPaneLineTone] = [] {
         didSet { needsDisplay = true }
@@ -568,6 +570,13 @@ final class DiffPaneCodeTextView: NSTextView {
 
     required init?(coder: NSCoder) {
         fatalError("not used")
+    }
+
+    deinit {
+        let lspController = lspController
+        Task { @MainActor in
+            lspController?.tearDown()
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -709,6 +718,18 @@ final class DiffPaneCodeTextView: NSTextView {
         let glyph = glyphRange.location
         let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
         return rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
+
+    func updateLSPController() {
+        guard let lspContext else {
+            lspController?.tearDown()
+            lspController = nil
+            return
+        }
+        if lspController == nil {
+            lspController = DiffPaneLSPController(textView: self)
+        }
+        lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
@@ -94,5 +95,104 @@ struct DiffPaneLSPLineMapTests {
         ]
 
         #expect(DiffPaneLSPLineMap.position(at: 5, metadata: metadata, allowedSide: .new) == nil)
+    }
+
+    @MainActor
+    @Test func retainOpenLoadsFileTextAndCallsOpenClosure() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lsp-retain-\(UUID().uuidString)")
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "let value = service.fetch()\n".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var captured: (URL, URL, String, String)?
+        let retain = try await DiffPaneLSPDocumentRetain.open(
+            worktreeRoot: root,
+            fileURL: source,
+            language: "swift",
+            open: { worktreeRoot, fileURL, language, text in
+                captured = (worktreeRoot, fileURL, language, text)
+                return nil
+            },
+            close: { _, _, _ in }
+        )
+        await retain.close()
+
+        let opened = try #require(captured)
+        #expect(opened.0 == root)
+        #expect(opened.1 == source)
+        #expect(opened.2 == "swift")
+        #expect(opened.3 == "let value = service.fetch()\n")
+    }
+
+    @MainActor
+    @Test func retainCloseCallsCloseClosureOnce() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lsp-retain-\(UUID().uuidString)")
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "let value = 1\n".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        var closeCount = 0
+        let retain = try await DiffPaneLSPDocumentRetain.open(
+            worktreeRoot: root,
+            fileURL: source,
+            language: "swift",
+            open: { _, _, _, _ in nil },
+            close: { _, _, _ in closeCount += 1 }
+        )
+
+        await retain.close()
+        await retain.close()
+
+        #expect(closeCount == 1)
+    }
+
+    @MainActor
+    @Test func controllerPositionUsesTextViewMetadataAndRejectsOldSide() {
+        let textView = DiffPaneCodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 80),
+            textContainer: NSTextContainer()
+        )
+        let newLine = DiffDisplayLine(
+            id: "file:new:0:0",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 12),
+            text: "let value",
+            lineNumber: 12,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let oldLine = DiffDisplayLine(
+            id: "file:old:0:1",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 1, side: .old, oldLine: 13, newLine: nil),
+            text: "let stale",
+            lineNumber: 13,
+            kind: .delete,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        textView.lineMetadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .add,
+                range: NSRange(location: 0, length: 9),
+                tone: .add,
+                sourceLine: newLine
+            ),
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .delete,
+                range: NSRange(location: 10, length: 9),
+                tone: .delete,
+                sourceLine: oldLine
+            ),
+        ]
+
+        let controller = DiffPaneLSPController(textView: textView)
+        controller.update(context: nil, allowedSide: .new)
+
+        #expect(controller.lspPosition(forCharacterIndex: 4) == LSPPosition(line: 11, character: 4))
+        #expect(controller.lspPosition(forCharacterIndex: 14) == nil)
+
+        controller.tearDown()
     }
 }
