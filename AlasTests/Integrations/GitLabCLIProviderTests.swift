@@ -605,6 +605,43 @@ struct GitLabCLIProviderTests {
         ))
     }
 
+    @Test func reviewDiffUsesMRDiffCommand() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        let diff = try await GitLabCLIProvider(runner: runner).reviewDiff(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(diff == "diff --git a/A.swift b/A.swift\n")
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: ["mr", "diff", "42", "-R", "platform/mobile/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func reviewDiffSurfacesGitLabCommandFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab mr diff", stderr: "not found")) {
+            _ = try await GitLabCLIProvider(runner: runner).reviewDiff(
+                remote: Self.remote,
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func currentReviewRequestResolvesSourceProjectIDsBeforeFilteringForkMRs() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.duplicateForkMRListOutput, stderr: ""),

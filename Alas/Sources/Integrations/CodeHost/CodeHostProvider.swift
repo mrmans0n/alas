@@ -62,6 +62,7 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws -> URL
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck]
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem]
     func checkEvidenceDetail(
         remote: CodeHostRemote,
@@ -87,6 +88,10 @@ protocol CodeHostProvider: Sendable {
 
 extension CodeHostProvider {
     var capabilities: CodeHostProviderCapabilities { .readOnly }
+
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
+    }
 
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         request.checks

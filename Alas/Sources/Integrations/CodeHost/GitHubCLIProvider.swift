@@ -159,6 +159,18 @@ struct GitHubCLIProvider: CodeHostProvider {
         return try Self.parseChecks(result.stdout)
     }
 
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        let result = try await runner.run(
+            "gh",
+            args: ["pr", "diff", "\(request.number)", "-R", remote.repositorySlug],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr diff", stderr: result.stderr)
+        }
+        return result.stdout
+    }
+
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         request.checks
             .filter { $0.bucket == .fail }

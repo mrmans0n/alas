@@ -138,6 +138,18 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try Self.parsePipeline(result.stdout)
     }
 
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        let result = try await runner.run(
+            "glab",
+            args: ["mr", "diff", "\(request.number)", "-R", remote.repositorySlug],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab mr diff", stderr: result.stderr)
+        }
+        return result.stdout
+    }
+
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         request.checks
             .filter { $0.bucket == .fail }

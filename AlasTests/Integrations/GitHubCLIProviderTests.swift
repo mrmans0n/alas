@@ -220,6 +220,43 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func reviewDiffUsesPRDiffCommand() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
+        ])
+        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
+
+        let diff = try await GitHubCLIProvider(runner: runner).reviewDiff(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(diff == "diff --git a/A.swift b/A.swift\n")
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: ["pr", "diff", "42", "-R", "mrmans0n/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func reviewDiffSurfacesGitHubCommandFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+        ])
+        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "gh pr diff", stderr: "not found")) {
+            _ = try await GitHubCLIProvider(runner: runner).reviewDiff(
+                remote: Self.remote,
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func currentReviewRequestKeepsRequestWhenReviewThreadFetchFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
