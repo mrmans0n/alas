@@ -26,27 +26,37 @@ struct ReviewChangesRail: View {
     private var expandedBody: some View {
         VStack(spacing: 0) {
             expandedHeader
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(session.sections) { section in
-                        sourceHeader(section)
-                        ForEach(ReviewChangesFileTreeBuilder.build(files: section.files)) { node in
-                            ReviewChangesRailTreeNode(
-                                node: node,
-                                depth: 0,
-                                selectedFileID: $selectedFileID,
-                                onSelectFile: onSelectFile
-                            )
-                        }
-                        if section.id != session.sections.last?.id {
-                            Divider()
-                                .overlay(theme.color("line"))
-                                .padding(.vertical, 6)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(session.sections) { section in
+                            sourceHeader(section)
+                            ForEach(section.tree) { node in
+                                ReviewChangesRailTreeNode(
+                                    node: node,
+                                    depth: 0,
+                                    selectedFileID: $selectedFileID,
+                                    onSelectFile: onSelectFile
+                                )
+                            }
+                            if section.id != session.sections.last?.id {
+                                Divider()
+                                    .overlay(theme.color("line"))
+                                    .padding(.vertical, 6)
+                            }
                         }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+                .onAppear {
+                    proxy.scrollTo(selectedFileID.rawValue, anchor: .center)
+                }
+                .onChange(of: selectedFileID) { _, id in
+                    withAnimation(.easeInOut(duration: 0.14)) {
+                        proxy.scrollTo(id.rawValue, anchor: .center)
+                    }
+                }
             }
         }
     }
@@ -58,13 +68,24 @@ struct ReviewChangesRail: View {
             Divider()
                 .overlay(theme.color("line"))
                 .padding(.horizontal, 8)
-            ScrollView(.vertical) {
-                LazyVStack(spacing: 6) {
-                    ForEach(session.files) { file in
-                        collapsedMarker(for: file)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 6) {
+                        ForEach(session.files) { file in
+                            collapsedMarker(for: file)
+                                .id(file.id.rawValue)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onAppear {
+                    proxy.scrollTo(selectedFileID.rawValue, anchor: .center)
+                }
+                .onChange(of: selectedFileID) { _, id in
+                    withAnimation(.easeInOut(duration: 0.14)) {
+                        proxy.scrollTo(id.rawValue, anchor: .center)
                     }
                 }
-                .padding(.vertical, 4)
             }
         }
     }
@@ -151,6 +172,10 @@ struct ReviewChangesRail: View {
                 ReviewChangesAccessibilityMarker(
                     identifier: "review-rail-marker-\(file.id.rawValue)",
                     label: file.path
+                )
+                ReviewChangesAccessibilityMarker(
+                    identifier: "review-rail-marker-scroll-id-\(file.id.rawValue)",
+                    label: file.id.rawValue
                 )
                 if selected {
                     ReviewChangesAccessibilityMarker(
@@ -261,12 +286,25 @@ private struct ReviewChangesRailTreeNode: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .id(file.id.rawValue)
         .accessibilityIdentifier("review-rail-row-\(file.id.rawValue)")
         .background(
-            ReviewChangesAccessibilityMarker(
-                identifier: "review-rail-row-\(file.id.rawValue)",
-                label: file.path
-            )
+            ZStack {
+                ReviewChangesAccessibilityMarker(
+                    identifier: "review-rail-row-\(file.id.rawValue)",
+                    label: file.path
+                )
+                ReviewChangesAccessibilityMarker(
+                    identifier: "review-rail-row-scroll-id-\(file.id.rawValue)",
+                    label: file.id.rawValue
+                )
+                if selected {
+                    ReviewChangesAccessibilityMarker(
+                        identifier: "review-rail-row-selected-\(file.id.rawValue)",
+                        label: file.path
+                    )
+                }
+            }
         )
         .help(file.path)
     }

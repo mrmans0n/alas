@@ -8,6 +8,23 @@ import Testing
 struct ReviewChangesTabViewTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func loadTokenOnlyAcceptsCurrentLoad() {
+        let key = "/repo\u{0}review"
+        let first = ReviewChangesLoadToken.next(key: key)
+        var activeKey: String? = first.key
+        var activeID = first.id
+
+        #expect(first.isActive(activeKey: activeKey, activeID: activeID))
+
+        let second = ReviewChangesLoadToken.next(key: key)
+        activeKey = second.key
+        activeID = second.id
+
+        #expect(!first.isActive(activeKey: activeKey, activeID: activeID))
+        #expect(second.isActive(activeKey: activeKey, activeID: activeID))
+        #expect(!second.isActive(activeKey: "other", activeID: activeID))
+    }
+
     @Test func railRendersFilesAndCollapsedStateKeepsMarkers() {
         let files = [
             ReviewChangesFileSummary(
@@ -44,6 +61,8 @@ struct ReviewChangesTabViewTests {
         expandedController.view.layoutSubtreeIfNeeded()
 
         #expect(subview(withAccessibilityIdentifier: "review-rail-row-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-rail-row-scroll-id-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-rail-row-selected-\(files[0].id.rawValue)", in: expandedController.view) != nil)
         #expect(accessibilityLabel(in: expandedController.view, containing: "AlphaView.swift") != nil)
         #expect(accessibilityLabel(in: expandedController.view, containing: "BetaTests.swift") != nil)
 
@@ -63,6 +82,7 @@ struct ReviewChangesTabViewTests {
 
         #expect(subview(withAccessibilityIdentifier: "review-rail-marker-\(files[0].id.rawValue)", in: collapsedController.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "review-rail-marker-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-rail-marker-scroll-id-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "review-rail-marker-selected-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
     }
 

@@ -1,5 +1,18 @@
 import SwiftUI
 
+struct ReviewChangesLoadToken: Equatable {
+    let key: String
+    let id: UUID
+
+    static func next(key: String) -> ReviewChangesLoadToken {
+        ReviewChangesLoadToken(key: key, id: UUID())
+    }
+
+    func isActive(activeKey: String?, activeID: UUID) -> Bool {
+        activeKey == key && activeID == id
+    }
+}
+
 struct ReviewChangesTabView: View {
     let worktree: Worktree
     let tabState: ReviewChangesTabState
@@ -14,6 +27,8 @@ struct ReviewChangesTabView: View {
     @State private var railCollapsed = false
     @State private var sectionFrames: [ReviewChangesSectionFrame] = []
     @State private var programmaticScroll = ReviewChangesProgrammaticScrollController()
+    @State private var activeLoadKey: String?
+    @State private var activeLoadID = UUID()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -223,22 +238,37 @@ struct ReviewChangesTabView: View {
 
     @MainActor
     private func loadSession() async {
+        let requestedLoadToken = ReviewChangesLoadToken.next(key: loadKey)
+        activeLoadKey = requestedLoadToken.key
+        activeLoadID = requestedLoadToken.id
         isLoading = true
         loadError = nil
         session = nil
+        defer {
+            if requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID) {
+                isLoading = false
+                activeLoadKey = nil
+            }
+        }
+
         do {
             let loaded = try await loader.load(worktreePath: worktree.path)
-            guard !Task.isCancelled else { return }
+            guard
+                requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
+                !Task.isCancelled
+            else { return }
             session = loaded
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
             } ?? loaded.summary.files.first?.id
         } catch is CancellationError {
         } catch {
-            guard !Task.isCancelled else { return }
+            guard
+                requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
+                !Task.isCancelled
+            else { return }
             loadError = error.localizedDescription
         }
-        isLoading = false
     }
 
     private var diffLayoutBinding: Binding<DiffLayoutMode> {

@@ -167,6 +167,13 @@ struct ReviewChangesSourceSection: Equatable, Identifiable {
 
     let source: ReviewChangesSource
     let files: [ReviewChangesFileSummary]
+    let tree: [ReviewChangesFileTreeNode]
+
+    init(source: ReviewChangesSource, files: [ReviewChangesFileSummary]) {
+        self.source = source
+        self.files = files
+        self.tree = ReviewChangesFileTreeBuilder.build(files: files)
+    }
 
     var title: String { source.title }
     var fileCount: Int { files.count }

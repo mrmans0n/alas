@@ -69,6 +69,43 @@ struct ReviewChangesModelsTests {
         #expect(session.sections.map(\.source) == [.unstaged, .staged])
     }
 
+    @Test func sourceSectionsPrebuildTreeShape() throws {
+        let files = [
+            ReviewChangesFileSummary(
+                path: "Sources/App/Alpha.swift",
+                source: .unstaged,
+                status: .modified,
+                additions: 1,
+                deletions: 0,
+                isRenderable: true
+            ),
+            ReviewChangesFileSummary(
+                path: "Sources/App/Beta.swift",
+                source: .unstaged,
+                status: .added,
+                additions: 2,
+                deletions: 0,
+                isRenderable: true
+            ),
+            ReviewChangesFileSummary(
+                path: "README.md",
+                source: .staged,
+                status: .modified,
+                additions: 1,
+                deletions: 1,
+                isRenderable: true
+            ),
+        ]
+
+        let session = ReviewChangesSessionModel(files: files)
+        let unstaged = try #require(session.sections.first { $0.source == .unstaged })
+        let staged = try #require(session.sections.first { $0.source == .staged })
+
+        #expect(unstaged.tree.map(\.name) == ["Sources/App"])
+        #expect(unstaged.tree.first?.children?.map(\.name) == ["Alpha.swift", "Beta.swift"])
+        #expect(staged.tree.map(\.name) == ["README.md"])
+    }
+
     @Test func fileSummaryDecodingDerivesIdentityFromSourceAndPath() throws {
         let data = Data("""
         {
