@@ -3,6 +3,28 @@ import Testing
 @testable import Alas
 
 struct ReviewChangesModelsTests {
+    @Test func triggerSummaryIsNilWhenThereAreNoNonConflictChanges() {
+        let changes = [
+            changedFile("conflicted.swift", add: 10, del: 2, conflict: .bothModified),
+        ]
+
+        #expect(ReviewChangesTriggerSummary.summary(for: changes) == nil)
+    }
+
+    @Test func triggerSummaryCountsOnlyNonConflictStagedAndUnstagedChanges() throws {
+        let changes = [
+            changedFile("staged.swift", stage: .staged, add: 12, del: 3),
+            changedFile("unstaged.swift", stage: .unstaged, add: 4, del: 7),
+            changedFile("conflicted.swift", stage: .unstaged, add: 20, del: 30, conflict: .bothModified),
+        ]
+
+        let summary = try #require(ReviewChangesTriggerSummary.summary(for: changes))
+
+        #expect(summary.fileCount == 2)
+        #expect(summary.additions == 16)
+        #expect(summary.deletions == 10)
+    }
+
     @Test func fileIdentityIncludesSourceAndPath() {
         let unstaged = ReviewChangesFileID(source: .unstaged, path: "Sources/App.swift")
         let staged = ReviewChangesFileID(source: .staged, path: "Sources/App.swift")
@@ -158,4 +180,22 @@ struct ReviewChangesModelsTests {
             "staged:Sources/App.swift",
         ])
     }
+}
+
+private func changedFile(
+    _ path: String,
+    stage: ChangeStage = .unstaged,
+    add: Int,
+    del: Int,
+    conflict: ConflictKind? = nil
+) -> ChangedFile {
+    ChangedFile(
+        path: path,
+        status: "M",
+        stage: stage,
+        add: add,
+        del: del,
+        renameFrom: nil,
+        conflict: conflict
+    )
 }
