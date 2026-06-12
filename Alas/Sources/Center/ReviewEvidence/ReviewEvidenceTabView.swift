@@ -201,9 +201,15 @@ struct ReviewEvidenceTabView: View {
             && feedbackItemsAreEmpty
         guard hasOnlyModelError else { return false }
 
-        return !isLoadingFiles
-            && fileErrorMessage == nil
-            && fileSession == nil
+        if fileSession != nil {
+            return false
+        }
+
+        if selectedSection == .files, isLoadingFiles || fileErrorMessage != nil {
+            return false
+        }
+
+        return true
     }
 
     static func contentRoute(
