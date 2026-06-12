@@ -603,8 +603,8 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == true)
     }
 
-    @Test("missing remote id falls back to session/new with no-transcript warning")
-    func missingRemoteIdFallsBackToNewWithWarning() async throws {
+    @Test("missing remote id falls back to session/new without warning for empty session")
+    func missingRemoteIdFallsBackToNewWithoutWarningForEmptySession() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(remoteSessionId: nil))
         let client = ACPMockClient()
@@ -619,8 +619,44 @@ struct ACPSessionManagerAttachRestoreTests {
         let methods = client.sent.map(\.method)
         #expect(methods == ["initialize", "session/new"])
         #expect(session.remoteSessionId == "remote-new")
-        let warning = try #require(session.contextRestoreWarning)
-        #expect(!warning.canSendTranscript)
+        #expect(session.contextRestoreWarning == nil)
+        let row = try #require(try store.loadSession(id: "local"))
+        #expect(row.remoteSessionId == "remote-new")
+        #expect(!row.contextRecoveryPending)
+    }
+
+    @Test("missing remote id warns and sends transcript recovery for nonempty session")
+    func missingRemoteIdWarnsAndSendsTranscriptRecoveryForNonemptySession() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: nil))
+        try appendMessage(
+            .user(id: UUID(), text: "Recover this context", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        try await waitUntil {
+            client.sent.map(\.method) == ["initialize", "session/new", "session/prompt"]
+                && session.contextRestoreWarning == nil
+        }
+        #expect(session.remoteSessionId == "remote-new")
+        #expect(session.contextRecoveryStatus == .restored)
+        let prompt = try #require(client.sent.last?.params as? ACPSessionPromptParams)
+        let block = try #require(prompt.prompt.first)
+        guard case .text(let recovery) = block else {
+            Issue.record("Expected recovery prompt")
+            return
+        }
+        #expect(recovery.contains("Recover this context"))
         let row = try #require(try store.loadSession(id: "local"))
         #expect(row.remoteSessionId == "remote-new")
         #expect(!row.contextRecoveryPending)

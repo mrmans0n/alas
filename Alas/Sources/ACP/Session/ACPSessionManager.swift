@@ -1451,6 +1451,7 @@ extension ACPSessionManager {
             let pendingRecovery = (try? store.loadSession(id: sessionId)?.contextRecoveryPending) == true
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
+            let hasRestorableContext = pendingRecovery || session.hasConversationTranscript
             var shouldHoldQueueForRecovery = pendingRecovery && session.hasConversationTranscript
             if firstRunAttach {
                 session.firstRunConnectingPhase = .creatingSession
@@ -1486,10 +1487,12 @@ extension ACPSessionManager {
                             persistContextRecoveryPending(sessionId: sessionId, pending: true)
                         }
                     }
-                    restoreWarning = .init(
-                        message: "Agent context could not be restored.",
-                        canSendTranscript: session.hasConversationTranscript
-                    )
+                    if hasRestorableContext {
+                        restoreWarning = .init(
+                            message: "Agent context could not be restored.",
+                            canSendTranscript: session.hasConversationTranscript
+                        )
+                    }
                     if session.hasConversationTranscript {
                         session.contextRecoveryStatus = .sendingTranscript
                     }
@@ -1505,10 +1508,12 @@ extension ACPSessionManager {
                         persistContextRecoveryPending(sessionId: sessionId, pending: true)
                     }
                 }
-                restoreWarning = .init(
-                    message: "Agent context could not be restored.",
-                    canSendTranscript: session.hasConversationTranscript
-                )
+                if hasRestorableContext {
+                    restoreWarning = .init(
+                        message: "Agent context could not be restored.",
+                        canSendTranscript: session.hasConversationTranscript
+                    )
+                }
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .sendingTranscript
                 }
