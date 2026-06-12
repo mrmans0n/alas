@@ -32,6 +32,23 @@ struct LanguageServerAvailability {
     func status(for entry: LanguageServerConfig) -> Status {
         guard entry.enabled else { return .disabled }
         guard let resolved = resolvedCommand(for: entry) else { return .notInstalled }
+        var assessedRealPaths = Set<String>()
+        let primary = gatekeeperStatus(forResolvedPath: resolved)
+        assessedRealPaths.insert((resolved as NSString).resolvingSymlinksInPath)
+        guard primary == .available else { return primary }
+
+        for helper in entry.gatekeeperHelpers {
+            guard let helperPath = resolvedHelper(helper, env: entry.env) else { continue }
+            let helperRealPath = (helperPath as NSString).resolvingSymlinksInPath
+            guard assessedRealPaths.insert(helperRealPath).inserted else { continue }
+            let helperStatus = gatekeeperStatus(forResolvedPath: helperRealPath)
+            guard helperStatus == .available else { return helperStatus }
+        }
+
+        return .available
+    }
+
+    private func gatekeeperStatus(forResolvedPath resolved: String) -> Status {
         let realPath = (resolved as NSString).resolvingSymlinksInPath
         switch gatekeeperAssessor(realPath) {
         case .rejected:
@@ -75,6 +92,13 @@ struct LanguageServerAvailability {
         }
         merged["PATH"] = effectivePath(env: entry.env)
         return merged
+    }
+
+    private func resolvedHelper(_ helper: String, env: [String: String]) -> String? {
+        if helper.contains("/") {
+            return fileManager.isExecutableFile(atPath: helper) ? helper : nil
+        }
+        return executableNamed(helper, env: env)
     }
 
     private func executableNamed(_ name: String, env: [String: String] = [:]) -> String? {
