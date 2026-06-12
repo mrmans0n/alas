@@ -112,6 +112,29 @@ struct ReviewChangesLoaderTests {
         #expect(file.summary.originalPath == "old.swift")
     }
 
+    @Test func includesOriginalPathWhenLoadingStagedRenameDiff() async throws {
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "new.swift", status: "R", stage: .staged, add: 1, del: 1, renameFrom: "old.swift"),
+            ],
+            diffs: [
+                .init(path: "new.swift", staged: true, originalPath: "old.swift"): diff(lines: [
+                    .init(kind: .delete, text: "let oldName = true", oldNumber: 1, newNumber: nil),
+                    .init(kind: .add, text: "let newName = true", oldNumber: nil, newNumber: 1),
+                ]),
+            ]
+        )
+        let loader = ReviewChangesLoader(git: git)
+
+        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.originalPath == "old.swift")
+        #expect(file.summary.isRenderable)
+        #expect(file.summary.additions == 1)
+        #expect(file.summary.deletions == 1)
+    }
+
     private func diff(lines: [ParsedDiff.Hunk.Line]) -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
@@ -132,12 +155,13 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
         status
     }
 
-    func diff(worktreePath: URL, file: String, staged: Bool) async throws -> ParsedDiff {
-        diffs[DiffKey(path: file, staged: staged), default: ParsedDiff(hunks: [])]
+    func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff {
+        diffs[DiffKey(path: file, staged: staged, originalPath: originalPath), default: ParsedDiff(hunks: [])]
     }
 }
 
 private struct DiffKey: Hashable {
     let path: String
     let staged: Bool
+    var originalPath: String? = nil
 }

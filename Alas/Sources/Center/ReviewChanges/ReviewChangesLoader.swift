@@ -2,7 +2,7 @@ import Foundation
 
 protocol ReviewChangesGitClient {
     func status(worktreePath: URL) async throws -> [ChangedFile]
-    func diff(worktreePath: URL, file: String, staged: Bool) async throws -> ParsedDiff
+    func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff
 }
 
 extension GitService: ReviewChangesGitClient {}
@@ -26,7 +26,8 @@ struct ReviewChangesLoader {
             let diff = try await git.diff(
                 worktreePath: worktreePath,
                 file: change.path,
-                staged: change.stage == .staged
+                staged: change.stage == .staged,
+                originalPath: change.renameFrom
             )
             try Task.checkCancellation()
 

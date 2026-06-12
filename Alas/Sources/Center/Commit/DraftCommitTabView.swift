@@ -320,7 +320,7 @@ struct DraftCommitTabView: View {
 
     private func loadDiff() async {
         guard let path = selectedPath,
-              stagedFiles.first(where: { $0.path == path }) != nil else {
+              let stagedFile = stagedFiles.first(where: { $0.path == path }) else {
             diff = ParsedDiff(hunks: [])
             displayModel = nil
             displayModelKey = nil
@@ -336,7 +336,12 @@ struct DraftCommitTabView: View {
             if activeDiffKey == requestedKey { loadingDiff = false }
         }
         do {
-            let loaded = try await git.diff(worktreePath: worktreePath, file: path, staged: true)
+            let loaded = try await git.diff(
+                worktreePath: worktreePath,
+                file: path,
+                staged: true,
+                originalPath: stagedFile.originalPath
+            )
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             let loadedModel = await Task.detached(priority: .userInitiated) {
                 DiffDisplayModelBuilder.build(diff: loaded, filePath: path)
