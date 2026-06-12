@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -24,6 +26,98 @@ struct ReviewRequestDraftTests {
         #expect(preview.fileExtension == "swift")
         #expect(preview.title == "A.swift")
         #expect(preview.directory == "Sources")
+    }
+
+    @Test func buildsSelectedFileDiffDisplayPreviewKey() {
+        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
+        let rawDiff = """
+        diff --git a/Sources/A.swift b/Sources/A.swift
+        index 1111111..2222222 100644
+        --- a/Sources/A.swift
+        +++ b/Sources/A.swift
+        @@ -1,1 +1,1 @@
+        -let value = 1
+        +let value = 2
+        """
+
+        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
+
+        #expect(key.path == file.path)
+        #expect(key.file == file)
+        #expect(key.rawDiff == rawDiff)
+    }
+
+    @Test func preparesSelectedFileDiffDisplayPreviewModelAsync() async {
+        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
+        let rawDiff = """
+        diff --git a/Sources/A.swift b/Sources/A.swift
+        index 1111111..2222222 100644
+        --- a/Sources/A.swift
+        +++ b/Sources/A.swift
+        @@ -1,1 +1,1 @@
+        -let value = 1
+        +let value = 2
+        """
+        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
+
+        let preview = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
+
+        #expect(preview.key == key)
+        #expect(preview.parsedDiff.hunks.count == 1)
+        #expect(preview.displayModel.filePath == "Sources/A.swift")
+        #expect(preview.displayModel.groups.count == 1)
+        #expect(preview.fileExtension == "swift")
+        #expect(preview.title == "A.swift")
+        #expect(preview.directory == "Sources")
+    }
+
+    @Test @MainActor func draftReviewRequestDiffPreviewUsesSharedDiffPane() async throws {
+        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
+        let rawDiff = """
+        diff --git a/Sources/A.swift b/Sources/A.swift
+        index 1111111..2222222 100644
+        --- a/Sources/A.swift
+        +++ b/Sources/A.swift
+        @@ -1,1 +1,1 @@
+        -let a = 1
+        +let a = 2
+        """
+        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
+        let preview = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DraftReviewRequestDiffPreviewView(
+            preview: preview,
+            codeFontFamily: "",
+            codeFontSize: 13,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 })
+        )
+        .environment(\.theme, try! ThemeStore().current)
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let subviews = allSubviews(of: controller.view)
+        let visiblePaneScrollViews = subviews
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter(isEffectivelyVisible)
+        let outerScrollViews = subviews
+            .compactMap { $0 as? NSScrollView }
+            .filter { !($0 is DiffPaneTextScrollView) }
+            .filter(isEffectivelyVisible)
+        let visibleText = visiblePaneScrollViews
+            .compactMap { $0.documentView as? NSTextView }
+            .map(\.string)
+            .joined(separator: "\n")
+
+        #expect(visiblePaneScrollViews.count == 2)
+        #expect(!outerScrollViews.isEmpty)
+        #expect(visibleText.contains("let a = 1"))
+        #expect(visibleText.contains("let a = 2"))
     }
 
     @Test func parsesGeneratedTitleAndBody() throws {
@@ -181,4 +275,17 @@ struct ReviewRequestDraftTests {
             threads: []
         )
     }
+}
+
+private func allSubviews(of view: NSView) -> [NSView] {
+    view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+}
+
+private func isEffectivelyVisible(_ view: NSView) -> Bool {
+    var current: NSView? = view
+    while let candidate = current {
+        if candidate.isHidden { return false }
+        current = candidate.superview
+    }
+    return true
 }
