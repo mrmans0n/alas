@@ -134,7 +134,8 @@ final class DiffPaneLSPController {
     private let hoverWindowController = HoverWindowController()
     private var definitionPopover: NSPopover?
     private let snippetCache = DefinitionSnippetCache()
-    private var requestID: UInt64 = 0
+    private var hoverRequestID: UInt64 = 0
+    private var definitionRequestID: UInt64 = 0
     private var hoverSymbolRange: NSRange?
 
     init(textView: DiffPaneCodeTextView) {
@@ -210,8 +211,8 @@ final class DiffPaneLSPController {
             return
         }
 
-        requestID &+= 1
-        let currentRequestID = requestID
+        hoverRequestID &+= 1
+        let currentRequestID = hoverRequestID
         let contextKey = ContextKey(context)
         hoverSymbolRange = symbolRange
         hoverTask?.cancel()
@@ -222,11 +223,11 @@ final class DiffPaneLSPController {
             do {
                 result = try await client.hover(uri: context.uri, position: position)
             } catch {
-                guard self.isCurrent(currentRequestID, contextKey: contextKey) else { return }
+                guard self.isCurrentHover(currentRequestID, contextKey: contextKey) else { return }
                 self.hideHover()
                 return
             }
-            guard self.isCurrent(currentRequestID, contextKey: contextKey),
+            guard self.isCurrentHover(currentRequestID, contextKey: contextKey),
                   self.lspPosition(at: point) == position,
                   self.hoverSymbolRange == symbolRange
             else { return }
@@ -237,8 +238,8 @@ final class DiffPaneLSPController {
     private func requestDefinition(at point: NSPoint) {
         guard let context, let position = lspPosition(at: point) else { return }
 
-        requestID &+= 1
-        let currentRequestID = requestID
+        definitionRequestID &+= 1
+        let currentRequestID = definitionRequestID
         let contextKey = ContextKey(context)
         definitionPopover?.close()
         definitionTask?.cancel()
@@ -246,8 +247,9 @@ final class DiffPaneLSPController {
             guard let self else { return }
             guard let client = await self.client(for: context, expectedKey: contextKey) else { return }
             let locations = (try? await client.definition(uri: context.uri, position: position)) ?? []
-            guard self.isCurrent(currentRequestID, contextKey: contextKey),
-                  self.lspPosition(at: point) == position
+            guard self.isCurrentDefinition(currentRequestID, contextKey: contextKey),
+                  self.lspPosition(at: point) == position,
+                  self.textView?.window != nil
             else { return }
             self.handleDefinition(locations: locations, anchorPoint: point, context: context)
         }
@@ -311,6 +313,7 @@ final class DiffPaneLSPController {
         context: DiffPaneLSPContext
     ) {
         guard let textView,
+              textView.window != nil,
               let body = nonEmptyBody(result),
               let theme = textView.theme
         else {
@@ -376,7 +379,7 @@ final class DiffPaneLSPController {
         anchor point: NSPoint,
         context: DiffPaneLSPContext
     ) {
-        guard let textView else { return }
+        guard let textView, textView.window != nil else { return }
         let entries = locations.map { location -> DefinitionPickerEntry in
             let url = URL(string: location.uri)
                 ?? URL(fileURLWithPath: location.uri.removingPercentEncoding ?? location.uri)
@@ -404,11 +407,16 @@ final class DiffPaneLSPController {
         definitionPopover = popover
     }
 
-    private func isCurrent(_ requestID: UInt64, contextKey: ContextKey) -> Bool {
-        !Task.isCancelled && self.requestID == requestID && context.map(ContextKey.init) == contextKey
+    private func isCurrentHover(_ requestID: UInt64, contextKey: ContextKey) -> Bool {
+        !Task.isCancelled && hoverRequestID == requestID && context.map(ContextKey.init) == contextKey
+    }
+
+    private func isCurrentDefinition(_ requestID: UInt64, contextKey: ContextKey) -> Bool {
+        !Task.isCancelled && definitionRequestID == requestID && context.map(ContextKey.init) == contextKey
     }
 
     private func hideHover() {
+        hoverRequestID &+= 1
         hoverTask?.cancel()
         hoverTask = nil
         hoverSymbolRange = nil
@@ -423,7 +431,8 @@ final class DiffPaneLSPController {
     }
 
     private func cancelRequests() {
-        requestID &+= 1
+        hoverRequestID &+= 1
+        definitionRequestID &+= 1
         hoverTask?.cancel()
         definitionTask?.cancel()
         hoverTask = nil
