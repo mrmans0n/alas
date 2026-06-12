@@ -30,7 +30,8 @@ enum DiffPaneLSPLineMap {
             return nil
         }
         guard let source = line.sourceLine,
-              source.anchor.side == allowedSide,
+              allowedSide == .new,
+              (source.anchor.side == .new || source.anchor.side == .paired),
               let newLine = source.anchor.newLine,
               newLine > 0
         else {

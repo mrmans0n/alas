@@ -33,6 +33,34 @@ struct DiffPaneLSPLineMapTests {
         #expect(result == LSPPosition(line: 41, character: 11))
     }
 
+    @Test func mapsPairedContextLineToNewFilePosition() {
+        let line = DiffDisplayLine(
+            id: "file:paired:0:0",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 0, side: .paired, oldLine: 40, newLine: 40),
+            text: "let context = value",
+            lineNumber: 40,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let metadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 0, length: 19),
+                tone: .context,
+                sourceLine: line
+            )
+        ]
+
+        let result = DiffPaneLSPLineMap.position(
+            at: 12,
+            metadata: metadata,
+            allowedSide: .new
+        )
+
+        #expect(result == LSPPosition(line: 39, character: 12))
+    }
+
     @Test func rejectsOldSideLine() {
         let line = DiffDisplayLine(
             id: "file:old:0:0",
