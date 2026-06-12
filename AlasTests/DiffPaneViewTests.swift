@@ -927,14 +927,52 @@ struct DiffPaneViewTests {
         #expect(codeView.lineMetadata.first?.sourceLine?.anchor.newLine == 3)
     }
 
-    @Test func diffPaneCodeTextViewCanResolveSymbolRange() throws {
+    @Test func diffPaneCodeTextViewResolvesSymbolsFromPoints() throws {
         let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
         textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))
         textView.layoutManager?.ensureLayout(for: textView.textContainer!)
 
-        let range = (textView.string as NSString).rangeOfWord(at: 4)
+        let expectedRange = NSRange(location: 4, length: 5)
+        let anchorRect = try #require(textView.symbolAnchorRect(for: expectedRange))
+        let point = NSPoint(x: anchorRect.midX, y: anchorRect.midY)
 
-        #expect(range == NSRange(location: 4, length: 5))
+        let characterIndex = try #require(textView.characterIndex(at: point))
+        let symbolRange = try #require(textView.symbolRange(at: point))
+
+        #expect(expectedRange.contains(characterIndex))
+        #expect(symbolRange == expectedRange)
+        #expect(anchorRect.width > 0)
+        #expect(anchorRect.height > 0)
+    }
+
+    @Test func diffPaneCodeTextViewRoutesCommandClickToHandler() throws {
+        let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
+        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(textView)
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        var clickedPoint: NSPoint?
+        textView.commandClickHandler = { clickedPoint = $0 }
+
+        let anchorRect = try #require(textView.symbolAnchorRect(for: NSRange(location: 4, length: 5)))
+        let windowPoint = textView.convert(NSPoint(x: anchorRect.midX, y: anchorRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        let point = try #require(clickedPoint)
+        #expect(abs(point.x - anchorRect.midX) < 0.5)
+        #expect(abs(point.y - anchorRect.midY) < 0.5)
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

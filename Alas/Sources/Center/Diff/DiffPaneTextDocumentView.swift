@@ -580,8 +580,8 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
-            commandClickHandler?(convert(event.locationInWindow, from: nil))
+        if event.modifierFlags.contains(.command), let commandClickHandler {
+            commandClickHandler(convert(event.locationInWindow, from: nil))
             return
         }
         super.mouseDown(with: event)
