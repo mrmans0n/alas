@@ -118,6 +118,33 @@ struct ReviewEvidenceModelTests {
         #expect(content == .files(.diffSurface))
     }
 
+    @Test func filesLoadingWithEvidenceErrorDoesNotShowModelUnavailable() async {
+        let provider = SuspendedLoadProvider(suspendDiff: true, ciError: TestError(message: "checks unavailable"))
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: provider,
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        let task = Task { await model.load() }
+        await provider.waitForDiffCall()
+        await provider.waitForEvidenceCalls()
+
+        #expect(await Self.waitUntil { model.errorMessage == "checks unavailable" && model.isLoadingFiles })
+        #expect(ReviewEvidenceTabView.contentRoute(
+            selectedSection: .files,
+            isLoadingFiles: model.isLoadingFiles,
+            fileErrorMessage: model.fileErrorMessage,
+            fileSession: model.fileSession,
+            modelErrorMessage: model.errorMessage
+        ) == .files(.loading))
+        #expect(!ReviewEvidenceTabView.shouldShowModelUnavailable(model, selectedSection: .files))
+
+        await provider.completeDiff()
+        await task.value
+    }
+
     @Test func fileErrorWithoutSessionChoosesFileErrorState() {
         let content = ReviewEvidenceTabView.contentRoute(
             selectedSection: .files,
@@ -642,6 +669,8 @@ private actor SuspendedLoadProvider: CodeHostProvider {
 
     private let suspendDiff: Bool
     private let suspendEvidence: Bool
+    private let ciError: TestError?
+    private let feedbackError: TestError?
     private var diffContinuation: CheckedContinuation<String, Never>?
     private var ciContinuation: CheckedContinuation<[ReviewEvidenceItem], Never>?
     private var feedbackContinuation: CheckedContinuation<[ReviewEvidenceItem], Never>?
@@ -651,9 +680,16 @@ private actor SuspendedLoadProvider: CodeHostProvider {
     private var didCallCI = false
     private var didCallFeedback = false
 
-    init(suspendDiff: Bool = false, suspendEvidence: Bool = false) {
+    init(
+        suspendDiff: Bool = false,
+        suspendEvidence: Bool = false,
+        ciError: TestError? = nil,
+        feedbackError: TestError? = nil
+    ) {
         self.suspendDiff = suspendDiff
         self.suspendEvidence = suspendEvidence
+        self.ciError = ciError
+        self.feedbackError = feedbackError
     }
 
     func waitForDiffCall() async {
@@ -700,6 +736,9 @@ private actor SuspendedLoadProvider: CodeHostProvider {
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         didCallCI = true
         resumeEvidenceWaitersIfReady()
+        if let ciError {
+            throw ciError
+        }
         guard suspendEvidence else { return [Self.makeCIItem()] }
         return await withCheckedContinuation { continuation in
             ciContinuation = continuation
@@ -709,6 +748,9 @@ private actor SuspendedLoadProvider: CodeHostProvider {
     func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         didCallFeedback = true
         resumeEvidenceWaitersIfReady()
+        if let feedbackError {
+            throw feedbackError
+        }
         guard suspendEvidence else { return [Self.makeFeedbackItem()] }
         return await withCheckedContinuation { continuation in
             feedbackContinuation = continuation

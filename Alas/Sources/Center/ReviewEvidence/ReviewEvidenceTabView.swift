@@ -159,7 +159,7 @@ struct ReviewEvidenceTabView: View {
         if let unavailableMessage {
             unavailableState(message: unavailableMessage)
         } else if let model {
-            if let message = model.errorMessage, Self.shouldShowModelUnavailable(model) {
+            if let message = model.errorMessage, Self.shouldShowModelUnavailable(model, selectedSection: selectedSection) {
                 unavailableState(message: message)
             } else {
                 evidenceBrowser(model: model)
@@ -172,11 +172,42 @@ struct ReviewEvidenceTabView: View {
     }
 
     static func shouldShowModelUnavailable(_ model: ReviewEvidenceModel) -> Bool {
-        model.errorMessage != nil
-            && model.ciItems.isEmpty
-            && model.feedbackItems.isEmpty
-            && model.fileSession == nil
-            && model.fileErrorMessage == nil
+        shouldShowModelUnavailable(model, selectedSection: model.selectedSection)
+    }
+
+    static func shouldShowModelUnavailable(_ model: ReviewEvidenceModel, selectedSection: ReviewEvidenceSection) -> Bool {
+        shouldShowModelUnavailable(
+            selectedSection: selectedSection,
+            isLoadingFiles: model.isLoadingFiles,
+            fileErrorMessage: model.fileErrorMessage,
+            fileSession: model.fileSession,
+            ciItemsAreEmpty: model.ciItems.isEmpty,
+            feedbackItemsAreEmpty: model.feedbackItems.isEmpty,
+            modelErrorMessage: model.errorMessage
+        )
+    }
+
+    static func shouldShowModelUnavailable(
+        selectedSection: ReviewEvidenceSection,
+        isLoadingFiles: Bool,
+        fileErrorMessage: String?,
+        fileSession: DiffReviewLoadedSession?,
+        ciItemsAreEmpty: Bool,
+        feedbackItemsAreEmpty: Bool,
+        modelErrorMessage: String?
+    ) -> Bool {
+        let hasOnlyModelError = modelErrorMessage != nil
+            && ciItemsAreEmpty
+            && feedbackItemsAreEmpty
+            && fileSession == nil
+            && fileErrorMessage == nil
+        guard hasOnlyModelError else { return false }
+
+        if selectedSection == .files, isLoadingFiles {
+            return false
+        }
+
+        return true
     }
 
     static func contentRoute(
