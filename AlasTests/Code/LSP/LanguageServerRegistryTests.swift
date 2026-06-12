@@ -59,6 +59,34 @@ struct LanguageServerRegistryTests {
         #expect(r.language(forFileExtension: "xyz") == nil)
     }
 
+    @Test("Kotlin built-in records intellij-server helper")
+    func kotlinGatekeeperHelper() {
+        let entry = LanguageServerRegistry.builtIns.first(where: { $0.language == "kotlin" })
+        #expect(entry?.command == "kotlin-lsp")
+        #expect(entry?.args == ["--stdio"])
+        #expect(entry?.gatekeeperHelpers == ["intellij-server"])
+    }
+
+    @Test("LanguageServerConfig decodes legacy JSON without gatekeeper helpers")
+    func legacyConfigDecodeDefaultsGatekeeperHelpers() throws {
+        let json = """
+        {
+          "language": "kotlin",
+          "extensions": ["kt", "kts"],
+          "command": "kotlin-lsp",
+          "args": ["--stdio"],
+          "env": {},
+          "rootMarkers": [".git"],
+          "enabled": true
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(LanguageServerConfig.self, from: Data(json.utf8))
+
+        #expect(decoded.language == "kotlin")
+        #expect(decoded.gatekeeperHelpers == [])
+    }
+
     @Test("built-in Python entry exists")
     func python() {
         let r = LanguageServerRegistry(userDefined: [])
