@@ -36,7 +36,7 @@ struct ReviewChangesLoader {
 
         return ReviewChangesLoadedSession(
             files: files,
-            summary: ReviewChangesSessionModel(files: files.map(\.summary))
+            summary: ReviewChangesSessionModel(files: files.map(\.summary), groupsEnabled: true)
         )
     }
 
@@ -57,10 +57,12 @@ struct ReviewChangesLoader {
         let source = ReviewChangesSource(stage: change.stage)
         let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: change.path)
         let counts = lineCounts(in: diff)
-        let summary = ReviewChangesFileSummary(
+        let summary = DiffReviewFileSummary(
             path: change.path,
-            source: source,
-            status: ReviewChangesFileStatus(gitStatus: change.status, conflict: change.conflict),
+            namespace: source.rawValue,
+            groupID: source.rawValue,
+            groupTitle: source.title,
+            status: DiffReviewFileStatus(gitStatus: change.status, conflict: change.conflict),
             additions: counts.additions,
             deletions: counts.deletions,
             isRenderable: canRender,
@@ -73,7 +75,8 @@ struct ReviewChangesLoader {
             displayModel: canRender
                 ? try await buildDisplayModel(diff: diff, filePath: change.path)
                 : nil,
-            placeholderMessage: canRender ? nil : placeholderMessage(for: change, diff: diff)
+            placeholderMessage: canRender ? nil : placeholderMessage(for: change, diff: diff),
+            openFile: nil
         )
     }
 

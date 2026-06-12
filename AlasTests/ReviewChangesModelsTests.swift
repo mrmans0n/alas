@@ -39,8 +39,8 @@ struct ReviewChangesModelsTests {
     }
 
     @Test func fileIdentityIncludesSourceAndPath() {
-        let unstaged = ReviewChangesFileID(source: .unstaged, path: "Sources/App.swift")
-        let staged = ReviewChangesFileID(source: .staged, path: "Sources/App.swift")
+        let unstaged = ReviewChangesFileID(namespace: "unstaged", path: "Sources/App.swift")
+        let staged = ReviewChangesFileID(namespace: "staged", path: "Sources/App.swift")
 
         #expect(unstaged.rawValue == "unstaged:Sources/App.swift")
         #expect(staged.rawValue == "staged:Sources/App.swift")
@@ -49,7 +49,7 @@ struct ReviewChangesModelsTests {
 
     @Test func buildsFlattenedDirectoryTreeWithDirectoriesBeforeFiles() {
         let files = [
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/Center/DiffPaneView.swift",
                 source: .unstaged,
                 status: .modified,
@@ -57,7 +57,7 @@ struct ReviewChangesModelsTests {
                 deletions: 3,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "README.md",
                 source: .unstaged,
                 status: .added,
@@ -78,7 +78,7 @@ struct ReviewChangesModelsTests {
 
     @Test func sessionTotalsIncludeAllFiles() {
         let files = [
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "a.swift",
                 source: .unstaged,
                 status: .modified,
@@ -86,7 +86,7 @@ struct ReviewChangesModelsTests {
                 deletions: 1,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "b.swift",
                 source: .staged,
                 status: .deleted,
@@ -96,17 +96,32 @@ struct ReviewChangesModelsTests {
             ),
         ]
 
-        let session = ReviewChangesSessionModel(files: files)
+        let session = ReviewChangesSessionModel(files: files, groupsEnabled: true)
 
         #expect(session.fileCount == 2)
         #expect(session.totalAdditions == 3)
         #expect(session.totalDeletions == 6)
+        #expect(session.groups.map(\.id) == ["unstaged", "staged"])
+        #expect(session.groups.map(\.title) == ["Unstaged", "Staged"])
         #expect(session.sections.map(\.source) == [.unstaged, .staged])
+    }
+
+    @Test func fileSummarySourceCompatibilityUsesReviewChangesSource() {
+        let summary = reviewSummary(
+            path: "a.swift",
+            source: .unstaged,
+            status: .modified,
+            additions: 1,
+            deletions: 0,
+            isRenderable: true
+        )
+
+        #expect(summary.source == .unstaged)
     }
 
     @Test func sourceSectionsPrebuildTreeShape() throws {
         let files = [
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App/Alpha.swift",
                 source: .unstaged,
                 status: .modified,
@@ -114,7 +129,7 @@ struct ReviewChangesModelsTests {
                 deletions: 0,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App/Beta.swift",
                 source: .unstaged,
                 status: .added,
@@ -122,7 +137,7 @@ struct ReviewChangesModelsTests {
                 deletions: 0,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "README.md",
                 source: .staged,
                 status: .modified,
@@ -132,24 +147,26 @@ struct ReviewChangesModelsTests {
             ),
         ]
 
-        let session = ReviewChangesSessionModel(files: files)
-        let unstaged = try #require(session.sections.first { $0.source == .unstaged })
-        let staged = try #require(session.sections.first { $0.source == .staged })
+        let session = ReviewChangesSessionModel(files: files, groupsEnabled: true)
+        let unstaged = try #require(session.groups.first { $0.id == "unstaged" })
+        let staged = try #require(session.groups.first { $0.id == "staged" })
 
         #expect(unstaged.tree.map(\.name) == ["Sources/App"])
         #expect(unstaged.tree.first?.children?.map(\.name) == ["Alpha.swift", "Beta.swift"])
         #expect(staged.tree.map(\.name) == ["README.md"])
     }
 
-    @Test func fileSummaryDecodingDerivesIdentityFromSourceAndPath() throws {
+    @Test func fileSummaryDecodingDerivesIdentityFromNamespaceAndPath() throws {
         let data = Data("""
         {
           "id": {
-            "source": "staged",
+            "namespace": "staged",
             "path": "Other.swift"
           },
           "path": "Sources/App.swift",
-          "source": "unstaged",
+          "namespace": "unstaged",
+          "groupID": "unstaged",
+          "groupTitle": "Unstaged",
           "status": "modified",
           "additions": 8,
           "deletions": 2,
@@ -159,14 +176,15 @@ struct ReviewChangesModelsTests {
 
         let summary = try JSONDecoder().decode(ReviewChangesFileSummary.self, from: data)
 
-        #expect(summary.id == ReviewChangesFileID(source: .unstaged, path: "Sources/App.swift"))
+        #expect(summary.id == ReviewChangesFileID(namespace: "unstaged", path: "Sources/App.swift"))
         #expect(summary.path == "Sources/App.swift")
-        #expect(summary.source == .unstaged)
+        #expect(summary.reviewChangesSource == .unstaged)
+        #expect(summary.groupID == "unstaged")
     }
 
-    @Test func duplicatePathTreeFilesOrderUnstagedBeforeStaged() {
+    @Test func groupedSessionOrdersDuplicatePathsUnstagedBeforeStaged() {
         let files = [
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App.swift",
                 source: .staged,
                 status: .modified,
@@ -174,7 +192,7 @@ struct ReviewChangesModelsTests {
                 deletions: 0,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App.swift",
                 source: .unstaged,
                 status: .modified,
@@ -184,11 +202,9 @@ struct ReviewChangesModelsTests {
             ),
         ]
 
-        let tree = ReviewChangesFileTreeBuilder.build(files: files)
+        let session = ReviewChangesSessionModel(files: files, groupsEnabled: true)
 
-        #expect(tree.count == 1)
-        #expect(tree[0].name == "Sources")
-        #expect(tree[0].children?.map(\.file?.id.rawValue) == [
+        #expect(session.groups.flatMap(\.files).map(\.id.rawValue) == [
             "unstaged:Sources/App.swift",
             "staged:Sources/App.swift",
         ])
@@ -210,5 +226,27 @@ private func changedFile(
         del: del,
         renameFrom: nil,
         conflict: conflict
+    )
+}
+
+private func reviewSummary(
+    path: String,
+    source: ReviewChangesSource,
+    status: ReviewChangesFileStatus,
+    additions: Int,
+    deletions: Int,
+    isRenderable: Bool,
+    originalPath: String? = nil
+) -> ReviewChangesFileSummary {
+    ReviewChangesFileSummary(
+        path: path,
+        namespace: source.rawValue,
+        groupID: source.rawValue,
+        groupTitle: source.title,
+        status: status,
+        additions: additions,
+        deletions: deletions,
+        isRenderable: isRenderable,
+        originalPath: originalPath
     )
 }

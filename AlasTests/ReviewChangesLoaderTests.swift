@@ -41,7 +41,9 @@ struct ReviewChangesLoaderTests {
 
         #expect(session.files.map(\.id.rawValue) == ["unstaged:a.swift", "staged:b.swift"])
         #expect(session.files.map(\.displayModel?.filePath) == ["a.swift", "b.swift"])
-        #expect(session.summary.sections.map(\.source) == [.unstaged, .staged])
+        #expect(session.files.map { $0.openFile == nil } == [true, true])
+        #expect(session.summary.groups.map(\.id) == ["unstaged", "staged"])
+        #expect(session.summary.groups.map(\.title) == ["Unstaged", "Staged"])
     }
 
     @Test func keepsUnsupportedFilesVisibleAsPlaceholders() async throws {
@@ -59,6 +61,8 @@ struct ReviewChangesLoaderTests {
 
         let file = try #require(session.files.first)
         #expect(file.summary.path == "image.png")
+        #expect(file.summary.groupID == "unstaged")
+        #expect(file.summary.reviewChangesSource == .unstaged)
         #expect(file.summary.isRenderable == false)
         #expect(file.placeholderMessage != nil)
     }

@@ -52,7 +52,7 @@ struct ReviewChangesTabViewTests {
 
     @Test func railRendersFilesAndCollapsedStateKeepsMarkers() {
         let files = [
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App/AlphaView.swift",
                 source: .unstaged,
                 status: .modified,
@@ -60,7 +60,7 @@ struct ReviewChangesTabViewTests {
                 deletions: 1,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Tests/BetaTests.swift",
                 source: .staged,
                 status: .added,
@@ -69,7 +69,7 @@ struct ReviewChangesTabViewTests {
                 isRenderable: true
             ),
         ]
-        let session = ReviewChangesSessionModel(files: files)
+        let session = ReviewChangesSessionModel(files: files, groupsEnabled: true)
         var selected = files[0].id
         var collapsed = false
 
@@ -85,9 +85,13 @@ struct ReviewChangesTabViewTests {
         expandedController.view.frame = NSRect(x: 0, y: 0, width: 280, height: 500)
         expandedController.view.layoutSubtreeIfNeeded()
 
-        #expect(subview(withAccessibilityIdentifier: "review-rail-row-\(files[0].id.rawValue)", in: expandedController.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-rail-row-scroll-id-\(files[0].id.rawValue)", in: expandedController.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-rail-row-selected-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-scroll-id-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-selected-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-icon-\(files[0].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-row-icon-\(files[1].id.rawValue)", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-source-unstaged", in: expandedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-source-staged", in: expandedController.view) != nil)
         #expect(accessibilityLabel(in: expandedController.view, containing: "AlphaView.swift") != nil)
         #expect(accessibilityLabel(in: expandedController.view, containing: "BetaTests.swift") != nil)
 
@@ -105,15 +109,15 @@ struct ReviewChangesTabViewTests {
         collapsedController.view.frame = NSRect(x: 0, y: 0, width: 60, height: 500)
         collapsedController.view.layoutSubtreeIfNeeded()
 
-        #expect(subview(withAccessibilityIdentifier: "review-rail-marker-\(files[0].id.rawValue)", in: collapsedController.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-rail-marker-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-rail-marker-scroll-id-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "review-rail-marker-selected-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-\(files[0].id.rawValue)", in: collapsedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-scroll-id-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-rail-marker-selected-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
     }
 
-    @Test func railRowsFlattenSourceTreesIntoDirectLazyItems() {
+    @Test func railRowsFlattenDirectorySectionsIntoDirectLazyItems() {
         let files = [
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App/AlphaView.swift",
                 source: .unstaged,
                 status: .modified,
@@ -121,7 +125,7 @@ struct ReviewChangesTabViewTests {
                 deletions: 1,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Sources/App/BetaView.swift",
                 source: .unstaged,
                 status: .modified,
@@ -129,7 +133,7 @@ struct ReviewChangesTabViewTests {
                 deletions: 0,
                 isRenderable: true
             ),
-            ReviewChangesFileSummary(
+            reviewSummary(
                 path: "Tests/GammaTests.swift",
                 source: .staged,
                 status: .added,
@@ -138,24 +142,24 @@ struct ReviewChangesTabViewTests {
                 isRenderable: true
             ),
         ]
-        let rows = ReviewChangesRailRows.rows(for: ReviewChangesSessionModel(files: files))
+        let rows = ReviewChangesRailRows.rows(for: ReviewChangesSessionModel(files: files, groupsEnabled: true))
 
         #expect(rows.map(\.kind) == [
-            .sourceHeader(.unstaged),
+            .sourceHeader(id: "unstaged", title: "Unstaged", fileCount: 2),
             .directory("Sources/App", depth: 0),
             .file(files[0], depth: 1, name: "AlphaView.swift"),
             .file(files[1], depth: 1, name: "BetaView.swift"),
             .divider,
-            .sourceHeader(.staged),
+            .sourceHeader(id: "staged", title: "Staged", fileCount: 1),
             .directory("Tests", depth: 0),
             .file(files[2], depth: 1, name: "GammaTests.swift"),
         ])
-        #expect(rows.map(\.id).contains("file:\(files[2].id.rawValue)"))
+        #expect(rows.map(\.id).contains("file:staged:\(files[2].id.rawValue)"))
     }
 
     @Test func fileSectionEmbedsDiffPaneWithoutPerFileToolbar() {
         let file = ReviewChangesFileSectionModel(
-            summary: ReviewChangesFileSummary(
+            summary: reviewSummary(
                 path: "Sources/App/AlphaView.swift",
                 source: .unstaged,
                 status: .modified,
@@ -165,19 +169,21 @@ struct ReviewChangesTabViewTests {
             ),
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
-            placeholderMessage: nil
+            placeholderMessage: nil,
+            openFile: nil
         )
         var layout = DiffLayoutMode.split
         var wrap = false
         var whitespace = false
 
-        let view = ReviewChangesFileSection(
+        let view = DiffReviewFileSection(
             file: file,
             layoutMode: Binding(get: { layout }, set: { layout = $0 }),
             wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
             showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
             codeFontFamily: "",
-            codeFontSize: 13
+            codeFontSize: 13,
+            showsSourceBadge: true
         )
         .environment(\.theme, theme())
 
@@ -185,9 +191,11 @@ struct ReviewChangesTabViewTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
         controller.view.layoutSubtreeIfNeeded()
 
-        #expect(subview(withAccessibilityIdentifier: "review-file-section-\(file.id.rawValue)", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-file-section-\(file.id.rawValue)", in: controller.view) != nil)
         #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
         #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-open-file-\(file.id.rawValue)", in: controller.view) == nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "UNSTAGED") != nil)
     }
 
     private func parsedDiff() -> ParsedDiff {
@@ -225,5 +233,27 @@ struct ReviewChangesTabViewTests {
             return label
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
+    }
+
+    private func reviewSummary(
+        path: String,
+        source: ReviewChangesSource,
+        status: ReviewChangesFileStatus,
+        additions: Int,
+        deletions: Int,
+        isRenderable: Bool,
+        originalPath: String? = nil
+    ) -> ReviewChangesFileSummary {
+        ReviewChangesFileSummary(
+            path: path,
+            namespace: source.rawValue,
+            groupID: source.rawValue,
+            groupTitle: source.title,
+            status: status,
+            additions: additions,
+            deletions: deletions,
+            isRenderable: isRenderable,
+            originalPath: originalPath
+        )
     }
 }

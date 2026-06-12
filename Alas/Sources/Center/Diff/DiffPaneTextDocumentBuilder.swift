@@ -5,6 +5,7 @@ struct DiffPaneTextDocumentBuilder {
     struct LineMetadata: Equatable {
         let kind: DiffDisplayRow.Kind
         let range: NSRange
+        var tone: DiffPaneLineTone? = nil
     }
 
     struct CodeDocument {
@@ -53,9 +54,10 @@ struct DiffPaneTextDocumentBuilder {
             if row.kind == .collapsed {
                 oldColumn.append(
                     collapsedCodeText(row, font: font, theme: theme),
-                    kind: row.kind
+                    kind: row.kind,
+                    tone: .collapsed
                 )
-                newColumn.append(emptyLayoutGlyph(font: font, theme: theme), kind: row.kind)
+                newColumn.append(emptyLayoutGlyph(font: font, theme: theme), kind: row.kind, tone: .collapsed)
                 continue
             }
 
@@ -68,7 +70,8 @@ struct DiffPaneTextDocumentBuilder {
                     showWhitespace: showWhitespace,
                     theme: theme
                 ),
-                kind: row.kind
+                kind: row.kind,
+                tone: tone(for: row.old, rowKind: row.kind)
             )
             newColumn.append(
                 code(
@@ -79,7 +82,8 @@ struct DiffPaneTextDocumentBuilder {
                     showWhitespace: showWhitespace,
                     theme: theme
                 ),
-                kind: row.kind
+                kind: row.kind,
+                tone: tone(for: row.new, rowKind: row.kind)
             )
         }
 
@@ -109,7 +113,7 @@ struct DiffPaneTextDocumentBuilder {
         for row in rows {
             if row.kind == .collapsed {
                 gutter.append("", side: .paired)
-                codeColumn.append(collapsedCodeText(row, font: font, theme: theme), kind: row.kind)
+                codeColumn.append(collapsedCodeText(row, font: font, theme: theme), kind: row.kind, tone: .collapsed)
                 continue
             }
 
@@ -124,7 +128,8 @@ struct DiffPaneTextDocumentBuilder {
                         showWhitespace: showWhitespace,
                         theme: theme
                     ),
-                    kind: row.kind
+                    kind: row.kind,
+                    tone: tone(for: line, rowKind: row.kind)
                 )
             }
         }
@@ -354,17 +359,21 @@ struct DiffPaneTextDocumentBuilder {
         guard let line else {
             return ""
         }
-        let number = line.lineNumber.map(String.init) ?? ""
-        let sign: String
+        return line.lineNumber.map(String.init) ?? ""
+    }
+
+    private static func tone(for line: DiffDisplayLine?, rowKind: DiffDisplayRow.Kind) -> DiffPaneLineTone {
+        guard let line else {
+            return rowKind == .collapsed ? .collapsed : .placeholder
+        }
         switch line.kind {
         case .add:
-            sign = "+"
+            return .add
         case .delete:
-            sign = "-"
+            return .delete
         case .context:
-            sign = " "
+            return .context
         }
-        return "\(sign)\(number)"
     }
 
     private static func prefix(
@@ -485,7 +494,11 @@ private struct ColumnAccumulator {
         )
     }
 
-    mutating func append(_ line: NSAttributedString, kind: DiffDisplayRow.Kind) {
+    mutating func append(
+        _ line: NSAttributedString,
+        kind: DiffDisplayRow.Kind,
+        tone: DiffPaneLineTone? = nil
+    ) {
         if output.length > 0 {
             output.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
         }
@@ -493,7 +506,8 @@ private struct ColumnAccumulator {
         output.append(line)
         metadata.append(DiffPaneTextDocumentBuilder.LineMetadata(
             kind: kind,
-            range: NSRange(location: start, length: line.length)
+            range: NSRange(location: start, length: line.length),
+            tone: tone
         ))
     }
 }
