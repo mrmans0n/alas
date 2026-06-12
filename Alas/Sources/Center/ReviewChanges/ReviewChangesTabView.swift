@@ -80,18 +80,18 @@ struct ReviewChangesTabView: View {
             Spacer()
             layoutSwitcher
             toolbarButton(
-                systemName: diffWrapBinding.wrappedValue ? "text.justify.left" : "text.alignleft",
+                systemName: diffPreferences.wrapLines.wrappedValue ? "text.justify.left" : "text.alignleft",
                 tooltip: "Wrap lines",
-                isActive: diffWrapBinding.wrappedValue
+                isActive: diffPreferences.wrapLines.wrappedValue
             ) {
-                diffWrapBinding.wrappedValue.toggle()
+                diffPreferences.wrapLines.wrappedValue.toggle()
             }
             toolbarButton(
                 systemName: "paragraphsign",
                 tooltip: "Show whitespace",
-                isActive: diffWhitespaceBinding.wrappedValue
+                isActive: diffPreferences.showWhitespace.wrappedValue
             ) {
-                diffWhitespaceBinding.wrappedValue.toggle()
+                diffPreferences.showWhitespace.wrappedValue.toggle()
             }
         }
         .padding(.horizontal, 14)
@@ -114,9 +114,9 @@ struct ReviewChangesTabView: View {
     }
 
     private func layoutButton(_ mode: DiffLayoutMode, systemName: String) -> some View {
-        let active = diffLayoutBinding.wrappedValue == mode
+        let active = diffPreferences.layoutMode.wrappedValue == mode
         return Button {
-            diffLayoutBinding.wrappedValue = mode
+            diffPreferences.layoutMode.wrappedValue = mode
         } label: {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .semibold))
@@ -175,9 +175,9 @@ struct ReviewChangesTabView: View {
                     ForEach(session.files) { file in
                         ReviewChangesFileSection(
                             file: file,
-                            layoutMode: diffLayoutBinding,
-                            wrapLines: diffWrapBinding,
-                            showWhitespace: diffWhitespaceBinding,
+                            layoutMode: diffPreferences.layoutMode,
+                            wrapLines: diffPreferences.wrapLines,
+                            showWhitespace: diffPreferences.showWhitespace,
                             codeFontFamily: appState.config.code.fontFamily,
                             codeFontSize: CGFloat(appState.config.code.fontSize)
                         )
@@ -266,34 +266,8 @@ struct ReviewChangesTabView: View {
         }
     }
 
-    private var diffLayoutBinding: Binding<DiffLayoutMode> {
-        Binding(
-            get: { appState.config.changes.diffLayoutMode },
-            set: {
-                appState.config.changes.diffLayoutMode = $0
-                appState.saveConfig()
-            }
-        )
-    }
-
-    private var diffWrapBinding: Binding<Bool> {
-        Binding(
-            get: { appState.config.changes.diffWrapLines },
-            set: {
-                appState.config.changes.diffWrapLines = $0
-                appState.saveConfig()
-            }
-        )
-    }
-
-    private var diffWhitespaceBinding: Binding<Bool> {
-        Binding(
-            get: { appState.config.changes.diffShowWhitespace },
-            set: {
-                appState.config.changes.diffShowWhitespace = $0
-                appState.saveConfig()
-            }
-        )
+    private var diffPreferences: DiffPreferenceBindings {
+        DiffPreferenceBindings(appState: appState)
     }
 
     private func scrollToFile(_ id: ReviewChangesFileID, proxy: ScrollViewProxy) {

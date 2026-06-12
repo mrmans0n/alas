@@ -334,6 +334,22 @@ struct DiffPaneViewTests {
         #expect(scrollView.contentView.bounds.origin.x == 0)
     }
 
+    @Test func diffPreferenceBindingsPersistChanges() {
+        let appState = AppState()
+        appState.config.changes.diffLayoutMode = .split
+        appState.config.changes.diffWrapLines = false
+        appState.config.changes.diffShowWhitespace = false
+
+        let bindings = DiffPreferenceBindings(appState: appState)
+        bindings.layoutMode.wrappedValue = .stacked
+        bindings.wrapLines.wrappedValue = true
+        bindings.showWhitespace.wrappedValue = true
+
+        #expect(appState.config.changes.diffLayoutMode == .stacked)
+        #expect(appState.config.changes.diffWrapLines == true)
+        #expect(appState.config.changes.diffShowWhitespace == true)
+    }
+
     @Test func collapsedContextControllerTogglesHiddenRows() throws {
         let group = try #require(collapsedContextModel().groups.first)
         let collapsedIDs = DiffCollapsedContextController.collapsedRowIDs(in: group)
