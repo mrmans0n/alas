@@ -11,6 +11,9 @@ final class RightPaneState {
     let worktree: Worktree
     let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
+    /// Increments whenever `refresh()` publishes a new change list. This
+    /// catches same-line unstaged edits whose add/delete totals stay constant.
+    private(set) var changesGeneration: Int = 0
     /// Fingerprint of the staged index contents (concatenated blob SHAs of
     /// staged files). Changes whenever any staged file's contents change,
     /// even when add/del totals are identical. Used by views that need to
@@ -378,6 +381,7 @@ final class RightPaneState {
             self.upstreamRef = resolvedUpstream?.ref
             _ = await mergeRefresh
             self.changes = entries
+            self.changesGeneration += 1
             if let lsResult = try? await Process.git(
                 ["ls-files", "-s", "-z"],
                 cwd: worktree.path

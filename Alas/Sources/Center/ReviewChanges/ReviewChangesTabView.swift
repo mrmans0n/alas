@@ -25,10 +25,18 @@ struct ReviewChangesLoadKey {
 
     @MainActor
     static func fingerprint(rightPaneState: RightPaneState) -> String {
-        fingerprint(changes: rightPaneState.changes, indexFingerprint: rightPaneState.indexFingerprint)
+        fingerprint(
+            changes: rightPaneState.changes,
+            indexFingerprint: rightPaneState.indexFingerprint,
+            changesGeneration: rightPaneState.changesGeneration
+        )
     }
 
-    static func fingerprint(changes: [ChangedFile], indexFingerprint: String) -> String {
+    static func fingerprint(
+        changes: [ChangedFile],
+        indexFingerprint: String,
+        changesGeneration: Int = 0
+    ) -> String {
         let changeTokens = changes
             .sorted { lhs, rhs in
                 if lhs.stage != rhs.stage { return lhs.stage.rawValue < rhs.stage.rawValue }
@@ -46,7 +54,7 @@ struct ReviewChangesLoadKey {
                 ].joined(separator: "\u{1f}")
             }
             .joined(separator: "\u{1e}")
-        return "\(indexFingerprint)\u{0}\(changes.count)\u{0}\(changeTokens)"
+        return "\(changesGeneration)\u{0}\(indexFingerprint)\u{0}\(changes.count)\u{0}\(changeTokens)"
     }
 }
 

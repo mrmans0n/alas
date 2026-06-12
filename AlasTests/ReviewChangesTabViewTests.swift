@@ -31,19 +31,22 @@ struct ReviewChangesTabViewTests {
             ChangedFile(path: "a.swift", status: "R", stage: .staged, add: 2, del: 1, renameFrom: "old.swift"),
         ]
 
-        let baseline = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-a")
-        let sameDifferentOrder = ReviewChangesLoadKey.fingerprint(changes: changes.reversed(), indexFingerprint: "index-a")
-        let changedIndex = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-b")
+        let baseline = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-a", changesGeneration: 1)
+        let sameDifferentOrder = ReviewChangesLoadKey.fingerprint(changes: changes.reversed(), indexFingerprint: "index-a", changesGeneration: 1)
+        let changedIndex = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-b", changesGeneration: 1)
+        let changedGeneration = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-a", changesGeneration: 2)
         let changedMetadata = ReviewChangesLoadKey.fingerprint(
             changes: [
                 ChangedFile(path: "b.swift", status: "M", stage: .unstaged, add: 2, del: 0, renameFrom: nil),
                 ChangedFile(path: "a.swift", status: "R", stage: .staged, add: 2, del: 1, renameFrom: "old.swift"),
             ],
-            indexFingerprint: "index-a"
+            indexFingerprint: "index-a",
+            changesGeneration: 1
         )
 
         #expect(baseline == sameDifferentOrder)
         #expect(baseline != changedIndex)
+        #expect(baseline != changedGeneration)
         #expect(baseline != changedMetadata)
     }
 
