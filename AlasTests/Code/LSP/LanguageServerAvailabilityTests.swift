@@ -373,6 +373,85 @@ struct LanguageServerAvailabilityTests {
         #expect(assessed == [server.resolvingSymlinksInPath().path])
     }
 
+    @Test("auto-remediation clears quarantined helper before reporting available")
+    func remediationClearsBlockedHelper() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        _ = try executable(named: "kotlin-lsp", in: dir)
+        let helper = try executable(named: "intellij-server", in: dir)
+        let helperPath = helper.resolvingSymlinksInPath().path
+        var blocked = Set([helperPath])
+        var remediated: [String] = []
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp", gatekeeperHelpers: ["intellij-server"])
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": dir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { path in blocked.contains(path) ? .rejected : .allowed },
+            gatekeeperRemediator: { path in
+                remediated.append(path)
+                blocked.remove(path)
+                return .allowed
+            }
+        )
+
+        #expect(await availability.statusRemediatingGatekeeper(for: entry) == .available)
+        #expect(remediated == [helperPath])
+    }
+
+    @Test("auto-remediation failure returns blocked helper path")
+    func remediationFailureReturnsBlockedHelper() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        _ = try executable(named: "kotlin-lsp", in: dir)
+        let helper = try executable(named: "intellij-server", in: dir)
+        let helperPath = helper.resolvingSymlinksInPath().path
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp", gatekeeperHelpers: ["intellij-server"])
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": dir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { path in path == helperPath ? .rejected : .allowed },
+            gatekeeperRemediator: { _ in .failed("nope") }
+        )
+
+        let status = await availability.statusRemediatingGatekeeper(for: entry)
+
+        guard case .blockedByGatekeeper(let realPath) = status else {
+            Issue.record("Expected blocked helper path, got \(status)")
+            return
+        }
+        #expect(realPath == helperPath)
+    }
+
+    @Test("auto-remediation rechecks primary command after successful remediation")
+    func remediationRechecksPrimaryCommand() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let server = try executable(named: "kotlin-lsp", in: dir)
+        let serverPath = server.resolvingSymlinksInPath().path
+        var blocked = Set([serverPath])
+        var remediated: [String] = []
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp")
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": dir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { path in blocked.contains(path) ? .rejected : .allowed },
+            gatekeeperRemediator: { path in
+                remediated.append(path)
+                blocked.remove(path)
+                return .allowed
+            }
+        )
+
+        #expect(await availability.statusRemediatingGatekeeper(for: entry) == .available)
+        #expect(remediated == [serverPath])
+    }
+
     @Test("notInstalled commands never reach the gatekeeper assessor")
     func notInstalledSkipsAssessor() {
         var assessorCalled = false

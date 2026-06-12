@@ -14,19 +14,24 @@ struct LanguageServerAvailability {
     private let xcrunFind: (String) -> String?
     private let additionalPathDirectories: [String]
     private let gatekeeperAssessor: (String) -> GatekeeperAssessor.Result
+    private let gatekeeperRemediator: (String) async -> GatekeeperRemediator.Outcome
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
         xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind,
         additionalPathDirectories: [String] = LanguageServerAvailability.defaultAdditionalPathDirectories(),
-        gatekeeperAssessor: @escaping (String) -> GatekeeperAssessor.Result = { GatekeeperAssessor.shared.assess(realPath: $0) }
+        gatekeeperAssessor: @escaping (String) -> GatekeeperAssessor.Result = { GatekeeperAssessor.shared.assess(realPath: $0) },
+        gatekeeperRemediator: @escaping (String) async -> GatekeeperRemediator.Outcome = {
+            await GatekeeperRemediator().remediate(realPath: $0)
+        }
     ) {
         self.environment = environment
         self.fileManager = fileManager
         self.xcrunFind = xcrunFind
         self.additionalPathDirectories = additionalPathDirectories
         self.gatekeeperAssessor = gatekeeperAssessor
+        self.gatekeeperRemediator = gatekeeperRemediator
     }
 
     func status(for entry: LanguageServerConfig) -> Status {
@@ -46,6 +51,26 @@ struct LanguageServerAvailability {
         }
 
         return .available
+    }
+
+    func statusRemediatingGatekeeper(for entry: LanguageServerConfig) async -> Status {
+        let maxAttempts = entry.gatekeeperHelpers.count + 1
+
+        for _ in 0..<maxAttempts {
+            let current = status(for: entry)
+            guard case .blockedByGatekeeper(let realPath) = current else {
+                return current
+            }
+
+            switch await gatekeeperRemediator(realPath) {
+            case .allowed:
+                continue
+            case .stillBlocked, .failed:
+                return .blockedByGatekeeper(realPath: realPath)
+            }
+        }
+
+        return status(for: entry)
     }
 
     private func gatekeeperStatus(forResolvedPath resolved: String) -> Status {
