@@ -25,7 +25,6 @@ struct ReviewChangesTabView: View {
     @State private var loadError: String?
     @State private var selectedFileID: ReviewChangesFileID?
     @State private var railCollapsed = false
-    @State private var sectionFrames: [ReviewChangesSectionFrame] = []
     @State private var programmaticScroll = ReviewChangesProgrammaticScrollController()
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
@@ -190,10 +189,6 @@ struct ReviewChangesTabView: View {
             }
             .coordinateSpace(name: Self.scrollCoordinateSpace)
             .onPreferenceChange(ReviewChangesSectionFramePreferenceKey.self) { frames in
-                sectionFrames = frames
-                updateSelectedFileFromScroll(viewportHeight: viewport.size.height)
-            }
-            .onChange(of: sectionFrames) { _, frames in
                 updateSelectedFileFromScroll(frames: frames, viewportHeight: viewport.size.height)
             }
         }
@@ -310,22 +305,16 @@ struct ReviewChangesTabView: View {
         finishProgrammaticScroll(token)
     }
 
-    private func updateSelectedFileFromScroll(viewportHeight: CGFloat) {
-        updateSelectedFileFromScroll(frames: sectionFrames, viewportHeight: viewportHeight)
-    }
-
     private func updateSelectedFileFromScroll(frames: [ReviewChangesSectionFrame], viewportHeight: CGFloat) {
-        guard
-            let active = ReviewChangesScrollSpy.activeFile(
-                in: frames,
-                viewportMinY: 0,
-                viewportMaxY: viewportHeight
-            ),
-            programmaticScroll.acceptsScrollSpyUpdate(for: active)
-        else { return }
-        selectedFileID = active
+        if let updated = ReviewChangesActiveFileSelection.updatedSelection(
+            current: selectedFileID,
+            frames: frames,
+            viewportHeight: viewportHeight,
+            programmaticScroll: programmaticScroll
+        ) {
+            selectedFileID = updated
+        }
     }
-
     private func finishProgrammaticScroll(_ token: ReviewChangesProgrammaticScrollController.Token) {
         Task {
             try? await Task.sleep(nanoseconds: 220_000_000)

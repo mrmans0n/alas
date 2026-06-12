@@ -90,4 +90,29 @@ struct ReviewChangesScrollSpyTests {
         #expect(controller.target == nil)
         #expect(controller.acceptsScrollSpyUpdate(for: first))
     }
+
+    @Test func activeSelectionSkipsRedundantScrollUpdates() {
+        let first = ReviewChangesFileID(source: .unstaged, path: "first.swift")
+        let second = ReviewChangesFileID(source: .unstaged, path: "second.swift")
+        let frames = [
+            ReviewChangesSectionFrame(id: first, minY: -20, maxY: 220),
+            ReviewChangesSectionFrame(id: second, minY: 260, maxY: 420),
+        ]
+
+        let unchanged = ReviewChangesActiveFileSelection.updatedSelection(
+            current: first,
+            frames: frames,
+            viewportHeight: 200,
+            programmaticScroll: ReviewChangesProgrammaticScrollController()
+        )
+        let changed = ReviewChangesActiveFileSelection.updatedSelection(
+            current: second,
+            frames: frames,
+            viewportHeight: 200,
+            programmaticScroll: ReviewChangesProgrammaticScrollController()
+        )
+
+        #expect(unchanged == nil)
+        #expect(changed == first)
+    }
 }

@@ -38,6 +38,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
 
     private var layoutMode: DiffLayoutMode = .split
     private var measuredHeight: CGFloat = 0
+    private var lastUpdateSignature: UpdateSignature?
 
     private let dividerWidth: CGFloat = 1
 
@@ -70,6 +71,23 @@ final class DiffPaneTextDocumentContainerView: NSView {
         font: NSFont,
         theme: Theme
     ) {
+        let signature = UpdateSignature(
+            group: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+            layoutMode: layoutMode,
+            wrapLines: wrapLines,
+            showWhitespace: showWhitespace,
+            fileExtension: fileExtension,
+            fontName: font.fontName,
+            fontSize: font.pointSize,
+            theme: theme
+        )
+        guard signature != lastUpdateSignature else {
+            needsLayout = true
+            return
+        }
+        lastUpdateSignature = signature
+
         self.layoutMode = layoutMode
         layer?.backgroundColor = NSColor(theme.color("bg-1")).cgColor
         dividerView.wantsLayer = true
@@ -184,6 +202,18 @@ final class DiffPaneTextDocumentContainerView: NSView {
 
     private func lineLabels(from attributedString: NSAttributedString) -> [String] {
         attributedString.string.components(separatedBy: "\n")
+    }
+
+    private struct UpdateSignature: Equatable {
+        let group: DiffDisplayGroup
+        let expandedCollapsedRowIDs: Set<String>
+        let layoutMode: DiffLayoutMode
+        let wrapLines: Bool
+        let showWhitespace: Bool
+        let fileExtension: String
+        let fontName: String
+        let fontSize: CGFloat
+        let theme: Theme
     }
 }
 

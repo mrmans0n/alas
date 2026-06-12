@@ -49,6 +49,27 @@ enum ReviewChangesScrollSpy {
     }
 }
 
+enum ReviewChangesActiveFileSelection {
+    static func updatedSelection(
+        current: ReviewChangesFileID?,
+        frames: [ReviewChangesSectionFrame],
+        viewportHeight: CGFloat,
+        programmaticScroll: ReviewChangesProgrammaticScrollController
+    ) -> ReviewChangesFileID? {
+        guard
+            let active = ReviewChangesScrollSpy.activeFile(
+                in: frames,
+                viewportMinY: 0,
+                viewportMaxY: viewportHeight
+            ),
+            active != current,
+            programmaticScroll.acceptsScrollSpyUpdate(for: active)
+        else { return nil }
+
+        return active
+    }
+}
+
 struct ReviewChangesProgrammaticScrollController: Equatable {
     struct Token: Equatable {
         fileprivate let generation: Int
