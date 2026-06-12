@@ -22,8 +22,8 @@ struct ReviewRequestDiffLoaderTests {
         #expect(session.files[1].summary.originalPath == "Sources/OldName.swift")
         #expect(session.files[2].summary.isRenderable == false)
         #expect(session.files[2].placeholderMessage == "Image changes are not available in this review view yet.")
-        #expect(session.summary.totalAdditions == 3)
-        #expect(session.summary.totalDeletions == 2)
+        #expect(session.summary.totalAdditions == 4)
+        #expect(session.summary.totalDeletions == 3)
     }
 
     @Test func emptyProviderDiffProducesEmptyUngroupedSession() async throws {

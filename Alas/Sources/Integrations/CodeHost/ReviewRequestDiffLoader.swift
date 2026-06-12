@@ -32,7 +32,7 @@ struct ReviewRequestDiffLoader {
         let parsed = DiffParser.parse(section.rawDiff)
         let isImage = ImageFileType.isSupported(relativePath: section.path)
         let canRender = !parsed.hunks.isEmpty && !isImage
-        let counts = isImage ? (additions: 0, deletions: 0) : lineCounts(in: parsed)
+        let counts = lineCounts(in: parsed)
         let summary = DiffReviewFileSummary(
             path: section.path,
             namespace: namespace,
