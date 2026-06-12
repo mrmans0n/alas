@@ -16,6 +16,40 @@ struct WorkingTreeChangeGroupTests {
         #expect(groups[0].primaryEntry == unstaged)
     }
 
+    @Test func mixedPrimaryEntryPreservesStagedRenameOrigin() {
+        let stagedRename = ChangedFile(
+            path: "Sources/NewName.swift",
+            status: "R",
+            stage: .staged,
+            add: 12,
+            del: 3,
+            renameFrom: "Sources/OldName.swift"
+        )
+        let unstagedEdit = changedFile(
+            "Sources/NewName.swift",
+            status: "M",
+            stage: .unstaged,
+            add: 12,
+            del: 3
+        )
+
+        let group = WorkingTreeChangeGroup.group(files: [stagedRename, unstagedEdit])[0]
+
+        #expect(group.stageState == .mixed)
+        #expect(group.primaryEntry.stage == .unstaged)
+        #expect(group.primaryEntry.renameFrom == "Sources/OldName.swift")
+    }
+
+    @Test func mixedStatsUsePerPathCountsOnce() {
+        let staged = changedFile("Sources/App.swift", status: "M", stage: .staged, add: 4, del: 2)
+        let unstaged = changedFile("Sources/App.swift", status: "M", stage: .unstaged, add: 4, del: 2)
+
+        let group = WorkingTreeChangeGroup.group(files: [staged, unstaged])[0]
+
+        #expect(group.add == 4)
+        #expect(group.del == 2)
+    }
+
     @Test func reportsCheckedAndUncheckedStateForSingleStageRows() {
         let staged = changedFile("A.swift", stage: .staged)
         let unstaged = changedFile("B.swift", stage: .unstaged)

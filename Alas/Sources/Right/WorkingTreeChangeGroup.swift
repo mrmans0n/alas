@@ -29,15 +29,30 @@ struct WorkingTreeChangeGroup: Identifiable, Equatable {
     }
 
     var primaryEntry: ChangedFile {
-        unstagedEntries.first ?? entries[0]
+        let primary = unstagedEntries.first ?? entries[0]
+        guard
+            primary.renameFrom == nil,
+            let renameFrom = entries.first(where: { $0.status == "R" && $0.renameFrom != nil })?.renameFrom
+        else {
+            return primary
+        }
+        return ChangedFile(
+            path: primary.path,
+            status: primary.status,
+            stage: primary.stage,
+            add: primary.add,
+            del: primary.del,
+            renameFrom: renameFrom,
+            conflict: primary.conflict
+        )
     }
 
     var add: Int {
-        entries.reduce(0) { $0 + $1.add }
+        entries.map(\.add).max() ?? 0
     }
 
     var del: Int {
-        entries.reduce(0) { $0 + $1.del }
+        entries.map(\.del).max() ?? 0
     }
 
     static func group(files: [ChangedFile]) -> [WorkingTreeChangeGroup] {

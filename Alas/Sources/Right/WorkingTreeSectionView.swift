@@ -26,8 +26,8 @@ struct WorkingTreeSectionView: View {
     private var changeGroups: [WorkingTreeChangeGroup] {
         WorkingTreeChangeGroup.group(files: changes)
     }
-    private var totalAdd: Int { changes.reduce(0) { $0 + $1.add } }
-    private var totalDel: Int { changes.reduce(0) { $0 + $1.del } }
+    private var totalAdd: Int { changeGroups.reduce(0) { $0 + $1.add } }
+    private var totalDel: Int { changeGroups.reduce(0) { $0 + $1.del } }
 
     var body: some View {
         Section {
@@ -45,7 +45,7 @@ struct WorkingTreeSectionView: View {
         } header: {
             SectionHeader(
                 title: "Working tree",
-                count: changes.count,
+                count: changeGroups.count,
                 expanded: expanded,
                 onToggle: { expanded.toggle() },
                 stats: (add: totalAdd, del: totalDel)
