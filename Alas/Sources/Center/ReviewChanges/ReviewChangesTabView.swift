@@ -70,7 +70,6 @@ struct ReviewChangesTabView: View {
     @State private var loadError: String?
     @State private var selectedFileID: ReviewChangesFileID?
     @State private var railCollapsed = false
-    @State private var programmaticScroll = ReviewChangesProgrammaticScrollController()
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
 
@@ -197,66 +196,17 @@ struct ReviewChangesTabView: View {
     }
 
     private func reviewSurface(_ session: ReviewChangesLoadedSession) -> some View {
-        let selectedBinding = Binding<ReviewChangesFileID>(
-            get: { selectedFileID ?? session.summary.files[0].id },
-            set: { selectedFileID = $0 }
+        DiffReviewSurface(
+            session: session,
+            selectedFileID: $selectedFileID,
+            railCollapsed: $railCollapsed,
+            layoutMode: diffPreferences.layoutMode,
+            wrapLines: diffPreferences.wrapLines,
+            showWhitespace: diffPreferences.showWhitespace,
+            codeFontFamily: appState.config.code.fontFamily,
+            codeFontSize: CGFloat(appState.config.code.fontSize),
+            showsSourceBadges: true
         )
-
-        return ScrollViewReader { scrollProxy in
-            HStack(spacing: 0) {
-                ReviewChangesRail(
-                    session: session.summary,
-                    selectedFileID: selectedBinding,
-                    collapsed: $railCollapsed,
-                    onSelectFile: { id in
-                        scrollToFile(id, proxy: scrollProxy)
-                    }
-                )
-                mainReviewStream(session)
-            }
-        }
-    }
-
-    private func mainReviewStream(_ session: ReviewChangesLoadedSession) -> some View {
-        GeometryReader { viewport in
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(session.files) { file in
-                        ReviewChangesFileSection(
-                            file: file,
-                            layoutMode: diffPreferences.layoutMode,
-                            wrapLines: diffPreferences.wrapLines,
-                            showWhitespace: diffPreferences.showWhitespace,
-                            codeFontFamily: appState.config.code.fontFamily,
-                            codeFontSize: CGFloat(appState.config.code.fontSize)
-                        )
-                        .id(file.summary.id.rawValue)
-                        .background(sectionFrameReader(for: file.summary.id))
-                    }
-                }
-                .padding(16)
-            }
-            .coordinateSpace(name: Self.scrollCoordinateSpace)
-            .onPreferenceChange(ReviewChangesSectionFramePreferenceKey.self) { frames in
-                updateSelectedFileFromScroll(frames: frames, viewportHeight: viewport.size.height)
-            }
-        }
-        .background(theme.color("bg-1"))
-    }
-
-    private func sectionFrameReader(for id: ReviewChangesFileID) -> some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: ReviewChangesSectionFramePreferenceKey.self,
-                value: [
-                    ReviewChangesSectionFrame(
-                        id: id,
-                        minY: proxy.frame(in: .named(Self.scrollCoordinateSpace)).minY,
-                        maxY: proxy.frame(in: .named(Self.scrollCoordinateSpace)).maxY
-                    ),
-                ]
-            )
-        }
     }
 
     private func stateView(title: String, detail: String?, color: Color) -> some View {
@@ -317,43 +267,5 @@ struct ReviewChangesTabView: View {
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
-    }
-
-    private func scrollToFile(_ id: ReviewChangesFileID, proxy: ScrollViewProxy) {
-        let token = programmaticScroll.beginProgrammaticScroll(to: id)
-        selectedFileID = id
-        withAnimation(.easeInOut(duration: 0.16)) {
-            proxy.scrollTo(id.rawValue, anchor: .top)
-        }
-        finishProgrammaticScroll(token)
-    }
-
-    private func updateSelectedFileFromScroll(frames: [ReviewChangesSectionFrame], viewportHeight: CGFloat) {
-        if let updated = ReviewChangesActiveFileSelection.updatedSelection(
-            current: selectedFileID,
-            frames: frames,
-            viewportHeight: viewportHeight,
-            programmaticScroll: programmaticScroll
-        ) {
-            selectedFileID = updated
-        }
-    }
-    private func finishProgrammaticScroll(_ token: ReviewChangesProgrammaticScrollController.Token) {
-        Task {
-            try? await Task.sleep(nanoseconds: 220_000_000)
-            await MainActor.run {
-                programmaticScroll.finishProgrammaticScroll(token)
-            }
-        }
-    }
-
-    private static let scrollCoordinateSpace = "review-changes-scroll"
-}
-
-private struct ReviewChangesSectionFramePreferenceKey: PreferenceKey {
-    static let defaultValue: [ReviewChangesSectionFrame] = []
-
-    static func reduce(value: inout [ReviewChangesSectionFrame], nextValue: () -> [ReviewChangesSectionFrame]) {
-        value.append(contentsOf: nextValue())
     }
 }

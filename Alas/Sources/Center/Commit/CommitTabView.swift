@@ -12,33 +12,29 @@ struct CommitTabView: View {
     @State private var detailsError: String?
     @State private var activeDetailsKey: String?
 
-    @State private var selectedPath: String?
-    @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
-    @State private var displayModel: DiffDisplayModel?
-    @State private var displayModelKey: String?
-    @State private var loadingDiff = false
-    @State private var diffError: String?
-    @State private var activeDiffKey: String?
+    @State private var reviewSession: DiffReviewLoadedSession?
+    @State private var loadingReviewSession = false
+    @State private var reviewSessionError: String?
+    @State private var selectedReviewFileID: DiffReviewFileID?
+    @State private var railCollapsed = false
+    @State private var activeReviewKey: String?
+    @State private var activeReviewID = UUID()
 
     @State private var headerExpanded: Bool = false
 
     @Environment(\.theme) private var theme
     private let git = GitService()
+    private let reviewLoader = CommitReviewLoader()
 
-    private static let minPaneWidth: CGFloat = 140
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
-    }
-
-    private var diffTaskKey: String {
-        "\(sha):\(selectedPath ?? "")"
     }
 
     var body: some View {
         VStack(spacing: 0) {
             if let details {
                 CommitHeaderView(details: details, expanded: $headerExpanded)
-                splitBody(details: details)
+                commitReviewContent(details: details)
             } else if loadingDetails {
                 Spinner()
                     .frame(width: 20, height: 20)
@@ -61,57 +57,60 @@ struct CommitTabView: View {
             }
         }
         .task(id: sha) { await loadDetails() }
-        .task(id: diffTaskKey) { await loadDiffIfNeeded() }
     }
 
     @ViewBuilder
-    private func splitBody(details: CommitDetails) -> some View {
-        GeometryReader { proxy in
-            let total = proxy.size.width
-            let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
-            let leftWidth = max(Self.minPaneWidth, total * ratio)
-            HStack(spacing: 0) {
-                CommitFilesListView(files: details.files, selectedPath: $selectedPath)
-                    .frame(width: leftWidth)
-                DragHandle(axis: .horizontal, onDrag: { delta in
-                    guard total > 0 else { return }
-                    let newWidth = max(Self.minPaneWidth, min(total - Self.minPaneWidth, leftWidth + delta))
-                    appState.config.commitDetailSplitRatio = newWidth / total
-                    appState.saveConfig()
-                })
-                Group {
-                    if let path = selectedPath,
-                       let file = details.files.first(where: { $0.path == path }) {
-                        let selectedDiffKey = "\(sha):\(path)"
-                        let selectedDisplayModel = displayModelKey == selectedDiffKey ? displayModel : nil
-                        let openAvailable = DiffOpenFileAvailability.isAvailable(
-                            worktreePath: worktreePath, relativePath: path
-                        )
-                        CommitDiffView(
-                            worktreePath: worktreePath,
-                            sha: sha,
-                            file: file,
-                            path: path,
-                            diff: diff,
-                            displayModel: selectedDisplayModel,
-                            loading: loadingDiff,
-                            error: diffError,
-                            codeFontFamily: appState.config.code.fontFamily,
-                            codeFontSize: CGFloat(appState.config.code.fontSize),
-                            layoutMode: diffPreferences.layoutMode,
-                            wrapLines: diffPreferences.wrapLines,
-                            showWhitespace: diffPreferences.showWhitespace,
-                            onOpenFile: openAvailable
-                                ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
-                                : nil
-                        )
-                    } else {
-                        Text("Select a file")
-                            .foregroundColor(theme.color("fg-dim"))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+    private func commitReviewContent(details: CommitDetails) -> some View {
+        let contentState = CommitReviewContentState.resolve(
+            detailsFileCount: details.files.count,
+            loadingReviewSession: loadingReviewSession,
+            reviewSessionFileCount: reviewSession?.files.count,
+            reviewSessionError: reviewSessionError
+        )
+
+        switch contentState {
+        case .loading:
+            Spinner()
+                .frame(width: 20, height: 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .error:
+            VStack(spacing: 8) {
+                Text("Could not load commit diffs")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(theme.color("del"))
+                Text(reviewSessionError ?? "")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(4)
+                AlasButton(title: "Retry", style: .subtle) {
+                    Task { await loadReviewSession(details: details) }
                 }
             }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loaded:
+            if let reviewSession {
+                CommitReviewBody(
+                    session: reviewSession,
+                    selectedFileID: $selectedReviewFileID,
+                    railCollapsed: $railCollapsed,
+                    layoutMode: diffPreferences.layoutMode,
+                    wrapLines: diffPreferences.wrapLines,
+                    showWhitespace: diffPreferences.showWhitespace,
+                    codeFontFamily: appState.config.code.fontFamily,
+                    codeFontSize: CGFloat(appState.config.code.fontSize)
+                )
+            } else {
+                Spinner()
+                    .frame(width: 20, height: 20)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        case .empty:
+            Text("No files changed in this commit")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(theme.color("fg-dim"))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -121,13 +120,12 @@ struct CommitTabView: View {
         loadingDetails = true
         detailsError = nil
         details = nil
-        activeDiffKey = nil
-        selectedPath = nil
-        diff = ParsedDiff(hunks: [])
-        displayModel = nil
-        displayModelKey = nil
-        loadingDiff = false
-        diffError = nil
+        reviewSession = nil
+        reviewSessionError = nil
+        selectedReviewFileID = nil
+        activeReviewKey = nil
+        activeReviewID = UUID()
+        loadingReviewSession = false
         defer {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
@@ -135,53 +133,156 @@ struct CommitTabView: View {
             let d = try await git.commitDetails(at: worktreePath, sha: sha)
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.details = d
-            self.selectedPath = d.files.first?.path
+            await loadReviewSession(details: d)
         } catch {
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             self.detailsError = (error as NSError).localizedDescription
         }
     }
 
-    private func loadDiffIfNeeded() async {
-        guard let path = selectedPath,
-              let file = details?.files.first(where: { $0.path == path }) else {
-            diff = ParsedDiff(hunks: [])
-            displayModel = nil
-            displayModelKey = nil
+    private func loadReviewSession(details: CommitDetails) async {
+        guard CommitReviewLoadIdentity.isCurrent(details: details, currentDetails: self.details, sha: sha) else {
             return
         }
-        let requestedKey = "\(sha):\(path)"
-        activeDiffKey = requestedKey
-        loadingDiff = true
-        diffError = nil
-        displayModel = nil
-        displayModelKey = nil
+        let requestedToken = CommitReviewLoadToken.next(key: reviewKey(details: details))
+        activeReviewKey = requestedToken.key
+        activeReviewID = requestedToken.id
+        loadingReviewSession = true
+        reviewSessionError = nil
+        reviewSession = nil
         defer {
-            if activeDiffKey == requestedKey { loadingDiff = false }
+            if requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID) {
+                loadingReviewSession = false
+                activeReviewKey = nil
+            }
         }
         do {
-            // For renames AND copies, forward the original path so git can
-            // emit a proper rename/copy header. GitService.diff post-slices
-            // the multi-file output down to just this file's section, so a
-            // C row whose source was also modified won't pull in the
-            // source's hunks.
-            let loaded = try await git.diff(
+            let loaded = try await reviewLoader.load(
                 worktreePath: worktreePath,
                 sha: sha,
-                file: path,
-                originalPath: file.originalPath
+                files: details.files,
+                openFileForPath: openFileAction(for:)
             )
-            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
-            let loadedModel = await Task.detached(priority: .userInitiated) {
-                DiffDisplayModelBuilder.build(diff: loaded, filePath: path)
-            }.value
-            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
-            self.diff = loaded
-            self.displayModel = loadedModel
-            self.displayModelKey = requestedKey
+            guard
+                !Task.isCancelled,
+                requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID),
+                CommitReviewLoadIdentity.isCurrent(details: details, currentDetails: self.details, sha: sha)
+            else { return }
+            reviewSession = loaded
+            selectedReviewFileID = selectedReviewFileID.flatMap { selected in
+                loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
+            } ?? loaded.summary.files.first?.id
+        } catch is CancellationError {
         } catch {
-            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
-            self.diffError = (error as NSError).localizedDescription
+            guard
+                !Task.isCancelled,
+                requestedToken.isActive(activeKey: activeReviewKey, activeID: activeReviewID),
+                CommitReviewLoadIdentity.isCurrent(details: details, currentDetails: self.details, sha: sha)
+            else { return }
+            reviewSessionError = (error as NSError).localizedDescription
         }
+    }
+
+    private func openFileAction(for path: String) -> (() -> Void)? {
+        guard DiffOpenFileAvailability.isAvailable(worktreePath: worktreePath, relativePath: path) else {
+            return nil
+        }
+        return {
+            Task { @MainActor in
+                appState.openFile(relativePath: path, worktreeId: worktreeId)
+            }
+        }
+    }
+
+    private func reviewKey(details: CommitDetails) -> String {
+        let fileKey = details.files
+            .map { file in
+                [
+                    file.path,
+                    file.originalPath ?? "",
+                    file.status,
+                    "\(file.add)",
+                    "\(file.del)",
+                ].joined(separator: "\u{1f}")
+            }
+            .joined(separator: "\u{1e}")
+        return "\(sha)\u{0}\(details.info.sha)\u{0}\(details.files.count)\u{0}\(fileKey)"
+    }
+}
+
+struct CommitReviewLoadToken: Equatable {
+    let key: String
+    let id: UUID
+
+    static func next(key: String) -> CommitReviewLoadToken {
+        CommitReviewLoadToken(key: key, id: UUID())
+    }
+
+    func isActive(activeKey: String?, activeID: UUID) -> Bool {
+        activeKey == key && activeID == id
+    }
+}
+
+enum CommitReviewLoadIdentity {
+    static func isCurrent(details: CommitDetails, currentDetails: CommitDetails?, sha: String) -> Bool {
+        details.info.sha == sha && currentDetails?.info.sha == details.info.sha
+    }
+}
+
+enum CommitReviewContentState: Equatable {
+    case loading
+    case error
+    case loaded
+    case empty
+
+    static func resolve(
+        detailsFileCount: Int,
+        loadingReviewSession: Bool,
+        reviewSessionFileCount: Int?,
+        reviewSessionError: String?
+    ) -> CommitReviewContentState {
+        if loadingReviewSession {
+            return .loading
+        }
+        if reviewSessionError != nil {
+            return .error
+        }
+        if let reviewSessionFileCount {
+            return reviewSessionFileCount > 0 ? .loaded : .empty
+        }
+        return detailsFileCount > 0 ? .loading : .empty
+    }
+}
+
+struct CommitReviewBody: View {
+    let session: DiffReviewLoadedSession
+    @Binding var selectedFileID: DiffReviewFileID?
+    @Binding var railCollapsed: Bool
+    @Binding var layoutMode: DiffLayoutMode
+    @Binding var wrapLines: Bool
+    @Binding var showWhitespace: Bool
+    let codeFontFamily: String
+    let codeFontSize: CGFloat
+
+    var body: some View {
+        DiffReviewSurface(
+            session: session,
+            selectedFileID: $selectedFileID,
+            railCollapsed: $railCollapsed,
+            layoutMode: $layoutMode,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            showsSourceBadges: false,
+            showsRailDisplayControls: true
+        )
+        .accessibilityIdentifier("commit-review-body")
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "commit-review-body",
+                label: "Commit review"
+            )
+        )
     }
 }

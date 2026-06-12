@@ -254,6 +254,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         textView = DiffPaneCodeTextView(frame: .zero, textContainer: container)
         super.init(frame: frameRect)
 
+        contentView = DiffPaneLeadingClipView(frame: .zero)
         drawsBackground = false
         borderType = .noBorder
         hasVerticalScroller = false
@@ -297,8 +298,11 @@ final class DiffPaneTextScrollView: NSScrollView {
     ) {
         self.lineLabels = lineLabels
         self.rowKinds = document.lines.map(\.kind)
-        self.lineTones = zip(lineLabels, rowKinds).map { label, kind in
-            DiffPaneLineTone(label: label, rowKind: kind)
+        self.lineTones = document.lines.enumerated().map { index, line in
+            line.tone ?? DiffPaneLineTone(
+                label: index < lineLabels.count ? lineLabels[index] : "",
+                rowKind: line.kind
+            )
         }
         self.baseDocument = document
         self.synchronizedRowHeights = []
@@ -306,6 +310,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         self.wraps = wraps
         self.font = font
         self.theme = theme
+        hasHorizontalScroller = !wraps
 
         textView.textStorage?.setAttributedString(document.attributedString)
         textView.font = font
@@ -378,6 +383,8 @@ final class DiffPaneTextScrollView: NSScrollView {
 
     override func layout() {
         super.layout()
+        hasHorizontalScroller = !wraps
+        tile()
         configureTextContainer()
         textView.frame = NSRect(
             x: 0,
@@ -390,6 +397,32 @@ final class DiffPaneTextScrollView: NSScrollView {
             shouldResetHorizontalOrigin = false
         }
         (verticalRulerView as? DiffPaneLineNumberRulerView)?.rowHeight = lineHeight()
+    }
+
+    override func tile() {
+        super.tile()
+        guard rulersVisible, let ruler = verticalRulerView else { return }
+
+        let rulerWidth = ruler.ruleThickness
+        var clipFrame = contentView.frame
+        guard clipFrame.minX < rulerWidth - 0.5 else { return }
+
+        clipFrame.origin.x = rulerWidth
+        clipFrame.size.width = max(bounds.width - rulerWidth, 1)
+        contentView.frame = clipFrame
+        var clipBounds = contentView.bounds
+        clipBounds.size = clipFrame.size
+        contentView.bounds = clipBounds
+        if wraps {
+            configureTextContainer()
+            textView.frame.size.width = max(clipFrame.width, 1)
+        }
+        ruler.frame = NSRect(
+            x: 0,
+            y: clipFrame.minY,
+            width: rulerWidth,
+            height: clipFrame.height
+        )
     }
 
     func resetHorizontalOriginToLeading() {
@@ -466,14 +499,19 @@ enum DiffPaneLineTone: Equatable {
     init(label: String, rowKind: DiffDisplayRow.Kind) {
         if rowKind == .collapsed {
             self = .collapsed
-        } else if label.hasPrefix("+") {
-            self = .add
-        } else if label.hasPrefix("-") {
-            self = .delete
         } else if label.isEmpty, rowKind != .context {
             self = .placeholder
         } else {
-            self = .context
+            switch rowKind {
+            case .add:
+                self = .add
+            case .delete:
+                self = .delete
+            case .context, .replacement:
+                self = .context
+            case .collapsed:
+                self = .collapsed
+            }
         }
     }
 }
@@ -481,6 +519,10 @@ enum DiffPaneLineTone: Equatable {
 final class DiffPaneCodeTextView: NSTextView {
     static func placeholderHatchRect(in rowRect: NSRect) -> NSRect {
         rowRect.insetBy(dx: 0, dy: 1)
+    }
+
+    static func changeRailRect(in rowRect: NSRect, tone: DiffPaneLineTone) -> NSRect? {
+        nil
     }
 
     var lineTones: [DiffPaneLineTone] = [] {
@@ -514,6 +556,19 @@ final class DiffPaneCodeTextView: NSTextView {
         }
     }
 
+    func diffFirstLineFragmentRects() -> [NSRect] {
+        guard let layoutManager, let textContainer else { return [] }
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textContainerOrigin
+        return paragraphRanges(lineCount: lineTones.count).map { range in
+            firstLineFragmentRect(
+                for: range,
+                layoutManager: layoutManager,
+                origin: origin
+            )
+        }
+    }
+
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
         guard let theme else { return }
         let rowRects = diffRowRects()
@@ -525,7 +580,6 @@ final class DiffPaneCodeTextView: NSTextView {
 
             rowFill(for: tone, theme: theme).setFill()
             rowRect.fill()
-            drawRail(for: tone, rowRect: rowRect, theme: theme)
             if tone == .placeholder {
                 drawPlaceholderHatch(in: rowRect, theme: theme)
             }
@@ -569,6 +623,37 @@ final class DiffPaneCodeTextView: NSTextView {
         return max(ceil(rowRect.height), defaultHeight)
     }
 
+    private func firstLineFragmentRect(
+        for range: NSRange,
+        layoutManager: NSLayoutManager,
+        origin: NSPoint
+    ) -> NSRect {
+        let defaultHeight = layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular))
+        guard range.length > 0 else {
+            return NSRect(x: 0, y: origin.y, width: bounds.width, height: defaultHeight)
+        }
+
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            return NSRect(x: 0, y: origin.y, width: bounds.width, height: defaultHeight)
+        }
+
+        var firstRect: NSRect?
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, stop in
+            firstRect = lineFragmentRect
+            stop.pointee = true
+        }
+
+        guard var rect = firstRect else {
+            return NSRect(x: 0, y: origin.y, width: bounds.width, height: defaultHeight)
+        }
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+        rect.size.width = max(bounds.width, visibleRect.width)
+        rect.size.height = max(ceil(rect.height), defaultHeight)
+        return rect
+    }
+
     private func rowFill(for tone: DiffPaneLineTone, theme: Theme) -> NSColor {
         switch tone {
         case .add:
@@ -582,21 +667,6 @@ final class DiffPaneCodeTextView: NSTextView {
         case .context:
             return .clear
         }
-    }
-
-    private func drawRail(for tone: DiffPaneLineTone, rowRect: NSRect, theme: Theme) {
-        let color: NSColor?
-        switch tone {
-        case .add:
-            color = NSColor(theme.color("add"))
-        case .delete:
-            color = NSColor(theme.color("del"))
-        default:
-            color = nil
-        }
-        guard let color else { return }
-        color.setFill()
-        NSRect(x: rowRect.minX, y: rowRect.minY, width: 3, height: rowRect.height).fill()
     }
 
     private func drawPlaceholderHatch(in rect: NSRect, theme: Theme) {
@@ -671,22 +741,56 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         guard !rowRects.isEmpty else { return }
 
         let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
-        for index in rowRects.indices {
+        let labelRects = labelDrawRects()
+        for index in visibleRowIndices(in: visible) {
             let label = labels[index]
             let sourceRowRect = rowRects[index]
-            guard sourceRowRect.intersects(visible) else { continue }
             let y = sourceRowRect.minY - visible.minY
             let rowRect = NSRect(x: 0, y: y, width: ruleThickness, height: sourceRowRect.height)
             drawRowBackground(index: index, rowRect: rowRect, theme: theme)
             guard !label.isEmpty else { continue }
-            let firstVisualLineHeight = min(sourceRowRect.height, rowHeight)
+            let sourceLabelRect = labelRects.indices.contains(index)
+                ? labelRects[index]
+                : NSRect(x: 0, y: sourceRowRect.minY, width: ruleThickness - horizontalPadding, height: textHeight)
             let drawRect = NSRect(
-                x: 0,
-                y: y + max((firstVisualLineHeight - textHeight) / 2, 0),
+                x: sourceLabelRect.minX,
+                y: sourceLabelRect.minY - visible.minY,
                 width: ruleThickness - horizontalPadding,
                 height: textHeight
             )
             NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label))
+        }
+    }
+
+    func visibleRowIndices(in visibleRect: NSRect) -> [Int] {
+        let rowRects = diffRowRects()
+        return rowRects.indices.filter { index in
+            let rowRect = rowRects[index]
+            return rowRect.maxY >= visibleRect.minY && rowRect.minY <= visibleRect.maxY
+        }
+    }
+
+    func labelDrawRects() -> [NSRect] {
+        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
+        let textLineRects: [NSRect]
+        if let textView = scrollView?.documentView as? DiffPaneCodeTextView {
+            textLineRects = textView.diffFirstLineFragmentRects()
+        } else {
+            textLineRects = diffRowRects().map {
+                NSRect(x: 0, y: $0.minY, width: $0.width, height: min($0.height, rowHeight))
+            }
+        }
+
+        return labels.indices.map { index in
+            let lineRect = textLineRects.indices.contains(index)
+                ? textLineRects[index]
+                : NSRect(x: 0, y: contentTopInset + CGFloat(index) * rowHeight, width: ruleThickness, height: rowHeight)
+            return NSRect(
+                x: 0,
+                y: lineRect.midY - textHeight / 2,
+                width: ruleThickness - horizontalPadding,
+                height: textHeight
+            )
         }
     }
 
@@ -777,9 +881,18 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         default:
             railColor = nil
         }
-        if let railColor {
+        if let railColor, let railRect = Self.changeRailRect(in: rowRect, tone: tone) {
             railColor.setFill()
-            NSRect(x: 0, y: rowRect.minY, width: 3, height: rowRect.height).fill()
+            railRect.fill()
+        }
+    }
+
+    static func changeRailRect(in rowRect: NSRect, tone: DiffPaneLineTone) -> NSRect? {
+        switch tone {
+        case .add, .delete:
+            return NSRect(x: rowRect.minX, y: rowRect.minY, width: 3, height: rowRect.height)
+        default:
+            return nil
         }
     }
 
@@ -787,5 +900,39 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
+    }
+}
+
+final class DiffPaneLeadingClipView: NSClipView {
+    override func scroll(to newOrigin: NSPoint) {
+        var origin = newOrigin
+        if enclosingScrollView?.hasHorizontalScroller == false {
+            origin.x = 0
+        }
+        super.scroll(to: origin)
+    }
+
+    override func setBoundsOrigin(_ newOrigin: NSPoint) {
+        var origin = newOrigin
+        if enclosingScrollView?.hasHorizontalScroller == false {
+            origin.x = 0
+        }
+        super.setBoundsOrigin(origin)
+    }
+
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var bounds = super.constrainBoundsRect(proposedBounds)
+        guard enclosingScrollView?.hasHorizontalScroller != false else {
+            bounds.origin.x = 0
+            return bounds
+        }
+        guard let documentView else {
+            bounds.origin.x = 0
+            return bounds
+        }
+
+        let maxX = max(documentView.frame.width - bounds.width, 0)
+        bounds.origin.x = min(max(bounds.origin.x, 0), maxX)
+        return bounds
     }
 }

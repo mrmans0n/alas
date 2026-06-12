@@ -4,11 +4,11 @@ import Testing
 
 struct ReviewChangesScrollSpyTests {
     @Test func picksVisibleSectionNearestViewportTopFromBelow() {
-        let activeID = ReviewChangesFileID(source: .unstaged, path: "b.swift")
+        let activeID = ReviewChangesFileID(namespace: "unstaged", path: "b.swift")
         let frames = [
-            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "a.swift"), minY: -180, maxY: 200),
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(namespace: "unstaged", path: "a.swift"), minY: -180, maxY: 200),
             ReviewChangesSectionFrame(id: activeID, minY: 24, maxY: 360),
-            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "c.swift"), minY: 380, maxY: 720),
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(namespace: "unstaged", path: "c.swift"), minY: 380, maxY: 720),
         ]
 
         let activeFile = ReviewChangesScrollSpy.activeFile(in: frames, viewportMinY: 0, viewportMaxY: 500)
@@ -17,10 +17,10 @@ struct ReviewChangesScrollSpyTests {
     }
 
     @Test func keepsLongFileActiveWhenItsTopHasScrolledAboveViewport() {
-        let activeID = ReviewChangesFileID(source: .unstaged, path: "large.swift")
+        let activeID = ReviewChangesFileID(namespace: "unstaged", path: "large.swift")
         let frames = [
             ReviewChangesSectionFrame(id: activeID, minY: -500, maxY: 700),
-            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "next.swift"), minY: 760, maxY: 1000),
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(namespace: "unstaged", path: "next.swift"), minY: 760, maxY: 1000),
         ]
 
         let activeFile = ReviewChangesScrollSpy.activeFile(in: frames, viewportMinY: 0, viewportMaxY: 500)
@@ -30,8 +30,8 @@ struct ReviewChangesScrollSpyTests {
 
     @Test func ignoresNonIntersectingSections() {
         let frames = [
-            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "above.swift"), minY: -400, maxY: -20),
-            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "below.swift"), minY: 520, maxY: 700),
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(namespace: "unstaged", path: "above.swift"), minY: -400, maxY: -20),
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(namespace: "unstaged", path: "below.swift"), minY: 520, maxY: 700),
         ]
 
         let activeFile = ReviewChangesScrollSpy.activeFile(in: frames, viewportMinY: 0, viewportMaxY: 500)
@@ -40,9 +40,9 @@ struct ReviewChangesScrollSpyTests {
     }
 
     @Test func breaksEqualMinYTiesByFileID() {
-        let expectedID = ReviewChangesFileID(source: .unstaged, path: "a.swift")
+        let expectedID = ReviewChangesFileID(namespace: "unstaged", path: "a.swift")
         let frames = [
-            ReviewChangesSectionFrame(id: ReviewChangesFileID(source: .unstaged, path: "b.swift"), minY: 24, maxY: 280),
+            ReviewChangesSectionFrame(id: ReviewChangesFileID(namespace: "unstaged", path: "b.swift"), minY: 24, maxY: 280),
             ReviewChangesSectionFrame(id: expectedID, minY: 24, maxY: 320),
         ]
 
@@ -52,8 +52,8 @@ struct ReviewChangesScrollSpyTests {
     }
 
     @Test func suppressionIgnoresUpdatesUntilReleased() {
-        let first = ReviewChangesFileID(source: .unstaged, path: "first.swift")
-        let second = ReviewChangesFileID(source: .staged, path: "second.swift")
+        let first = ReviewChangesFileID(namespace: "unstaged", path: "first.swift")
+        let second = ReviewChangesFileID(namespace: "staged", path: "second.swift")
         var controller = ReviewChangesProgrammaticScrollController()
 
         #expect(controller.acceptsScrollSpyUpdate(for: first))
@@ -70,8 +70,8 @@ struct ReviewChangesScrollSpyTests {
     }
 
     @Test func staleProgrammaticScrollFinishDoesNotReleaseNewerSuppression() {
-        let first = ReviewChangesFileID(source: .unstaged, path: "first.swift")
-        let second = ReviewChangesFileID(source: .staged, path: "second.swift")
+        let first = ReviewChangesFileID(namespace: "unstaged", path: "first.swift")
+        let second = ReviewChangesFileID(namespace: "staged", path: "second.swift")
         var controller = ReviewChangesProgrammaticScrollController()
 
         let tokenA = controller.beginProgrammaticScroll(to: first)
@@ -92,8 +92,8 @@ struct ReviewChangesScrollSpyTests {
     }
 
     @Test func activeSelectionSkipsRedundantScrollUpdates() {
-        let first = ReviewChangesFileID(source: .unstaged, path: "first.swift")
-        let second = ReviewChangesFileID(source: .unstaged, path: "second.swift")
+        let first = ReviewChangesFileID(namespace: "unstaged", path: "first.swift")
+        let second = ReviewChangesFileID(namespace: "unstaged", path: "second.swift")
         let frames = [
             ReviewChangesSectionFrame(id: first, minY: -20, maxY: 220),
             ReviewChangesSectionFrame(id: second, minY: 260, maxY: 420),

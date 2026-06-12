@@ -273,12 +273,50 @@ struct DiffPaneViewTests {
             let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
             let codeRows = codeView.diffRowRects()
             let rulerRows = ruler.diffRowRects()
+            let codeFirstLineRects = codeView.diffFirstLineFragmentRects()
+            let rulerLabelRects = ruler.labelDrawRects()
 
             #expect(codeRows.count == rulerRows.count)
             for index in 0..<min(codeRows.count, rulerRows.count) {
                 #expect(abs(codeRows[index].minY - rulerRows[index].minY) < 0.5)
                 #expect(abs(codeRows[index].height - rulerRows[index].height) < 0.5)
             }
+            #expect(codeFirstLineRects.count == rulerLabelRects.count)
+            for index in 0..<min(codeFirstLineRects.count, rulerLabelRects.count) {
+                let codeCenter = codeFirstLineRects[index].midY
+                let labelCenter = rulerLabelRects[index].midY
+                #expect(abs(codeCenter - labelCenter) < 0.75)
+            }
+        }
+    }
+
+    @Test func diffTextScrollPanesUseLeadingClipViewsAndStartScrolledLeft() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 360, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let scrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter(isEffectivelyVisible)
+        #expect(scrollViews.isEmpty == false)
+        for scrollView in scrollViews {
+            #expect(scrollView.contentView is DiffPaneLeadingClipView)
+            #expect(abs(scrollView.contentView.bounds.origin.x) < 0.5)
         }
     }
 
@@ -332,6 +370,129 @@ struct DiffPaneViewTests {
         scrollView.layoutSubtreeIfNeeded()
 
         #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
+    @Test func lineNumberRulerKeepsRowsVisibleAfterHorizontalScroll() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = \"This line is intentionally long enough to make the inner pane horizontally scrollable.\""
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [.init(kind: .add, range: NSRange(location: 0, length: (text as NSString).length))]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 180, height: 80))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["56"],
+            wraps: false,
+            font: font,
+            theme: theme
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+        #expect(ruler.visibleRowIndices(in: scrollView.contentView.bounds) == [0])
+    }
+
+    @Test func wrappedDiffTextScrollPaneDoesNotAllowHorizontalOffset() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = \"This line is intentionally long enough to wrap instead of creating an inner horizontal scroll range.\""
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [.init(kind: .context, range: NSRange(location: 0, length: (text as NSString).length))]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 180, height: 80))
+
+        scrollView.update(
+            document: document,
+            lineLabels: [" 1"],
+            wraps: true,
+            font: font,
+            theme: theme
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+
+        #expect(scrollView.hasHorizontalScroller == false)
+        #expect(abs(scrollView.contentView.bounds.origin.x) < 0.5)
+        #expect(abs(scrollView.documentView!.frame.width - scrollView.contentView.bounds.width) < 0.5)
+    }
+
+    @Test func wrappedDiffTextKeepsContinuationGlyphsVisible() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "        guard currentConfigOptions.first(where: { $0.id == configId })?.currentValue == selectedValue else {"
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [.init(kind: .add, range: NSRange(location: 0, length: (text as NSString).length))]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 430, height: 120))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+56"],
+            wraps: true,
+            font: font,
+            theme: theme
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let layoutManager = try #require(codeView.layoutManager)
+        let textContainer = try #require(codeView.textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let configRange = (text as NSString).range(of: "configId")
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: configRange, actualCharacterRange: nil)
+        let glyphRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            .offsetBy(dx: codeView.textContainerOrigin.x, dy: codeView.textContainerOrigin.y)
+        let visibleCodeRect = codeView.visibleRect.insetBy(dx: codeView.textContainerInset.width, dy: 0)
+
+        #expect(glyphRect.minX >= visibleCodeRect.minX - 0.5)
+        #expect(glyphRect.maxX <= visibleCodeRect.maxX + 0.5)
+    }
+
+    @Test func wrappedDiffTextPaneKeepsCodeViewportAfterLineRuler() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "struct ACPConfigOptionItem: Codable, Equatable, Identifiable {"
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [.init(kind: .context, range: NSRange(location: 0, length: (text as NSString).length))]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 430, height: 120))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["73"],
+            wraps: true,
+            font: font,
+            theme: theme
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let rulerWidth = try #require(scrollView.verticalRulerView?.ruleThickness)
+        #expect(scrollView.contentView.frame.minX >= rulerWidth - 0.5)
     }
 
     @Test func diffPreferenceBindingsPersistChanges() {
@@ -509,11 +670,11 @@ struct DiffPaneViewTests {
     }
 
     @Test func diffLineToneClassifiesRailsAndEmptyCounterparts() {
-        #expect(DiffPaneLineTone(label: "-12", rowKind: .delete) == .delete)
-        #expect(DiffPaneLineTone(label: "+13", rowKind: .add) == .add)
+        #expect(DiffPaneLineTone(label: "12", rowKind: .delete) == .delete)
+        #expect(DiffPaneLineTone(label: "13", rowKind: .add) == .add)
         #expect(DiffPaneLineTone(label: "", rowKind: .add) == .placeholder)
         #expect(DiffPaneLineTone(label: "", rowKind: .collapsed) == .collapsed)
-        #expect(DiffPaneLineTone(label: " 8", rowKind: .context) == .context)
+        #expect(DiffPaneLineTone(label: "8", rowKind: .context) == .context)
     }
 
     @Test func placeholderHatchIsInsetInsideRowRect() {
@@ -524,6 +685,17 @@ struct DiffPaneViewTests {
         #expect(hatchRect.maxY < rowRect.maxY)
         #expect(hatchRect.minX == rowRect.minX)
         #expect(hatchRect.maxX == rowRect.maxX)
+    }
+
+    @Test func changeRailsRenderOnlyInLineNumberRuler() {
+        let rowRect = NSRect(x: 0, y: 10, width: 120, height: 24)
+
+        #expect(DiffPaneLineNumberRulerView.changeRailRect(in: rowRect, tone: .add) == NSRect(x: 0, y: 10, width: 3, height: 24))
+        #expect(DiffPaneLineNumberRulerView.changeRailRect(in: rowRect, tone: .delete) == NSRect(x: 0, y: 10, width: 3, height: 24))
+        #expect(DiffPaneLineNumberRulerView.changeRailRect(in: rowRect, tone: .context) == nil)
+
+        #expect(DiffPaneCodeTextView.changeRailRect(in: rowRect, tone: .add) == nil)
+        #expect(DiffPaneCodeTextView.changeRailRect(in: rowRect, tone: .delete) == nil)
     }
 
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
@@ -544,8 +716,8 @@ struct DiffPaneViewTests {
             "let a = 1",
             "let b = 3",
         ])
-        #expect(result.oldGutter.string.components(separatedBy: "\n") == [" 1", "-2"])
-        #expect(result.newGutter.string.components(separatedBy: "\n") == [" 1", "+2"])
+        #expect(result.oldGutter.string.components(separatedBy: "\n") == ["1", "2"])
+        #expect(result.newGutter.string.components(separatedBy: "\n") == ["1", "2"])
         #expect(!result.oldCode.attributedString.string.contains("|"))
         #expect(!result.newCode.attributedString.string.contains("|"))
         #expect(result.oldCode.lines.contains { $0.kind == .replacement })
@@ -564,7 +736,7 @@ struct DiffPaneViewTests {
 
         let rows = result.code.attributedString.string.components(separatedBy: "\n")
         #expect(rows == ["let a = 1", "let b = 2", "let b = 3"])
-        #expect(result.gutter.string.components(separatedBy: "\n") == [" 1", "-2", "+2"])
+        #expect(result.gutter.string.components(separatedBy: "\n") == ["1", "2", "2"])
         #expect(!result.code.attributedString.string.contains("|"))
         #expect(result.code.lines.contains { $0.kind == .replacement })
     }
