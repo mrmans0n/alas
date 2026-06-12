@@ -173,12 +173,126 @@ private struct ProviderDiffFileSection {
     }
 
     private static func paths(fromDiffHeader header: String) -> (old: String, new: String)? {
-        let rawPaths = header
-            .dropFirst("diff --git ".count)
+        let payload = String(header.dropFirst("diff --git ".count))
+        if let quotedPaths = quotedPaths(from: payload) {
+            return quotedPaths
+        }
+        if let prefixedPaths = prefixedPaths(from: payload) {
+            return prefixedPaths
+        }
+
+        let rawPaths = payload
             .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
             .map(String.init)
         guard rawPaths.count == 2 else { return nil }
         return (stripGitPrefix(rawPaths[0]), stripGitPrefix(rawPaths[1]))
+    }
+
+    private static func prefixedPaths(from payload: String) -> (old: String, new: String)? {
+        guard payload.hasPrefix("a/"),
+              let delimiter = payload.range(of: " b/")
+        else { return nil }
+
+        let oldPath = String(payload[..<delimiter.lowerBound])
+        let newPath = String(payload[payload.index(after: delimiter.lowerBound)...])
+        return (stripGitPrefix(oldPath), stripGitPrefix(newPath))
+    }
+
+    private static func quotedPaths(from payload: String) -> (old: String, new: String)? {
+        var index = payload.startIndex
+        guard let oldPath = quotedPathToken(in: payload, index: &index) else {
+            return nil
+        }
+        skipSpaces(in: payload, index: &index)
+        guard let newPath = quotedPathToken(in: payload, index: &index) else {
+            return nil
+        }
+        return (stripGitPrefix(oldPath), stripGitPrefix(newPath))
+    }
+
+    private static func quotedPathToken(in text: String, index: inout String.Index) -> String? {
+        guard index < text.endIndex, text[index] == "\"" else {
+            return nil
+        }
+
+        index = text.index(after: index)
+        var value = ""
+
+        while index < text.endIndex {
+            let character = text[index]
+            if character == "\"" {
+                index = text.index(after: index)
+                return value
+            }
+            if character == "\\" {
+                guard let escaped = decodeEscapedCharacter(in: text, index: &index) else {
+                    return nil
+                }
+                value.append(escaped)
+            } else {
+                value.append(character)
+                index = text.index(after: index)
+            }
+        }
+
+        return nil
+    }
+
+    private static func decodeEscapedCharacter(in text: String, index: inout String.Index) -> Character? {
+        let escapeStart = index
+        let escapedIndex = text.index(after: escapeStart)
+        guard escapedIndex < text.endIndex else { return nil }
+
+        let escaped = text[escapedIndex]
+        switch escaped {
+        case "n":
+            index = text.index(after: escapedIndex)
+            return "\n"
+        case "r":
+            index = text.index(after: escapedIndex)
+            return "\r"
+        case "t":
+            index = text.index(after: escapedIndex)
+            return "\t"
+        case "\"", "\\":
+            index = text.index(after: escapedIndex)
+            return escaped
+        default:
+            if let octal = decodeOctalEscape(in: text, index: escapedIndex) {
+                index = octal.nextIndex
+                return octal.character
+            }
+            index = text.index(after: escapedIndex)
+            return escaped
+        }
+    }
+
+    private static func decodeOctalEscape(in text: String, index: String.Index) -> (character: Character, nextIndex: String.Index)? {
+        var cursor = index
+        var digits = ""
+
+        while cursor < text.endIndex, digits.count < 3, isOctalDigit(text[cursor]) {
+            digits.append(text[cursor])
+            cursor = text.index(after: cursor)
+        }
+
+        guard !digits.isEmpty,
+              let value = UInt32(digits, radix: 8),
+              let scalar = UnicodeScalar(value)
+        else { return nil }
+
+        return (Character(scalar), cursor)
+    }
+
+    private static func isOctalDigit(_ character: Character) -> Bool {
+        guard let scalar = character.unicodeScalars.first else { return false }
+        return scalar.value >= 48 && scalar.value <= 55
+    }
+
+    private static func skipSpaces(in text: String, index: inout String.Index) {
+        while index < text.endIndex, text[index] == " " {
+            index = text.index(after: index)
+        }
     }
 
     private static func firstHeaderValue(in lines: [String], prefix: String) -> String? {

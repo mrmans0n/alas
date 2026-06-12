@@ -41,6 +41,51 @@ struct ReviewRequestDiffLoaderTests {
         #expect(session.summary.groupsEnabled == false)
     }
 
+    @Test func noHunkPlaceholderFileWithSpacesKeepsHeaderPath() async throws {
+        let provider = FakeDiffProvider(diff: """
+        diff --git a/Assets/logo file.png b/Assets/logo file.png
+        index 111..222 100644
+        """)
+        let loader = ReviewRequestDiffLoader(provider: provider)
+
+        let session = try await loader.load(
+            remote: Self.remote(),
+            request: Self.reviewRequest(),
+            cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.path == "Assets/logo file.png")
+        #expect(file.summary.isRenderable == false)
+        #expect(file.placeholderMessage == "Image changes are not available in this review view yet.")
+    }
+
+    @Test func gitLabNewFileUsesMergeRequestNamespaceAndAddedStatus() async throws {
+        let provider = FakeDiffProvider(
+            diff: """
+            diff --git a/Sources/NewFile.swift b/Sources/NewFile.swift
+            new file mode 100644
+            index 0000000..1111111
+            --- /dev/null
+            +++ b/Sources/NewFile.swift
+            @@ -0,0 +1 @@
+            +let value = true
+            """,
+            kind: .gitlab
+        )
+        let loader = ReviewRequestDiffLoader(provider: provider)
+
+        let session = try await loader.load(
+            remote: Self.remote(kind: .gitlab),
+            request: Self.reviewRequest(kind: .gitlab),
+            cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.namespace == "gitlab-mr")
+        #expect(file.summary.status == .added)
+    }
+
     private static let sampleDiff = """
     diff --git a/Sources/App.swift b/Sources/App.swift
     index 111..222 100644
@@ -70,9 +115,9 @@ struct ReviewRequestDiffLoaderTests {
     +binary new
     """
 
-    private static func remote() -> CodeHostRemote {
+    private static func remote(kind: CodeHostKind = .github) -> CodeHostRemote {
         CodeHostRemote(
-            kind: .github,
+            kind: kind,
             host: "github.com",
             owner: "mrmans0n",
             repository: "alas",
@@ -81,9 +126,9 @@ struct ReviewRequestDiffLoaderTests {
         )
     }
 
-    private static func reviewRequest() -> ReviewRequest {
+    private static func reviewRequest(kind: CodeHostKind = .github) -> ReviewRequest {
         ReviewRequest(
-            remote: remote(),
+            remote: remote(kind: kind),
             number: 516,
             title: "Files first",
             url: URL(string: "https://github.com/mrmans0n/alas/pull/516")!,
@@ -101,7 +146,7 @@ struct ReviewRequestDiffLoaderTests {
 
 private struct FakeDiffProvider: CodeHostProvider {
     let diff: String
-    var kind: CodeHostKind { .github }
+    var kind: CodeHostKind = .github
     func isAvailable() async -> Bool { true }
     func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
     func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL) async throws -> ReviewRequest? { nil }
