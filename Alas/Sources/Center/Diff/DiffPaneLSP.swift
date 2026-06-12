@@ -271,7 +271,7 @@ final class DiffPaneLSPController {
                     fileURL: context.fileURL,
                     language: context.language,
                     open: { worktreeRoot, fileURL, language, text in
-                        await context.lsp.openDocument(
+                        await context.lsp.openTemporaryDocument(
                             worktreeRoot: worktreeRoot,
                             fileURL: fileURL,
                             languageId: language,
@@ -279,7 +279,7 @@ final class DiffPaneLSPController {
                         )
                     },
                     close: { worktreeRoot, fileURL, language in
-                        await context.lsp.closeDocument(
+                        await context.lsp.closeTemporaryDocument(
                             worktreeRoot: worktreeRoot,
                             fileURL: fileURL,
                             languageId: language

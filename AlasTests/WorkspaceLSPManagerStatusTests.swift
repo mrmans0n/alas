@@ -15,7 +15,16 @@ struct WorkspaceLSPManagerStatusTests {
         self.fileURL = r.appendingPathComponent("main.swift")
     }
 
-    private func manager(withFakeEntry language: String = "swift") -> WorkspaceLSPManager {
+    private func manager(
+        withFakeEntry language: String = "swift",
+        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient = { executable, arguments, environment, language, rootURI in
+            LSPClient(
+                transport: LSPTransport(executable: executable, arguments: arguments, environment: environment),
+                language: language,
+                rootURI: rootURI
+            )
+        }
+    ) -> WorkspaceLSPManager {
         let registry = LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
                 language: language,
@@ -36,7 +45,8 @@ struct WorkspaceLSPManagerStatusTests {
                     additionalPathDirectories: [],
                     gatekeeperAssessor: { _ in .allowed }
                 )
-            }
+            },
+            makeClient: makeClient
         )
     }
 
@@ -408,5 +418,47 @@ struct WorkspaceLSPManagerStatusTests {
         _ = await opened
 
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+    }
+
+    @Test func editorOpenReplacesTemporaryDiffTextAndTemporaryCloseKeepsEditorOpen() async {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+            }
+        }
+        let mgr = manager(
+            withFakeEntry: "swift",
+            makeClient: { _, _, _, language, rootURI in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            }
+        )
+
+        _ = await mgr.openTemporaryDocument(
+            worktreeRoot: root,
+            fileURL: fileURL,
+            languageId: "swift",
+            text: "let disk = 1\n"
+        )
+        _ = await mgr.openDocument(
+            worktreeRoot: root,
+            fileURL: fileURL,
+            languageId: "swift",
+            text: "let unsaved = 2\n"
+        )
+
+        let didOpen = transport.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
+        let didChange = transport.sent.filter { $0.contains(#""method":"textDocument/didChange""#) }
+        #expect(didOpen.count == 1)
+        #expect(didOpen.first?.contains(#""text":"let disk = 1\n""#) == true)
+        #expect(didChange.count == 1)
+        #expect(didChange.first?.contains(#""text":"let unsaved = 2\n""#) == true)
+
+        await mgr.closeTemporaryDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        #expect(!transport.sent.contains { $0.contains(#""method":"textDocument/didClose""#) })
+
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        #expect(transport.sent.contains { $0.contains(#""method":"textDocument/didClose""#) })
+        transport.finish()
     }
 }
