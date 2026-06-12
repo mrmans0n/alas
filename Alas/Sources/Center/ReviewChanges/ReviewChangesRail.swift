@@ -29,21 +29,8 @@ struct ReviewChangesRail: View {
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(session.sections) { section in
-                            sourceHeader(section)
-                            ForEach(section.tree) { node in
-                                ReviewChangesRailTreeNode(
-                                    node: node,
-                                    depth: 0,
-                                    selectedFileID: $selectedFileID,
-                                    onSelectFile: onSelectFile
-                                )
-                            }
-                            if section.id != session.sections.last?.id {
-                                Divider()
-                                    .overlay(theme.color("line"))
-                                    .padding(.vertical, 6)
-                            }
+                        ForEach(ReviewChangesRailRows.rows(for: session)) { row in
+                            expandedRow(row)
                         }
                     }
                     .padding(.horizontal, 8)
@@ -130,13 +117,29 @@ struct ReviewChangesRail: View {
         .accessibilityIdentifier("review-rail-collapse-toggle")
     }
 
-    private func sourceHeader(_ section: ReviewChangesSourceSection) -> some View {
+    @ViewBuilder
+    private func expandedRow(_ row: ReviewChangesRailRow) -> some View {
+        switch row.kind {
+        case let .sourceHeader(source):
+            sourceHeader(source: source, fileCount: row.fileCount ?? 0)
+        case let .directory(name, depth):
+            directoryRow(name: name, depth: depth)
+        case let .file(file, depth, name):
+            fileRow(file, depth: depth, name: name)
+        case .divider:
+            Divider()
+                .overlay(theme.color("line"))
+                .padding(.vertical, 6)
+        }
+    }
+
+    private func sourceHeader(source: ReviewChangesSource, fileCount: Int) -> some View {
         HStack(spacing: 6) {
-            Text(section.title.uppercased())
+            Text(source.title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
-            Text("\(section.fileCount)")
+            Text("\(fileCount)")
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundColor(theme.color("fg-faint"))
         }
@@ -145,98 +148,13 @@ struct ReviewChangesRail: View {
         .padding(.bottom, 4)
     }
 
-    private func collapsedMarker(for file: ReviewChangesFileSummary) -> some View {
-        let selected = selectedFileID == file.id
-        return Button {
-            selectedFileID = file.id
-            onSelectFile(file.id)
-        } label: {
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(selected ? theme.color("accent-soft") : theme.color("bg-3"))
-                    .frame(width: 28, height: 26)
-                Rectangle()
-                    .fill(selected ? theme.color("accent") : Color.clear)
-                    .frame(width: 3, height: 18)
-                    .clipShape(RoundedRectangle(cornerRadius: 2))
-                Text(file.status.glyph)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundColor(selected ? theme.color("fg") : statusColor(file.status))
-                    .frame(width: 28, height: 26)
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("review-rail-marker-\(file.id.rawValue)")
-        .background(
-            ZStack {
-                ReviewChangesAccessibilityMarker(
-                    identifier: "review-rail-marker-\(file.id.rawValue)",
-                    label: file.path
-                )
-                ReviewChangesAccessibilityMarker(
-                    identifier: "review-rail-marker-scroll-id-\(file.id.rawValue)",
-                    label: file.id.rawValue
-                )
-                if selected {
-                    ReviewChangesAccessibilityMarker(
-                        identifier: "review-rail-marker-selected-\(file.id.rawValue)",
-                        label: file.path
-                    )
-                }
-            }
-        )
-        .help(file.path)
-    }
-
-    private func statusColor(_ status: ReviewChangesFileStatus) -> Color {
-        switch status {
-        case .added:
-            theme.color("add")
-        case .deleted:
-            theme.color("del")
-        case .renamed, .copied:
-            theme.color("accent")
-        case .conflicted:
-            theme.color("warn")
-        case .modified, .unknown:
-            theme.color("fg-dim")
-        }
-    }
-}
-
-private struct ReviewChangesRailTreeNode: View {
-    let node: ReviewChangesFileTreeNode
-    let depth: Int
-    @Binding var selectedFileID: ReviewChangesFileID
-    let onSelectFile: (ReviewChangesFileID) -> Void
-
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let file = node.file {
-                fileRow(file, name: node.name)
-            } else {
-                directoryRow
-                ForEach(node.children ?? []) { child in
-                    ReviewChangesRailTreeNode(
-                        node: child,
-                        depth: depth + 1,
-                        selectedFileID: $selectedFileID,
-                        onSelectFile: onSelectFile
-                    )
-                }
-            }
-        }
-    }
-
-    private var directoryRow: some View {
+    private func directoryRow(name: String, depth: Int) -> some View {
         HStack(spacing: 5) {
             Image(systemName: "folder")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundColor(theme.color("fg-faint"))
                 .frame(width: 13)
-            Text(node.name)
+            Text(name)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(theme.color("fg-dim"))
                 .lineLimit(1)
@@ -247,7 +165,7 @@ private struct ReviewChangesRailTreeNode: View {
         .frame(height: 22)
     }
 
-    private func fileRow(_ file: ReviewChangesFileSummary, name: String) -> some View {
+    private func fileRow(_ file: ReviewChangesFileSummary, depth: Int, name: String) -> some View {
         let selected = selectedFileID == file.id
         return Button {
             selectedFileID = file.id
@@ -309,6 +227,49 @@ private struct ReviewChangesRailTreeNode: View {
         .help(file.path)
     }
 
+    private func collapsedMarker(for file: ReviewChangesFileSummary) -> some View {
+        let selected = selectedFileID == file.id
+        return Button {
+            selectedFileID = file.id
+            onSelectFile(file.id)
+        } label: {
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(selected ? theme.color("accent-soft") : theme.color("bg-3"))
+                    .frame(width: 28, height: 26)
+                Rectangle()
+                    .fill(selected ? theme.color("accent") : Color.clear)
+                    .frame(width: 3, height: 18)
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+                Text(file.status.glyph)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(selected ? theme.color("fg") : statusColor(file.status))
+                    .frame(width: 28, height: 26)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("review-rail-marker-\(file.id.rawValue)")
+        .background(
+            ZStack {
+                ReviewChangesAccessibilityMarker(
+                    identifier: "review-rail-marker-\(file.id.rawValue)",
+                    label: file.path
+                )
+                ReviewChangesAccessibilityMarker(
+                    identifier: "review-rail-marker-scroll-id-\(file.id.rawValue)",
+                    label: file.id.rawValue
+                )
+                if selected {
+                    ReviewChangesAccessibilityMarker(
+                        identifier: "review-rail-marker-selected-\(file.id.rawValue)",
+                        label: file.path
+                    )
+                }
+            }
+        )
+        .help(file.path)
+    }
+
     private func changeSummary(_ file: ReviewChangesFileSummary) -> some View {
         HStack(spacing: 5) {
             if file.additions > 0 {
@@ -335,6 +296,64 @@ private struct ReviewChangesRailTreeNode: View {
             theme.color("warn")
         case .modified, .unknown:
             theme.color("fg-dim")
+        }
+    }
+}
+
+struct ReviewChangesRailRow: Equatable, Identifiable {
+    enum Kind: Equatable {
+        case sourceHeader(ReviewChangesSource)
+        case directory(String, depth: Int)
+        case file(ReviewChangesFileSummary, depth: Int, name: String)
+        case divider
+    }
+
+    let id: String
+    let kind: Kind
+    var fileCount: Int? = nil
+}
+
+enum ReviewChangesRailRows {
+    static func rows(for session: ReviewChangesSessionModel) -> [ReviewChangesRailRow] {
+        session.sections.enumerated().flatMap { index, section in
+            var rows = [
+                ReviewChangesRailRow(
+                    id: "source:\(section.source.rawValue)",
+                    kind: .sourceHeader(section.source),
+                    fileCount: section.fileCount
+                ),
+            ]
+            rows.append(contentsOf: flatten(section.tree, depth: 0))
+            if index < session.sections.count - 1 {
+                rows.append(ReviewChangesRailRow(
+                    id: "divider:\(section.source.rawValue)",
+                    kind: .divider
+                ))
+            }
+            return rows
+        }
+    }
+
+    private static func flatten(
+        _ nodes: [ReviewChangesFileTreeNode],
+        depth: Int
+    ) -> [ReviewChangesRailRow] {
+        nodes.flatMap { node -> [ReviewChangesRailRow] in
+            if let file = node.file {
+                return [
+                    ReviewChangesRailRow(
+                        id: "file:\(file.id.rawValue)",
+                        kind: .file(file, depth: depth, name: node.name)
+                    ),
+                ]
+            }
+
+            return [
+                ReviewChangesRailRow(
+                    id: "directory:\(node.path):\(depth)",
+                    kind: .directory(node.name, depth: depth)
+                ),
+            ] + flatten(node.children ?? [], depth: depth + 1)
         }
     }
 }

@@ -86,6 +86,48 @@ struct ReviewChangesTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "review-rail-marker-selected-\(files[1].id.rawValue)", in: collapsedController.view) != nil)
     }
 
+    @Test func railRowsFlattenSourceTreesIntoDirectLazyItems() {
+        let files = [
+            ReviewChangesFileSummary(
+                path: "Sources/App/AlphaView.swift",
+                source: .unstaged,
+                status: .modified,
+                additions: 4,
+                deletions: 1,
+                isRenderable: true
+            ),
+            ReviewChangesFileSummary(
+                path: "Sources/App/BetaView.swift",
+                source: .unstaged,
+                status: .modified,
+                additions: 2,
+                deletions: 0,
+                isRenderable: true
+            ),
+            ReviewChangesFileSummary(
+                path: "Tests/GammaTests.swift",
+                source: .staged,
+                status: .added,
+                additions: 12,
+                deletions: 0,
+                isRenderable: true
+            ),
+        ]
+        let rows = ReviewChangesRailRows.rows(for: ReviewChangesSessionModel(files: files))
+
+        #expect(rows.map(\.kind) == [
+            .sourceHeader(.unstaged),
+            .directory("Sources/App", depth: 0),
+            .file(files[0], depth: 1, name: "AlphaView.swift"),
+            .file(files[1], depth: 1, name: "BetaView.swift"),
+            .divider,
+            .sourceHeader(.staged),
+            .directory("Tests", depth: 0),
+            .file(files[2], depth: 1, name: "GammaTests.swift"),
+        ])
+        #expect(rows.map(\.id).contains("file:\(files[2].id.rawValue)"))
+    }
+
     @Test func fileSectionEmbedsDiffPaneWithoutPerFileToolbar() {
         let file = ReviewChangesFileSectionModel(
             summary: ReviewChangesFileSummary(
