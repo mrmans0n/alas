@@ -386,7 +386,8 @@ Set the metadata:
 
 ```swift
 textView.lineMetadata = document.lines
-textView.updateLSP(context: lspContext, allowedSide: allowedLSPSide)
+textView.lspContext = lspContext
+textView.allowedLSPSide = allowedLSPSide
 ```
 
 Update all existing callers in `DiffPaneTextDocumentContainerView` to pass `lspContext: nil` temporarily; Task 4 wires real contexts.
@@ -399,19 +400,8 @@ var hoverHandler: ((NSPoint) -> Void)?
 var commandClickHandler: ((NSPoint) -> Void)?
 var flagsChangedHandler: ((NSEvent) -> Void)?
 var mouseExitedHandler: (() -> Void)?
-private var lspController: DiffPaneLSPController?
-
-func updateLSP(context: DiffPaneLSPContext?, allowedSide: DiffLineSide) {
-    if let context {
-        if lspController == nil {
-            lspController = DiffPaneLSPController(textView: self)
-        }
-        lspController?.update(context: context, allowedSide: allowedSide)
-    } else {
-        lspController?.tearDown()
-        lspController = nil
-    }
-}
+var lspContext: DiffPaneLSPContext?
+var allowedLSPSide: DiffLineSide = .new
 
 override func mouseMoved(with event: NSEvent) {
     super.mouseMoved(with: event)
@@ -476,7 +466,7 @@ func symbolAnchorRect(for range: NSRange) -> NSRect? {
 }
 ```
 
-In `DiffPaneCodeTextView.deinit`, call `lspController?.tearDown()`.
+Do not reference `DiffPaneLSPController` in this task. Task 3 creates and attaches the controller.
 
 - [ ] **Step 4: Run tests and verify GREEN**
 
