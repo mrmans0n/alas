@@ -270,6 +270,32 @@ struct CommitReviewBody: View {
     var worktreePath: URL? = nil
     var appState: AppState? = nil
 
+    init(
+        session: DiffReviewLoadedSession,
+        selectedFileID: Binding<DiffReviewFileID?>,
+        railCollapsed: Binding<Bool>,
+        layoutMode: Binding<DiffLayoutMode>,
+        wrapLines: Binding<Bool>,
+        showWhitespace: Binding<Bool>,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        worktreeId: String? = nil,
+        worktreePath: URL? = nil,
+        appState: AppState? = nil
+    ) {
+        self.session = session
+        self._selectedFileID = selectedFileID
+        self._railCollapsed = railCollapsed
+        self._layoutMode = layoutMode
+        self._wrapLines = wrapLines
+        self._showWhitespace = showWhitespace
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.worktreeId = worktreeId
+        self.worktreePath = worktreePath
+        self.appState = appState
+    }
+
     var body: some View {
         DiffReviewSurface(
             session: session,
