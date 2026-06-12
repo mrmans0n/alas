@@ -13,6 +13,43 @@ struct ReviewChangesLoadToken: Equatable {
     }
 }
 
+struct ReviewChangesLoadKey {
+    @MainActor
+    static func build(tabID: TabID, worktreePath: URL, rightPaneState: RightPaneState?) -> String {
+        [
+            tabID,
+            worktreePath.path,
+            rightPaneState.map(fingerprint) ?? "no-right-pane-state",
+        ].joined(separator: "\u{0}")
+    }
+
+    @MainActor
+    static func fingerprint(rightPaneState: RightPaneState) -> String {
+        fingerprint(changes: rightPaneState.changes, indexFingerprint: rightPaneState.indexFingerprint)
+    }
+
+    static func fingerprint(changes: [ChangedFile], indexFingerprint: String) -> String {
+        let changeTokens = changes
+            .sorted { lhs, rhs in
+                if lhs.stage != rhs.stage { return lhs.stage.rawValue < rhs.stage.rawValue }
+                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+            }
+            .map { change in
+                [
+                    change.stage.rawValue,
+                    change.path,
+                    change.status,
+                    "\(change.add)",
+                    "\(change.del)",
+                    change.renameFrom ?? "",
+                    change.conflict?.rawValue ?? "",
+                ].joined(separator: "\u{1f}")
+            }
+            .joined(separator: "\u{1e}")
+        return "\(indexFingerprint)\u{0}\(changes.count)\u{0}\(changeTokens)"
+    }
+}
+
 struct ReviewChangesTabView: View {
     let worktree: Worktree
     let tabState: ReviewChangesTabState
@@ -43,7 +80,11 @@ struct ReviewChangesTabView: View {
     }
 
     private var loadKey: String {
-        "\(tabState.id)\u{0}\(worktree.path.path)"
+        ReviewChangesLoadKey.build(
+            tabID: tabState.id,
+            worktreePath: worktree.path,
+            rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
+        )
     }
 
     @ViewBuilder

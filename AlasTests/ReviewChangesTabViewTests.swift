@@ -25,6 +25,28 @@ struct ReviewChangesTabViewTests {
         #expect(!second.isActive(activeKey: "other", activeID: activeID))
     }
 
+    @Test func loadKeyFingerprintTracksIndexAndChangeMetadata() {
+        let changes = [
+            ChangedFile(path: "b.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil),
+            ChangedFile(path: "a.swift", status: "R", stage: .staged, add: 2, del: 1, renameFrom: "old.swift"),
+        ]
+
+        let baseline = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-a")
+        let sameDifferentOrder = ReviewChangesLoadKey.fingerprint(changes: changes.reversed(), indexFingerprint: "index-a")
+        let changedIndex = ReviewChangesLoadKey.fingerprint(changes: changes, indexFingerprint: "index-b")
+        let changedMetadata = ReviewChangesLoadKey.fingerprint(
+            changes: [
+                ChangedFile(path: "b.swift", status: "M", stage: .unstaged, add: 2, del: 0, renameFrom: nil),
+                ChangedFile(path: "a.swift", status: "R", stage: .staged, add: 2, del: 1, renameFrom: "old.swift"),
+            ],
+            indexFingerprint: "index-a"
+        )
+
+        #expect(baseline == sameDifferentOrder)
+        #expect(baseline != changedIndex)
+        #expect(baseline != changedMetadata)
+    }
+
     @Test func railRendersFilesAndCollapsedStateKeepsMarkers() {
         let files = [
             ReviewChangesFileSummary(
