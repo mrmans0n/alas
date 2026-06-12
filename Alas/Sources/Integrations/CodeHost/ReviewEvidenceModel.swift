@@ -55,35 +55,23 @@ final class ReviewEvidenceModel {
         errorMessage = nil
         fileErrorMessage = nil
 
-        async let filesResult = loadFiles(remote: remote, request: request)
-        async let evidenceResult = loadEvidence(remote: remote, request: request)
-        let (files, evidence) = await (filesResult, evidenceResult)
-
-        switch files {
-        case .success(let loadedFiles):
-            fileSession = loadedFiles
-        case .failure(let error):
-            fileSession = nil
-            fileErrorMessage = error.localizedDescription
-        }
-        isLoadingFiles = false
-
-        switch evidence {
-        case .success(let loadedEvidence):
-            let (loadedCI, loadedFeedback) = loadedEvidence
-            ciItems = loadedCI
-            feedbackItems = loadedFeedback
-            chooseInitialSelection()
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-        }
-        isLoadingList = false
+        async let files: Void = loadAndPublishFiles(remote: remote, request: request)
+        async let evidence: Void = loadAndPublishEvidence(remote: remote, request: request)
+        _ = await (files, evidence)
     }
 
     func select(itemID: String, section: ReviewEvidenceSection) {
         detailRequestID += 1
         selectedSection = section
         selectedItemID = itemID
+        selectedDetail = nil
+        isLoadingDetail = false
+    }
+
+    func select(section: ReviewEvidenceSection) {
+        detailRequestID += 1
+        selectedSection = section
+        selectedItemID = nil
         selectedDetail = nil
         isLoadingDetail = false
     }
@@ -209,9 +197,45 @@ final class ReviewEvidenceModel {
         }
     }
 
-    private func loadFiles(
+    private func publishFiles(_ result: LoadResult<DiffReviewLoadedSession>) {
+        switch result {
+        case .success(let loadedFiles):
+            fileSession = loadedFiles
+        case .failure(let error):
+            fileSession = nil
+            fileErrorMessage = error.localizedDescription
+        }
+        isLoadingFiles = false
+    }
+
+    private func loadAndPublishFiles(remote: CodeHostRemote, request: ReviewRequest) async {
+        let result = await Self.loadFiles(provider: provider, remote: remote, request: request, cwd: cwd)
+        publishFiles(result)
+    }
+
+    private func publishEvidence(_ result: LoadResult<([ReviewEvidenceItem], [ReviewEvidenceItem])>) {
+        switch result {
+        case .success(let loadedEvidence):
+            let (loadedCI, loadedFeedback) = loadedEvidence
+            ciItems = loadedCI
+            feedbackItems = loadedFeedback
+            chooseInitialSelection()
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        }
+        isLoadingList = false
+    }
+
+    private func loadAndPublishEvidence(remote: CodeHostRemote, request: ReviewRequest) async {
+        let result = await Self.loadEvidence(provider: provider, remote: remote, request: request, cwd: cwd)
+        publishEvidence(result)
+    }
+
+    private nonisolated static func loadFiles(
+        provider: any CodeHostProvider,
         remote: CodeHostRemote,
-        request: ReviewRequest
+        request: ReviewRequest,
+        cwd: URL
     ) async -> LoadResult<DiffReviewLoadedSession> {
         do {
             let session = try await ReviewRequestDiffLoader(provider: provider).load(
@@ -225,9 +249,11 @@ final class ReviewEvidenceModel {
         }
     }
 
-    private func loadEvidence(
+    private nonisolated static func loadEvidence(
+        provider: any CodeHostProvider,
         remote: CodeHostRemote,
-        request: ReviewRequest
+        request: ReviewRequest,
+        cwd: URL
     ) async -> LoadResult<([ReviewEvidenceItem], [ReviewEvidenceItem])> {
         do {
             async let ci = provider.failedCheckEvidence(remote: remote, request: request, cwd: cwd)

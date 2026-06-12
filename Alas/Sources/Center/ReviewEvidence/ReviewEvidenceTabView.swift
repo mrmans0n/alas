@@ -553,6 +553,11 @@ struct ReviewEvidenceTabView: View {
 
     private func applySelectedSection(_ section: ReviewEvidenceSection, loadDetail: Bool) {
         selectedSection = section
+        if section == .files {
+            model?.select(section: section)
+            persistSelection(section: section, itemID: nil)
+            return
+        }
         guard let model, let item = model.items(for: section).first else {
             persistSelection(section: section, itemID: nil)
             return
