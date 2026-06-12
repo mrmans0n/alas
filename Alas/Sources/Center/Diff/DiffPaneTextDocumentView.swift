@@ -108,14 +108,18 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lineLabels: lineLabels(from: result.oldGutter),
                 wraps: wrapLines,
                 font: font,
-                theme: theme
+                theme: theme,
+                lspContext: nil,
+                allowedLSPSide: .old
             )
             newPane.update(
                 document: result.newCode,
                 lineLabels: lineLabels(from: result.newGutter),
                 wraps: wrapLines,
                 font: font,
-                theme: theme
+                theme: theme,
+                lspContext: nil,
+                allowedLSPSide: .new
             )
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
@@ -132,7 +136,9 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lineLabels: lineLabels(from: result.gutter),
                 wraps: wrapLines,
                 font: font,
-                theme: theme
+                theme: theme,
+                lspContext: nil,
+                allowedLSPSide: .new
             )
             measuredHeight = stackedPane.documentHeight
         }
@@ -294,7 +300,9 @@ final class DiffPaneTextScrollView: NSScrollView {
         lineLabels: [String],
         wraps: Bool,
         font: NSFont,
-        theme: Theme
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?,
+        allowedLSPSide: DiffLineSide
     ) {
         self.lineLabels = lineLabels
         self.rowKinds = document.lines.map(\.kind)
@@ -314,8 +322,11 @@ final class DiffPaneTextScrollView: NSScrollView {
 
         textView.textStorage?.setAttributedString(document.attributedString)
         textView.font = font
+        textView.lineMetadata = document.lines
         textView.lineTones = lineTones
         textView.theme = theme
+        textView.lspContext = lspContext
+        textView.allowedLSPSide = allowedLSPSide
         textView.insertionPointColor = NSColor(theme.color("fg"))
 
         if let ruler = verticalRulerView as? DiffPaneLineNumberRulerView {
@@ -525,18 +536,78 @@ final class DiffPaneCodeTextView: NSTextView {
         nil
     }
 
+    private var ownedTextStorage: NSTextStorage?
+
     var lineTones: [DiffPaneLineTone] = [] {
         didSet { needsDisplay = true }
     }
+    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
+    var hoverHandler: ((NSPoint) -> Void)?
+    var commandClickHandler: ((NSPoint) -> Void)?
+    var flagsChangedHandler: ((NSEvent) -> Void)?
+    var mouseExitedHandler: (() -> Void)?
+    var lspContext: DiffPaneLSPContext?
+    var allowedLSPSide: DiffLineSide = .new
     var theme: Theme? {
         didSet { needsDisplay = true }
     }
 
     override var isFlipped: Bool { true }
 
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        if textStorage == nil, let textContainer {
+            let storage = NSTextStorage()
+            let layoutManager = NSLayoutManager()
+            layoutManager.addTextContainer(textContainer)
+            storage.addLayoutManager(layoutManager)
+            ownedTextStorage = storage
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawLineBackgrounds(in: dirtyRect)
         super.draw(dirtyRect)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        hoverHandler?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            commandClickHandler?(convert(event.locationInWindow, from: nil))
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        flagsChangedHandler?(event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        mouseExitedHandler?()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
     }
 
     func diffRowRects() -> [NSRect] {
@@ -567,6 +638,30 @@ final class DiffPaneCodeTextView: NSTextView {
                 origin: origin
             )
         }
+    }
+
+    func characterIndex(at point: NSPoint) -> Int? {
+        guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
+        let containerPoint = NSPoint(
+            x: point.x - textContainerInset.width,
+            y: point.y - textContainerInset.height
+        )
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        return charIndex < (storage.string as NSString).length ? charIndex : nil
+    }
+
+    func symbolRange(at point: NSPoint) -> NSRange? {
+        guard let index = characterIndex(at: point) else { return nil }
+        let range = (string as NSString).rangeOfWord(at: index)
+        return range.length == 0 ? nil : range
+    }
+
+    func symbolAnchorRect(for range: NSRange) -> NSRect? {
+        guard range.length > 0, let layoutManager, let textContainer else { return nil }
+        let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {

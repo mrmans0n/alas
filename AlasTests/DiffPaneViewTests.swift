@@ -338,7 +338,9 @@ struct DiffPaneViewTests {
             lineLabels: [" 1"],
             wraps: false,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
         scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
@@ -358,7 +360,9 @@ struct DiffPaneViewTests {
             lineLabels: [" 1"],
             wraps: false,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
 
         #expect(scrollView.contentView.bounds.origin.x == 0)
@@ -390,7 +394,9 @@ struct DiffPaneViewTests {
             lineLabels: ["56"],
             wraps: false,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -420,7 +426,9 @@ struct DiffPaneViewTests {
             lineLabels: [" 1"],
             wraps: true,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -450,7 +458,9 @@ struct DiffPaneViewTests {
             lineLabels: ["+56"],
             wraps: true,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -487,7 +497,9 @@ struct DiffPaneViewTests {
             lineLabels: ["73"],
             wraps: true,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -875,6 +887,54 @@ struct DiffPaneViewTests {
 
         #expect(!first.isActive(activeKey: activeKey, activeID: activeID))
         #expect(second.isActive(activeKey: activeKey, activeID: activeID))
+    }
+
+    @Test func diffPaneCodeTextViewStoresLineMetadata() throws {
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: "let value = 1"),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .add,
+                    range: NSRange(location: 0, length: 13),
+                    tone: .add,
+                    sourceLine: DiffDisplayLine(
+                        id: "a.swift:new:0:0",
+                        anchor: DiffLineAnchor(filePath: "a.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 3),
+                        text: "let value = 1",
+                        lineNumber: 3,
+                        kind: .add,
+                        inlineSpans: [],
+                        noTrailingNewline: false
+                    )
+                )
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView()
+        let theme = try Theme.loadBundled(id: "cool-slate")
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+3"],
+            wraps: false,
+            font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        #expect(codeView.lineMetadata.count == 1)
+        #expect(codeView.lineMetadata.first?.sourceLine?.anchor.newLine == 3)
+    }
+
+    @Test func diffPaneCodeTextViewCanResolveSymbolRange() throws {
+        let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+
+        let range = (textView.string as NSString).rangeOfWord(at: 4)
+
+        #expect(range == NSRange(location: 4, length: 5))
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {
