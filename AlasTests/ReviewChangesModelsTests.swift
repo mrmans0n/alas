@@ -25,6 +25,19 @@ struct ReviewChangesModelsTests {
         #expect(summary.deletions == 10)
     }
 
+    @Test func triggerSummaryHidesLineCountsForDuplicatePaths() throws {
+        let changes = [
+            changedFile("same.swift", stage: .staged, add: 99, del: 88),
+            changedFile("same.swift", stage: .unstaged, add: 99, del: 88),
+        ]
+
+        let summary = try #require(ReviewChangesTriggerSummary.summary(for: changes))
+
+        #expect(summary.fileCount == 2)
+        #expect(summary.additions == nil)
+        #expect(summary.deletions == nil)
+    }
+
     @Test func fileIdentityIncludesSourceAndPath() {
         let unstaged = ReviewChangesFileID(source: .unstaged, path: "Sources/App.swift")
         let staged = ReviewChangesFileID(source: .staged, path: "Sources/App.swift")

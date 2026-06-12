@@ -237,17 +237,18 @@ struct ChangesTabView: View {
 
 struct ReviewChangesTriggerSummary: Equatable {
     let fileCount: Int
-    let additions: Int
-    let deletions: Int
+    let additions: Int?
+    let deletions: Int?
 
     static func summary(for changes: [ChangedFile]) -> ReviewChangesTriggerSummary? {
         let reviewableChanges = changes.filter { $0.conflict == nil }
         guard !reviewableChanges.isEmpty else { return nil }
+        let hasDuplicatePath = Set(reviewableChanges.map(\.path)).count != reviewableChanges.count
 
         return ReviewChangesTriggerSummary(
             fileCount: reviewableChanges.count,
-            additions: reviewableChanges.reduce(0) { $0 + $1.add },
-            deletions: reviewableChanges.reduce(0) { $0 + $1.del }
+            additions: hasDuplicatePath ? nil : reviewableChanges.reduce(0) { $0 + $1.add },
+            deletions: hasDuplicatePath ? nil : reviewableChanges.reduce(0) { $0 + $1.del }
         )
     }
 }
@@ -269,15 +270,17 @@ private struct ReviewChangesTriggerRow: View {
                 Text(fileLabel)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(theme.color("fg-dim"))
-                Text("·")
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-faint"))
-                Text("+\(summary.additions)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(theme.color("add"))
-                Text("−\(summary.deletions)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(theme.color("del"))
+                if let additions = summary.additions, let deletions = summary.deletions {
+                    Text("·")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-faint"))
+                    Text("+\(additions)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("add"))
+                    Text("−\(deletions)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("del"))
+                }
                 Spacer()
                 Text("Review Changes")
                     .font(.system(size: 11.5, weight: .semibold))
