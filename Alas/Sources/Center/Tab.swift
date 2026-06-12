@@ -115,7 +115,7 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
         self.number = request?.number ?? 0
         self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
         self.title = request?.title ?? ""
-        self.selectedSection = initialSection ?? .ci
+        self.selectedSection = initialSection ?? .files
         self.selectedItemID = nil
         let host = remote?.host ?? self.url.host ?? ""
         self.id = [

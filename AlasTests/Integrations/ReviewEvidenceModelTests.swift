@@ -59,6 +59,35 @@ struct ReviewEvidenceModelTests {
         #expect(model.feedbackItems.isEmpty)
     }
 
+    @Test func loadedFilesKeepBrowserAvailableWhenEvidenceFails() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(ciError: TestError(message: "checks unavailable")),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.fileSession != nil)
+        #expect(model.errorMessage == "checks unavailable")
+        #expect(!ReviewEvidenceTabView.shouldShowModelUnavailable(model))
+    }
+
+    @Test func missingReviewRequestKeepsBrowserUnavailable() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: nil),
+            provider: FakeCodeHostProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.errorMessage == "Review request not found.")
+        #expect(ReviewEvidenceTabView.shouldShowModelUnavailable(model))
+    }
+
     @Test func evidencePublishesWhileFileLoadIsSuspended() async {
         let provider = SuspendedLoadProvider(suspendDiff: true)
         let model = ReviewEvidenceModel(

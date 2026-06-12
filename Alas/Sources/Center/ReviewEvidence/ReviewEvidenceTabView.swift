@@ -141,7 +141,7 @@ struct ReviewEvidenceTabView: View {
         if let unavailableMessage {
             unavailableState(message: unavailableMessage)
         } else if let model {
-            if let message = model.errorMessage, model.ciItems.isEmpty, model.feedbackItems.isEmpty {
+            if let message = model.errorMessage, Self.shouldShowModelUnavailable(model) {
                 unavailableState(message: message)
             } else {
                 evidenceBrowser(model: model)
@@ -151,6 +151,13 @@ struct ReviewEvidenceTabView: View {
                 .frame(width: 20, height: 20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    static func shouldShowModelUnavailable(_ model: ReviewEvidenceModel) -> Bool {
+        model.errorMessage != nil
+            && model.ciItems.isEmpty
+            && model.feedbackItems.isEmpty
+            && model.fileSession == nil
     }
 
     private func evidenceBrowser(model: ReviewEvidenceModel) -> some View {

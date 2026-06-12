@@ -118,6 +118,28 @@ struct TabsManagerReviewEvidenceTests {
         #expect(!state.matches(Self.snapshot(number: 42, host: "github.example.com")))
     }
 
+    @Test func reviewEvidenceTabStateDefaultsToFilesUnlessInitialSectionIsExplicit() {
+        let defaultState = ReviewEvidenceTabState(
+            worktreeId: "review-evidence-default",
+            snapshot: Self.snapshot(),
+            initialSection: nil
+        )
+        let ciState = ReviewEvidenceTabState(
+            worktreeId: "review-evidence-ci",
+            snapshot: Self.snapshot(),
+            initialSection: .ci
+        )
+        let feedbackState = ReviewEvidenceTabState(
+            worktreeId: "review-evidence-feedback",
+            snapshot: Self.snapshot(),
+            initialSection: .feedback
+        )
+
+        #expect(defaultState.selectedSection == .files)
+        #expect(ciState.selectedSection == .ci)
+        #expect(feedbackState.selectedSection == .feedback)
+    }
+
     @Test func reviewEvidenceTabStateCodableRoundTrips() throws {
         let state = ReviewEvidenceTabState(
             worktreeId: "wt-1",
