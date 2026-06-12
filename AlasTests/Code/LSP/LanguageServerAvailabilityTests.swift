@@ -325,6 +325,40 @@ struct LanguageServerAvailabilityTests {
         #expect(realPath == helper.resolvingSymlinksInPath().path)
     }
 
+    @Test("gatekeeper helper resolves next to symlinked launcher target")
+    func helperGatekeeperResolvesNextToSymlinkedLauncherTarget() throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pathDir = dir.appendingPathComponent("path")
+        let installDir = dir.appendingPathComponent("kotlin-server")
+        let helperDir = installDir.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: pathDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: helperDir, withIntermediateDirectories: true)
+
+        let launcher = try executable(named: "kotlin-lsp.sh", in: installDir)
+        let pathCommand = pathDir.appendingPathComponent("kotlin-lsp")
+        try FileManager.default.createSymbolicLink(at: pathCommand, withDestinationURL: launcher)
+        let helper = try executable(named: "intellij-server", in: helperDir)
+
+        let entry = config(language: "kotlin", command: "kotlin-lsp", gatekeeperHelpers: ["intellij-server"])
+        let availability = LanguageServerAvailability(
+            environment: ["PATH": pathDir.path],
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { path in
+                path == helper.resolvingSymlinksInPath().path ? .rejected : .allowed
+            }
+        )
+
+        let status = availability.status(for: entry)
+
+        guard case .blockedByGatekeeper(let realPath) = status else {
+            Issue.record("Expected helper block, got \(status)")
+            return
+        }
+        #expect(realPath == helper.resolvingSymlinksInPath().path)
+    }
+
     @Test("missing gatekeeper helper does not make server unavailable")
     func missingHelperDoesNotBlockAvailability() throws {
         let dir = try temporaryDirectory()
@@ -389,7 +423,7 @@ struct LanguageServerAvailabilityTests {
             xcrunFind: { _ in nil },
             additionalPathDirectories: [],
             gatekeeperAssessor: { path in blocked.contains(path) ? .rejected : .allowed },
-            gatekeeperRemediator: { path in
+            gatekeeperRemediator: { path, _ in
                 remediated.append(path)
                 blocked.remove(path)
                 return .allowed
@@ -398,6 +432,81 @@ struct LanguageServerAvailabilityTests {
 
         #expect(await availability.statusRemediatingGatekeeper(for: entry) == .available)
         #expect(remediated == [helperPath])
+    }
+
+    @Test("auto-remediation clears helper install root when marker is configured")
+    func remediationClearsHelperInstallRoot() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let installDir = dir.appendingPathComponent("kotlin-server")
+        let helperDir = installDir.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: helperDir, withIntermediateDirectories: true)
+        #expect(FileManager.default.createFile(
+            atPath: installDir.appendingPathComponent("product-info.json").path,
+            contents: Data()
+        ))
+        _ = try executable(named: "kotlin-lsp.sh", in: installDir)
+        let helper = try executable(named: "intellij-server", in: helperDir)
+        let helperPath = helper.resolvingSymlinksInPath().path
+        var blocked = Set([helperPath])
+        var remediated: [String] = []
+
+        let entry = config(
+            language: "kotlin",
+            command: installDir.appendingPathComponent("kotlin-lsp.sh").path,
+            gatekeeperHelpers: ["intellij-server"],
+            gatekeeperRemediationRootMarkers: ["product-info.json"]
+        )
+        let availability = LanguageServerAvailability(
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { path in blocked.contains(path) ? .rejected : .allowed },
+            gatekeeperRemediator: { _, remediationTarget in
+                remediated.append(remediationTarget)
+                blocked.remove(helperPath)
+                return .allowed
+            }
+        )
+
+        #expect(await availability.statusRemediatingGatekeeper(for: entry) == .available)
+        #expect(remediated == [installDir.path])
+    }
+
+    @Test("auto-remediation clears install root when binaries were already allowed")
+    func remediationClearsInstallRootWhenBinariesAlreadyAllowed() async throws {
+        let dir = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let installDir = dir.appendingPathComponent("kotlin-server")
+        let helperDir = installDir.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: helperDir, withIntermediateDirectories: true)
+        #expect(FileManager.default.createFile(
+            atPath: installDir.appendingPathComponent("product-info.json").path,
+            contents: Data()
+        ))
+        _ = try executable(named: "kotlin-lsp.sh", in: installDir)
+        _ = try executable(named: "intellij-server", in: helperDir)
+        var blocked = Set([installDir.path])
+        var remediated: [String] = []
+
+        let entry = config(
+            language: "kotlin",
+            command: installDir.appendingPathComponent("kotlin-lsp.sh").path,
+            gatekeeperHelpers: ["intellij-server"],
+            gatekeeperRemediationRootMarkers: ["product-info.json"]
+        )
+        let availability = LanguageServerAvailability(
+            xcrunFind: { _ in nil },
+            additionalPathDirectories: [],
+            gatekeeperAssessor: { path in blocked.contains(path) ? .rejected : .allowed },
+            gatekeeperRemediator: { _, remediationTarget in
+                remediated.append(remediationTarget)
+                blocked.remove(remediationTarget)
+                return .allowed
+            }
+        )
+
+        #expect(await availability.statusRemediatingGatekeeper(for: entry) == .available)
+        #expect(remediated == [installDir.path])
     }
 
     @Test("auto-remediation failure returns blocked helper path")
@@ -414,7 +523,7 @@ struct LanguageServerAvailabilityTests {
             xcrunFind: { _ in nil },
             additionalPathDirectories: [],
             gatekeeperAssessor: { path in path == helperPath ? .rejected : .allowed },
-            gatekeeperRemediator: { _ in .failed("nope") }
+            gatekeeperRemediator: { _, _ in .failed("nope") }
         )
 
         let status = await availability.statusRemediatingGatekeeper(for: entry)
@@ -441,7 +550,7 @@ struct LanguageServerAvailabilityTests {
             xcrunFind: { _ in nil },
             additionalPathDirectories: [],
             gatekeeperAssessor: { path in blocked.contains(path) ? .rejected : .allowed },
-            gatekeeperRemediator: { path in
+            gatekeeperRemediator: { path, _ in
                 remediated.append(path)
                 blocked.remove(path)
                 return .allowed
@@ -475,6 +584,7 @@ struct LanguageServerAvailabilityTests {
         args: [String] = [],
         env: [String: String] = [:],
         gatekeeperHelpers: [String] = [],
+        gatekeeperRemediationRootMarkers: [String] = [],
         enabled: Bool = true
     ) -> LanguageServerConfig {
         LanguageServerConfig(
@@ -485,6 +595,7 @@ struct LanguageServerAvailabilityTests {
             env: env,
             rootMarkers: [],
             gatekeeperHelpers: gatekeeperHelpers,
+            gatekeeperRemediationRootMarkers: gatekeeperRemediationRootMarkers,
             enabled: enabled
         )
     }

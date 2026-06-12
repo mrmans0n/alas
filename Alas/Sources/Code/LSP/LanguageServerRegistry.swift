@@ -9,6 +9,7 @@ struct LanguageServerConfig: Codable, Equatable, Identifiable, Sendable {
     var env: [String: String]
     var rootMarkers: [String]
     var gatekeeperHelpers: [String]
+    var gatekeeperRemediationRootMarkers: [String]
     var enabled: Bool
 
     init(
@@ -19,6 +20,7 @@ struct LanguageServerConfig: Codable, Equatable, Identifiable, Sendable {
         env: [String: String],
         rootMarkers: [String],
         gatekeeperHelpers: [String] = [],
+        gatekeeperRemediationRootMarkers: [String] = [],
         enabled: Bool
     ) {
         self.language = language
@@ -28,11 +30,12 @@ struct LanguageServerConfig: Codable, Equatable, Identifiable, Sendable {
         self.env = env
         self.rootMarkers = rootMarkers
         self.gatekeeperHelpers = gatekeeperHelpers
+        self.gatekeeperRemediationRootMarkers = gatekeeperRemediationRootMarkers
         self.enabled = enabled
     }
 
     private enum CodingKeys: String, CodingKey {
-        case language, extensions, command, args, env, rootMarkers, gatekeeperHelpers, enabled
+        case language, extensions, command, args, env, rootMarkers, gatekeeperHelpers, gatekeeperRemediationRootMarkers, enabled
     }
 
     init(from decoder: Decoder) throws {
@@ -44,6 +47,10 @@ struct LanguageServerConfig: Codable, Equatable, Identifiable, Sendable {
         env = try container.decode([String: String].self, forKey: .env)
         rootMarkers = try container.decode([String].self, forKey: .rootMarkers)
         gatekeeperHelpers = try container.decodeIfPresent([String].self, forKey: .gatekeeperHelpers) ?? []
+        gatekeeperRemediationRootMarkers = try container.decodeIfPresent(
+            [String].self,
+            forKey: .gatekeeperRemediationRootMarkers
+        ) ?? []
         enabled = try container.decode(Bool.self, forKey: .enabled)
     }
 }
@@ -90,6 +97,7 @@ struct LanguageServerRegistry {
                 "pom.xml", ".git"
             ],
             gatekeeperHelpers: ["intellij-server"],
+            gatekeeperRemediationRootMarkers: ["product-info.json"],
             enabled: true
         ),
         LanguageServerConfig(

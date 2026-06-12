@@ -171,7 +171,7 @@ struct WorkspaceLSPManagerStatusTests {
                     xcrunFind: { _ in nil },
                     additionalPathDirectories: [],
                     gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
-                    gatekeeperRemediator: { path in
+                    gatekeeperRemediator: { path, _ in
                         box.remediated.append(path)
                         box.blocked = false
                         return .allowed
@@ -219,7 +219,7 @@ struct WorkspaceLSPManagerStatusTests {
                     xcrunFind: { _ in nil },
                     additionalPathDirectories: [],
                     gatekeeperAssessor: { _ in .rejected },
-                    gatekeeperRemediator: { _ in .failed("nope") }
+                    gatekeeperRemediator: { _, _ in .failed("nope") }
                 )
             }
         )
@@ -270,7 +270,7 @@ struct WorkspaceLSPManagerStatusTests {
                     xcrunFind: { _ in nil },
                     additionalPathDirectories: [],
                     gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
-                    gatekeeperRemediator: { _ in await box.waitForBothRemediationAttempts() }
+                    gatekeeperRemediator: { _, _ in await box.waitForBothRemediationAttempts() }
                 )
             }
         )
@@ -325,7 +325,7 @@ struct WorkspaceLSPManagerStatusTests {
                     xcrunFind: { _ in nil },
                     additionalPathDirectories: [],
                     gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
-                    gatekeeperRemediator: { _ in await box.remediate() }
+                    gatekeeperRemediator: { _, _ in await box.remediate() }
                 )
             }
         )
@@ -383,7 +383,7 @@ struct WorkspaceLSPManagerStatusTests {
                     xcrunFind: { _ in nil },
                     additionalPathDirectories: [],
                     gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
-                    gatekeeperRemediator: { _ in await box.remediate() }
+                    gatekeeperRemediator: { _, _ in await box.remediate() }
                 )
             }
         )
