@@ -537,6 +537,7 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     private var ownedTextStorage: NSTextStorage?
+    private var customTrackingArea: NSTrackingArea?
 
     var lineTones: [DiffPaneLineTone] = [] {
         didSet { needsDisplay = true }
@@ -599,15 +600,20 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for area in trackingAreas {
-            removeTrackingArea(area)
+        if let customTrackingArea {
+            if trackingAreas.contains(where: { $0 === customTrackingArea }) {
+                removeTrackingArea(customTrackingArea)
+            }
+            self.customTrackingArea = nil
         }
-        addTrackingArea(NSTrackingArea(
+        let trackingArea = NSTrackingArea(
             rect: bounds,
             options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
-        ))
+        )
+        customTrackingArea = trackingArea
+        addTrackingArea(trackingArea)
     }
 
     func diffRowRects() -> [NSRect] {
@@ -642,13 +648,32 @@ final class DiffPaneCodeTextView: NSTextView {
 
     func characterIndex(at point: NSPoint) -> Int? {
         guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
+        let nsString = storage.string as NSString
+        guard nsString.length > 0 else { return nil }
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textContainerOrigin
         let containerPoint = NSPoint(
-            x: point.x - textContainerInset.width,
-            y: point.y - textContainerInset.height
+            x: point.x - origin.x,
+            y: point.y - origin.y
         )
+        let glyphCount = layoutManager.numberOfGlyphs
+        guard glyphCount > 0 else { return nil }
         let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < glyphCount else { return nil }
+
+        let lineFragmentRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let lineUsedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let tolerance: CGFloat = 0.5
+        guard containerPoint.y >= lineFragmentRect.minY - tolerance,
+              containerPoint.y <= lineFragmentRect.maxY + tolerance,
+              containerPoint.x >= lineUsedRect.minX - tolerance,
+              containerPoint.x <= lineUsedRect.maxX + tolerance
+        else {
+            return nil
+        }
+
         let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
-        return charIndex < (storage.string as NSString).length ? charIndex : nil
+        return charIndex < nsString.length ? charIndex : nil
     }
 
     func symbolRange(at point: NSPoint) -> NSRange? {
@@ -658,10 +683,32 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     func symbolAnchorRect(for range: NSRange) -> NSRect? {
-        guard range.length > 0, let layoutManager, let textContainer else { return nil }
-        let glyph = layoutManager.glyphIndexForCharacter(at: range.location)
+        guard range.length > 0,
+              range.location != NSNotFound,
+              let layoutManager,
+              let textContainer,
+              let storage = textStorage
+        else {
+            return nil
+        }
+        let textLength = (storage.string as NSString).length
+        guard range.location >= 0,
+              range.location < textLength,
+              range.length <= textLength - range.location
+        else {
+            return nil
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.location != NSNotFound,
+              glyphRange.length > 0,
+              glyphRange.location < layoutManager.numberOfGlyphs
+        else {
+            return nil
+        }
+        let glyph = glyphRange.location
         let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
-        return rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
+        return rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
