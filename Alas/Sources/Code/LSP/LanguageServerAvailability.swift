@@ -14,24 +14,93 @@ struct LanguageServerAvailability {
     private let xcrunFind: (String) -> String?
     private let additionalPathDirectories: [String]
     private let gatekeeperAssessor: (String) -> GatekeeperAssessor.Result
+    private let gatekeeperRemediator: (String, String) async -> GatekeeperRemediator.Outcome
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
         xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind,
         additionalPathDirectories: [String] = LanguageServerAvailability.defaultAdditionalPathDirectories(),
-        gatekeeperAssessor: @escaping (String) -> GatekeeperAssessor.Result = { GatekeeperAssessor.shared.assess(realPath: $0) }
+        gatekeeperAssessor: @escaping (String) -> GatekeeperAssessor.Result = { GatekeeperAssessor.shared.assess(realPath: $0) },
+        gatekeeperRemediator: @escaping (String, String) async -> GatekeeperRemediator.Outcome = {
+            await GatekeeperRemediator().remediate(realPath: $0, remediationTarget: $1)
+        }
     ) {
         self.environment = environment
         self.fileManager = fileManager
         self.xcrunFind = xcrunFind
         self.additionalPathDirectories = additionalPathDirectories
         self.gatekeeperAssessor = gatekeeperAssessor
+        self.gatekeeperRemediator = gatekeeperRemediator
     }
 
     func status(for entry: LanguageServerConfig) -> Status {
         guard entry.enabled else { return .disabled }
         guard let resolved = resolvedCommand(for: entry) else { return .notInstalled }
+        var assessedRealPaths = Set<String>()
+        let primary = gatekeeperStatus(forResolvedPath: resolved)
+        assessedRealPaths.insert((resolved as NSString).resolvingSymlinksInPath)
+        guard primary == .available else { return primary }
+
+        for helper in entry.gatekeeperHelpers {
+            guard let helperPath = resolvedHelper(helper, env: entry.env, primaryCommandPath: resolved) else { continue }
+            let helperRealPath = (helperPath as NSString).resolvingSymlinksInPath
+            guard assessedRealPaths.insert(helperRealPath).inserted else { continue }
+            let helperStatus = gatekeeperStatus(forResolvedPath: helperRealPath)
+            guard helperStatus == .available else { return helperStatus }
+        }
+
+        let rootPath = remediationTarget(for: (resolved as NSString).resolvingSymlinksInPath, entry: entry)
+        if rootPath != (resolved as NSString).resolvingSymlinksInPath,
+           assessedRealPaths.insert(rootPath).inserted {
+            let rootStatus = gatekeeperStatus(forResolvedPath: rootPath)
+            guard rootStatus == .available else { return rootStatus }
+        }
+
+        return .available
+    }
+
+    func statusRemediatingGatekeeper(for entry: LanguageServerConfig) async -> Status {
+        let maxAttempts = entry.gatekeeperHelpers.count + (entry.gatekeeperRemediationRootMarkers.isEmpty ? 1 : 2)
+
+        for _ in 0..<maxAttempts {
+            let current = status(for: entry)
+            guard case .blockedByGatekeeper(let realPath) = current else {
+                return current
+            }
+            let remediationTarget = remediationTarget(for: realPath, entry: entry)
+
+            switch await gatekeeperRemediator(realPath, remediationTarget) {
+            case .allowed:
+                continue
+            case .stillBlocked, .failed:
+                return .blockedByGatekeeper(realPath: realPath)
+            }
+        }
+
+        return status(for: entry)
+    }
+
+    private func remediationTarget(for realPath: String, entry: LanguageServerConfig) -> String {
+        guard !entry.gatekeeperRemediationRootMarkers.isEmpty else { return realPath }
+        var current = URL(fileURLWithPath: realPath)
+        if !isDirectory(current) {
+            current.deleteLastPathComponent()
+        }
+
+        while current.path != "/" {
+            for marker in entry.gatekeeperRemediationRootMarkers {
+                let markerPath = current.appendingPathComponent(marker).path
+                if fileManager.fileExists(atPath: markerPath) {
+                    return current.path
+                }
+            }
+            current.deleteLastPathComponent()
+        }
+        return realPath
+    }
+
+    private func gatekeeperStatus(forResolvedPath resolved: String) -> Status {
         let realPath = (resolved as NSString).resolvingSymlinksInPath
         switch gatekeeperAssessor(realPath) {
         case .rejected:
@@ -77,6 +146,22 @@ struct LanguageServerAvailability {
         return merged
     }
 
+    private func resolvedHelper(_ helper: String, env: [String: String], primaryCommandPath: String) -> String? {
+        if helper.contains("/") {
+            return fileManager.isExecutableFile(atPath: helper) ? helper : nil
+        }
+        let primaryDirectory = URL(fileURLWithPath: primaryCommandPath)
+            .resolvingSymlinksInPath()
+            .deletingLastPathComponent()
+        for candidate in [
+            primaryDirectory.appendingPathComponent(helper).path,
+            primaryDirectory.appendingPathComponent("bin").appendingPathComponent(helper).path
+        ] where fileManager.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        return executableNamed(helper, env: env)
+    }
+
     private func executableNamed(_ name: String, env: [String: String] = [:]) -> String? {
         for dir in effectivePath(env: env).split(separator: ":", omittingEmptySubsequences: true) {
             let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent(name).path
@@ -85,6 +170,11 @@ struct LanguageServerAvailability {
             }
         }
         return nil
+    }
+
+    private func isDirectory(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        return fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
 
     private func effectivePath(env: [String: String]) -> String {

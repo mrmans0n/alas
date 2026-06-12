@@ -144,4 +144,269 @@ struct WorkspaceLSPManagerStatusTests {
         _ = mgr.availabilityStatus(forLanguage: "swift")
         #expect(box.calls == 1)
     }
+
+    @Test func openDocumentRemediatesGatekeeperBlockBeforeSpawning() async {
+        final class Box {
+            let path = "/usr/bin/true"
+            var blocked = true
+            var remediated: [String] = []
+        }
+        let box = Box()
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: box.path,
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let mgr = WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
+                    gatekeeperRemediator: { path, _ in
+                        box.remediated.append(path)
+                        box.blocked = false
+                        return .allowed
+                    }
+                )
+            }
+        )
+
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+
+        #expect(box.remediated == [box.path])
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) != .none)
+    }
+
+    @Test func openDocumentPostsBlockedNotificationWhenRemediationFails() async {
+        final class Box {
+            let path = "/usr/bin/true"
+            var notificationRealPath: String?
+        }
+        let box = Box()
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: box.path,
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let token = NotificationCenter.default.addObserver(
+            forName: .lspBlockedByGatekeeper,
+            object: nil,
+            queue: nil
+        ) { note in
+            box.notificationRealPath = note.userInfo?["realPath"] as? String
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        let mgr = WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in .rejected },
+                    gatekeeperRemediator: { _, _ in .failed("nope") }
+                )
+            }
+        )
+
+        _ = await mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+
+        #expect(box.notificationRealPath == box.path)
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+    }
+
+    @Test func concurrentOpenDocumentsJoinHolderInsertedAfterRemediation() async {
+        final class Box {
+            let path = "/usr/bin/true"
+            var blocked = true
+            var continuations: [CheckedContinuation<GatekeeperRemediator.Outcome, Never>] = []
+
+            func waitForBothRemediationAttempts() async -> GatekeeperRemediator.Outcome {
+                await withCheckedContinuation { continuation in
+                    continuations.append(continuation)
+                    guard continuations.count == 2 else { return }
+                    blocked = false
+                    let parked = continuations
+                    continuations.removeAll()
+                    for continuation in parked {
+                        continuation.resume(returning: .allowed)
+                    }
+                }
+            }
+        }
+        let box = Box()
+        let otherFileURL = root.appendingPathComponent("other.swift")
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: box.path,
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let mgr = WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
+                    gatekeeperRemediator: { _, _ in await box.waitForBothRemediationAttempts() }
+                )
+            }
+        )
+
+        async let first: LSPClient? = mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        async let second: LSPClient? = mgr.openDocument(worktreeRoot: root, fileURL: otherFileURL, languageId: "swift", text: "")
+        _ = await (first, second)
+
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) != .none)
+        #expect(mgr.documentStatus(forFile: otherFileURL, worktreeRoot: root) != .none)
+    }
+
+    @Test func closeDuringRemediationCancelsPendingOpen() async {
+        final class Box {
+            let path = "/usr/bin/true"
+            var blocked = true
+            var remediation: CheckedContinuation<GatekeeperRemediator.Outcome, Never>?
+            var parked: CheckedContinuation<Void, Never>?
+
+            func remediate() async -> GatekeeperRemediator.Outcome {
+                await withCheckedContinuation { continuation in
+                    remediation = continuation
+                    parked?.resume()
+                    parked = nil
+                }
+            }
+
+            func waitUntilRemediationIsParked() async {
+                if remediation != nil { return }
+                await withCheckedContinuation { continuation in
+                    parked = continuation
+                }
+            }
+        }
+        let box = Box()
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: box.path,
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let mgr = WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
+                    gatekeeperRemediator: { _, _ in await box.remediate() }
+                )
+            }
+        )
+
+        async let opened: LSPClient? = mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        await box.waitUntilRemediationIsParked()
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        box.blocked = false
+        box.remediation?.resume(returning: .allowed)
+        box.remediation = nil
+        _ = await opened
+
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+    }
+
+    @Test func closeDuringRemediationCancelsPendingOpenAfterRegistryChange() async {
+        final class Box {
+            let path = "/usr/bin/true"
+            var blocked = true
+            var remediation: CheckedContinuation<GatekeeperRemediator.Outcome, Never>?
+            var parked: CheckedContinuation<Void, Never>?
+
+            func remediate() async -> GatekeeperRemediator.Outcome {
+                await withCheckedContinuation { continuation in
+                    remediation = continuation
+                    parked?.resume()
+                    parked = nil
+                }
+            }
+
+            func waitUntilRemediationIsParked() async {
+                if remediation != nil { return }
+                await withCheckedContinuation { continuation in
+                    parked = continuation
+                }
+            }
+        }
+        let box = Box()
+        let initialRegistry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: box.path,
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let mgr = WorkspaceLSPManager(
+            registry: initialRegistry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
+                    gatekeeperRemediator: { _, _ in await box.remediate() }
+                )
+            }
+        )
+
+        async let opened: LSPClient? = mgr.openDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift", text: "")
+        await box.waitUntilRemediationIsParked()
+        mgr.updateRegistry(LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: "/usr/bin/false",
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ]))
+        await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
+        box.blocked = false
+        box.remediation?.resume(returning: .allowed)
+        box.remediation = nil
+        _ = await opened
+
+        #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+    }
 }

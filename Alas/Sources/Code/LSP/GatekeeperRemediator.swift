@@ -16,7 +16,7 @@ final class GatekeeperRemediator {
         case failed(String)
     }
 
-    typealias QuarantineRemover = (_ realPath: String) async -> Bool
+    typealias QuarantineRemover = (_ path: String) async -> Bool
     typealias Reassess = (_ realPath: String) -> GatekeeperAssessor.Result
     typealias InvalidateCache = (_ realPath: String) -> Void
 
@@ -34,8 +34,9 @@ final class GatekeeperRemediator {
         self.invalidate = invalidate
     }
 
-    func remediate(realPath: String) async -> Outcome {
-        let removed = await removeQuarantine(realPath)
+    func remediate(realPath: String, remediationTarget: String? = nil) async -> Outcome {
+        let target = remediationTarget ?? realPath
+        let removed = await removeQuarantine(target)
         invalidate(realPath)
         switch reassess(realPath) {
         case .allowed:
@@ -50,14 +51,33 @@ final class GatekeeperRemediator {
     nonisolated static func defaultRemoveQuarantine(realPath: String) async -> Bool {
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
-                let size = realPath.withCString { cpath in
-                    removexattr(cpath, "com.apple.quarantine", 0)
-                }
-                // 0 → removed. -1 with ENOATTR → wasn't there; treat as
-                // success since the post-state matches the goal.
-                let ok = size == 0 || (size == -1 && errno == ENOATTR)
-                continuation.resume(returning: ok)
+                continuation.resume(returning: removeQuarantineRecursively(at: realPath))
             }
         }
+    }
+
+    nonisolated private static func removeQuarantineRecursively(at path: String) -> Bool {
+        var ok = removeQuarantineAttribute(at: path)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue,
+              let enumerator = FileManager.default.enumerator(atPath: path) else {
+            return ok
+        }
+
+        for case let relativePath as String in enumerator {
+            let childPath = URL(fileURLWithPath: path).appendingPathComponent(relativePath).path
+            ok = removeQuarantineAttribute(at: childPath) && ok
+        }
+        return ok
+    }
+
+    nonisolated private static func removeQuarantineAttribute(at path: String) -> Bool {
+        let result = path.withCString { cpath in
+            removexattr(cpath, "com.apple.quarantine", 0)
+        }
+        // 0 → removed. -1 with ENOATTR → wasn't there; treat as
+        // success since the post-state matches the goal.
+        return result == 0 || (result == -1 && errno == ENOATTR)
     }
 }

@@ -87,6 +87,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     }
 
     private var holders: [Key: Holder] = [:]
+    private var pendingOpenRefs: [Key: [String: Int]] = [:]
 
     /// Bumping counter that lets `@Observable` consumers (the status badge)
     /// re-run derivations when a holder transitions starting → ready → dead.
@@ -185,18 +186,19 @@ final class WorkspaceLSPManager: DocumentFormatter {
             // this value rather than the stale `text` captured on a prior
             // call. (Codex case: tab closed and reopened with different
             // content while the server was still initializing.)
-            var pending = existing.pendingOpenText
-            if !existing.openedURIs.contains(uri) { pending[uri] = text }
-            holders[key] = Holder(client: existing.client, ready: existing.ready, refsByURI: refs, openedURIs: existing.openedURIs, versions: existing.versions, pendingOpenText: pending, texts: existing.texts, languagesByURI: existing.languagesByURI, lifeState: existing.lifeState)
+            holders[key] = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs)
             client = existing.client
             ready = existing.ready
             isFirstOpener = false
         } else {
+            addPendingOpenRef(key: key, uri: uri)
             let availability = makeAvailability()
-            switch availability.status(for: entry) {
+            switch await availability.statusRemediatingGatekeeper(for: entry) {
             case .disabled, .notInstalled:
+                _ = consumePendingOpenRef(key: key, uri: uri)
                 return nil
             case .blockedByGatekeeper(let realPath):
+                _ = consumePendingOpenRef(key: key, uri: uri)
                 NotificationCenter.default.post(
                     name: .lspBlockedByGatekeeper,
                     object: nil,
@@ -206,24 +208,34 @@ final class WorkspaceLSPManager: DocumentFormatter {
             case .available:
                 break
             }
-            let spawn = Self.resolveSpawn(
-                command: entry.command,
-                args: entry.args,
-                env: entry.env,
-                language: entry.language,
-                availability: availability
-            )
-            let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: spawn.environment)
-            let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
-            let task = Task<Bool, Never> {
-                do { try await newClient.initialize()
-                return true } catch { return false }
+            guard consumePendingOpenRef(key: key, uri: uri) else { return nil }
+            if let existing = holders[key] {
+                var refs = existing.refsByURI
+                refs[uri, default: 0] += 1
+                holders[key] = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs)
+                client = existing.client
+                ready = existing.ready
+                isFirstOpener = false
+            } else {
+                let spawn = Self.resolveSpawn(
+                    command: entry.command,
+                    args: entry.args,
+                    env: entry.env,
+                    language: entry.language,
+                    availability: availability
+                )
+                let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: spawn.environment)
+                let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
+                let task = Task<Bool, Never> {
+                    do { try await newClient.initialize()
+                    return true } catch { return false }
+                }
+                holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], languagesByURI: [:], lifeState: .starting)
+                bumpStateTick()
+                client = newClient
+                ready = task
+                isFirstOpener = true
             }
-            holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], languagesByURI: [:], lifeState: .starting)
-            bumpStateTick()
-            client = newClient
-            ready = task
-            isFirstOpener = true
         }
 
         let initOk = await ready.value
@@ -322,7 +334,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         // See `didChange` — find the holder by URI so registry edits made
         // after the open don't strand the original server.
-        guard let key = holderKey(forURI: uri), var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else { return }
+        guard let key = holderKey(forURI: uri), var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else {
+            _ = consumePendingOpenRef(forURI: uri, withinWorktreeRoot: worktreeRoot)
+            return
+        }
         var refs = holder.refsByURI
         let newRef = (refs[uri] ?? 0) - 1
         if newRef <= 0 {
@@ -585,6 +600,54 @@ final class WorkspaceLSPManager: DocumentFormatter {
             return key
         }
         return nil
+    }
+
+    private func addPendingOpenRef(key: Key, uri: String) {
+        var refs = pendingOpenRefs[key] ?? [:]
+        refs[uri, default: 0] += 1
+        pendingOpenRefs[key] = refs
+    }
+
+    private func consumePendingOpenRef(key: Key, uri: String) -> Bool {
+        guard var refs = pendingOpenRefs[key], let count = refs[uri], count > 0 else { return false }
+        if count == 1 {
+            refs.removeValue(forKey: uri)
+        } else {
+            refs[uri] = count - 1
+        }
+        if refs.isEmpty {
+            pendingOpenRefs.removeValue(forKey: key)
+        } else {
+            pendingOpenRefs[key] = refs
+        }
+        return true
+    }
+
+    private func consumePendingOpenRef(forURI uri: String, withinWorktreeRoot worktreeRoot: URL) -> Bool {
+        let rootPath = worktreeRoot.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        for key in pendingOpenRefs.keys where pendingOpenRefs[key]?[uri] != nil {
+            if key.root == rootPath || key.root.hasPrefix(rootPrefix) {
+                return consumePendingOpenRef(key: key, uri: uri)
+            }
+        }
+        return false
+    }
+
+    private func holderByUpdatingRefs(_ holder: Holder, uri: String, text: String, refs: [String: Int]) -> Holder {
+        var pending = holder.pendingOpenText
+        if !holder.openedURIs.contains(uri) { pending[uri] = text }
+        return Holder(
+            client: holder.client,
+            ready: holder.ready,
+            refsByURI: refs,
+            openedURIs: holder.openedURIs,
+            versions: holder.versions,
+            pendingOpenText: pending,
+            texts: holder.texts,
+            languagesByURI: holder.languagesByURI,
+            lifeState: holder.lifeState
+        )
     }
 
     /// Worktree-scoped variant: returns a holder for `uri` only if its
