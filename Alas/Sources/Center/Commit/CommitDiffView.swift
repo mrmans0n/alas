@@ -6,10 +6,14 @@ struct CommitDiffView: View {
     let file: CommitChangedFile
     let path: String
     let diff: ParsedDiff
+    let displayModel: DiffDisplayModel?
     let loading: Bool
     let error: String?
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
+    @Binding var layoutMode: DiffLayoutMode
+    @Binding var wrapLines: Bool
+    @Binding var showWhitespace: Bool
     let onOpenFile: (() -> Void)?
     let onDropHunk: ((ParsedDiff.Hunk) -> Void)?
     let dropHunkEnabled: (CommitChangedFile, ParsedDiff.Hunk) -> Bool
@@ -27,10 +31,14 @@ struct CommitDiffView: View {
         file: CommitChangedFile,
         path: String,
         diff: ParsedDiff,
+        displayModel: DiffDisplayModel?,
         loading: Bool,
         error: String?,
         codeFontFamily: String = "",
         codeFontSize: CGFloat = 13,
+        layoutMode: Binding<DiffLayoutMode>,
+        wrapLines: Binding<Bool>,
+        showWhitespace: Binding<Bool>,
         onOpenFile: (() -> Void)?,
         onDropHunk: ((ParsedDiff.Hunk) -> Void)? = nil,
         dropHunkEnabled: @escaping (CommitChangedFile, ParsedDiff.Hunk) -> Bool = { _, _ in false }
@@ -40,10 +48,14 @@ struct CommitDiffView: View {
         self.file = file
         self.path = path
         self.diff = diff
+        self.displayModel = displayModel
         self.loading = loading
         self.error = error
         self.codeFontFamily = codeFontFamily
         self.codeFontSize = codeFontSize
+        self._layoutMode = layoutMode
+        self._wrapLines = wrapLines
+        self._showWhitespace = showWhitespace
         self.onOpenFile = onOpenFile
         self.onDropHunk = onDropHunk
         self.dropHunkEnabled = dropHunkEnabled
@@ -150,22 +162,27 @@ struct CommitDiffView: View {
             Text("No changes for \(path)")
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
-        } else {
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(diff.hunks.enumerated()), id: \.offset) { (_, hunk) in
-                        HunkView(
-                            hunk: hunk,
-                            fileExtension: LanguageRegistry.highlighterExtension(forPath: path),
-                            codeFontFamily: codeFontFamily,
-                            codeFontSize: codeFontSize,
-                            onDropFromCommit: dropHunkEnabled(file, hunk) ? { onDropHunk?(hunk) } : nil
-                        )
-                    }
+        } else if let displayModel {
+            DiffPaneView(
+                model: displayModel,
+                fileExtension: LanguageRegistry.highlighterExtension(forPath: path),
+                layoutMode: $layoutMode,
+                wrapLines: $wrapLines,
+                showWhitespace: $showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsToolbar: false,
+                verticalScrollMode: .internalScroll,
+                hunkActions: { hunk in
+                    DiffPaneHunkActions(
+                        dropFromCommit: dropHunkEnabled(file, hunk) ? { onDropHunk?(hunk) } : nil
+                    )
                 }
-                .padding(.vertical, 8)
-            }
-            .defaultScrollAnchor(.topLeading)
+            )
+        } else {
+            Spinner()
+                .frame(width: 16, height: 16)
+                .padding()
         }
     }
 

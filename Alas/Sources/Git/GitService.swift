@@ -127,7 +127,7 @@ extension GitService {
         return entries
     }
 
-    func diff(worktreePath: URL, file: String, staged: Bool = false) async throws -> ParsedDiff {
+    func diff(worktreePath: URL, file: String, staged: Bool = false, originalPath: String? = nil) async throws -> ParsedDiff {
         // Untracked files have no HEAD entry, so `git diff HEAD -- <path>`
         // returns nothing. Detect via `git ls-files --error-unmatch` (exit 0
         // iff tracked) and fall back to comparing against /dev/null so the
@@ -159,15 +159,21 @@ extension GitService {
         //     vs empty tree) so initial-commit workflows still render the
         //     staged side.
         let head = try await hasHead(worktreePath: worktreePath)
-        var args = ["diff", "--no-color"]
+        var args = ["diff", "--no-color", "-M", "-C"]
         if staged {
             args.append("--cached")
             if head { args.append("HEAD") }
         }
         args.append("--")
         args.append(file)
+        if let originalPath, !originalPath.isEmpty {
+            args.append(originalPath)
+        }
         let result = try await Process.git(args, cwd: worktreePath)
-        return await Self.parseOffMain(result.stdout)
+        let stdout = originalPath?.isEmpty == false
+            ? Self.sliceDiffForFile(result.stdout, file: file)
+            : result.stdout
+        return await Self.parseOffMain(stdout)
     }
 
     /// Parses diff stdout on a detached executor so callers awaited from the

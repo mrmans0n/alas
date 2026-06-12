@@ -86,6 +86,82 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
+    @Test func defaultModeShowsDiffToolbar() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) != nil)
+    }
+
+    @Test func embeddedModeHidesDiffToolbar() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
+    }
+
+    @Test func embeddedStaticModeDoesNotCreateOuterVerticalScrollView() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let outerScrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? NSScrollView }
+            .filter { !($0 is DiffPaneTextScrollView) }
+        #expect(outerScrollViews.isEmpty)
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+    }
+
     @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -206,6 +282,74 @@ struct DiffPaneViewTests {
         }
     }
 
+    @Test func diffTextScrollPaneResetsHorizontalOriginWhenLaidOutForInitialDisplay() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = \"This line is intentionally long enough to make the inner pane horizontally scrollable.\""
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [.init(kind: .context, range: NSRange(location: 0, length: (text as NSString).length))]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 180, height: 80))
+
+        scrollView.update(
+            document: document,
+            lineLabels: [" 1"],
+            wraps: false,
+            font: font,
+            theme: theme
+        )
+        scrollView.layoutSubtreeIfNeeded()
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+
+        scrollView.resetHorizontalOriginToLeading()
+
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+
+        scrollView.update(
+            document: document,
+            lineLabels: [" 1"],
+            wraps: false,
+            font: font,
+            theme: theme
+        )
+
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+
+        scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+        #expect(scrollView.contentView.bounds.origin.x > 0)
+
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
+    @Test func diffPreferenceBindingsPersistChanges() {
+        let appState = AppState()
+        appState.config.changes.diffLayoutMode = .split
+        appState.config.changes.diffWrapLines = false
+        appState.config.changes.diffShowWhitespace = false
+
+        let bindings = DiffPreferenceBindings(appState: appState)
+        bindings.layoutMode.wrappedValue = .stacked
+        bindings.wrapLines.wrappedValue = true
+        bindings.showWhitespace.wrappedValue = true
+
+        #expect(appState.config.changes.diffLayoutMode == .stacked)
+        #expect(appState.config.changes.diffWrapLines == true)
+        #expect(appState.config.changes.diffShowWhitespace == true)
+    }
+
     @Test func collapsedContextControllerTogglesHiddenRows() throws {
         let group = try #require(collapsedContextModel().groups.first)
         let collapsedIDs = DiffCollapsedContextController.collapsedRowIDs(in: group)
@@ -302,7 +446,7 @@ struct DiffPaneViewTests {
         let model = DiffDisplayModelBuilder.build(
             diff: ParsedDiff(hunks: [
                 ParsedDiff.Hunk(
-                    header: "@@ -1,1 +1,2 @@",
+                    header: "@@ -1,1 +1,4 @@",
                     oldStart: 1,
                     newStart: 1,
                     lines: [
@@ -312,7 +456,9 @@ struct DiffPaneViewTests {
                             oldNumber: nil,
                             newNumber: 1
                         ),
-                        .init(kind: .context, text: "let c = 3", oldNumber: 1, newNumber: 2),
+                        .init(kind: .add, text: "let second = true", oldNumber: nil, newNumber: 2),
+                        .init(kind: .add, text: "let third = true", oldNumber: nil, newNumber: 3),
+                        .init(kind: .context, text: "let c = 3", oldNumber: 1, newNumber: 4),
                     ]
                 )
             ]),
@@ -349,11 +495,17 @@ struct DiffPaneViewTests {
         let newRows = newCodeView.diffRowRects()
 
         #expect(oldRows.count == newRows.count)
-        #expect(oldRows.count >= 2)
+        #expect(oldRows.count >= 4)
         #expect(abs(oldRows[0].minY - oldCodeView.textContainerInset.height) < 0.5)
         #expect(abs(newRows[0].minY - newCodeView.textContainerInset.height) < 0.5)
-        #expect(abs(oldRows[0].height - newRows[0].height) < 0.5)
-        #expect(abs(oldRows[1].minY - newRows[1].minY) < 0.5)
+        for index in oldRows.indices {
+            #expect(abs(oldRows[index].minY - newRows[index].minY) < 0.5)
+            #expect(abs(oldRows[index].height - newRows[index].height) < 0.5)
+            if index > 0 {
+                #expect(oldRows[index].minY >= oldRows[index - 1].maxY - 0.5)
+                #expect(newRows[index].minY >= newRows[index - 1].maxY - 0.5)
+            }
+        }
     }
 
     @Test func diffLineToneClassifiesRailsAndEmptyCounterparts() {
@@ -555,6 +707,13 @@ struct DiffPaneViewTests {
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+        if view.accessibilityIdentifier() == identifier {
+            return view
+        }
+        return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
     }
 
     private func isEffectivelyVisible(_ view: NSView) -> Bool {

@@ -12,10 +12,13 @@ struct DraftCommitTabView: View {
     @State private var selectedPath: String?
     @State private var stagedFiles: [CommitChangedFile] = []
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
+    @State private var displayModel: DiffDisplayModel?
+    @State private var displayModelKey: String?
     @State private var busy = false
     @State private var error: String?
     @State private var loadingFiles = false
     @State private var loadingDiff = false
+    @State private var activeDiffKey: String?
     @State private var amendPrefilled: Bool = false
     @State private var amendPrefilledSubject: String = ""
     @State private var amendPrefilledBody: String = ""
@@ -27,6 +30,9 @@ struct DraftCommitTabView: View {
     private let git = GitService()
 
     private static let minPaneWidth: CGFloat = 140
+    private var diffPreferences: DiffPreferenceBindings {
+        DiffPreferenceBindings(appState: appState)
+    }
 
     private var trimmedSubject: String {
         subject.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -140,16 +146,21 @@ struct DraftCommitTabView: View {
                 })
                 if hasStaged, let path = selectedPath,
                    let file = stagedFiles.first(where: { $0.path == path }) {
+                    let selectedDisplayModel = displayModelKey == diffKey ? displayModel : nil
                     CommitDiffView(
                         worktreePath: worktreePath,
                         sha: "INDEX",
                         file: file,
                         path: path,
                         diff: diff,
+                        displayModel: selectedDisplayModel,
                         loading: loadingDiff,
                         error: nil,
                         codeFontFamily: appState.config.code.fontFamily,
                         codeFontSize: CGFloat(appState.config.code.fontSize),
+                        layoutMode: diffPreferences.layoutMode,
+                        wrapLines: diffPreferences.wrapLines,
+                        showWhitespace: diffPreferences.showWhitespace,
                         onOpenFile: nil,
                         onDropHunk: { hunk in unstageHunk(path: path, hunk: hunk) },
                         dropHunkEnabled: { file, hunk in !busy && file.status == "M" && !hunk.lines.isEmpty }
@@ -309,17 +320,38 @@ struct DraftCommitTabView: View {
 
     private func loadDiff() async {
         guard let path = selectedPath,
-              stagedFiles.first(where: { $0.path == path }) != nil else {
+              let stagedFile = stagedFiles.first(where: { $0.path == path }) else {
             diff = ParsedDiff(hunks: [])
+            displayModel = nil
+            displayModelKey = nil
+            activeDiffKey = nil
             return
         }
+        let requestedKey = "\(stagedKey):\(path)"
+        activeDiffKey = requestedKey
         loadingDiff = true
-        defer { loadingDiff = false }
+        displayModel = nil
+        displayModelKey = nil
+        defer {
+            if activeDiffKey == requestedKey { loadingDiff = false }
+        }
         do {
-            let loaded = try await git.diff(worktreePath: worktreePath, file: path, staged: true)
-            guard !Task.isCancelled else { return }
+            let loaded = try await git.diff(
+                worktreePath: worktreePath,
+                file: path,
+                staged: true,
+                originalPath: stagedFile.originalPath
+            )
+            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
+            let loadedModel = await Task.detached(priority: .userInitiated) {
+                DiffDisplayModelBuilder.build(diff: loaded, filePath: path)
+            }.value
+            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             diff = loaded
+            displayModel = loadedModel
+            displayModelKey = requestedKey
         } catch {
+            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             self.error = (error as NSError).localizedDescription
         }
     }

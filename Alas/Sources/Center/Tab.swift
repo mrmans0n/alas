@@ -11,6 +11,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case draftCommit(DraftCommitTabState)
     case draftReviewRequest(DraftReviewRequestTabState)
     case reviewEvidence(ReviewEvidenceTabState)
+    case reviewChanges(ReviewChangesTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
@@ -25,6 +26,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftCommit(let s):  return s.id
         case .draftReviewRequest(let s): return s.id
         case .reviewEvidence(let s): return s.id
+        case .reviewChanges(let s): return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
@@ -41,6 +43,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftCommit:         return "Draft commit"
         case .draftReviewRequest(let s): return s.displayTitle
         case .reviewEvidence(let s): return s.displayTitle
+        case .reviewChanges:       return "Review Changes"
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
@@ -57,6 +60,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftCommit:  return "commit"
         case .draftReviewRequest: return "pull-request"
         case .reviewEvidence: return "doc.text.magnifyingglass"
+        case .reviewChanges: return "diff"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
@@ -70,6 +74,16 @@ enum Tab: Codable, Equatable, Identifiable {
         case .mergeConflict(let s): return s.relativePath
         default:                   return nil
         }
+    }
+}
+
+struct ReviewChangesTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+
+    init(worktreeId: String) {
+        self.id = "review-changes:\(worktreeId)"
+        self.worktreeId = worktreeId
     }
 }
 

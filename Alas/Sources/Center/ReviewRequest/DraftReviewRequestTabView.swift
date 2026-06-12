@@ -17,6 +17,9 @@ struct DraftReviewRequestTabView: View {
     @State private var warning: String?
     @State private var loadingContext = false
     @State private var loadedContextKey: String?
+    @State private var selectedDisplayPreview: DraftReviewRequestDiffDisplayPreview?
+    @State private var selectedDisplayPreviewLoadingKey: DraftReviewRequestDiffDisplayPreview.Key?
+    @State private var selectedDisplayPreviewTask: Task<Void, Never>?
     @State private var generation: Task<Void, Never>? = nil
 
     @Environment(\.theme) private var theme
@@ -63,6 +66,10 @@ struct DraftReviewRequestTabView: View {
         return "\(head):\(base)"
     }
 
+    private var diffPreferences: DiffPreferenceBindings {
+        DiffPreferenceBindings(appState: appState)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             reviewRequestEditor
@@ -72,10 +79,14 @@ struct DraftReviewRequestTabView: View {
         .onChange(of: title) { _, new in persist(title: new) }
         .onChange(of: bodyText) { _, new in persist(body: new) }
         .onChange(of: createAsDraft) { _, new in persist(createAsDraft: new) }
-        .onChange(of: selectedPath) { _, new in persist(selectedPath: new) }
+        .onChange(of: selectedPath) { _, new in
+            persist(selectedPath: new)
+            refreshSelectedDisplayPreview()
+        }
         .task(id: contextKey) { await loadContext() }
         .onDisappear {
             generation?.cancel()
+            selectedDisplayPreviewTask?.cancel()
         }
     }
 
@@ -365,16 +376,27 @@ struct DraftReviewRequestTabView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     let preview = selectedDiffPreview(in: context)
                     if let selectedPath,
-                       let file = context.changedFiles.first(where: { $0.path == selectedPath }) {
-                        DraftReviewRequestDiffPreviewView(
-                            preview: DraftReviewRequestDiffPreview(
-                                path: selectedPath,
-                                file: file,
-                                rawDiff: preview.diff
-                            ),
-                            codeFontFamily: appState.config.code.fontFamily,
-                            codeFontSize: CGFloat(appState.config.code.fontSize)
-                        )
+                       let file = context.changedFiles.first(where: { $0.path == selectedPath }),
+                       let rawDiff = context.fileDiffsByPath[selectedPath] {
+                        if let displayPreview = selectedDisplayPreview,
+                           displayPreview.key == DraftReviewRequestDiffDisplayPreview.Key(
+                               path: selectedPath,
+                               file: file,
+                               rawDiff: rawDiff
+                           ) {
+                            DraftReviewRequestDiffPreviewView(
+                                preview: displayPreview,
+                                codeFontFamily: appState.config.code.fontFamily,
+                                codeFontSize: CGFloat(appState.config.code.fontSize),
+                                layoutMode: diffPreferences.layoutMode,
+                                wrapLines: diffPreferences.wrapLines,
+                                showWhitespace: diffPreferences.showWhitespace
+                            )
+                        } else {
+                            Spinner()
+                                .frame(width: 16, height: 16)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     } else {
                         Text("Branch diff")
                             .font(.system(size: 12, weight: .semibold))
@@ -454,6 +476,7 @@ struct DraftReviewRequestTabView: View {
         loadingContext = true
         context = nil
         loadedContextKey = nil
+        clearSelectedDisplayPreview()
         warning = nil
         error = nil
         defer {
@@ -477,9 +500,11 @@ struct DraftReviewRequestTabView: View {
                 ? "Uncommitted changes are present but excluded from this \(tabState.provider.reviewRequestLabel)."
                 : nil
             if let selectedPath, loaded.changedFiles.contains(where: { $0.path == selectedPath }) {
+                refreshSelectedDisplayPreview()
                 return
             }
             selectedPath = loaded.changedFiles.first?.path
+            refreshSelectedDisplayPreview()
         } catch {
             guard !Task.isCancelled, key == contextKey else { return }
             self.error = (error as NSError).localizedDescription
@@ -586,6 +611,54 @@ struct DraftReviewRequestTabView: View {
         return (selectedPath, diff)
     }
 
+    private func refreshSelectedDisplayPreview() {
+        guard let key = selectedDisplayPreviewKey() else {
+            clearSelectedDisplayPreview()
+            return
+        }
+
+        guard selectedDisplayPreview?.key != key else { return }
+        guard selectedDisplayPreviewLoadingKey != key else { return }
+
+        selectedDisplayPreviewTask?.cancel()
+        selectedDisplayPreview = nil
+        selectedDisplayPreviewLoadingKey = key
+        selectedDisplayPreviewTask = Task { @MainActor in
+            let prepared = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
+            guard !Task.isCancelled else { return }
+            guard selectedDisplayPreviewKey() == key else {
+                if selectedDisplayPreviewLoadingKey == key {
+                    selectedDisplayPreviewLoadingKey = nil
+                    selectedDisplayPreviewTask = nil
+                }
+                return
+            }
+
+            selectedDisplayPreview = prepared
+            selectedDisplayPreviewLoadingKey = nil
+            selectedDisplayPreviewTask = nil
+        }
+    }
+
+    private func selectedDisplayPreviewKey() -> DraftReviewRequestDiffDisplayPreview.Key? {
+        guard let context,
+              let selectedPath,
+              let file = context.changedFiles.first(where: { $0.path == selectedPath }),
+              let rawDiff = context.fileDiffsByPath[selectedPath]
+        else {
+            return nil
+        }
+
+        return DraftReviewRequestDiffDisplayPreview.Key(path: selectedPath, file: file, rawDiff: rawDiff)
+    }
+
+    private func clearSelectedDisplayPreview() {
+        selectedDisplayPreviewTask?.cancel()
+        selectedDisplayPreviewTask = nil
+        selectedDisplayPreviewLoadingKey = nil
+        selectedDisplayPreview = nil
+    }
+
     private func statusColor(_ status: String) -> Color {
         switch status {
         case "A": return theme.color("add")
@@ -618,10 +691,81 @@ struct DraftReviewRequestDiffPreview {
     }
 }
 
-private struct DraftReviewRequestDiffPreviewView: View {
-    let preview: DraftReviewRequestDiffPreview
+struct DraftReviewRequestDiffDisplayPreview {
+    struct Key: Equatable {
+        let path: String
+        let originalPath: String?
+        let status: String
+        let add: Int
+        let del: Int
+        let rawDiff: String
+
+        init(path: String, file: CommitChangedFile, rawDiff: String) {
+            self.path = path
+            self.originalPath = file.originalPath
+            self.status = file.status
+            self.add = file.add
+            self.del = file.del
+            self.rawDiff = rawDiff
+        }
+
+        var file: CommitChangedFile {
+            CommitChangedFile(
+                path: path,
+                originalPath: originalPath,
+                status: status,
+                add: add,
+                del: del
+            )
+        }
+    }
+
+    let path: String
+    let file: CommitChangedFile
+    let rawDiff: String
+    let parsedDiff: ParsedDiff
+    let displayModel: DiffDisplayModel
+
+    static func prepare(key: Key) async -> DraftReviewRequestDiffDisplayPreview {
+        await Task.detached(priority: .userInitiated) {
+            let parsed = DiffParser.parse(key.rawDiff)
+            let model = DiffDisplayModelBuilder.build(diff: parsed, filePath: key.path)
+            return DraftReviewRequestDiffDisplayPreview(key: key, parsedDiff: parsed, displayModel: model)
+        }.value
+    }
+
+    var key: Key {
+        Key(path: path, file: file, rawDiff: rawDiff)
+    }
+
+    private init(key: Key, parsedDiff: ParsedDiff, displayModel: DiffDisplayModel) {
+        self.path = key.path
+        self.file = key.file
+        self.rawDiff = key.rawDiff
+        self.parsedDiff = parsedDiff
+        self.displayModel = displayModel
+    }
+
+    var fileExtension: String {
+        LanguageRegistry.highlighterExtension(forPath: path)
+    }
+
+    var title: String {
+        (path as NSString).lastPathComponent
+    }
+
+    var directory: String {
+        (path as NSString).deletingLastPathComponent
+    }
+}
+
+struct DraftReviewRequestDiffPreviewView: View {
+    let preview: DraftReviewRequestDiffDisplayPreview
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    @Binding var layoutMode: DiffLayoutMode
+    @Binding var wrapLines: Bool
+    @Binding var showWhitespace: Bool
 
     @Environment(\.theme) private var theme
 
@@ -666,27 +810,24 @@ private struct DraftReviewRequestDiffPreviewView: View {
 
     @ViewBuilder
     private var content: some View {
-        let parsed = preview.parsedDiff
-        if parsed.hunks.isEmpty {
+        if preview.parsedDiff.hunks.isEmpty {
             Text("No changes for \(preview.path)")
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(parsed.hunks.enumerated()), id: \.offset) { _, hunk in
-                        HunkView(
-                            hunk: hunk,
-                            fileExtension: preview.fileExtension,
-                            codeFontFamily: codeFontFamily,
-                            codeFontSize: codeFontSize
-                        )
-                    }
-                }
-                .padding(.vertical, 8)
-            }
-            .defaultScrollAnchor(.topLeading)
+            DiffPaneView(
+                model: preview.displayModel,
+                fileExtension: preview.fileExtension,
+                layoutMode: $layoutMode,
+                wrapLines: $wrapLines,
+                showWhitespace: $showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsToolbar: false,
+                verticalScrollMode: .internalScroll,
+                hunkActions: { _ in DiffPaneHunkActions() }
+            )
         }
     }
 }

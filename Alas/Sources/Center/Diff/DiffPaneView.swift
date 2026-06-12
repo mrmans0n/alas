@@ -67,6 +67,11 @@ enum DiffPaneRowProjection {
     }
 }
 
+enum DiffPaneVerticalScrollMode {
+    case internalScroll
+    case staticHeight
+}
+
 struct DiffPaneView: View {
     let model: DiffDisplayModel
     let fileExtension: String
@@ -75,6 +80,8 @@ struct DiffPaneView: View {
     @Binding var showWhitespace: Bool
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    var showsToolbar: Bool = true
+    var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -82,20 +89,32 @@ struct DiffPaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            toolbar
+            if showsToolbar {
+                toolbar
+            }
             diffBody
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: verticalScrollMode == .internalScroll ? .infinity : nil,
+            alignment: .topLeading
+        )
         .background(theme.color("bg-1"))
     }
 
+    @ViewBuilder
     private var diffBody: some View {
-        GeometryReader { proxy in
-            ScrollView(.vertical) {
-                rowsStack
-                    .frame(minWidth: proxy.size.width, alignment: .topLeading)
+        if verticalScrollMode == .internalScroll {
+            GeometryReader { proxy in
+                ScrollView(.vertical) {
+                    rowsStack
+                        .frame(minWidth: proxy.size.width, alignment: .topLeading)
+                }
+                .defaultScrollAnchor(.topLeading)
             }
-            .defaultScrollAnchor(.topLeading)
+        } else {
+            rowsStack
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
@@ -130,6 +149,8 @@ struct DiffPaneView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
+        .accessibilityIdentifier("diff-pane-toolbar")
+        .background(DiffPaneToolbarMarker())
         .background(theme.color("bg-1"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
@@ -256,6 +277,16 @@ struct DiffPaneView: View {
         DiffPaneActionButton(systemName: systemName, tooltip: tooltip, action: action)
             .frame(width: 22, height: 20)
     }
+}
+
+private struct DiffPaneToolbarMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setAccessibilityIdentifier("diff-pane-toolbar")
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 private struct DiffPaneActionButton: NSViewRepresentable {

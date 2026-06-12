@@ -116,9 +116,9 @@ struct DiffTabView: View {
                 DiffPaneView(
                     model: displayModel,
                     fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
-                    layoutMode: diffLayoutBinding,
-                    wrapLines: diffWrapBinding,
-                    showWhitespace: diffWhitespaceBinding,
+                    layoutMode: diffPreferences.layoutMode,
+                    wrapLines: diffPreferences.wrapLines,
+                    showWhitespace: diffPreferences.showWhitespace,
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
                     hunkActions: { hunk in
@@ -160,34 +160,8 @@ struct DiffTabView: View {
         "\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)"
     }
 
-    private var diffLayoutBinding: Binding<DiffLayoutMode> {
-        Binding(
-            get: { appState.config.changes.diffLayoutMode },
-            set: {
-                appState.config.changes.diffLayoutMode = $0
-                appState.saveConfig()
-            }
-        )
-    }
-
-    private var diffWrapBinding: Binding<Bool> {
-        Binding(
-            get: { appState.config.changes.diffWrapLines },
-            set: {
-                appState.config.changes.diffWrapLines = $0
-                appState.saveConfig()
-            }
-        )
-    }
-
-    private var diffWhitespaceBinding: Binding<Bool> {
-        Binding(
-            get: { appState.config.changes.diffShowWhitespace },
-            set: {
-                appState.config.changes.diffShowWhitespace = $0
-                appState.saveConfig()
-            }
-        )
+    private var diffPreferences: DiffPreferenceBindings {
+        DiffPreferenceBindings(appState: appState)
     }
 
     private var header: some View {

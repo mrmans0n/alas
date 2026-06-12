@@ -227,6 +227,33 @@ struct TabsManagerTests {
         #expect(decoded.staged)
     }
 
+    @Test func openOrFocusReviewChangesCreatesStableWorktreeScopedTab() {
+        let worktreeId = "tabs-manager-review-changes-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openOrFocusReviewChanges(worktreeId: worktreeId)
+        let second = mgr.openOrFocusReviewChanges(worktreeId: worktreeId)
+
+        #expect(first.id == "review-changes:\(worktreeId)")
+        #expect(second.id == first.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 1)
+        #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
+        #expect(first.title == "Review Changes")
+    }
+
+    @Test func reviewChangesTabStateRoundTrips() throws {
+        let state = ReviewChangesTabState(worktreeId: "wt")
+        let tab = Tab.reviewChanges(state)
+
+        let data = try JSONEncoder().encode(tab)
+        let decoded = try JSONDecoder().decode(Tab.self, from: data)
+
+        #expect(decoded == tab)
+        #expect(decoded.title == "Review Changes")
+        #expect(decoded.iconName == "diff")
+    }
+
     @Test func imagePreviewTabStateRoundTrips() throws {
         let state = ImagePreviewTabState(id: "img", title: "logo.png", relativePath: "Assets/logo.png")
         let data = try JSONEncoder().encode(state)

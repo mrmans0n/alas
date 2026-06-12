@@ -118,6 +118,29 @@ struct GitServiceStagedTests {
         #expect(after.hunks.count == 1)
     }
 
+    @Test func diff_includesOriginalPathForStagedRename() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try "one\ntwo\nthree\n".write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "old.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-m", "seed"], cwd: repo)
+
+        _ = try await Process.git(["mv", "old.txt", "new.txt"], cwd: repo)
+        try "one\nTWO\nthree\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "new.txt"], cwd: repo)
+
+        let diff = try await GitService().diff(
+            worktreePath: repo,
+            file: "new.txt",
+            staged: true,
+            originalPath: "old.txt"
+        )
+
+        #expect(diff.hunks.flatMap(\.lines).filter { $0.kind == .add }.count == 1)
+        #expect(diff.hunks.flatMap(\.lines).filter { $0.kind == .delete }.count == 1)
+    }
+
     /// Renames stage as `D <old>` + `A <new>` in the index. Unstaging both
     /// paths is required to fully clear the rename; passing only the new
     /// path leaves the deletion-of-old staged.

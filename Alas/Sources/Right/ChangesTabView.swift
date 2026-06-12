@@ -26,6 +26,10 @@ struct ChangesTabView: View {
         rps.changes.filter { $0.conflict == nil }
     }
 
+    private var reviewChangesSummary: ReviewChangesTriggerSummary? {
+        ReviewChangesTriggerSummary.summary(for: rps.changes)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -89,6 +93,12 @@ struct ChangesTabView: View {
                     hasDraft: hasDraftTab,
                     draftNonEmpty: draftNonEmpty,
                     onOpen: openDraftTab
+                )
+            }
+            if let reviewChangesSummary {
+                ReviewChangesTriggerRow(
+                    summary: reviewChangesSummary,
+                    onOpen: openReviewChangesTab
                 )
             }
             WorkingTreeSectionView(
@@ -188,6 +198,10 @@ struct ChangesTabView: View {
         _ = appState.tabs.openOrFocusDraftCommit(worktreeId: rps.worktree.id)
     }
 
+    private func openReviewChangesTab() {
+        _ = appState.openReviewChangesTab(for: rps.worktree)
+    }
+
     private func copyCommitSHA(_ commit: CommitInfo) {
         Clipboard.copy(commit.sha)
     }
@@ -218,6 +232,68 @@ struct ChangesTabView: View {
         // available.
         return appState.agentRegistry.enabled()
             .first(where: { $0.bypassPermissionsFlag != nil })
+    }
+}
+
+struct ReviewChangesTriggerSummary: Equatable {
+    let fileCount: Int
+    let additions: Int?
+    let deletions: Int?
+
+    static func summary(for changes: [ChangedFile]) -> ReviewChangesTriggerSummary? {
+        let reviewableChanges = changes.filter { $0.conflict == nil }
+        guard !reviewableChanges.isEmpty else { return nil }
+        let hasDuplicatePath = Set(reviewableChanges.map(\.path)).count != reviewableChanges.count
+
+        return ReviewChangesTriggerSummary(
+            fileCount: reviewableChanges.count,
+            additions: hasDuplicatePath ? nil : reviewableChanges.reduce(0) { $0 + $1.add },
+            deletions: hasDuplicatePath ? nil : reviewableChanges.reduce(0) { $0 + $1.del }
+        )
+    }
+}
+
+private struct ReviewChangesTriggerRow: View {
+    let summary: ReviewChangesTriggerSummary
+    let onOpen: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    private var fileLabel: String {
+        summary.fileCount == 1 ? "1 file" : "\(summary.fileCount) files"
+    }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 8) {
+                Icon(name: "diff", size: 11, color: theme.color("fg-dim"))
+                Text(fileLabel)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(theme.color("fg-dim"))
+                if let additions = summary.additions, let deletions = summary.deletions {
+                    Text("·")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-faint"))
+                    Text("+\(additions)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("add"))
+                    Text("−\(deletions)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(theme.color("del"))
+                }
+                Spacer()
+                Text("Review Changes")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundColor(theme.color("accent"))
+                Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(theme.color("bg-1"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 }
 
