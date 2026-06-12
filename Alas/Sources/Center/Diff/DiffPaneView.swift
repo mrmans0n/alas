@@ -67,6 +67,11 @@ enum DiffPaneRowProjection {
     }
 }
 
+enum DiffPaneVerticalScrollMode {
+    case internalScroll
+    case staticHeight
+}
+
 struct DiffPaneView: View {
     let model: DiffDisplayModel
     let fileExtension: String
@@ -76,6 +81,7 @@ struct DiffPaneView: View {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     var showsToolbar: Bool = true
+    var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -88,17 +94,27 @@ struct DiffPaneView: View {
             }
             diffBody
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: verticalScrollMode == .internalScroll ? .infinity : nil,
+            alignment: .topLeading
+        )
         .background(theme.color("bg-1"))
     }
 
+    @ViewBuilder
     private var diffBody: some View {
-        GeometryReader { proxy in
-            ScrollView(.vertical) {
-                rowsStack
-                    .frame(minWidth: proxy.size.width, alignment: .topLeading)
+        if verticalScrollMode == .internalScroll {
+            GeometryReader { proxy in
+                ScrollView(.vertical) {
+                    rowsStack
+                        .frame(minWidth: proxy.size.width, alignment: .topLeading)
+                }
+                .defaultScrollAnchor(.topLeading)
             }
-            .defaultScrollAnchor(.topLeading)
+        } else {
+            rowsStack
+                .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 

@@ -14,6 +14,7 @@ struct ReviewChangesLoader {
         self.git = git
     }
 
+    @MainActor
     func load(worktreePath: URL) async throws -> ReviewChangesLoadedSession {
         try Task.checkCancellation()
         let status = try await git.status(worktreePath: worktreePath)

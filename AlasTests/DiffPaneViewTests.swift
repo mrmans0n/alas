@@ -133,6 +133,35 @@ struct DiffPaneViewTests {
         #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
     }
 
+    @Test func embeddedStaticModeDoesNotCreateOuterVerticalScrollView() {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let outerScrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? NSScrollView }
+            .filter { !($0 is DiffPaneTextScrollView) }
+        #expect(outerScrollViews.isEmpty)
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+    }
+
     @Test func splitPaneUsesMergeStyleScrollPanesWithLineRulers() throws {
         var layout = DiffLayoutMode.split
         var wrap = false
