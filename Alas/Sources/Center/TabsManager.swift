@@ -767,7 +767,7 @@ final class TabsManager {
               case .reviewEvidence(var state) = file.tabs[idx]
         else { return nil }
         state.selectedSection = selectedSection
-        state.selectedItemID = selectedItemID
+        state.selectedItemID = selectedSection == .files ? nil : selectedItemID
         let tab = Tab.reviewEvidence(state)
         file.tabs[idx] = tab
         byWorktree[worktreeId] = file

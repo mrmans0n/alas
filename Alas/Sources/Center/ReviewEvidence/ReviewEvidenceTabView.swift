@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+enum ReviewEvidenceFilesContentState: Equatable {
+    case loading
+    case error(String)
+    case diffSurface
+    case empty
+}
+
+enum ReviewEvidenceContentRoute: Equatable {
+    case files(ReviewEvidenceFilesContentState)
+    case evidenceBrowser
+}
+
 struct ReviewEvidenceTabView: View {
     let worktreePath: URL
     let tabState: ReviewEvidenceTabState
@@ -11,6 +23,8 @@ struct ReviewEvidenceTabView: View {
     @State private var loadNonce = 0
     @State private var isRerunningFailedChecks = false
     @State private var loadGeneration = 0
+    @State private var selectedFileID: DiffReviewFileID?
+    @State private var railCollapsed = false
 
     @Environment(\.theme) private var theme
 
@@ -33,6 +47,10 @@ struct ReviewEvidenceTabView: View {
     private var canSendToAgent: Bool {
         let agentID = appState.config.changes.aiToolId
         return agentID != "none" && appState.agent(id: agentID) != nil
+    }
+
+    private var diffPreferences: DiffPreferenceBindings {
+        DiffPreferenceBindings(appState: appState)
     }
 
     private var loadKey: String {
@@ -158,6 +176,40 @@ struct ReviewEvidenceTabView: View {
             && model.ciItems.isEmpty
             && model.feedbackItems.isEmpty
             && model.fileSession == nil
+            && model.fileErrorMessage == nil
+    }
+
+    static func contentRoute(
+        selectedSection: ReviewEvidenceSection,
+        isLoadingFiles: Bool,
+        fileErrorMessage: String?,
+        fileSession: DiffReviewLoadedSession?,
+        modelErrorMessage: String?
+    ) -> ReviewEvidenceContentRoute {
+        guard selectedSection == .files else { return .evidenceBrowser }
+
+        return .files(filesContentState(
+            isLoadingFiles: isLoadingFiles,
+            fileErrorMessage: fileErrorMessage,
+            fileSession: fileSession
+        ))
+    }
+
+    static func filesContentState(
+        isLoadingFiles: Bool,
+        fileErrorMessage: String?,
+        fileSession: DiffReviewLoadedSession?
+    ) -> ReviewEvidenceFilesContentState {
+        if isLoadingFiles {
+            return .loading
+        }
+        if let fileErrorMessage, fileSession == nil {
+            return .error(fileErrorMessage)
+        }
+        if let fileSession, !fileSession.files.isEmpty {
+            return .diffSurface
+        }
+        return .empty
     }
 
     private func evidenceBrowser(model: ReviewEvidenceModel) -> some View {
@@ -174,16 +226,73 @@ struct ReviewEvidenceTabView: View {
 
             Divider()
 
-            HStack(spacing: 0) {
-                evidenceList(model: model)
-                    .frame(minWidth: 220, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
-                    .background(theme.color("bg-1"))
-                Divider()
-                detailPane(model: model)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(theme.color("bg-0"))
+            switch Self.contentRoute(
+                selectedSection: selectedSection,
+                isLoadingFiles: model.isLoadingFiles,
+                fileErrorMessage: model.fileErrorMessage,
+                fileSession: model.fileSession,
+                modelErrorMessage: model.errorMessage
+            ) {
+            case .files(let state):
+                filesPane(state: state, session: model.fileSession)
+            case .evidenceBrowser:
+                HStack(spacing: 0) {
+                    evidenceList(model: model)
+                        .frame(minWidth: 220, idealWidth: 300, maxWidth: 360, maxHeight: .infinity)
+                        .background(theme.color("bg-1"))
+                    Divider()
+                    detailPane(model: model)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(theme.color("bg-0"))
+                }
             }
         }
+    }
+
+    @ViewBuilder
+    private func filesPane(state: ReviewEvidenceFilesContentState, session: DiffReviewLoadedSession?) -> some View {
+        switch state {
+        case .loading:
+            VStack(spacing: 10) {
+                Spinner()
+                    .frame(width: 20, height: 20)
+                Text("Loading files")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(theme.color("bg-1"))
+        case .error(let message):
+            unavailableState(message: message)
+                .background(theme.color("bg-1"))
+        case .diffSurface:
+            if let session {
+                DiffReviewSurface(
+                    session: session,
+                    selectedFileID: $selectedFileID,
+                    railCollapsed: $railCollapsed,
+                    layoutMode: diffPreferences.layoutMode,
+                    wrapLines: diffPreferences.wrapLines,
+                    showWhitespace: diffPreferences.showWhitespace,
+                    codeFontFamily: appState.config.code.fontFamily,
+                    codeFontSize: CGFloat(appState.config.code.fontSize),
+                    showsSourceBadges: true,
+                    showsRailDisplayControls: true
+                )
+            } else {
+                filesEmptyState
+            }
+        case .empty:
+            filesEmptyState
+        }
+    }
+
+    private var filesEmptyState: some View {
+        Text("No changed files")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(theme.color("fg-dim"))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(theme.color("bg-1"))
     }
 
     private func evidenceList(model: ReviewEvidenceModel) -> some View {

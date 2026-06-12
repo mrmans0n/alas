@@ -74,6 +74,92 @@ struct ReviewEvidenceModelTests {
         #expect(!ReviewEvidenceTabView.shouldShowModelUnavailable(model))
     }
 
+    @Test func filesSectionChoosesFilesContent() {
+        let content = ReviewEvidenceTabView.contentRoute(
+            selectedSection: .files,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(),
+            modelErrorMessage: nil
+        )
+
+        #expect(content == .files(.diffSurface))
+    }
+
+    @Test func ciAndFeedbackSectionsChooseEvidenceBrowser() {
+        let ciContent = ReviewEvidenceTabView.contentRoute(
+            selectedSection: .ci,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(),
+            modelErrorMessage: nil
+        )
+        let feedbackContent = ReviewEvidenceTabView.contentRoute(
+            selectedSection: .feedback,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(),
+            modelErrorMessage: nil
+        )
+
+        #expect(ciContent == .evidenceBrowser)
+        #expect(feedbackContent == .evidenceBrowser)
+    }
+
+    @Test func filesLoadedWithEvidenceErrorStillChoosesFilesContent() {
+        let content = ReviewEvidenceTabView.contentRoute(
+            selectedSection: .files,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(),
+            modelErrorMessage: "checks unavailable"
+        )
+
+        #expect(content == .files(.diffSurface))
+    }
+
+    @Test func fileErrorWithoutSessionChoosesFileErrorState() {
+        let content = ReviewEvidenceTabView.contentRoute(
+            selectedSection: .files,
+            isLoadingFiles: false,
+            fileErrorMessage: "diff unavailable",
+            fileSession: nil,
+            modelErrorMessage: nil
+        )
+
+        #expect(content == .files(.error("diff unavailable")))
+    }
+
+    @Test func fileErrorKeepsFilesRouteAvailableWhenEvidenceAlsoFails() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(),
+            provider: FakeCodeHostProvider(
+                diffError: TestError(message: "diff unavailable"),
+                ciError: TestError(message: "checks unavailable")
+            ),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.fileErrorMessage == "diff unavailable")
+        #expect(model.errorMessage == "checks unavailable")
+        #expect(!ReviewEvidenceTabView.shouldShowModelUnavailable(model))
+    }
+
+    @Test func emptyFileSessionChoosesEmptyState() {
+        let content = ReviewEvidenceTabView.contentRoute(
+            selectedSection: .files,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(summaries: []),
+            modelErrorMessage: nil
+        )
+
+        #expect(content == .files(.empty))
+    }
+
     @Test func missingReviewRequestKeepsBrowserUnavailable() async {
         let model = ReviewEvidenceModel(
             snapshot: Self.snapshot(reviewRequest: nil),
@@ -336,6 +422,34 @@ struct ReviewEvidenceModelTests {
             subtitle: body,
             status: .actionable,
             providerURL: URL(string: "https://github.com/discussion/\(id)")
+        )
+    }
+
+    private static func loadedSession(
+        summaries: [DiffReviewFileSummary] = [
+            DiffReviewFileSummary(
+                path: "Sources/App.swift",
+                namespace: "github-pr",
+                groupID: nil,
+                groupTitle: nil,
+                status: .modified,
+                additions: 2,
+                deletions: 1,
+                isRenderable: true
+            ),
+        ]
+    ) -> DiffReviewLoadedSession {
+        DiffReviewLoadedSession(
+            files: summaries.map { summary in
+                DiffReviewFileSectionModel(
+                    summary: summary,
+                    parsedDiff: nil,
+                    displayModel: nil,
+                    placeholderMessage: "No diff.",
+                    openFile: nil
+                )
+            },
+            summary: DiffReviewSessionModel(files: summaries, groupsEnabled: false)
         )
     }
 
