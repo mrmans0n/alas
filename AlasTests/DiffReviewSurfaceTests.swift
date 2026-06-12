@@ -132,6 +132,36 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "UNSTAGED") != nil)
     }
 
+    @Test func fileSectionAcceptsLSPContextWithoutChangingLayout() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App/AlphaView.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "SF Mono",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            lspContext: nil
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
+    }
+
     @Test func placeholderSectionsRenderMessageWithoutDiffPane() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Assets/logo.png", status: .modified, isRenderable: false),

@@ -11,6 +11,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let theme: Theme
+    let lspContext: DiffPaneLSPContext?
 
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
         DiffPaneTextDocumentContainerView()
@@ -25,7 +26,8 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             showWhitespace: showWhitespace,
             fileExtension: fileExtension,
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
-            theme: theme
+            theme: theme,
+            lspContext: lspContext
         )
     }
 }
@@ -69,7 +71,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
         showWhitespace: Bool,
         fileExtension: String,
         font: NSFont,
-        theme: Theme
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?
     ) {
         let signature = UpdateSignature(
             group: group,
@@ -80,7 +83,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
             fileExtension: fileExtension,
             fontName: font.fontName,
             fontSize: font.pointSize,
-            theme: theme
+            theme: theme,
+            lspContext: lspContext.map(UpdateSignature.LSPContextSignature.init)
         )
         guard signature != lastUpdateSignature else {
             needsLayout = true
@@ -110,7 +114,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 font: font,
                 theme: theme,
                 lspContext: nil,
-                allowedLSPSide: .old
+                allowedLSPSide: .new
             )
             newPane.update(
                 document: result.newCode,
@@ -118,7 +122,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 wraps: wrapLines,
                 font: font,
                 theme: theme,
-                lspContext: nil,
+                lspContext: lspContext,
                 allowedLSPSide: .new
             )
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
@@ -137,7 +141,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 wraps: wrapLines,
                 font: font,
                 theme: theme,
-                lspContext: nil,
+                lspContext: lspContext,
                 allowedLSPSide: .new
             )
             measuredHeight = stackedPane.documentHeight
@@ -220,6 +224,21 @@ final class DiffPaneTextDocumentContainerView: NSView {
         let fontName: String
         let fontSize: CGFloat
         let theme: Theme
+        let lspContext: LSPContextSignature?
+
+        struct LSPContextSignature: Equatable {
+            let worktreeRoot: URL
+            let relativePath: String
+            let language: String
+            let lsp: ObjectIdentifier
+
+            init(_ context: DiffPaneLSPContext) {
+                worktreeRoot = context.worktreeRoot
+                relativePath = context.relativePath
+                language = context.language
+                lsp = ObjectIdentifier(context.lsp)
+            }
+        }
     }
 }
 

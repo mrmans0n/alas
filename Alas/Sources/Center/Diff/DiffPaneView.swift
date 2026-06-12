@@ -82,6 +82,7 @@ struct DiffPaneView: View {
     let codeFontSize: CGFloat
     var showsToolbar: Bool = true
     var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
+    var lspContext: DiffPaneLSPContext? = nil
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -220,7 +221,8 @@ struct DiffPaneView: View {
                 fileExtension: fileExtension,
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
-                theme: theme
+                theme: theme,
+                lspContext: lspContext
             )
             .fixedSize(horizontal: false, vertical: true)
         }

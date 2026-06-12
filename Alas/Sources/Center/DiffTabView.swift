@@ -17,6 +17,7 @@ struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
     let staged: Bool
+    let worktreeId: String
     let appState: AppState
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
@@ -121,6 +122,7 @@ struct DiffTabView: View {
                     showWhitespace: diffPreferences.showWhitespace,
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
+                    lspContext: lspContext,
                     hunkActions: { hunk in
                         let actions = stagedHunkActions(hunk: hunk)
                         return DiffPaneHunkActions(stage: actions.stage, discard: actions.discard)
@@ -162,6 +164,58 @@ struct DiffTabView: View {
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
+    }
+
+    private var lspContext: DiffPaneLSPContext? {
+        guard !isFileDeleted else { return nil }
+        guard let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension) else {
+            return nil
+        }
+        return DiffPaneLSPContext(
+            worktreeId: worktreeId,
+            worktreeRoot: worktreePath,
+            relativePath: relativePath,
+            language: language,
+            lsp: appState.lsp,
+            openTarget: { url, line, character in
+                openLSPTarget(
+                    url: url,
+                    originatingRelativePath: relativePath,
+                    language: language,
+                    line: line,
+                    character: character
+                )
+            }
+        )
+    }
+
+    private func openLSPTarget(
+        url: URL,
+        originatingRelativePath: String,
+        language: String,
+        line: Int,
+        character: Int
+    ) {
+        let prefix = worktreePath.path + "/"
+        if url.path.hasPrefix(prefix) {
+            let relativeTarget = String(url.path.dropFirst(prefix.count))
+            appState.tabs.openEditor(
+                worktreeId: worktreeId,
+                relativePath: relativeTarget,
+                revealLine: line,
+                revealCharacter: character
+            )
+        } else {
+            appState.tabs.openExternalEditor(
+                worktreeId: worktreeId,
+                absoluteURL: url,
+                revealLine: line,
+                revealCharacter: character,
+                originatingRelativePath: originatingRelativePath,
+                originatingWorktreeRoot: worktreePath,
+                language: language
+            )
+        }
     }
 
     private var header: some View {
