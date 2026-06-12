@@ -175,7 +175,7 @@ struct ReviewEvidenceModelTests {
         #expect(!ReviewEvidenceTabView.shouldShowModelUnavailable(model))
     }
 
-    @Test func evidenceErrorWithFileErrorStillShowsUnavailableForCIAndFeedback() {
+    @Test func evidenceErrorWithFileErrorKeepsBrowserAvailableForCIAndFeedback() {
         let ciUnavailable = ReviewEvidenceTabView.shouldShowModelUnavailable(
             selectedSection: .ci,
             isLoadingFiles: false,
@@ -195,8 +195,32 @@ struct ReviewEvidenceModelTests {
             modelErrorMessage: "feedback unavailable"
         )
 
-        #expect(ciUnavailable)
-        #expect(feedbackUnavailable)
+        #expect(!ciUnavailable)
+        #expect(!feedbackUnavailable)
+    }
+
+    @Test func evidenceErrorWithLoadedFilesKeepsBrowserAvailableForCIAndFeedback() {
+        let ciUnavailable = ReviewEvidenceTabView.shouldShowModelUnavailable(
+            selectedSection: .ci,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(),
+            ciItemsAreEmpty: true,
+            feedbackItemsAreEmpty: true,
+            modelErrorMessage: "checks unavailable"
+        )
+        let feedbackUnavailable = ReviewEvidenceTabView.shouldShowModelUnavailable(
+            selectedSection: .feedback,
+            isLoadingFiles: false,
+            fileErrorMessage: nil,
+            fileSession: Self.loadedSession(),
+            ciItemsAreEmpty: true,
+            feedbackItemsAreEmpty: true,
+            modelErrorMessage: "feedback unavailable"
+        )
+
+        #expect(!ciUnavailable)
+        #expect(!feedbackUnavailable)
     }
 
     @Test func emptyFileSessionChoosesEmptyState() {
