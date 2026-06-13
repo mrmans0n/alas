@@ -200,10 +200,10 @@ private struct InlineFeedbackFileMatcher {
            let file = filesByOriginalPath[originalPath] {
             return file
         }
-        if let file = filesByOriginalPath[location.path] {
-            return file
+        if let exactCurrentPathMatch = filesByPath[location.path] {
+            return exactCurrentPathMatch
         }
-        return filesByPath[location.path]
+        return filesByOriginalPath[location.path]
     }
 
     private static func uniqueFiles(

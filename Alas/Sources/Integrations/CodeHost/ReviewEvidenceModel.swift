@@ -56,6 +56,7 @@ final class ReviewEvidenceModel {
         isLoadingFiles = true
         errorMessage = nil
         fileErrorMessage = nil
+        fileSession = nil
         inlineFeedbackByFileID = [:]
 
         async let files: Void = loadAndPublishFiles(remote: remote, request: request)

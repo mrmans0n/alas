@@ -186,6 +186,56 @@ struct ReviewEvidenceModelTests {
         ))
     }
 
+    @Test func inlineFeedbackMappingPrefersExactCurrentPathWhenOldSidePathCollidesWithOriginalPath() {
+        let modifiedFile = DiffReviewFileSummary(
+            path: "Sources/App.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .modified,
+            additions: 2,
+            deletions: 2,
+            isRenderable: true
+        )
+        let copiedFromApp = DiffReviewFileSummary(
+            path: "Sources/AppCopy.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .copied,
+            additions: 3,
+            deletions: 1,
+            isRenderable: true,
+            originalPath: "Sources/App.swift"
+        )
+        let threads = [
+            ReviewThreadSummary(
+                id: "thread-old-side-current-path",
+                author: "reviewer",
+                body: "Old side feedback on the modified file.",
+                url: URL(string: "https://github.com/discussion/old-current"),
+                isResolved: false,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/App.swift",
+                    originalPath: nil,
+                    line: 5,
+                    side: .old,
+                    providerPosition: "old-current"
+                )
+            ),
+        ]
+
+        let feedback = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: threads,
+            files: [modifiedFile, copiedFromApp],
+            providerName: "GitHub"
+        )
+
+        #expect(feedback[modifiedFile.id]?.map(\.id) == ["thread-old-side-current-path"])
+        #expect(feedback[copiedFromApp.id] == nil)
+    }
+
     @Test func inlineFeedbackMappingFallsBackToOriginalPathForNewSideWhenCurrentPathIsMissing() {
         let renamedFile = DiffReviewFileSummary(
             path: "Sources/NewApp.swift",
@@ -315,6 +365,46 @@ struct ReviewEvidenceModelTests {
         await model.load()
 
         #expect(model.inlineFeedbackByFileID.isEmpty)
+    }
+
+    @Test func reloadClearsStaleFileSessionAndInlineFeedbackUntilFreshFilesPublish() async throws {
+        let provider = FirstFastThenSuspendedDiffProvider()
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: Self.reviewRequest(threads: [
+                ReviewThreadSummary(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please simplify this.",
+                    url: URL(string: "https://github.com/discussion"),
+                    isResolved: false,
+                    isActionable: true,
+                    location: ReviewThreadLocation(
+                        path: "Sources/App.swift",
+                        originalPath: nil,
+                        line: 1,
+                        side: .new,
+                        providerPosition: "thread-1"
+                    )
+                ),
+            ])),
+            provider: provider,
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+        let initialFileID = try #require(model.fileSession?.files.first?.id)
+        #expect(model.inlineFeedbackByFileID[initialFileID]?.map(\.id) == ["thread-1"])
+
+        let task = Task { await model.load() }
+        await provider.waitForSecondDiffCall()
+        await provider.waitForSecondEvidenceCalls()
+
+        #expect(model.fileSession == nil)
+        #expect(model.inlineFeedbackByFileID.isEmpty)
+
+        await provider.completeSecondDiff()
+        await task.value
     }
 
     @Test func fileLoaderFailureLeavesEvidenceLoadedAndSetsFileError() async {
@@ -1120,6 +1210,123 @@ private actor SuspendedLoadProvider: CodeHostProvider {
             waiter.resume()
         }
         evidenceWaiters.removeAll()
+    }
+
+    private nonisolated static let diff = """
+    diff --git a/Sources/App.swift b/Sources/App.swift
+    index 111..222 100644
+    --- a/Sources/App.swift
+    +++ b/Sources/App.swift
+    @@ -1 +1 @@
+    -let old = true
+    +let new = true
+    """
+
+    private nonisolated static func makeCIItem() -> ReviewEvidenceItem {
+        ReviewEvidenceItem(
+            id: "ci:test",
+            section: .ci,
+            title: "Tests",
+            subtitle: "CI",
+            status: .failed,
+            providerURL: URL(string: "https://github.com/run")
+        )
+    }
+
+    private nonisolated static func makeFeedbackItem() -> ReviewEvidenceItem {
+        ReviewEvidenceItem(
+            id: "feedback:thread-1",
+            section: .feedback,
+            title: "reviewer",
+            subtitle: "Please simplify this.",
+            status: .actionable,
+            providerURL: URL(string: "https://github.com/discussion")
+        )
+    }
+}
+
+private actor FirstFastThenSuspendedDiffProvider: CodeHostProvider {
+    nonisolated let kind: CodeHostKind = .github
+    nonisolated let capabilities: CodeHostProviderCapabilities = .githubCLI
+
+    private var diffCallCount = 0
+    private var ciCallCount = 0
+    private var feedbackCallCount = 0
+    private var secondDiffContinuation: CheckedContinuation<String, Never>?
+    private var secondDiffWaiters: [CheckedContinuation<Void, Never>] = []
+    private var secondEvidenceWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func waitForSecondDiffCall() async {
+        if diffCallCount >= 2 { return }
+        await withCheckedContinuation { continuation in
+            secondDiffWaiters.append(continuation)
+        }
+    }
+
+    func waitForSecondEvidenceCalls() async {
+        if ciCallCount >= 2 && feedbackCallCount >= 2 { return }
+        await withCheckedContinuation { continuation in
+            secondEvidenceWaiters.append(continuation)
+        }
+    }
+
+    func completeSecondDiff() {
+        secondDiffContinuation?.resume(returning: Self.diff)
+        secondDiffContinuation = nil
+    }
+
+    func isAvailable() async -> Bool { true }
+    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+    func currentReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL) async throws -> ReviewRequest? { nil }
+    func createReviewRequest(remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, title: String, body: String, isDraft: Bool, cwd: URL) async throws -> URL { remote.webURL }
+    func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        diffCallCount += 1
+        if diffCallCount == 2 {
+            resumeSecondDiffWaiters()
+            return await withCheckedContinuation { continuation in
+                secondDiffContinuation = continuation
+            }
+        }
+        return Self.diff
+    }
+
+    func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
+        ciCallCount += 1
+        resumeSecondEvidenceWaitersIfReady()
+        return [Self.makeCIItem()]
+    }
+
+    func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
+        feedbackCallCount += 1
+        resumeSecondEvidenceWaitersIfReady()
+        return [Self.makeFeedbackItem()]
+    }
+
+    func checkEvidenceDetail(remote: CodeHostRemote, request: ReviewRequest, item: ReviewEvidenceItem, cwd: URL) async throws -> ReviewEvidenceDetail {
+        ReviewEvidenceDetail(item: item, body: "CI detail", filePath: nil, line: nil, isTruncated: false)
+    }
+
+    func feedbackEvidenceDetail(remote: CodeHostRemote, request: ReviewRequest, item: ReviewEvidenceItem, cwd: URL) async throws -> ReviewEvidenceDetail {
+        ReviewEvidenceDetail(item: item, body: "Feedback detail", filePath: nil, line: nil, isTruncated: false)
+    }
+
+    func rerunFailedChecks(remote: CodeHostRemote, branch: String, headSHA: String, request: ReviewRequest?, cwd: URL) async throws {}
+
+    private func resumeSecondDiffWaiters() {
+        for waiter in secondDiffWaiters {
+            waiter.resume()
+        }
+        secondDiffWaiters.removeAll()
+    }
+
+    private func resumeSecondEvidenceWaitersIfReady() {
+        guard ciCallCount >= 2 && feedbackCallCount >= 2 else { return }
+        for waiter in secondEvidenceWaiters {
+            waiter.resume()
+        }
+        secondEvidenceWaiters.removeAll()
     }
 
     private nonisolated static let diff = """
