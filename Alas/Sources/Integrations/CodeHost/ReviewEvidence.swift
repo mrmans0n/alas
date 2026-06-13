@@ -187,7 +187,7 @@ private struct InlineFeedbackFileMatcher {
     func file(for location: ReviewThreadLocation) -> DiffReviewFileSummary? {
         switch location.side {
         case .new:
-            filesByPath[location.path]
+            filesByPath[location.path] ?? location.originalPath.flatMap { filesByOriginalPath[$0] } ?? filesByOriginalPath[location.path]
         case .unknown:
             filesByPath[location.path] ?? location.originalPath.flatMap { filesByOriginalPath[$0] }
         case .old:
