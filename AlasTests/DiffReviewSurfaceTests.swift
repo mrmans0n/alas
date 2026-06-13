@@ -319,6 +319,70 @@ struct DiffReviewSurfaceTests {
         #expect(!result.programmaticScroll.isSuppressing)
     }
 
+    @Test func scrollCommandAdvancesGenerationForRepeatedFileSelections() {
+        let file = DiffReviewFileID(namespace: "commit", path: "Sources/App.swift")
+        var controller = DiffReviewScrollCommandController()
+
+        let first = controller.command(to: file)
+        let second = controller.command(to: file)
+
+        #expect(first.id == file)
+        #expect(second.id == file)
+        #expect(second.generation == first.generation + 1)
+    }
+
+    @Test func renderWindowKeepsSelectedTargetAndNearViewportFiles() {
+        let selected = DiffReviewFileID(namespace: "commit", path: "Selected.swift")
+        let near = DiffReviewFileID(namespace: "commit", path: "Near.swift")
+        let far = DiffReviewFileID(namespace: "commit", path: "Far.swift")
+        let target = DiffReviewFileID(namespace: "commit", path: "Target.swift")
+        let frames = [
+            DiffReviewSectionFrame(id: near, minY: 520, maxY: 820),
+            DiffReviewSectionFrame(id: far, minY: 5_000, maxY: 5_300),
+        ]
+
+        let rendered = DiffReviewRenderWindow.renderedFileIDs(
+            current: [far],
+            frames: frames,
+            viewportHeight: 500,
+            selectedFileID: selected,
+            programmaticTarget: target,
+            firstFileID: nil
+        )
+
+        #expect(rendered.contains(selected))
+        #expect(rendered.contains(target))
+        #expect(rendered.contains(near))
+        #expect(!rendered.contains(far))
+    }
+
+    @Test func estimatedSectionHeightScalesWithDiffRows() {
+        let small = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/Small.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        var largeRows = Array(
+            repeating: ParsedDiff.Hunk.Line(kind: .add, text: "let value = 1", oldNumber: nil, newNumber: 1),
+            count: 40
+        )
+        largeRows.insert(.init(kind: .context, text: "let before = 0", oldNumber: 1, newNumber: 1), at: 0)
+        let largeDiff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(header: "@@ -1,1 +1,41 @@", oldStart: 1, newStart: 1, lines: largeRows),
+        ])
+        let large = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/Large.swift", additions: 40),
+            parsedDiff: largeDiff,
+            displayModel: DiffDisplayModelBuilder.build(diff: largeDiff, filePath: "Sources/Large.swift"),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+
+        #expect(DiffReviewFileSectionHeightEstimator.estimatedHeight(for: large) > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: small))
+    }
+
     private func parsedDiff() -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
