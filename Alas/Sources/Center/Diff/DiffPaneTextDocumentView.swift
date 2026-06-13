@@ -125,6 +125,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lspContext: lspContext,
                 allowedLSPSide: .new
             )
+            stackedPane.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
             let result = DiffPaneTextDocumentBuilder.buildStacked(
@@ -144,6 +145,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lspContext: lspContext,
                 allowedLSPSide: .new
             )
+            oldPane.clearLSPContext()
+            newPane.clearLSPContext()
             measuredHeight = stackedPane.documentHeight
         }
 
@@ -362,6 +365,11 @@ final class DiffPaneTextScrollView: NSScrollView {
         resetHorizontalOriginToLeading()
         needsLayout = true
         invalidateIntrinsicContentSize()
+    }
+
+    func clearLSPContext() {
+        textView.lspContext = nil
+        textView.updateLSPController()
     }
 
     func diffRowRects() -> [NSRect] {

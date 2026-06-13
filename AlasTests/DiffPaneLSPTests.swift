@@ -365,6 +365,99 @@ struct DiffPaneLSPLineMapTests {
         controller.tearDown()
     }
 
+    @MainActor
+    @Test func controllerRejectsSourceLineShiftedByOpenEditorBuffer() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lsp-dirty-editor-\(UUID().uuidString)")
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        let current = value
+        let target = value
+        """.write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+            }
+        }
+        let manager = WorkspaceLSPManager(
+            registry: LanguageServerRegistry(userDefined: [
+                LanguageServerConfig(
+                    language: "swift",
+                    extensions: ["swift"],
+                    command: "/usr/bin/true",
+                    args: [],
+                    env: [:],
+                    rootMarkers: [],
+                    enabled: true
+                )
+            ]),
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: [:],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in .allowed }
+                )
+            },
+            makeClient: { _, _, _, language, rootURI in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            }
+        )
+        _ = await manager.openDocument(
+            worktreeRoot: root,
+            fileURL: source,
+            languageId: "swift",
+            text: """
+            let inserted = value
+            let current = value
+            let target = value
+            """
+        )
+
+        let textView = DiffPaneCodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 80),
+            textContainer: NSTextContainer()
+        )
+        let renderedLine = DiffDisplayLine(
+            id: "file:new:0:1",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 1, side: .new, oldLine: nil, newLine: 2),
+            text: "let target = value",
+            lineNumber: 2,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        textView.lineMetadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .add,
+                range: NSRange(location: 0, length: 18),
+                tone: .add,
+                sourceLine: renderedLine
+            ),
+        ]
+        let controller = DiffPaneLSPController(textView: textView)
+        controller.update(context: nil, allowedSide: .new)
+        let match = try #require(controller.lspMatch(forCharacterIndex: 4))
+        let context = DiffPaneLSPContext(
+            worktreeId: "worktree-1",
+            worktreeRoot: root,
+            relativePath: "Sources/App.swift",
+            language: "swift",
+            lsp: manager,
+            openTarget: { _, _, _ in }
+        )
+
+        let isCurrent = await controller.matchesCurrentSourceForTesting(match, context: context)
+
+        #expect(!isCurrent)
+        controller.tearDown()
+        await manager.closeDocument(worktreeRoot: root, fileURL: source, languageId: "swift")
+        transport.finish()
+    }
+
     private func theme() -> Theme {
         try! ThemeStore().current
     }

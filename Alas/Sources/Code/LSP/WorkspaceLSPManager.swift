@@ -664,6 +664,27 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return holder.client
     }
 
+    /// Returns `nil` when the file is not currently open on an LSP server.
+    /// Returns `false` when it is open but the served text does not contain
+    /// `text` at `line`.
+    func openedDocumentLineMatches(
+        forFile fileURL: URL,
+        worktreeRoot: URL,
+        line: Int,
+        text: String
+    ) -> Bool? {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key],
+              holder.openedURIs.contains(uri) else {
+            return nil
+        }
+        guard line >= 0, let servedText = holder.texts[uri] else { return false }
+        let lines = servedText.split(separator: "\n", omittingEmptySubsequences: false)
+        guard line < lines.count else { return false }
+        return String(lines[line]) == text
+    }
+
     /// Tear down the holder currently serving `fileURL` under `worktreeRoot`
     /// and re-open every URI it had open. Holder-scoped (not tab-scoped) so
     /// all tabs sharing the holder benefit from one restart — which matches

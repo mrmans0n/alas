@@ -311,7 +311,7 @@ final class DiffPaneLSPController {
         let fileURL = context.fileURL
         let lineNumber = match.position.line
         let sourceText = match.sourceText
-        return await Task.detached(priority: .userInitiated) {
+        let diskMatches = await Task.detached(priority: .userInitiated) {
             guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
                 return false
             }
@@ -321,6 +321,16 @@ final class DiffPaneLSPController {
             }
             return String(lines[lineNumber]) == sourceText
         }.value
+        guard diskMatches else { return false }
+        if let lspMatches = context.lsp.openedDocumentLineMatches(
+            forFile: fileURL,
+            worktreeRoot: context.worktreeRoot,
+            line: lineNumber,
+            text: sourceText
+        ) {
+            return lspMatches
+        }
+        return true
     }
 
     private func client(for context: DiffPaneLSPContext, expectedKey: ContextKey) async -> LSPClient? {
