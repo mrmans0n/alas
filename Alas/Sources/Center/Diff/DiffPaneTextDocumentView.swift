@@ -11,6 +11,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let theme: Theme
+    let lspContext: DiffPaneLSPContext?
 
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
         DiffPaneTextDocumentContainerView()
@@ -25,7 +26,8 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             showWhitespace: showWhitespace,
             fileExtension: fileExtension,
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
-            theme: theme
+            theme: theme,
+            lspContext: lspContext
         )
     }
 }
@@ -69,7 +71,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
         showWhitespace: Bool,
         fileExtension: String,
         font: NSFont,
-        theme: Theme
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?
     ) {
         let signature = UpdateSignature(
             group: group,
@@ -80,7 +83,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
             fileExtension: fileExtension,
             fontName: font.fontName,
             fontSize: font.pointSize,
-            theme: theme
+            theme: theme,
+            lspContext: lspContext.map(UpdateSignature.LSPContextSignature.init)
         )
         guard signature != lastUpdateSignature else {
             needsLayout = true
@@ -108,15 +112,20 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lineLabels: lineLabels(from: result.oldGutter),
                 wraps: wrapLines,
                 font: font,
-                theme: theme
+                theme: theme,
+                lspContext: nil,
+                allowedLSPSide: .new
             )
             newPane.update(
                 document: result.newCode,
                 lineLabels: lineLabels(from: result.newGutter),
                 wraps: wrapLines,
                 font: font,
-                theme: theme
+                theme: theme,
+                lspContext: lspContext,
+                allowedLSPSide: .new
             )
+            stackedPane.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
         case .stacked:
             let result = DiffPaneTextDocumentBuilder.buildStacked(
@@ -132,8 +141,12 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lineLabels: lineLabels(from: result.gutter),
                 wraps: wrapLines,
                 font: font,
-                theme: theme
+                theme: theme,
+                lspContext: lspContext,
+                allowedLSPSide: .new
             )
+            oldPane.clearLSPContext()
+            newPane.clearLSPContext()
             measuredHeight = stackedPane.documentHeight
         }
 
@@ -214,6 +227,21 @@ final class DiffPaneTextDocumentContainerView: NSView {
         let fontName: String
         let fontSize: CGFloat
         let theme: Theme
+        let lspContext: LSPContextSignature?
+
+        struct LSPContextSignature: Equatable {
+            let worktreeRoot: URL
+            let relativePath: String
+            let language: String
+            let lsp: ObjectIdentifier
+
+            init(_ context: DiffPaneLSPContext) {
+                worktreeRoot = context.worktreeRoot
+                relativePath = context.relativePath
+                language = context.language
+                lsp = ObjectIdentifier(context.lsp)
+            }
+        }
     }
 }
 
@@ -294,7 +322,9 @@ final class DiffPaneTextScrollView: NSScrollView {
         lineLabels: [String],
         wraps: Bool,
         font: NSFont,
-        theme: Theme
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?,
+        allowedLSPSide: DiffLineSide
     ) {
         self.lineLabels = lineLabels
         self.rowKinds = document.lines.map(\.kind)
@@ -314,8 +344,12 @@ final class DiffPaneTextScrollView: NSScrollView {
 
         textView.textStorage?.setAttributedString(document.attributedString)
         textView.font = font
+        textView.lineMetadata = document.lines
         textView.lineTones = lineTones
         textView.theme = theme
+        textView.lspContext = lspContext
+        textView.allowedLSPSide = allowedLSPSide
+        textView.updateLSPController()
         textView.insertionPointColor = NSColor(theme.color("fg"))
 
         if let ruler = verticalRulerView as? DiffPaneLineNumberRulerView {
@@ -331,6 +365,11 @@ final class DiffPaneTextScrollView: NSScrollView {
         resetHorizontalOriginToLeading()
         needsLayout = true
         invalidateIntrinsicContentSize()
+    }
+
+    func clearLSPContext() {
+        textView.lspContext = nil
+        textView.updateLSPController()
     }
 
     func diffRowRects() -> [NSRect] {
@@ -525,18 +564,94 @@ final class DiffPaneCodeTextView: NSTextView {
         nil
     }
 
+    private var ownedTextStorage: NSTextStorage?
+    private var customTrackingArea: NSTrackingArea?
+    private var lspController: DiffPaneLSPController?
+
     var lineTones: [DiffPaneLineTone] = [] {
         didSet { needsDisplay = true }
     }
+    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
+    var hoverHandler: ((NSPoint) -> Void)?
+    var commandClickHandler: ((NSPoint) -> Void)?
+    var flagsChangedHandler: ((NSEvent) -> Void)?
+    var mouseExitedHandler: (() -> Void)?
+    var lspContext: DiffPaneLSPContext?
+    var allowedLSPSide: DiffLineSide = .new
+    var hasLSPContextForTesting: Bool { lspContext != nil }
+    var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
     var theme: Theme? {
         didSet { needsDisplay = true }
     }
 
     override var isFlipped: Bool { true }
 
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        if textStorage == nil, let textContainer {
+            let storage = NSTextStorage()
+            let layoutManager = NSLayoutManager()
+            layoutManager.addTextContainer(textContainer)
+            storage.addLayoutManager(layoutManager)
+            ownedTextStorage = storage
+        }
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    deinit {
+        let lspController = lspController
+        Task { @MainActor in
+            lspController?.tearDown()
+        }
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawLineBackgrounds(in: dirtyRect)
         super.draw(dirtyRect)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        hoverHandler?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command), let commandClickHandler {
+            commandClickHandler(convert(event.locationInWindow, from: nil))
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+        flagsChangedHandler?(event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        mouseExitedHandler?()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let customTrackingArea {
+            if trackingAreas.contains(where: { $0 === customTrackingArea }) {
+                removeTrackingArea(customTrackingArea)
+            }
+            self.customTrackingArea = nil
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        customTrackingArea = trackingArea
+        addTrackingArea(trackingArea)
     }
 
     func diffRowRects() -> [NSRect] {
@@ -567,6 +682,83 @@ final class DiffPaneCodeTextView: NSTextView {
                 origin: origin
             )
         }
+    }
+
+    func characterIndex(at point: NSPoint) -> Int? {
+        guard let layoutManager, let textContainer, let storage = textStorage else { return nil }
+        let nsString = storage.string as NSString
+        guard nsString.length > 0 else { return nil }
+        layoutManager.ensureLayout(for: textContainer)
+        let origin = textContainerOrigin
+        let containerPoint = NSPoint(
+            x: point.x - origin.x,
+            y: point.y - origin.y
+        )
+        let glyphCount = layoutManager.numberOfGlyphs
+        guard glyphCount > 0 else { return nil }
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < glyphCount else { return nil }
+
+        let lineFragmentRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let lineUsedRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let tolerance: CGFloat = 0.5
+        guard containerPoint.y >= lineFragmentRect.minY - tolerance,
+              containerPoint.y <= lineFragmentRect.maxY + tolerance,
+              containerPoint.x >= lineUsedRect.minX - tolerance,
+              containerPoint.x <= lineUsedRect.maxX + tolerance
+        else {
+            return nil
+        }
+
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        return charIndex < nsString.length ? charIndex : nil
+    }
+
+    func symbolRange(at point: NSPoint) -> NSRange? {
+        guard let index = characterIndex(at: point) else { return nil }
+        let range = (string as NSString).rangeOfWord(at: index)
+        return range.length == 0 ? nil : range
+    }
+
+    func symbolAnchorRect(for range: NSRange) -> NSRect? {
+        guard range.length > 0,
+              range.location != NSNotFound,
+              let layoutManager,
+              let textContainer,
+              let storage = textStorage
+        else {
+            return nil
+        }
+        let textLength = (storage.string as NSString).length
+        guard range.location >= 0,
+              range.location < textLength,
+              range.length <= textLength - range.location
+        else {
+            return nil
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.location != NSNotFound,
+              glyphRange.length > 0,
+              glyphRange.location < layoutManager.numberOfGlyphs
+        else {
+            return nil
+        }
+        let glyph = glyphRange.location
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        return rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+    }
+
+    func updateLSPController() {
+        guard let lspContext else {
+            lspController?.tearDown()
+            lspController = nil
+            return
+        }
+        if lspController == nil {
+            lspController = DiffPaneLSPController(textView: self)
+        }
+        lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
     }
 
     private func drawLineBackgrounds(in dirtyRect: NSRect) {

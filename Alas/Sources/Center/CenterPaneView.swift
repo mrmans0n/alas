@@ -176,6 +176,7 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             relativePath: s.relativePath,
                             staged: s.staged,
+                            worktreeId: worktree.id,
                             appState: state,
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize),

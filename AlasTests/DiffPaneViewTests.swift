@@ -338,7 +338,9 @@ struct DiffPaneViewTests {
             lineLabels: [" 1"],
             wraps: false,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
         scrollView.contentView.scroll(to: NSPoint(x: 120, y: 0))
@@ -358,7 +360,9 @@ struct DiffPaneViewTests {
             lineLabels: [" 1"],
             wraps: false,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
 
         #expect(scrollView.contentView.bounds.origin.x == 0)
@@ -390,7 +394,9 @@ struct DiffPaneViewTests {
             lineLabels: ["56"],
             wraps: false,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -420,7 +426,9 @@ struct DiffPaneViewTests {
             lineLabels: [" 1"],
             wraps: true,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -450,7 +458,9 @@ struct DiffPaneViewTests {
             lineLabels: ["+56"],
             wraps: true,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -487,7 +497,9 @@ struct DiffPaneViewTests {
             lineLabels: ["73"],
             wraps: true,
             font: font,
-            theme: theme
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
         )
         scrollView.layoutSubtreeIfNeeded()
 
@@ -875,6 +887,150 @@ struct DiffPaneViewTests {
 
         #expect(!first.isActive(activeKey: activeKey, activeID: activeID))
         #expect(second.isActive(activeKey: activeKey, activeID: activeID))
+    }
+
+    @Test func diffPaneCodeTextViewStoresLineMetadata() throws {
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: "let value = 1"),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .add,
+                    range: NSRange(location: 0, length: 13),
+                    tone: .add,
+                    sourceLine: DiffDisplayLine(
+                        id: "a.swift:new:0:0",
+                        anchor: DiffLineAnchor(filePath: "a.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 3),
+                        text: "let value = 1",
+                        lineNumber: 3,
+                        kind: .add,
+                        inlineSpans: [],
+                        noTrailingNewline: false
+                    )
+                )
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView()
+        let theme = try Theme.loadBundled(id: "cool-slate")
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+3"],
+            wraps: false,
+            font: .monospacedSystemFont(ofSize: 13, weight: .regular),
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        #expect(codeView.lineMetadata.count == 1)
+        #expect(codeView.lineMetadata.first?.sourceLine?.anchor.newLine == 3)
+    }
+
+    @Test func diffPaneCodeTextViewResolvesSymbolsFromPoints() throws {
+        let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+
+        let expectedRange = NSRange(location: 4, length: 5)
+        let anchorRect = try #require(textView.symbolAnchorRect(for: expectedRange))
+        let point = NSPoint(x: anchorRect.midX, y: anchorRect.midY)
+
+        let characterIndex = try #require(textView.characterIndex(at: point))
+        let symbolRange = try #require(textView.symbolRange(at: point))
+
+        #expect(expectedRange.contains(characterIndex))
+        #expect(symbolRange == expectedRange)
+        #expect(anchorRect.width > 0)
+        #expect(anchorRect.height > 0)
+    }
+
+    @Test func diffPaneCodeTextViewHitTestingIgnoresPointsLeftOfText() throws {
+        let textView = makeDiffPaneCodeTextView(string: "let value = 1")
+        let textRect = try firstGlyphRect(in: textView, range: NSRange(location: 0, length: 3))
+        let point = NSPoint(x: textView.textContainerInset.width - 2, y: textRect.midY)
+
+        #expect(textView.characterIndex(at: point) == nil)
+    }
+
+    @Test func diffPaneCodeTextViewHitTestingIgnoresPointsRightOfLineText() throws {
+        let textView = makeDiffPaneCodeTextView(string: "short\nlet muchLongerValue = 1")
+        let firstLineRect = try firstGlyphRect(in: textView, range: NSRange(location: 0, length: 5))
+        let point = NSPoint(x: firstLineRect.maxX + 20, y: firstLineRect.midY)
+
+        #expect(textView.characterIndex(at: point) == nil)
+    }
+
+    @Test func diffPaneCodeTextViewHitTestingIgnoresPointsBelowText() throws {
+        let textView = makeDiffPaneCodeTextView(string: "let value = 1")
+        let textRect = try firstGlyphRect(in: textView, range: NSRange(location: 0, length: 3))
+        let point = NSPoint(x: textRect.midX, y: textRect.maxY + 30)
+
+        #expect(textView.characterIndex(at: point) == nil)
+    }
+
+    @Test func diffPaneCodeTextViewUpdateTrackingAreasPreservesExternalTrackingAreas() {
+        let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
+        let owner = NSObject()
+        let externalArea = NSTrackingArea(
+            rect: textView.bounds,
+            options: [.mouseMoved, .activeInActiveApp],
+            owner: owner,
+            userInfo: nil
+        )
+        textView.addTrackingArea(externalArea)
+
+        textView.updateTrackingAreas()
+
+        #expect(textView.trackingAreas.contains { $0 === externalArea })
+    }
+
+    @Test func diffPaneCodeTextViewRoutesCommandClickToHandler() throws {
+        let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
+        let window = NSWindow(contentRect: textView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(textView)
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        var clickedPoint: NSPoint?
+        textView.commandClickHandler = { clickedPoint = $0 }
+
+        let anchorRect = try #require(textView.symbolAnchorRect(for: NSRange(location: 4, length: 5)))
+        let windowPoint = textView.convert(NSPoint(x: anchorRect.midX, y: anchorRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        let point = try #require(clickedPoint)
+        #expect(abs(point.x - anchorRect.midX) < 0.5)
+        #expect(abs(point.y - anchorRect.midY) < 0.5)
+    }
+
+    private func makeDiffPaneCodeTextView(string: String) -> DiffPaneCodeTextView {
+        let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 120), textContainer: NSTextContainer())
+        textView.textContainerInset = NSSize(width: 10, height: 8)
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        textView.textStorage?.setAttributedString(NSAttributedString(string: string, attributes: [.font: font]))
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        return textView
+    }
+
+    private func firstGlyphRect(in textView: DiffPaneCodeTextView, range: NSRange) throws -> NSRect {
+        let layoutManager = try #require(textView.layoutManager)
+        let textContainer = try #require(textView.textContainer)
+        layoutManager.ensureLayout(for: textContainer)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        return rect.offsetBy(dx: textView.textContainerInset.width, dy: textView.textContainerInset.height)
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

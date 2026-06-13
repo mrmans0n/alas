@@ -30,7 +30,7 @@ final class EditorOverlayPanel {
         contentViewController: NSViewController,
         size: NSSize,
         anchor: NSRect,
-        in textView: CodeTextView
+        in textView: NSTextView
     ) {
         let panel = ensurePanel(size: size)
         panel.contentViewController = contentViewController
@@ -80,7 +80,7 @@ final class EditorOverlayPanel {
         panel.level = parentWindow.level
     }
 
-    func frame(for size: NSSize, anchor: NSRect, in textView: CodeTextView) -> NSRect {
+    func frame(for size: NSSize, anchor: NSRect, in textView: NSTextView) -> NSRect {
         guard let window = textView.window else {
             return NSRect(origin: .zero, size: size)
         }
@@ -112,7 +112,7 @@ final class EditorOverlayPanel {
 
 enum EditorOverlayPanelTesting {
     @MainActor
-    static func frame(for panel: EditorOverlayPanel, size: NSSize, anchor: NSRect, in textView: CodeTextView) -> NSRect {
+    static func frame(for panel: EditorOverlayPanel, size: NSSize, anchor: NSRect, in textView: NSTextView) -> NSRect {
         panel.frame(for: size, anchor: anchor, in: textView)
     }
 }

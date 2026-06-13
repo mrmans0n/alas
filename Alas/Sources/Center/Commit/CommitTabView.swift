@@ -99,7 +99,10 @@ struct CommitTabView: View {
                     wrapLines: diffPreferences.wrapLines,
                     showWhitespace: diffPreferences.showWhitespace,
                     codeFontFamily: appState.config.code.fontFamily,
-                    codeFontSize: CGFloat(appState.config.code.fontSize)
+                    codeFontSize: CGFloat(appState.config.code.fontSize),
+                    worktreeId: worktreeId,
+                    worktreePath: worktreePath,
+                    appState: appState
                 )
             } else {
                 Spinner()
@@ -263,6 +266,35 @@ struct CommitReviewBody: View {
     @Binding var showWhitespace: Bool
     let codeFontFamily: String
     let codeFontSize: CGFloat
+    var worktreeId: String? = nil
+    var worktreePath: URL? = nil
+    var appState: AppState? = nil
+
+    init(
+        session: DiffReviewLoadedSession,
+        selectedFileID: Binding<DiffReviewFileID?>,
+        railCollapsed: Binding<Bool>,
+        layoutMode: Binding<DiffLayoutMode>,
+        wrapLines: Binding<Bool>,
+        showWhitespace: Binding<Bool>,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        worktreeId: String? = nil,
+        worktreePath: URL? = nil,
+        appState: AppState? = nil
+    ) {
+        self.session = session
+        self._selectedFileID = selectedFileID
+        self._railCollapsed = railCollapsed
+        self._layoutMode = layoutMode
+        self._wrapLines = wrapLines
+        self._showWhitespace = showWhitespace
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.worktreeId = worktreeId
+        self.worktreePath = worktreePath
+        self.appState = appState
+    }
 
     var body: some View {
         DiffReviewSurface(
@@ -275,7 +307,10 @@ struct CommitReviewBody: View {
             codeFontFamily: codeFontFamily,
             codeFontSize: codeFontSize,
             showsSourceBadges: false,
-            showsRailDisplayControls: true
+            showsRailDisplayControls: true,
+            lspContextForFile: { file in
+                makeLSPContext(relativePath: file.summary.path)
+            }
         )
         .accessibilityIdentifier("commit-review-body")
         .background(
@@ -284,5 +319,66 @@ struct CommitReviewBody: View {
                 label: "Commit review"
             )
         )
+    }
+
+    private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {
+        guard let worktreeId, let worktreePath, let appState else { return nil }
+        let fileURL = worktreePath.appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: fileURL.path),
+              let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        else {
+            return nil
+        }
+        return DiffPaneLSPContext(
+            worktreeId: worktreeId,
+            worktreeRoot: worktreePath,
+            relativePath: relativePath,
+            language: language,
+            lsp: appState.lsp,
+            openTarget: { url, line, character in
+                openLSPTarget(
+                    url: url,
+                    worktreeId: worktreeId,
+                    worktreePath: worktreePath,
+                    appState: appState,
+                    originatingRelativePath: relativePath,
+                    language: language,
+                    line: line,
+                    character: character
+                )
+            }
+        )
+    }
+
+    private func openLSPTarget(
+        url: URL,
+        worktreeId: String,
+        worktreePath: URL,
+        appState: AppState,
+        originatingRelativePath: String,
+        language: String,
+        line: Int,
+        character: Int
+    ) {
+        let prefix = worktreePath.path + "/"
+        if url.path.hasPrefix(prefix) {
+            let relativeTarget = String(url.path.dropFirst(prefix.count))
+            appState.tabs.openEditor(
+                worktreeId: worktreeId,
+                relativePath: relativeTarget,
+                revealLine: line,
+                revealCharacter: character
+            )
+        } else {
+            appState.tabs.openExternalEditor(
+                worktreeId: worktreeId,
+                absoluteURL: url,
+                revealLine: line,
+                revealCharacter: character,
+                originatingRelativePath: originatingRelativePath,
+                originatingWorktreeRoot: worktreePath,
+                language: language
+            )
+        }
     }
 }

@@ -173,6 +173,7 @@ struct CommitDiffView: View {
                 codeFontSize: codeFontSize,
                 showsToolbar: false,
                 verticalScrollMode: .internalScroll,
+                lspContext: nil,
                 hunkActions: { hunk in
                     DiffPaneHunkActions(
                         dropFromCommit: dropHunkEnabled(file, hunk) ? { onDropHunk?(hunk) } : nil

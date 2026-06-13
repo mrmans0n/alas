@@ -132,6 +132,93 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "UNSTAGED") != nil)
     }
 
+    @Test func fileSectionAcceptsLSPContextWithoutChangingLayout() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App/AlphaView.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
+        let context = DiffPaneLSPContext(
+            worktreeId: "worktree-1",
+            worktreeRoot: URL(fileURLWithPath: "/tmp/worktree"),
+            relativePath: "Sources/App/AlphaView.swift",
+            language: "swift",
+            lsp: manager,
+            openTarget: { _, _, _ in }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "SF Mono",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            lspContext: context
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+        let textViews = allSubviews(of: controller.view).compactMap { $0 as? DiffPaneCodeTextView }
+
+        #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+        #expect(textViews.contains { $0.hasLSPContextForTesting && $0.allowedLSPSideForTesting == .new })
+        #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
+    }
+
+    @Test func textDocumentViewClearsInactivePaneLSPContextWhenLayoutChanges() {
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
+        let context = DiffPaneLSPContext(
+            worktreeId: "worktree-1",
+            worktreeRoot: URL(fileURLWithPath: "/tmp/worktree"),
+            relativePath: "Sources/App/AlphaView.swift",
+            language: "swift",
+            lsp: manager,
+            openTarget: { _, _, _ in }
+        )
+        let container = DiffPaneTextDocumentContainerView(frame: NSRect(x: 0, y: 0, width: 900, height: 500))
+        let group = try! #require(displayModel().groups.first)
+
+        container.update(
+            group: group,
+            expandedCollapsedRowIDs: [],
+            layoutMode: .split,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "SF Mono", size: 13),
+            theme: theme(),
+            lspContext: context
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let splitTextViews = allSubviews(of: container).compactMap { $0 as? DiffPaneCodeTextView }
+        #expect(splitTextViews.filter(\.hasLSPContextForTesting).count == 1)
+
+        container.update(
+            group: group,
+            expandedCollapsedRowIDs: [],
+            layoutMode: .stacked,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "SF Mono", size: 13),
+            theme: theme(),
+            lspContext: context
+        )
+        container.layoutSubtreeIfNeeded()
+
+        let stackedTextViews = allSubviews(of: container).compactMap { $0 as? DiffPaneCodeTextView }
+        #expect(stackedTextViews.filter(\.hasLSPContextForTesting).count == 1)
+    }
+
     @Test func placeholderSectionsRenderMessageWithoutDiffPane() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Assets/logo.png", status: .modified, isRenderable: false),

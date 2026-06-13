@@ -41,13 +41,17 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// awaiting `initialize()` so a concurrent `closeDocument` can find it
     /// and update state in flight.
     ///
-    /// `refsByURI` tracks the user's open intent **per file** — the codex
-    /// scenario being: file A starts the server, file B opens during init
-    /// (sees existing holder, registers its URI), file A closes during
-    /// init. With aggregate ref counting the holder still has refCount=1
-    /// (B), so A's resumed open path would happily send `didOpen` for the
-    /// already-closed A. With per-URI counts, A's resume sees `refsByURI[A]`
-    /// is gone and skips `didOpen`, while B proceeds normally.
+    /// `refsByURI` tracks total open intent **per file**. Editor-owned refs
+    /// and temporary read-only refs both keep the URI open on the server,
+    /// while `temporaryRefsByURI` records the temporary subset so editor
+    /// opens can replace temporary disk text and closes only release the
+    /// ownership they actually hold. The codex scenario being: file A starts
+    /// the server, file B opens during init (sees existing holder, registers
+    /// its URI), file A closes during init. With aggregate ref counting the
+    /// holder still has refCount=1 (B), so A's resumed open path would
+    /// happily send `didOpen` for the already-closed A. With per-URI counts,
+    /// A's resume sees `refsByURI[A]` is gone and skips `didOpen`, while B
+    /// proceeds normally.
     ///
     /// `openedURIs` records URIs for which `didOpen` was actually delivered,
     /// so `closeDocument` only sends `didClose` when there's something
@@ -62,6 +66,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let client: LSPClient
         let ready: Task<Bool, Never>
         var refsByURI: [String: Int]
+        var temporaryRefsByURI: [String: Int]
+        var temporaryTextsByURI: [String: String]
         var openedURIs: Set<String>
         var versions: [String: Int]   // last didChange version per URI
         var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
@@ -76,6 +82,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
         var lifeState: HolderLifeState
     }
 
+    private enum DocumentOwnership {
+        case editor
+        case temporary
+    }
+
     /// Coarse status of a document's serving holder. The resolver folds this
     /// into `EditorLSPStatus.loading` (.none and .loading), `.ready`, or
     /// `.problem(.dead)`.
@@ -88,6 +99,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
     private var holders: [Key: Holder] = [:]
     private var pendingOpenRefs: [Key: [String: Int]] = [:]
+    private var pendingTemporaryOpenRefs: [Key: [String: Int]] = [:]
 
     /// Bumping counter that lets `@Observable` consumers (the status badge)
     /// re-run derivations when a holder transitions starting → ready → dead.
@@ -97,6 +109,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
     private func bumpStateTick() { stateTick &+= 1 }
 
     private var registry: LanguageServerRegistry
+    private let makeClient: (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient
 
     /// Cached per-language availability so the status badge doesn't re-run
     /// `LanguageServerAvailability.status(for:)` — which can spawn
@@ -109,11 +122,19 @@ final class WorkspaceLSPManager: DocumentFormatter {
 
     init(
         registry: LanguageServerRegistry,
-        makeAvailability: @escaping () -> LanguageServerAvailability = { LanguageServerAvailability() }
+        makeAvailability: @escaping () -> LanguageServerAvailability = { LanguageServerAvailability() },
+        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient = { executable, arguments, environment, language, rootURI in
+            LSPClient(
+                transport: LSPTransport(executable: executable, arguments: arguments, environment: environment),
+                language: language,
+                rootURI: rootURI
+            )
+        }
     ) {
         self.registry = registry
         self.makeAvailability = makeAvailability
         self.cachedAvailability = makeAvailability()
+        self.makeClient = makeClient
     }
 
     func updateRegistry(_ registry: LanguageServerRegistry) {
@@ -157,10 +178,27 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// closed before init completed).
     @discardableResult
     func openDocument(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async -> LSPClient? {
+        await openDocument(worktreeRoot: worktreeRoot, fileURL: fileURL, languageId: languageId, text: text, ownership: .editor)
+    }
+
+    @discardableResult
+    func openTemporaryDocument(worktreeRoot: URL, fileURL: URL, languageId: String, text: String) async -> LSPClient? {
+        await openDocument(worktreeRoot: worktreeRoot, fileURL: fileURL, languageId: languageId, text: text, ownership: .temporary)
+    }
+
+    @discardableResult
+    private func openDocument(
+        worktreeRoot: URL,
+        fileURL: URL,
+        languageId: String,
+        text: String,
+        ownership: DocumentOwnership
+    ) async -> LSPClient? {
         guard let entry = registry.entry(forLanguage: languageId) else { return nil }
         let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
         let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
         let uri = fileURL.lspURI
+        var shouldReplaceTemporaryText = false
         // If a previous holder's server died (process exited, transport
         // closed) we'd otherwise reuse the dead client and silently fail to
         // deliver hover/diagnostics/definition until the user closed every
@@ -181,24 +219,39 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if let existing = holders[key] {
             var refs = existing.refsByURI
             refs[uri, default: 0] += 1
+            var temporaryRefs = existing.temporaryRefsByURI
+            if ownership == .temporary {
+                temporaryRefs[uri, default: 0] += 1
+            } else if existing.openedURIs.contains(uri),
+                      normalRefCount(forURI: uri, in: existing) == 0,
+                      (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
+                shouldReplaceTemporaryText = true
+            }
             // Record this open's text as the latest pending — if `didOpen`
             // hasn't been sent yet, whichever awaiter wakes first will read
             // this value rather than the stale `text` captured on a prior
             // call. (Codex case: tab closed and reopened with different
             // content while the server was still initializing.)
-            holders[key] = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs)
+            holders[key] = holderByUpdatingRefs(
+                existing,
+                uri: uri,
+                text: text,
+                refs: refs,
+                temporaryRefs: temporaryRefs,
+                ownership: ownership
+            )
             client = existing.client
             ready = existing.ready
             isFirstOpener = false
         } else {
-            addPendingOpenRef(key: key, uri: uri)
+            addPendingOpenRef(key: key, uri: uri, ownership: ownership)
             let availability = makeAvailability()
             switch await availability.statusRemediatingGatekeeper(for: entry) {
             case .disabled, .notInstalled:
-                _ = consumePendingOpenRef(key: key, uri: uri)
+                _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
                 return nil
             case .blockedByGatekeeper(let realPath):
-                _ = consumePendingOpenRef(key: key, uri: uri)
+                _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
                 NotificationCenter.default.post(
                     name: .lspBlockedByGatekeeper,
                     object: nil,
@@ -208,11 +261,26 @@ final class WorkspaceLSPManager: DocumentFormatter {
             case .available:
                 break
             }
-            guard consumePendingOpenRef(key: key, uri: uri) else { return nil }
+            guard consumePendingOpenRef(key: key, uri: uri, ownership: ownership) else { return nil }
             if let existing = holders[key] {
                 var refs = existing.refsByURI
                 refs[uri, default: 0] += 1
-                holders[key] = holderByUpdatingRefs(existing, uri: uri, text: text, refs: refs)
+                var temporaryRefs = existing.temporaryRefsByURI
+                if ownership == .temporary {
+                    temporaryRefs[uri, default: 0] += 1
+                } else if existing.openedURIs.contains(uri),
+                          normalRefCount(forURI: uri, in: existing) == 0,
+                          (existing.temporaryRefsByURI[uri] ?? 0) > 0 {
+                    shouldReplaceTemporaryText = true
+                }
+                holders[key] = holderByUpdatingRefs(
+                    existing,
+                    uri: uri,
+                    text: text,
+                    refs: refs,
+                    temporaryRefs: temporaryRefs,
+                    ownership: ownership
+                )
                 client = existing.client
                 ready = existing.ready
                 isFirstOpener = false
@@ -224,13 +292,24 @@ final class WorkspaceLSPManager: DocumentFormatter {
                     language: entry.language,
                     availability: availability
                 )
-                let transport = LSPTransport(executable: spawn.executable, arguments: spawn.arguments, environment: spawn.environment)
-                let newClient = LSPClient(transport: transport, language: languageId, rootURI: lspRoot.lspURI)
+                let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI)
                 let task = Task<Bool, Never> {
                     do { try await newClient.initialize()
                     return true } catch { return false }
                 }
-                holders[key] = Holder(client: newClient, ready: task, refsByURI: [uri: 1], openedURIs: [], versions: [:], pendingOpenText: [uri: text], texts: [:], languagesByURI: [:], lifeState: .starting)
+                holders[key] = Holder(
+                    client: newClient,
+                    ready: task,
+                    refsByURI: [uri: 1],
+                    temporaryRefsByURI: ownership == .temporary ? [uri: 1] : [:],
+                    temporaryTextsByURI: ownership == .temporary ? [uri: text] : [:],
+                    openedURIs: [],
+                    versions: [:],
+                    pendingOpenText: [uri: text],
+                    texts: [:],
+                    languagesByURI: [:],
+                    lifeState: .starting
+                )
                 bumpStateTick()
                 client = newClient
                 ready = task
@@ -278,7 +357,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // newer content wins even if an earlier opener's continuation
         // resumes first.
         if !h.openedURIs.contains(uri) {
-            let openText = h.pendingOpenText[uri] ?? text
+            let openText: String
+            if normalRefCount(forURI: uri, in: h) == 0,
+               (h.temporaryRefsByURI[uri] ?? 0) > 0,
+               let temporaryText = h.temporaryTextsByURI[uri] {
+                openText = temporaryText
+            } else {
+                openText = h.pendingOpenText[uri] ?? text
+            }
             if var holder = holders[key] {
                 holder.openedURIs.insert(uri)
                 holder.versions[uri] = 1
@@ -294,6 +380,21 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 version: 1,
                 text: openText
             )
+        } else if shouldReplaceTemporaryText {
+            if var holder = holders[key], holder.client === client, holder.openedURIs.contains(uri) {
+                let nextVersion = (holder.versions[uri] ?? 1) + 1
+                let previousText = holder.texts[uri]
+                holder.versions[uri] = nextVersion
+                holder.texts[uri] = text
+                holder.languagesByURI[uri] = languageId
+                holders[key] = holder
+                try? await client.didChange(
+                    uri: uri,
+                    version: nextVersion,
+                    text: text,
+                    previousText: previousText
+                )
+            }
         }
         return client
     }
@@ -331,14 +432,46 @@ final class WorkspaceLSPManager: DocumentFormatter {
     }
 
     func closeDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
+        await closeDocument(worktreeRoot: worktreeRoot, fileURL: fileURL, languageId: languageId, ownership: .editor)
+    }
+
+    func closeTemporaryDocument(worktreeRoot: URL, fileURL: URL, languageId: String) async {
+        await closeDocument(worktreeRoot: worktreeRoot, fileURL: fileURL, languageId: languageId, ownership: .temporary)
+    }
+
+    private func closeDocument(
+        worktreeRoot: URL,
+        fileURL: URL,
+        languageId: String,
+        ownership: DocumentOwnership
+    ) async {
         let uri = fileURL.lspURI
         // See `didChange` — find the holder by URI so registry edits made
         // after the open don't strand the original server.
         guard let key = holderKey(forURI: uri), var holder = holders[key], (holder.refsByURI[uri] ?? 0) > 0 else {
-            _ = consumePendingOpenRef(forURI: uri, withinWorktreeRoot: worktreeRoot)
+            _ = consumePendingOpenRef(forURI: uri, withinWorktreeRoot: worktreeRoot, ownership: ownership)
             return
         }
         var refs = holder.refsByURI
+        var temporaryRefs = holder.temporaryRefsByURI
+        switch ownership {
+        case .editor:
+            guard normalRefCount(forURI: uri, in: holder) > 0 else {
+                _ = consumePendingOpenRef(forURI: uri, withinWorktreeRoot: worktreeRoot, ownership: ownership)
+                return
+            }
+        case .temporary:
+            guard (temporaryRefs[uri] ?? 0) > 0 else {
+                _ = consumePendingOpenRef(forURI: uri, withinWorktreeRoot: worktreeRoot, ownership: ownership)
+                return
+            }
+            let newTemporaryRef = (temporaryRefs[uri] ?? 0) - 1
+            if newTemporaryRef <= 0 {
+                temporaryRefs.removeValue(forKey: uri)
+            } else {
+                temporaryRefs[uri] = newTemporaryRef
+            }
+        }
         let newRef = (refs[uri] ?? 0) - 1
         if newRef <= 0 {
             refs.removeValue(forKey: uri)
@@ -346,7 +479,11 @@ final class WorkspaceLSPManager: DocumentFormatter {
             refs[uri] = newRef
         }
         holder.refsByURI = refs
+        holder.temporaryRefsByURI = temporaryRefs
         holders[key] = holder
+        if ownership == .editor {
+            restorePendingTemporaryTextIfNeeded(key: key, holder: holder, uri: uri)
+        }
 
         // If the holder never reached `.ready` (init failed), it lingers
         // in the dict so the badge can show `.problem(.dead)` and offer
@@ -364,7 +501,12 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if !initOk { return }
 
         // Other tabs still need this file open — nothing to send.
-        if (cur.refsByURI[uri] ?? 0) > 0 { return }
+        if (cur.refsByURI[uri] ?? 0) > 0 {
+            if ownership == .editor {
+                await restoreTemporaryTextIfNeeded(key: key, holder: cur, uri: uri, languageId: languageId)
+            }
+            return
+        }
 
         // File is fully closed. Send `didClose` if the matching `didOpen`
         // was actually delivered; otherwise the server has nothing to forget.
@@ -376,6 +518,8 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 c.pendingOpenText.removeValue(forKey: uri)
                 c.texts.removeValue(forKey: uri)
                 c.languagesByURI.removeValue(forKey: uri)
+                c.temporaryRefsByURI.removeValue(forKey: uri)
+                c.temporaryTextsByURI.removeValue(forKey: uri)
                 holders[key] = c
             }
         }
@@ -386,6 +530,67 @@ final class WorkspaceLSPManager: DocumentFormatter {
             holders.removeValue(forKey: key)
             bumpStateTick()
         }
+    }
+
+    private func restorePendingTemporaryTextIfNeeded(
+        key: Key,
+        holder: Holder,
+        uri: String
+    ) {
+        guard !holder.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: holder) == 0,
+              (holder.temporaryRefsByURI[uri] ?? 0) > 0,
+              let temporaryText = holder.temporaryTextsByURI[uri]
+        else {
+            return
+        }
+        guard var current = holders[key],
+              current.client === holder.client,
+              !current.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: current) == 0,
+              (current.temporaryRefsByURI[uri] ?? 0) > 0
+        else {
+            return
+        }
+        current.pendingOpenText[uri] = temporaryText
+        holders[key] = current
+    }
+
+    private func restoreTemporaryTextIfNeeded(
+        key: Key,
+        holder: Holder,
+        uri: String,
+        languageId: String
+    ) async {
+        guard holder.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: holder) == 0,
+              (holder.temporaryRefsByURI[uri] ?? 0) > 0,
+              let temporaryText = holder.temporaryTextsByURI[uri],
+              holder.texts[uri] != temporaryText
+        else {
+            return
+        }
+        guard var current = holders[key],
+              current.client === holder.client,
+              current.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: current) == 0,
+              (current.temporaryRefsByURI[uri] ?? 0) > 0
+        else {
+            return
+        }
+
+        let nextVersion = (current.versions[uri] ?? 1) + 1
+        let previousText = current.texts[uri]
+        current.versions[uri] = nextVersion
+        current.texts[uri] = temporaryText
+        current.languagesByURI[uri] = languageId
+        holders[key] = current
+        try? await current.client.didChange(
+            uri: uri,
+            version: nextVersion,
+            text: temporaryText,
+            previousText: previousText
+        )
     }
 
     /// Fire-and-forget `textDocument/didSave`. Skipped if the document was
@@ -493,6 +698,27 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return holder.client
     }
 
+    /// Returns `nil` when the file is not currently open on an LSP server.
+    /// Returns `false` when it is open but the served text does not contain
+    /// `text` at `line`.
+    func openedDocumentLineMatches(
+        forFile fileURL: URL,
+        worktreeRoot: URL,
+        line: Int,
+        text: String
+    ) -> Bool? {
+        let uri = fileURL.lspURI
+        guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
+              let holder = holders[key],
+              holder.openedURIs.contains(uri) else {
+            return nil
+        }
+        guard line >= 0, let servedText = holder.texts[uri] else { return false }
+        let lines = servedText.split(separator: "\n", omittingEmptySubsequences: false)
+        guard line < lines.count else { return false }
+        return String(lines[line]) == text
+    }
+
     /// Tear down the holder currently serving `fileURL` under `worktreeRoot`
     /// and re-open every URI it had open. Holder-scoped (not tab-scoped) so
     /// all tabs sharing the holder benefit from one restart — which matches
@@ -553,10 +779,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // (typescript-language-server serves typescript / typescriptreact /
         // javascript / javascriptreact under one binary).
         let refsToReopen: [String: Int]
+        let temporaryRefsToReopen: [String: Int]
+        let temporaryTextsToReopen: [String: String]
         let textsByURI: [String: String]
         let languagesByURI: [String: String]
         if let cur = holders[key], cur.client === existing.client {
             refsToReopen = cur.refsByURI
+            temporaryRefsToReopen = cur.temporaryRefsByURI
+            temporaryTextsToReopen = cur.temporaryTextsByURI
             textsByURI = cur.texts.merging(cur.pendingOpenText) { current, _ in current }
             languagesByURI = cur.languagesByURI
             holders.removeValue(forKey: key)
@@ -573,8 +803,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
             guard refCount > 0, let fileURL = URL(string: uri) else { continue }
             let text = textsByURI[uri] ?? ""
             let reopenLanguage = languagesByURI[uri] ?? language
-            for _ in 0 ..< refCount {
+            let temporaryRefCount = temporaryRefsToReopen[uri] ?? 0
+            let editorRefCount = max(refCount - temporaryRefCount, 0)
+            for _ in 0 ..< editorRefCount {
                 _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
+            }
+            let temporaryText = temporaryTextsToReopen[uri] ?? text
+            for _ in 0 ..< temporaryRefCount {
+                _ = await openTemporaryDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: temporaryText)
             }
         }
     }
@@ -588,7 +824,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let uri = fileURL.lspURI
         guard let key = holderKey(forURI: uri, withinWorktreeRoot: worktreeRoot),
               let holder = holders[key] else { return false }
-        return holder.openedURIs.contains(uri)
+        return holder.openedURIs.contains(uri) && normalRefCount(forURI: uri, in: holder) > 0
     }
 
     /// Locates the holder currently tracking `uri` (regardless of which
@@ -602,45 +838,90 @@ final class WorkspaceLSPManager: DocumentFormatter {
         return nil
     }
 
-    private func addPendingOpenRef(key: Key, uri: String) {
-        var refs = pendingOpenRefs[key] ?? [:]
-        refs[uri, default: 0] += 1
-        pendingOpenRefs[key] = refs
+    private func pendingOpenRefs(for ownership: DocumentOwnership) -> [Key: [String: Int]] {
+        switch ownership {
+        case .editor: return pendingOpenRefs
+        case .temporary: return pendingTemporaryOpenRefs
+        }
     }
 
-    private func consumePendingOpenRef(key: Key, uri: String) -> Bool {
-        guard var refs = pendingOpenRefs[key], let count = refs[uri], count > 0 else { return false }
+    private func setPendingOpenRefs(_ refs: [Key: [String: Int]], for ownership: DocumentOwnership) {
+        switch ownership {
+        case .editor: pendingOpenRefs = refs
+        case .temporary: pendingTemporaryOpenRefs = refs
+        }
+    }
+
+    private func addPendingOpenRef(key: Key, uri: String, ownership: DocumentOwnership) {
+        var pending = pendingOpenRefs(for: ownership)
+        var refs = pending[key] ?? [:]
+        refs[uri, default: 0] += 1
+        pending[key] = refs
+        setPendingOpenRefs(pending, for: ownership)
+    }
+
+    private func consumePendingOpenRef(key: Key, uri: String, ownership: DocumentOwnership) -> Bool {
+        var pending = pendingOpenRefs(for: ownership)
+        guard var refs = pending[key], let count = refs[uri], count > 0 else { return false }
         if count == 1 {
             refs.removeValue(forKey: uri)
         } else {
             refs[uri] = count - 1
         }
         if refs.isEmpty {
-            pendingOpenRefs.removeValue(forKey: key)
+            pending.removeValue(forKey: key)
         } else {
-            pendingOpenRefs[key] = refs
+            pending[key] = refs
         }
+        setPendingOpenRefs(pending, for: ownership)
         return true
     }
 
-    private func consumePendingOpenRef(forURI uri: String, withinWorktreeRoot worktreeRoot: URL) -> Bool {
+    private func consumePendingOpenRef(
+        forURI uri: String,
+        withinWorktreeRoot worktreeRoot: URL,
+        ownership: DocumentOwnership
+    ) -> Bool {
         let rootPath = worktreeRoot.path
         let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        for key in pendingOpenRefs.keys where pendingOpenRefs[key]?[uri] != nil {
+        let pending = pendingOpenRefs(for: ownership)
+        for key in pending.keys where pending[key]?[uri] != nil {
             if key.root == rootPath || key.root.hasPrefix(rootPrefix) {
-                return consumePendingOpenRef(key: key, uri: uri)
+                return consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
             }
         }
         return false
     }
 
-    private func holderByUpdatingRefs(_ holder: Holder, uri: String, text: String, refs: [String: Int]) -> Holder {
+    private func holderByUpdatingRefs(
+        _ holder: Holder,
+        uri: String,
+        text: String,
+        refs: [String: Int],
+        temporaryRefs: [String: Int],
+        ownership: DocumentOwnership
+    ) -> Holder {
         var pending = holder.pendingOpenText
-        if !holder.openedURIs.contains(uri) { pending[uri] = text }
+        var temporaryTexts = holder.temporaryTextsByURI
+        if !holder.openedURIs.contains(uri) {
+            switch ownership {
+            case .editor:
+                pending[uri] = text
+            case .temporary:
+                temporaryTexts[uri] = text
+                if normalRefCount(forURI: uri, in: holder) == 0 {
+                    pending[uri] = text
+                }
+            }
+        } else if ownership == .temporary {
+            temporaryTexts[uri] = text
+        }
         return Holder(
             client: holder.client,
             ready: holder.ready,
             refsByURI: refs,
+            temporaryRefsByURI: temporaryRefs,
+            temporaryTextsByURI: temporaryTexts,
             openedURIs: holder.openedURIs,
             versions: holder.versions,
             pendingOpenText: pending,
@@ -648,6 +929,10 @@ final class WorkspaceLSPManager: DocumentFormatter {
             languagesByURI: holder.languagesByURI,
             lifeState: holder.lifeState
         )
+    }
+
+    private func normalRefCount(forURI uri: String, in holder: Holder) -> Int {
+        max((holder.refsByURI[uri] ?? 0) - (holder.temporaryRefsByURI[uri] ?? 0), 0)
     }
 
     /// Worktree-scoped variant: returns a holder for `uri` only if its

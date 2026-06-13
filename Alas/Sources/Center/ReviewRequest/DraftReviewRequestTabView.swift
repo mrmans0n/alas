@@ -826,6 +826,7 @@ struct DraftReviewRequestDiffPreviewView: View {
                 codeFontSize: codeFontSize,
                 showsToolbar: false,
                 verticalScrollMode: .internalScroll,
+                lspContext: nil,
                 hunkActions: { _ in DiffPaneHunkActions() }
             )
         }

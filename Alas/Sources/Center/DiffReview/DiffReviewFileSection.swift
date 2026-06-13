@@ -8,6 +8,7 @@ struct DiffReviewFileSection: View {
     let codeFontFamily: String
     let codeFontSize: CGFloat
     let showsSourceBadge: Bool
+    var lspContext: DiffPaneLSPContext? = nil
 
     @Environment(\.theme) private var theme
 
@@ -97,6 +98,7 @@ struct DiffReviewFileSection: View {
                 codeFontSize: codeFontSize,
                 showsToolbar: false,
                 verticalScrollMode: .staticHeight,
+                lspContext: lspContext,
                 hunkActions: { _ in DiffPaneHunkActions() }
             )
         } else {

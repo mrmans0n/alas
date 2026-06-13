@@ -205,8 +205,65 @@ struct ReviewChangesTabView: View {
             showWhitespace: diffPreferences.showWhitespace,
             codeFontFamily: appState.config.code.fontFamily,
             codeFontSize: CGFloat(appState.config.code.fontSize),
-            showsSourceBadges: true
+            showsSourceBadges: true,
+            lspContextForFile: { file in
+                makeLSPContext(relativePath: file.summary.path)
+            }
         )
+    }
+
+    private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {
+        let fileURL = worktree.path.appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: fileURL.path),
+              let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
+        else {
+            return nil
+        }
+        return DiffPaneLSPContext(
+            worktreeId: worktree.id,
+            worktreeRoot: worktree.path,
+            relativePath: relativePath,
+            language: language,
+            lsp: appState.lsp,
+            openTarget: { url, line, character in
+                openLSPTarget(
+                    url: url,
+                    originatingRelativePath: relativePath,
+                    language: language,
+                    line: line,
+                    character: character
+                )
+            }
+        )
+    }
+
+    private func openLSPTarget(
+        url: URL,
+        originatingRelativePath: String,
+        language: String,
+        line: Int,
+        character: Int
+    ) {
+        let prefix = worktree.path.path + "/"
+        if url.path.hasPrefix(prefix) {
+            let relativeTarget = String(url.path.dropFirst(prefix.count))
+            appState.tabs.openEditor(
+                worktreeId: worktree.id,
+                relativePath: relativeTarget,
+                revealLine: line,
+                revealCharacter: character
+            )
+        } else {
+            appState.tabs.openExternalEditor(
+                worktreeId: worktree.id,
+                absoluteURL: url,
+                revealLine: line,
+                revealCharacter: character,
+                originatingRelativePath: originatingRelativePath,
+                originatingWorktreeRoot: worktree.path,
+                language: language
+            )
+        }
     }
 
     private func stateView(title: String, detail: String?, color: Color) -> some View {

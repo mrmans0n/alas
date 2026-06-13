@@ -11,6 +11,7 @@ struct DiffReviewSurface: View {
     let codeFontSize: CGFloat
     var showsSourceBadges: Bool = true
     var showsRailDisplayControls: Bool = false
+    var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -82,7 +83,8 @@ struct DiffReviewSurface: View {
                             showWhitespace: $showWhitespace,
                             codeFontFamily: codeFontFamily,
                             codeFontSize: codeFontSize,
-                            showsSourceBadge: showsSourceBadges
+                            showsSourceBadge: showsSourceBadges,
+                            lspContext: lspContextForFile(file)
                         )
                         .id(file.summary.id.rawValue)
                         .background(sectionFrameReader(for: file.summary.id))
