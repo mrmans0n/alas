@@ -440,6 +440,38 @@ struct ReviewEvidenceModelTests {
         #expect(model.inlineFeedbackByFileID[fileID]?.map(\.id) == ["thread-1"])
     }
 
+    @Test func reviewEvidenceFilesRouteUsesModelInlineFeedbackForDiffSurface() async throws {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: Self.reviewRequest(threads: [
+                ReviewThreadSummary(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please simplify this.",
+                    url: URL(string: "https://github.com/discussion"),
+                    isResolved: false,
+                    isActionable: true,
+                    location: ReviewThreadLocation(
+                        path: "Sources/App.swift",
+                        originalPath: nil,
+                        line: 1,
+                        side: .new,
+                        providerPosition: "thread-1"
+                    )
+                ),
+            ])),
+            provider: FakeCodeHostProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: .files
+        )
+
+        await model.load()
+
+        let fileID = try #require(model.fileSession?.files.first?.id)
+        let feedback = ReviewEvidenceTabView.diffSurfaceInlineFeedbackByFileID(for: model)
+
+        #expect(feedback[fileID]?.map(\.id) == ["thread-1"])
+    }
+
     @Test func modelClearsInlineFeedbackWithoutReviewRequest() async {
         let model = ReviewEvidenceModel(
             snapshot: Self.snapshot(reviewRequest: nil),
@@ -572,6 +604,13 @@ struct ReviewEvidenceModelTests {
 
         #expect(ciContent == .evidenceBrowser)
         #expect(feedbackContent == .evidenceBrowser)
+    }
+
+    @Test func evidenceBrowserEmptyTextReflectsLoadingState() {
+        #expect(ReviewEvidenceTabView.emptyText(for: .ci, isLoadingList: true, itemCount: 0) == "Loading checks…")
+        #expect(ReviewEvidenceTabView.emptyText(for: .ci, isLoadingList: false, itemCount: 0) == "No checks")
+        #expect(ReviewEvidenceTabView.emptyText(for: .feedback, isLoadingList: true, itemCount: 0) == "Loading feedback…")
+        #expect(ReviewEvidenceTabView.emptyText(for: .feedback, isLoadingList: false, itemCount: 0) == "No feedback")
     }
 
     @Test func filesLoadedWithEvidenceErrorStillChoosesFilesContent() {

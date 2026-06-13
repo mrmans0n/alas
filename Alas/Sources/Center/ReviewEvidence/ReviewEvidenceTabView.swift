@@ -267,7 +267,11 @@ struct ReviewEvidenceTabView: View {
                 modelErrorMessage: model.errorMessage
             ) {
             case .files(let state):
-                filesPane(state: state, session: model.fileSession)
+                filesPane(
+                    state: state,
+                    session: model.fileSession,
+                    inlineFeedbackByFileID: Self.diffSurfaceInlineFeedbackByFileID(for: model)
+                )
             case .evidenceBrowser:
                 HStack(spacing: 0) {
                     evidenceList(model: model)
@@ -283,7 +287,11 @@ struct ReviewEvidenceTabView: View {
     }
 
     @ViewBuilder
-    private func filesPane(state: ReviewEvidenceFilesContentState, session: DiffReviewLoadedSession?) -> some View {
+    private func filesPane(
+        state: ReviewEvidenceFilesContentState,
+        session: DiffReviewLoadedSession?,
+        inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]]
+    ) -> some View {
         switch state {
         case .loading:
             VStack(spacing: 10) {
@@ -310,7 +318,8 @@ struct ReviewEvidenceTabView: View {
                     codeFontFamily: appState.config.code.fontFamily,
                     codeFontSize: CGFloat(appState.config.code.fontSize),
                     showsSourceBadges: true,
-                    showsRailDisplayControls: true
+                    showsRailDisplayControls: true,
+                    inlineFeedbackByFileID: inlineFeedbackByFileID
                 )
             } else {
                 filesEmptyState
@@ -332,12 +341,12 @@ struct ReviewEvidenceTabView: View {
         let items = model.items(for: selectedSection)
 
         return Group {
-            if model.isLoadingList {
-                Spinner()
-                    .frame(width: 18, height: 18)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if items.isEmpty {
-                Text(emptyText(for: selectedSection))
+            if items.isEmpty {
+                Text(Self.emptyText(
+                    for: selectedSection,
+                    isLoadingList: model.isLoadingList,
+                    itemCount: items.count
+                ))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(theme.color("fg-dim"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -731,12 +740,27 @@ struct ReviewEvidenceTabView: View {
         )
     }
 
-    private func emptyText(for section: ReviewEvidenceSection) -> String {
+    static func emptyText(
+        for section: ReviewEvidenceSection,
+        isLoadingList: Bool,
+        itemCount: Int
+    ) -> String {
         switch section {
-        case .files: "No changed files"
-        case .ci: "No failed checks"
-        case .feedback: "No actionable feedback"
+        case .files:
+            return "No changed files"
+        case .ci:
+            if isLoadingList && itemCount == 0 { return "Loading checks…" }
+            return "No checks"
+        case .feedback:
+            if isLoadingList && itemCount == 0 { return "Loading feedback…" }
+            return "No feedback"
         }
+    }
+
+    static func diffSurfaceInlineFeedbackByFileID(
+        for model: ReviewEvidenceModel
+    ) -> [DiffReviewFileID: [DiffReviewInlineFeedback]] {
+        model.inlineFeedbackByFileID
     }
 
     private func detailLocation(_ detail: ReviewEvidenceDetail) -> String? {
