@@ -480,8 +480,8 @@ struct GitHubCLIProviderTests {
         #expect(checks[0].bucket == .fail)
     }
 
-    @Test func failedCheckEvidenceUsesFailedChecksOnly() async throws {
-        let checks = try GitHubCLIProvider.parseChecks(Self.failedChecksOutput)
+    @Test func failedCheckEvidenceUsesCIActivityChecks() async throws {
+        let checks = try GitHubCLIProvider.parseChecks(Self.ciActivityChecksOutput)
         let request = Self.makeRequest(checks: checks)
 
         let evidence = try await GitHubCLIProvider().failedCheckEvidence(
@@ -490,16 +490,11 @@ struct GitHubCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(evidence == [
-            ReviewEvidenceItem(
-                id: checks[0].id,
-                section: .ci,
-                title: "test",
-                subtitle: "CI",
-                status: .failed,
-                providerURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/1/job/3")
-            ),
-        ])
+        #expect(evidence.map(\.id) == checks.map(\.id))
+        #expect(evidence.map(\.title) == ["build", "test", "lint", "docs", "deploy"])
+        #expect(evidence.map(\.subtitle) == ["CI", "CI", "CI", "Docs", "Deploy"])
+        #expect(evidence.map(\.status) == [.passed, .failed, .pending, .unknown, .cancelled])
+        #expect(evidence.map(\.providerURL) == checks.map(\.detailURL))
     }
 
     @Test func checkEvidenceDetailLoadsRunLogForWorkflowCheck() async throws {
@@ -872,6 +867,66 @@ struct GitHubCLIProviderTests {
         "startedAt": "2026-06-01T12:31:00Z",
         "state": "FAILURE",
         "workflow": "CI"
+      }
+    ]
+    """
+
+    private static let ciActivityChecksOutput = """
+    [
+      {
+        "bucket": "pass",
+        "completedAt": "2026-06-01T12:34:56Z",
+        "description": "Build passed",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/1",
+        "name": "build",
+        "startedAt": "2026-06-01T12:30:00Z",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "bucket": "fail",
+        "completedAt": "2026-06-01T12:35:56Z",
+        "description": "Unit tests failed",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/3",
+        "name": "test",
+        "startedAt": "2026-06-01T12:31:00Z",
+        "state": "FAILURE",
+        "workflow": "CI"
+      },
+      {
+        "bucket": "pending",
+        "completedAt": null,
+        "description": "Lint is running",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/4",
+        "name": "lint",
+        "startedAt": "2026-06-01T12:32:00Z",
+        "state": "PENDING",
+        "workflow": "CI"
+      },
+      {
+        "bucket": "skipping",
+        "completedAt": null,
+        "description": "Docs skipped",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/5",
+        "name": "docs",
+        "startedAt": null,
+        "state": "SKIPPED",
+        "workflow": "Docs"
+      },
+      {
+        "bucket": "cancel",
+        "completedAt": "2026-06-01T12:36:56Z",
+        "description": "Deploy cancelled",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/6",
+        "name": "deploy",
+        "startedAt": "2026-06-01T12:33:00Z",
+        "state": "CANCELLED",
+        "workflow": "Deploy"
       }
     ]
     """
