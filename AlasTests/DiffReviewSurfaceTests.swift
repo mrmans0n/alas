@@ -143,6 +143,15 @@ struct DiffReviewSurfaceTests {
         var layout = DiffLayoutMode.split
         var wrap = false
         var whitespace = false
+        let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
+        let context = DiffPaneLSPContext(
+            worktreeId: "worktree-1",
+            worktreeRoot: URL(fileURLWithPath: "/tmp/worktree"),
+            relativePath: "Sources/App/AlphaView.swift",
+            language: "swift",
+            lsp: manager,
+            openTarget: { _, _, _ in }
+        )
 
         let view = DiffReviewFileSection(
             file: file,
@@ -152,13 +161,15 @@ struct DiffReviewSurfaceTests {
             codeFontFamily: "SF Mono",
             codeFontSize: 13,
             showsSourceBadge: false,
-            lspContext: nil
+            lspContext: context
         )
         .environment(\.theme, theme())
 
         let controller = host(view, width: 900, height: 500)
+        let textViews = allSubviews(of: controller.view).compactMap { $0 as? DiffPaneCodeTextView }
 
         #expect(allSubviews(of: controller.view).contains { $0 is DiffPaneTextScrollView })
+        #expect(textViews.contains { $0.hasLSPContextForTesting && $0.allowedLSPSideForTesting == .new })
         #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
     }
 

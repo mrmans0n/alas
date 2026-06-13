@@ -570,6 +570,8 @@ final class DiffPaneCodeTextView: NSTextView {
     var mouseExitedHandler: (() -> Void)?
     var lspContext: DiffPaneLSPContext?
     var allowedLSPSide: DiffLineSide = .new
+    var hasLSPContextForTesting: Bool { lspContext != nil }
+    var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
     var theme: Theme? {
         didSet { needsDisplay = true }
     }

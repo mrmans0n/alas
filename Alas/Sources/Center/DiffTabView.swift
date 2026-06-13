@@ -167,7 +167,13 @@ struct DiffTabView: View {
     }
 
     private var lspContext: DiffPaneLSPContext? {
-        guard !isFileDeleted else { return nil }
+        let fileURL = worktreePath.appendingPathComponent(relativePath)
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue
+        else {
+            return nil
+        }
         guard let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension) else {
             return nil
         }
