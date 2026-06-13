@@ -141,6 +141,41 @@ struct GitLabCLIProviderTests {
         #expect(threads[1].isActionable)
     }
 
+    @Test func discussionsJSONPreservesLocationMetadata() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            """
+            [
+              {
+                "id": "discussion-1",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 100,
+                    "body": "This needs a guard.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_100",
+                    "author": { "username": "reviewer" },
+                    "position": {
+                      "new_path": "Sources/App.swift",
+                      "old_path": "Sources/OldApp.swift",
+                      "new_line": 24,
+                      "old_line": null
+                    }
+                  }
+                ]
+              }
+            ]
+            """,
+            requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
+        )
+
+        #expect(threads.first?.location?.path == "Sources/App.swift")
+        #expect(threads.first?.location?.originalPath == "Sources/OldApp.swift")
+        #expect(threads.first?.location?.line == 24)
+        #expect(threads.first?.location?.side == .new)
+        #expect(threads.first?.location?.providerPosition == "100")
+    }
+
     @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
         let threads = try GitLabCLIProvider.parseDiscussions(
             Self.systemOnlyDiscussionsOutput,

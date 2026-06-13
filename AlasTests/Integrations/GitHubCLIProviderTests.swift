@@ -313,6 +313,50 @@ struct GitHubCLIProviderTests {
         #expect(threads[1].isActionable == false)
     }
 
+    @Test func reviewThreadsJSONPreservesLocationMetadata() throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(
+            """
+            {
+              "data": {
+                "repository": {
+                  "pullRequest": {
+                    "reviewThreads": {
+                      "nodes": [
+                        {
+                          "id": "PRRT_kwDO",
+                          "isResolved": false,
+                          "isOutdated": false,
+                          "path": "Sources/App.swift",
+                          "line": 56,
+                          "originalLine": null,
+                          "diffSide": "RIGHT",
+                          "comments": {
+                            "nodes": [
+                              {
+                                "id": "PRRC_kwDO",
+                                "body": "Please simplify this.",
+                                "url": "https://github.com/mrmans0n/alas/pull/1#discussion_r1",
+                                "author": { "login": "reviewer" }
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
+                  }
+                }
+              }
+            }
+            """
+        )
+
+        #expect(threads.first?.location?.path == "Sources/App.swift")
+        #expect(threads.first?.location?.line == 56)
+        #expect(threads.first?.location?.side == .new)
+        #expect(threads.first?.location?.providerPosition == "PRRT_kwDO")
+    }
+
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """

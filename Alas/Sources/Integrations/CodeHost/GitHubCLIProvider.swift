@@ -12,6 +12,10 @@ struct GitHubCLIProvider: CodeHostProvider {
               id
               isResolved
               isOutdated
+              path
+              line
+              originalLine
+              diffSide
               comments(first: 50) {
                 nodes {
                   id
@@ -459,7 +463,8 @@ struct GitHubCLIProvider: CodeHostProvider {
                 body: comment.body,
                 url: url,
                 isResolved: thread.isResolved,
-                isActionable: !thread.isResolved && !thread.isOutdated
+                isActionable: !thread.isResolved && !thread.isOutdated,
+                location: reviewThreadLocation(from: thread)
             )
         }
         return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
@@ -540,6 +545,40 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput(context)
         }
         return url
+    }
+
+    private static func normalizedOptionalString(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func reviewThreadLocation(from thread: ReviewThreadNode) -> ReviewThreadLocation? {
+        guard let path = normalizedOptionalString(thread.path) else {
+            return nil
+        }
+        let side: ReviewThreadSide
+        let line: Int?
+        switch thread.diffSide?.uppercased() {
+        case "LEFT":
+            side = .old
+            line = thread.originalLine ?? thread.line
+        case "RIGHT":
+            side = .new
+            line = thread.line ?? thread.originalLine
+        default:
+            side = .unknown
+            line = thread.line ?? thread.originalLine
+        }
+        return ReviewThreadLocation(
+            path: path,
+            originalPath: nil,
+            line: line,
+            side: side,
+            providerPosition: thread.id
+        )
     }
 
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
@@ -667,6 +706,10 @@ private struct ReviewThreadNode: Decodable {
     let id: String
     let isResolved: Bool
     let isOutdated: Bool
+    let path: String?
+    let line: Int?
+    let originalLine: Int?
+    let diffSide: String?
     let comments: ReviewThreadCommentsConnection
 }
 

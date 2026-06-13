@@ -119,6 +119,20 @@ struct ReviewCheck: Identifiable, Equatable, Sendable {
     let completedAt: Date?
 }
 
+enum ReviewThreadSide: String, Codable, Equatable, Sendable {
+    case old
+    case new
+    case unknown
+}
+
+struct ReviewThreadLocation: Codable, Equatable, Sendable {
+    let path: String
+    let originalPath: String?
+    let line: Int?
+    let side: ReviewThreadSide
+    let providerPosition: String?
+}
+
 struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
     let id: String
     let author: String?
@@ -126,6 +140,25 @@ struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
     let url: URL?
     let isResolved: Bool
     let isActionable: Bool
+    let location: ReviewThreadLocation?
+
+    init(
+        id: String,
+        author: String?,
+        body: String,
+        url: URL?,
+        isResolved: Bool,
+        isActionable: Bool,
+        location: ReviewThreadLocation? = nil
+    ) {
+        self.id = id
+        self.author = author
+        self.body = body
+        self.url = url
+        self.isResolved = isResolved
+        self.isActionable = isActionable
+        self.location = location
+    }
 }
 
 struct ReviewRequest: Identifiable, Equatable, Sendable {
