@@ -176,6 +176,53 @@ struct GitLabCLIProviderTests {
         #expect(threads.first?.location?.providerPosition == "100")
     }
 
+    @Test func discussionsJSONIgnoresMalformedPositionMetadata() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            """
+            [
+              {
+                "id": "discussion-malformed",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 101,
+                    "body": "Keep this discussion.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_101",
+                    "author": { "username": "reviewer" },
+                    "position": {
+                      "new_path": 123,
+                      "old_path": "Sources/OldApp.swift",
+                      "new_line": "24",
+                      "old_line": false
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "discussion-position-string",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 102,
+                    "body": "Keep this non-object position discussion.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_102",
+                    "author": { "username": "reviewer" },
+                    "position": "not-a-position-object"
+                  }
+                ]
+              }
+            ]
+            """,
+            requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
+        )
+
+        #expect(threads.map(\.id) == ["discussion-malformed", "discussion-position-string"])
+        #expect(threads.first?.body == "Keep this discussion.")
+        #expect(threads.allSatisfy { $0.location == nil })
+    }
+
     @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
         let threads = try GitLabCLIProvider.parseDiscussions(
             Self.systemOnlyDiscussionsOutput,

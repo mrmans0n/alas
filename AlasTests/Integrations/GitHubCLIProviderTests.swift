@@ -357,6 +357,49 @@ struct GitHubCLIProviderTests {
         #expect(threads.first?.location?.providerPosition == "PRRT_kwDO")
     }
 
+    @Test func reviewThreadsJSONIgnoresMalformedLocationMetadata() throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(
+            """
+            {
+              "data": {
+                "repository": {
+                  "pullRequest": {
+                    "reviewThreads": {
+                      "nodes": [
+                        {
+                          "id": "PRRT_malformed",
+                          "isResolved": false,
+                          "isOutdated": false,
+                          "path": 123,
+                          "line": "56",
+                          "originalLine": "55",
+                          "diffSide": true,
+                          "comments": {
+                            "nodes": [
+                              {
+                                "id": "PRRC_malformed",
+                                "body": "Keep this feedback.",
+                                "url": "https://github.com/mrmans0n/alas/pull/1#discussion_r2",
+                                "author": { "login": "reviewer" }
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
+                  }
+                }
+              }
+            }
+            """
+        )
+
+        #expect(threads.map(\.id) == ["PRRT_malformed"])
+        #expect(threads.first?.body == "Keep this feedback.")
+        #expect(threads.first?.location == nil)
+    }
+
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """

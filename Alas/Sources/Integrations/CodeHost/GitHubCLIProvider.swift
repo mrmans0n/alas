@@ -711,6 +711,29 @@ private struct ReviewThreadNode: Decodable {
     let originalLine: Int?
     let diffSide: String?
     let comments: ReviewThreadCommentsConnection
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.isResolved = try container.decode(Bool.self, forKey: .isResolved)
+        self.isOutdated = try container.decode(Bool.self, forKey: .isOutdated)
+        self.path = try? container.decode(String.self, forKey: .path)
+        self.line = try? container.decode(Int.self, forKey: .line)
+        self.originalLine = try? container.decode(Int.self, forKey: .originalLine)
+        self.diffSide = try? container.decode(String.self, forKey: .diffSide)
+        self.comments = try container.decode(ReviewThreadCommentsConnection.self, forKey: .comments)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case isResolved
+        case isOutdated
+        case path
+        case line
+        case originalLine
+        case diffSide
+        case comments
+    }
 }
 
 private struct ReviewThreadCommentsConnection: Decodable {

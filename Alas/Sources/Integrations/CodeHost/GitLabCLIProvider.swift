@@ -925,6 +925,18 @@ private struct GitLabDiscussionNote: Decodable {
         system ?? false
     }
 
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(Int.self, forKey: .id)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.author = try container.decodeIfPresent(GitLabDiscussionAuthor.self, forKey: .author)
+        self.system = try container.decodeIfPresent(Bool.self, forKey: .system)
+        self.resolvable = try container.decodeIfPresent(Bool.self, forKey: .resolvable)
+        self.resolved = try container.decodeIfPresent(Bool.self, forKey: .resolved)
+        self.webURL = try container.decodeIfPresent(String.self, forKey: .webURL)
+        self.position = try? container.decode(GitLabNotePosition.self, forKey: .position)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case body
