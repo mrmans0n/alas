@@ -189,7 +189,7 @@ private struct InlineFeedbackFileMatcher {
         case .new:
             filesByPath[location.path] ?? location.originalPath.flatMap { filesByOriginalPath[$0] } ?? filesByOriginalPath[location.path]
         case .unknown:
-            filesByPath[location.path] ?? location.originalPath.flatMap { filesByOriginalPath[$0] }
+            filesByPath[location.path] ?? location.originalPath.flatMap { filesByOriginalPath[$0] } ?? filesByOriginalPath[location.path]
         case .old:
             fileForOldSide(location)
         }

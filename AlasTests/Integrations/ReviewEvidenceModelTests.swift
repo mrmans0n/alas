@@ -230,6 +230,50 @@ struct ReviewEvidenceModelTests {
         ))
     }
 
+    @Test func inlineFeedbackMappingFallsBackToOriginalPathForUnknownSideWhenCurrentPathIsMissing() {
+        let renamedFile = DiffReviewFileSummary(
+            path: "Sources/NewApp.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .renamed,
+            additions: 4,
+            deletions: 3,
+            isRenderable: true,
+            originalPath: "Sources/OldApp.swift"
+        )
+        let threads = [
+            ReviewThreadSummary(
+                id: "thread-unknown-side-original-path",
+                author: "reviewer",
+                body: "Provider omitted side data.",
+                url: URL(string: "https://github.com/discussion/unknown-original"),
+                isResolved: false,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/OldApp.swift",
+                    originalPath: nil,
+                    line: 8,
+                    side: .unknown,
+                    providerPosition: "unknown-original"
+                )
+            ),
+        ]
+
+        let feedback = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: threads,
+            files: [renamedFile],
+            providerName: "GitHub"
+        )
+
+        #expect(feedback[renamedFile.id]?.map(\.id) == ["thread-unknown-side-original-path"])
+        #expect(feedback[renamedFile.id]?.first?.anchor == DiffReviewInlineFeedbackAnchor(
+            path: "Sources/OldApp.swift",
+            line: 8,
+            side: .unknown
+        ))
+    }
+
     @Test func modelPublishesInlineFeedbackAfterFilesAndEvidenceLoad() async throws {
         let model = ReviewEvidenceModel(
             snapshot: Self.snapshot(reviewRequest: Self.reviewRequest(threads: [
