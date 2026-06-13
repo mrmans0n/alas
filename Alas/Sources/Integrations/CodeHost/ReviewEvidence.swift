@@ -111,6 +111,36 @@ enum ReviewEvidenceFallbacks {
     }
 }
 
+enum ReviewEvidenceCIActivityMapper {
+    static func items(for checks: [ReviewCheck]) -> [ReviewEvidenceItem] {
+        checks.map { check in
+            ReviewEvidenceItem(
+                id: check.id,
+                section: .ci,
+                title: check.name,
+                subtitle: check.workflow,
+                status: status(for: check.bucket),
+                providerURL: check.detailURL
+            )
+        }
+    }
+
+    private static func status(for bucket: ReviewCheckBucket) -> ReviewEvidenceStatus {
+        switch bucket {
+        case .pass:
+            .passed
+        case .fail:
+            .failed
+        case .pending:
+            .pending
+        case .cancel:
+            .cancelled
+        case .skipping, .unknown:
+            .unknown
+        }
+    }
+}
+
 enum ReviewEvidenceInlineFeedbackMapper {
     static func feedbackByFileID(
         threads: [ReviewThreadSummary],

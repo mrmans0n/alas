@@ -25,6 +25,42 @@ struct ReviewEvidenceModelTests {
         #expect(counts.feedback == 0)
     }
 
+    @Test func ciActivityEvidenceMapsAllCheckBuckets() {
+        let checks = [
+            Self.check(id: "check-pass", name: "build", workflow: "CI", bucket: .pass),
+            Self.check(id: "check-fail", name: "test", workflow: "CI", bucket: .fail),
+            Self.check(id: "check-pending", name: "lint", workflow: "CI", bucket: .pending),
+            Self.check(id: "check-skipping", name: "docs", workflow: "Docs", bucket: .skipping),
+            Self.check(id: "check-cancel", name: "release", workflow: "Deploy", bucket: .cancel),
+        ]
+
+        let items = ReviewEvidenceCIActivityMapper.items(for: checks)
+
+        #expect(items.map(\.id) == checks.map(\.id))
+        #expect(items.map(\.section) == [.ci, .ci, .ci, .ci, .ci])
+        #expect(items.map(\.title) == ["build", "test", "lint", "docs", "release"])
+        #expect(items.map(\.subtitle) == ["CI", "CI", "CI", "Docs", "Deploy"])
+        #expect(items.map(\.status) == [.passed, .failed, .pending, .unknown, .cancelled])
+        #expect(items.map(\.providerURL) == checks.map(\.detailURL))
+    }
+
+    @Test func modelPublishesPendingChecksFromReviewRequest() async {
+        let pending = Self.check(id: "check-pending", name: "lint", workflow: "CI", bucket: .pending)
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: Self.reviewRequest(checks: [pending])),
+            provider: DefaultEvidenceProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: .ci
+        )
+
+        await model.load()
+
+        #expect(model.selectedSection == .ci)
+        #expect(model.ciItems.map(\.id) == ["check-pending"])
+        #expect(model.ciItems.first?.status == .pending)
+        #expect(model.selectedItem?.id == "check-pending")
+    }
+
     @Test func inlineFeedbackMappingUsesLocatedActionableThreads() {
         let files = [
             DiffReviewFileSummary(
@@ -902,7 +938,10 @@ struct ReviewEvidenceModelTests {
         )
     }
 
-    private static func reviewRequest(threads: [ReviewThreadSummary] = []) -> ReviewRequest {
+    private static func reviewRequest(
+        checks: [ReviewCheck] = [],
+        threads: [ReviewThreadSummary] = []
+    ) -> ReviewRequest {
         let remote = Self.remote()
         let request = ReviewRequest(
             remote: remote,
@@ -915,10 +954,27 @@ struct ReviewEvidenceModelTests {
             baseRefName: "main",
             reviewDecision: .changesRequested,
             mergeState: .blocked,
-            checks: [],
+            checks: checks,
             threads: threads
         )
         return request
+    }
+
+    private static func check(
+        id: String,
+        name: String,
+        workflow: String?,
+        bucket: ReviewCheckBucket,
+        detailURL: URL? = URL(string: "https://github.com/check")
+    ) -> ReviewCheck {
+        ReviewCheck(
+            id: id,
+            name: name,
+            workflow: workflow,
+            bucket: bucket,
+            detailURL: detailURL,
+            completedAt: nil
+        )
     }
 
     private static func feedbackItem(id: String, title: String, body: String) -> ReviewEvidenceItem {
@@ -969,6 +1025,62 @@ struct ReviewEvidenceModelTests {
         }
         return predicate()
     }
+}
+
+private struct DefaultEvidenceProvider: CodeHostProvider {
+    var kind: CodeHostKind { .github }
+    var capabilities: CodeHostProviderCapabilities { .readOnly }
+
+    func isAvailable() async -> Bool { true }
+
+    func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+
+    func currentReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        cwd: URL
+    ) async throws -> ReviewRequest? {
+        nil
+    }
+
+    func createReviewRequest(
+        remote: CodeHostRemote,
+        branch: String,
+        headOwner: String?,
+        baseBranch: String,
+        title: String,
+        body: String,
+        isDraft: Bool,
+        cwd: URL
+    ) async throws -> URL {
+        remote.webURL
+    }
+
+    func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {
+        []
+    }
+
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        """
+        diff --git a/Sources/App.swift b/Sources/App.swift
+        index 111..222 100644
+        --- a/Sources/App.swift
+        +++ b/Sources/App.swift
+        @@ -1 +1 @@
+        -let old = true
+        +let new = true
+        """
+    }
+
+    func rerunFailedChecks(
+        remote: CodeHostRemote,
+        branch: String,
+        headSHA: String,
+        request: ReviewRequest?,
+        cwd: URL
+    ) async throws {}
 }
 
 private actor EvidenceProviderRecorder {

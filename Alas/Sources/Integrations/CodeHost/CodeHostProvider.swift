@@ -94,18 +94,7 @@ extension CodeHostProvider {
     }
 
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        request.checks
-            .filter { $0.bucket == .fail }
-            .map {
-                ReviewEvidenceItem(
-                    id: $0.id,
-                    section: .ci,
-                    title: $0.name,
-                    subtitle: $0.workflow,
-                    status: .failed,
-                    providerURL: $0.detailURL
-                )
-            }
+        ReviewEvidenceCIActivityMapper.items(for: request.checks)
     }
 
     func checkEvidenceDetail(

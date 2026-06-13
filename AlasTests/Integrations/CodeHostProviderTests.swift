@@ -133,8 +133,8 @@ struct CodeHostProviderTests {
         let ci = try await provider.failedCheckEvidence(remote: remote, request: request, cwd: URL(fileURLWithPath: "/tmp/alas"))
         let feedback = try await provider.feedbackEvidence(remote: remote, request: request, cwd: URL(fileURLWithPath: "/tmp/alas"))
 
-        #expect(ci.map(\.id) == ["check-1"])
-        #expect(ci.first?.status == .failed)
+        #expect(ci.map(\.id) == ["check-passed", "check-1", "check-pending"])
+        #expect(ci.map(\.status) == [.passed, .failed, .pending])
         #expect(feedback.map(\.id) == ["thread-1"])
         #expect(feedback.first?.status == .actionable)
     }
