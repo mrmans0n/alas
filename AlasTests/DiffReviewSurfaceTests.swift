@@ -173,6 +173,50 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
     }
 
+    @Test func fileSectionRendersFileLevelInlineFeedbackBelowHeader() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = [
+            DiffReviewInlineFeedback(
+                id: "thread-file",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Please review this file.",
+                status: .actionable,
+                providerURL: URL(string: "https://github.com/thread-file")!,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+                evidenceItemID: "thread-file"
+            ),
+        ]
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: feedback,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-file", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "GitHub") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "reviewer") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Please review this file.") != nil)
+    }
+
     @Test func textDocumentViewClearsInactivePaneLSPContextWhenLayoutChanges() {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
         let context = DiffPaneLSPContext(
@@ -275,6 +319,53 @@ struct DiffReviewSurfaceTests {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
 
         #expect(selected == first.id)
+    }
+
+    @Test func surfacePassesFeedbackToMatchingFileOnly() {
+        let first = summary(path: "Sources/App.swift")
+        let second = summary(path: "Sources/Other.swift")
+        let session = loadedSession(summaries: [first, second])
+        let feedback = [
+            first.id: [
+                DiffReviewInlineFeedback(
+                    id: "thread-app",
+                    providerName: "GitHub",
+                    author: "reviewer",
+                    bodyPreview: "App feedback.",
+                    status: .actionable,
+                    providerURL: nil,
+                    anchor: DiffReviewInlineFeedbackAnchor(path: first.path, line: 2, side: .new),
+                    evidenceItemID: "thread-app"
+                ),
+            ],
+        ]
+        var selected: DiffReviewFileID? = second.id
+        var collapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
+            railCollapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            inlineFeedbackByFileID: feedback
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1000, height: 700)
+
+        let matchingCards = allSubviews(of: controller.view).filter {
+            $0.accessibilityIdentifier() == "diff-review-inline-feedback-thread-app"
+        }
+        #expect(matchingCards.count == 1)
+        #expect(accessibilityLabel(in: controller.view, containing: "line 2") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "App feedback.") != nil)
     }
 
     @Test func selectionSynchronizationClearsEmptySessions() {

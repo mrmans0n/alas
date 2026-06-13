@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DiffReviewFileSection: View {
     let file: DiffReviewFileSectionModel
+    var inlineFeedback: [DiffReviewInlineFeedback] = []
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -15,6 +16,7 @@ struct DiffReviewFileSection: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            inlineFeedbackStack
             content
         }
         .background(theme.color("bg-1"))
@@ -83,6 +85,21 @@ struct DiffReviewFileSection: View {
         .padding(.vertical, 10)
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+    }
+
+    @ViewBuilder
+    private var inlineFeedbackStack: some View {
+        if !inlineFeedback.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(inlineFeedback) { item in
+                    DiffReviewInlineFeedbackCard(item: item)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(theme.color("bg-1"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        }
     }
 
     @ViewBuilder
@@ -161,6 +178,89 @@ struct DiffReviewFileSection: View {
             theme.color("warn")
         case .modified, .unknown:
             theme.color("fg-dim")
+        }
+    }
+}
+
+private struct DiffReviewInlineFeedbackCard: View {
+    let item: DiffReviewInlineFeedback
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(statusColor)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(item.providerName)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(statusColor)
+
+                    if let author = item.author, !author.isEmpty {
+                        Text(author)
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-muted"))
+                    }
+
+                    if let line = item.anchor.line {
+                        Text("line \(line)")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-faint"))
+                    }
+                }
+                .lineLimit(1)
+
+                Text(item.bodyPreview)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .background(theme.color("bg-2"))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(theme.color("line"), lineWidth: 0.5)
+        )
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-inline-feedback-\(item.id)",
+                label: accessibilityLabel
+            )
+        )
+    }
+
+    private var accessibilityLabel: String {
+        [
+            item.providerName,
+            item.author,
+            item.anchor.line.map { "line \($0)" },
+            item.bodyPreview,
+        ]
+        .compactMap { part in
+            guard let part, !part.isEmpty else { return nil }
+            return part
+        }
+        .joined(separator: ", ")
+    }
+
+    private var statusColor: Color {
+        switch item.status {
+        case .actionable, .pending:
+            theme.color("accent")
+        case .failed:
+            theme.color("del")
+        case .passed, .resolved:
+            theme.color("add")
+        case .cancelled, .unknown:
+            theme.color("fg-muted")
         }
     }
 }

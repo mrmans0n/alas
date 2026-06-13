@@ -12,6 +12,7 @@ struct DiffReviewSurface: View {
     var showsSourceBadges: Bool = true
     var showsRailDisplayControls: Bool = false
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
+    var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -109,6 +110,7 @@ struct DiffReviewSurface: View {
         if isRendered {
             DiffReviewFileSection(
                 file: file,
+                inlineFeedback: inlineFeedbackByFileID[file.id] ?? [],
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
                 showWhitespace: $showWhitespace,
