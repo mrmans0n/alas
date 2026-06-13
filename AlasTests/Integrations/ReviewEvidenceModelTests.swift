@@ -236,6 +236,56 @@ struct ReviewEvidenceModelTests {
         #expect(feedback[copiedFromApp.id] == nil)
     }
 
+    @Test func inlineFeedbackMappingPrefersExactCurrentPathWhenOldSideOriginalPathEqualsPath() {
+        let modifiedFile = DiffReviewFileSummary(
+            path: "Sources/App.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .modified,
+            additions: 2,
+            deletions: 2,
+            isRenderable: true
+        )
+        let copiedFromApp = DiffReviewFileSummary(
+            path: "Sources/AppCopy.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .copied,
+            additions: 3,
+            deletions: 1,
+            isRenderable: true,
+            originalPath: "Sources/App.swift"
+        )
+        let threads = [
+            ReviewThreadSummary(
+                id: "thread-old-side-same-original-path",
+                author: "reviewer",
+                body: "GitLab reports old_path and new_path as the same file.",
+                url: URL(string: "https://github.com/discussion/old-same"),
+                isResolved: false,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/App.swift",
+                    originalPath: "Sources/App.swift",
+                    line: 5,
+                    side: .old,
+                    providerPosition: "old-same"
+                )
+            ),
+        ]
+
+        let feedback = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: threads,
+            files: [modifiedFile, copiedFromApp],
+            providerName: "GitHub"
+        )
+
+        #expect(feedback[modifiedFile.id]?.map(\.id) == ["thread-old-side-same-original-path"])
+        #expect(feedback[copiedFromApp.id] == nil)
+    }
+
     @Test func inlineFeedbackMappingFallsBackToOriginalPathForNewSideWhenCurrentPathIsMissing() {
         let renamedFile = DiffReviewFileSummary(
             path: "Sources/NewApp.swift",

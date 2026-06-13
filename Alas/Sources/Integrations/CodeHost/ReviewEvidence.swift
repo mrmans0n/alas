@@ -196,6 +196,10 @@ private struct InlineFeedbackFileMatcher {
     }
 
     private func fileForOldSide(_ location: ReviewThreadLocation) -> DiffReviewFileSummary? {
+        if location.originalPath == nil || location.originalPath == location.path,
+           let exactCurrentPathMatch = filesByPath[location.path] {
+            return exactCurrentPathMatch
+        }
         if let originalPath = location.originalPath,
            let file = filesByOriginalPath[originalPath] {
             return file
