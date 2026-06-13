@@ -67,6 +67,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
         let ready: Task<Bool, Never>
         var refsByURI: [String: Int]
         var temporaryRefsByURI: [String: Int]
+        var temporaryTextsByURI: [String: String]
         var openedURIs: Set<String>
         var versions: [String: Int]   // last didChange version per URI
         var pendingOpenText: [String: String]  // latest text supplied to a not-yet-sent didOpen
@@ -301,6 +302,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                     ready: task,
                     refsByURI: [uri: 1],
                     temporaryRefsByURI: ownership == .temporary ? [uri: 1] : [:],
+                    temporaryTextsByURI: ownership == .temporary ? [uri: text] : [:],
                     openedURIs: [],
                     versions: [:],
                     pendingOpenText: [uri: text],
@@ -489,7 +491,12 @@ final class WorkspaceLSPManager: DocumentFormatter {
         if !initOk { return }
 
         // Other tabs still need this file open — nothing to send.
-        if (cur.refsByURI[uri] ?? 0) > 0 { return }
+        if (cur.refsByURI[uri] ?? 0) > 0 {
+            if ownership == .editor {
+                await restoreTemporaryTextIfNeeded(key: key, holder: cur, uri: uri, languageId: languageId)
+            }
+            return
+        }
 
         // File is fully closed. Send `didClose` if the matching `didOpen`
         // was actually delivered; otherwise the server has nothing to forget.
@@ -502,6 +509,7 @@ final class WorkspaceLSPManager: DocumentFormatter {
                 c.texts.removeValue(forKey: uri)
                 c.languagesByURI.removeValue(forKey: uri)
                 c.temporaryRefsByURI.removeValue(forKey: uri)
+                c.temporaryTextsByURI.removeValue(forKey: uri)
                 holders[key] = c
             }
         }
@@ -512,6 +520,43 @@ final class WorkspaceLSPManager: DocumentFormatter {
             holders.removeValue(forKey: key)
             bumpStateTick()
         }
+    }
+
+    private func restoreTemporaryTextIfNeeded(
+        key: Key,
+        holder: Holder,
+        uri: String,
+        languageId: String
+    ) async {
+        guard holder.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: holder) == 0,
+              (holder.temporaryRefsByURI[uri] ?? 0) > 0,
+              let temporaryText = holder.temporaryTextsByURI[uri],
+              holder.texts[uri] != temporaryText
+        else {
+            return
+        }
+        guard var current = holders[key],
+              current.client === holder.client,
+              current.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: current) == 0,
+              (current.temporaryRefsByURI[uri] ?? 0) > 0
+        else {
+            return
+        }
+
+        let nextVersion = (current.versions[uri] ?? 1) + 1
+        let previousText = current.texts[uri]
+        current.versions[uri] = nextVersion
+        current.texts[uri] = temporaryText
+        current.languagesByURI[uri] = languageId
+        holders[key] = current
+        try? await current.client.didChange(
+            uri: uri,
+            version: nextVersion,
+            text: temporaryText,
+            previousText: previousText
+        )
     }
 
     /// Fire-and-forget `textDocument/didSave`. Skipped if the document was
@@ -680,11 +725,13 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // javascript / javascriptreact under one binary).
         let refsToReopen: [String: Int]
         let temporaryRefsToReopen: [String: Int]
+        let temporaryTextsToReopen: [String: String]
         let textsByURI: [String: String]
         let languagesByURI: [String: String]
         if let cur = holders[key], cur.client === existing.client {
             refsToReopen = cur.refsByURI
             temporaryRefsToReopen = cur.temporaryRefsByURI
+            temporaryTextsToReopen = cur.temporaryTextsByURI
             textsByURI = cur.texts.merging(cur.pendingOpenText) { current, _ in current }
             languagesByURI = cur.languagesByURI
             holders.removeValue(forKey: key)
@@ -706,8 +753,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
             for _ in 0 ..< editorRefCount {
                 _ = await openDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
             }
+            let temporaryText = temporaryTextsToReopen[uri] ?? text
             for _ in 0 ..< temporaryRefCount {
-                _ = await openTemporaryDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: text)
+                _ = await openTemporaryDocument(worktreeRoot: reopenRoot, fileURL: fileURL, languageId: reopenLanguage, text: temporaryText)
             }
         }
     }
@@ -799,21 +847,26 @@ final class WorkspaceLSPManager: DocumentFormatter {
         ownership: DocumentOwnership
     ) -> Holder {
         var pending = holder.pendingOpenText
+        var temporaryTexts = holder.temporaryTextsByURI
         if !holder.openedURIs.contains(uri) {
             switch ownership {
             case .editor:
                 pending[uri] = text
             case .temporary:
+                temporaryTexts[uri] = text
                 if normalRefCount(forURI: uri, in: holder) == 0 {
                     pending[uri] = text
                 }
             }
+        } else if ownership == .temporary {
+            temporaryTexts[uri] = text
         }
         return Holder(
             client: holder.client,
             ready: holder.ready,
             refsByURI: refs,
             temporaryRefsByURI: temporaryRefs,
+            temporaryTextsByURI: temporaryTexts,
             openedURIs: holder.openedURIs,
             versions: holder.versions,
             pendingOpenText: pending,
