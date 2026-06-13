@@ -562,7 +562,7 @@ struct GitLabCLIProviderTests {
         }
     }
 
-    @Test func failedCheckEvidenceUsesFailedPipelineJobs() async throws {
+    @Test func failedCheckEvidenceUsesPipelineJobs() async throws {
         let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
         let request = Self.makeRequest(checks: checks)
 
@@ -572,8 +572,8 @@ struct GitLabCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(evidence.map(\.title) == ["test", "lint"])
-        #expect(evidence.allSatisfy { $0.status == .failed })
+        #expect(evidence.map(\.title) == ["build", "test", "lint"])
+        #expect(evidence.map(\.status) == [.passed, .failed, .failed])
     }
 
     @Test func checkEvidenceDetailLoadsGitLabTraceForJobID() async throws {
@@ -582,11 +582,12 @@ struct GitLabCLIProviderTests {
         ])
         let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
         let request = Self.makeRequest(checks: checks)
-        let item = try #require(try await GitLabCLIProvider(runner: runner).failedCheckEvidence(
+        let evidence = try await GitLabCLIProvider(runner: runner).failedCheckEvidence(
             remote: Self.remote,
             request: request,
             cwd: Self.cwd
-        ).first)
+        )
+        let item = try #require(evidence.first { $0.title == "test" })
 
         let detail = try await GitLabCLIProvider(runner: runner).checkEvidenceDetail(
             remote: Self.remote,
