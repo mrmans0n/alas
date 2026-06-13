@@ -295,6 +295,27 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
+    @MainActor
+    @Test func inlineFeedbackMarkdownRendersCommonReviewMarkup() throws {
+        let rendered = NSAttributedString(
+            DiffReviewInlineFeedbackMarkdown.render("Use **bold** and `configId`, then see [docs](https://example.com/docs).")
+        )
+
+        #expect(rendered.string == "Use bold and configId, then see docs.")
+
+        let linkRange = (rendered.string as NSString).range(of: "docs")
+        try #require(linkRange.location != NSNotFound)
+        let url = rendered.attribute(NSAttributedString.Key.link, at: linkRange.location, effectiveRange: nil) as? URL
+        #expect(url?.absoluteString == "https://example.com/docs")
+    }
+
+    @MainActor
+    @Test func inlineFeedbackMarkdownPlainTextStripsDelimitersForAccessibility() {
+        let plain = DiffReviewInlineFeedbackMarkdown.plainText("Use **bold** and `configId`.")
+
+        #expect(plain == "Use bold and configId.")
+    }
+
     @Test func textDocumentViewClearsInactivePaneLSPContextWhenLayoutChanges() {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
         let context = DiffPaneLSPContext(

@@ -308,6 +308,18 @@ enum DiffReviewInlineFeedbackDisplayPolicy {
     }
 }
 
+enum DiffReviewInlineFeedbackMarkdown {
+    @MainActor
+    static func render(_ source: String) -> AttributedString {
+        ACPMarkdownText.inlineMarkdown(source)
+    }
+
+    @MainActor
+    static func plainText(_ source: String) -> String {
+        NSAttributedString(render(source)).string
+    }
+}
+
 private struct DiffReviewInlineFeedbackCard: View {
     let item: DiffReviewInlineFeedback
 
@@ -339,7 +351,7 @@ private struct DiffReviewInlineFeedbackCard: View {
                 }
                 .lineLimit(1)
 
-                Text(item.bodyPreview)
+                Text(DiffReviewInlineFeedbackMarkdown.render(item.bodyPreview))
                     .font(.system(size: 11.5))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(3)
@@ -368,7 +380,7 @@ private struct DiffReviewInlineFeedbackCard: View {
             item.providerName,
             item.author,
             item.anchor.line.map { "line \($0)" },
-            item.bodyPreview,
+            DiffReviewInlineFeedbackMarkdown.plainText(item.bodyPreview),
         ]
         .compactMap { part in
             guard let part, !part.isEmpty else { return nil }
