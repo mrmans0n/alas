@@ -56,11 +56,11 @@ struct ReviewEvidenceTabView: View {
     private var loadKey: String {
         let head = snapshot?.local.headSHA ?? "no-head"
         let providerState = "\(snapshot?.providerAvailable == true):\(snapshot?.providerAuthenticated == true)"
-        let request = snapshot?.reviewRequest.map(reviewEvidenceRevisionKey) ?? "no-request"
+        let request = snapshot?.reviewRequest.map(Self.reviewEvidenceRevisionKey) ?? "no-request"
         return "\(tabState.id):\(head):\(providerState):\(request):\(loadNonce)"
     }
 
-    private func reviewEvidenceRevisionKey(for request: ReviewRequest) -> String {
+    static func reviewEvidenceRevisionKey(for request: ReviewRequest) -> String {
         let checks = request.checks
             .sorted { $0.id < $1.id }
             .map { check in
@@ -84,7 +84,12 @@ struct ReviewEvidenceTabView: View {
                     thread.body,
                     thread.url?.absoluteString ?? "nil",
                     String(thread.isResolved),
-                    String(thread.isActionable)
+                    String(thread.isActionable),
+                    thread.location?.path ?? "nil",
+                    thread.location?.originalPath ?? "nil",
+                    thread.location?.line.map(String.init) ?? "nil",
+                    thread.location?.side.rawValue ?? "nil",
+                    thread.location?.providerPosition ?? "nil"
                 ].joined(separator: ",")
             }
             .joined(separator: ";")

@@ -61,6 +61,48 @@ struct ReviewEvidenceModelTests {
         #expect(model.selectedItem?.id == "check-pending")
     }
 
+    @Test func reviewEvidenceRevisionKeyIncludesThreadLocation() {
+        let baseThread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please simplify this.",
+            url: URL(string: "https://github.com/discussion"),
+            isResolved: false,
+            isActionable: true,
+            location: ReviewThreadLocation(
+                path: "Sources/App.swift",
+                originalPath: nil,
+                line: 12,
+                side: .new,
+                providerPosition: "12"
+            )
+        )
+        let movedThread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please simplify this.",
+            url: URL(string: "https://github.com/discussion"),
+            isResolved: false,
+            isActionable: true,
+            location: ReviewThreadLocation(
+                path: "Sources/App.swift",
+                originalPath: nil,
+                line: 18,
+                side: .old,
+                providerPosition: "18"
+            )
+        )
+
+        let baseKey = ReviewEvidenceTabView.reviewEvidenceRevisionKey(
+            for: Self.reviewRequest(threads: [baseThread])
+        )
+        let movedKey = ReviewEvidenceTabView.reviewEvidenceRevisionKey(
+            for: Self.reviewRequest(threads: [movedThread])
+        )
+
+        #expect(baseKey != movedKey)
+    }
+
     @Test func inlineFeedbackMappingUsesLocatedActionableThreads() {
         let files = [
             DiffReviewFileSummary(
