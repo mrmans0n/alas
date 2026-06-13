@@ -267,15 +267,14 @@ extension DiffReviewFileSectionHeightEstimator {
         inlineFeedback: [DiffReviewInlineFeedback]
     ) -> CGFloat {
         guard let displayModel = file.displayModel else {
-            return estimatedHeight(for: file, inlineFeedbackCount: inlineFeedback.count)
+            return estimatedHeight(for: file)
+                + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: inlineFeedback)
         }
 
         let placement = DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: displayModel.groups)
-        let fileLevelHeight = DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(
-            for: placement.fileLevel.count
-        )
+        let fileLevelHeight = DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: placement.fileLevel)
         let groupHeights = placement.byGroupID.values.reduce(CGFloat(0)) { total, groupFeedback in
-            total + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: groupFeedback.count)
+            total + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: groupFeedback)
         }
 
         return estimatedHeight(for: file) + fileLevelHeight + groupHeights

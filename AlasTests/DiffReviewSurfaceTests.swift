@@ -592,8 +592,69 @@ struct DiffReviewSurfaceTests {
         #expect(manyFeedback == cappedFeedback)
     }
 
-    @Test func inlineFeedbackCardEstimateReservesThreeLinePreviewHeight() {
-        #expect(DiffReviewInlineFeedbackDisplayPolicy.cardEstimatedHeight >= 78)
+    @Test func estimatedSectionHeightGrowsWithInlineFeedbackBodyLength() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let shortFeedback = [
+            DiffReviewInlineFeedback(
+                id: "short",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Short.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
+                evidenceItemID: "short"
+            ),
+        ]
+        let longFeedback = [
+            DiffReviewInlineFeedback(
+                id: "long",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: Array(repeating: "This review comment needs to remain fully visible.", count: 12).joined(separator: " "),
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
+                evidenceItemID: "long"
+            ),
+        ]
+
+        #expect(
+            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: longFeedback)
+                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: shortFeedback)
+        )
+    }
+
+    @Test func inlineFeedbackCardEstimateUsesDynamicBodyHeight() {
+        let short = DiffReviewInlineFeedback(
+            id: "short",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Short.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+            evidenceItemID: "short"
+        )
+        let long = DiffReviewInlineFeedback(
+            id: "long",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: Array(repeating: "Long feedback body.", count: 24).joined(separator: " "),
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+            evidenceItemID: "long"
+        )
+
+        #expect(DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: long) > DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: short))
+        #expect(DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: short) >= DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight)
     }
 
     private func parsedDiff() -> ParsedDiff {

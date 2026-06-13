@@ -276,8 +276,11 @@ enum DiffReviewInlineFeedbackPlacement {
 
 enum DiffReviewInlineFeedbackDisplayPolicy {
     static let maximumVisibleCards = 3
-    static let cardEstimatedHeight: CGFloat = 78
+    static let cardMinimumHeight: CGFloat = 78
     static let moreRowEstimatedHeight: CGFloat = 20
+    private static let estimatedBodyCharactersPerLine = 86
+    private static let estimatedBodyLineHeight: CGFloat = 15.5
+    private static let cardNonBodyHeight: CGFloat = 46
     private static let stackVerticalPadding: CGFloat = 20
     private static let rowSpacing: CGFloat = 6
 
@@ -300,11 +303,39 @@ enum DiffReviewInlineFeedbackDisplayPolicy {
         let visibleCount = min(itemCount, maximumVisibleCards)
         let hiddenCount = max(0, itemCount - visibleCount)
         let rowCount = visibleCount + (hiddenCount > 0 ? 1 : 0)
-        let rowHeights = CGFloat(visibleCount) * cardEstimatedHeight
+        let rowHeights = CGFloat(visibleCount) * cardMinimumHeight
             + (hiddenCount > 0 ? moreRowEstimatedHeight : 0)
         let spacingHeight = CGFloat(max(0, rowCount - 1)) * rowSpacing
 
         return stackVerticalPadding + rowHeights + spacingHeight
+    }
+
+    static func estimatedHeight(for items: [DiffReviewInlineFeedback]) -> CGFloat {
+        guard !items.isEmpty else { return 0 }
+
+        let display = display(for: items)
+        let visibleHeights = display.visibleItems.reduce(CGFloat(0)) { total, item in
+            total + estimatedCardHeight(for: item)
+        }
+        let rowCount = display.visibleItems.count + (display.hiddenCount > 0 ? 1 : 0)
+        let moreHeight = display.hiddenCount > 0 ? moreRowEstimatedHeight : 0
+        let spacingHeight = CGFloat(max(0, rowCount - 1)) * rowSpacing
+
+        return stackVerticalPadding + visibleHeights + moreHeight + spacingHeight
+    }
+
+    static func estimatedCardHeight(for item: DiffReviewInlineFeedback) -> CGFloat {
+        let bodyLineCount = estimatedLineCount(for: item.bodyPreview)
+        let bodyHeight = CGFloat(bodyLineCount) * estimatedBodyLineHeight
+
+        return max(cardMinimumHeight, cardNonBodyHeight + bodyHeight)
+    }
+
+    private static func estimatedLineCount(for source: String) -> Int {
+        let logicalLines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        return logicalLines.reduce(0) { total, line in
+            total + max(1, Int(ceil(Double(line.count) / Double(estimatedBodyCharactersPerLine))))
+        }
     }
 }
 
@@ -354,13 +385,14 @@ private struct DiffReviewInlineFeedbackCard: View {
                 Text(DiffReviewInlineFeedbackMarkdown.render(item.bodyPreview))
                     .font(.system(size: 11.5))
                     .foregroundColor(theme.color("fg"))
-                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Spacer(minLength: 0)
         }
         .padding(8)
-        .frame(height: DiffReviewInlineFeedbackDisplayPolicy.cardEstimatedHeight, alignment: .top)
+        .frame(minHeight: DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight, alignment: .top)
         .background(theme.color("bg-2"))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
