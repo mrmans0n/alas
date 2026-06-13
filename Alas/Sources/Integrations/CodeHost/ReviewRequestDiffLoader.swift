@@ -233,6 +233,10 @@ private struct ProviderDiffFileSection {
                 return value
             }
             if character == "\\" {
+                if let decodedOctalBytes = decodeOctalByteSequence(in: text, index: &index) {
+                    value.append(decodedOctalBytes)
+                    continue
+                }
                 guard let escaped = decodeEscapedCharacter(in: text, index: &index) else {
                     return nil
                 }
@@ -244,6 +248,36 @@ private struct ProviderDiffFileSection {
         }
 
         return nil
+    }
+
+    private static func decodeOctalByteSequence(in text: String, index: inout String.Index) -> String? {
+        var cursor = index
+        var bytes: [UInt8] = []
+
+        while cursor < text.endIndex, text[cursor] == "\\" {
+            let escapedIndex = text.index(after: cursor)
+            guard escapedIndex < text.endIndex, isOctalDigit(text[escapedIndex]) else {
+                break
+            }
+
+            var digitCursor = escapedIndex
+            var digits = ""
+            while digitCursor < text.endIndex, digits.count < 3, isOctalDigit(text[digitCursor]) {
+                digits.append(text[digitCursor])
+                digitCursor = text.index(after: digitCursor)
+            }
+
+            guard let value = UInt8(digits, radix: 8) else {
+                return nil
+            }
+
+            bytes.append(value)
+            cursor = digitCursor
+        }
+
+        guard !bytes.isEmpty else { return nil }
+        index = cursor
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private static func decodeEscapedCharacter(in text: String, index: inout String.Index) -> Character? {
