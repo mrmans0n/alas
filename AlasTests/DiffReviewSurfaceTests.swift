@@ -225,7 +225,7 @@ struct DiffReviewSurfaceTests {
             placeholderMessage: nil,
             openFile: nil
         )
-        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path)
+        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
         var layout = DiffLayoutMode.split
         var wrap = false
         var whitespace = false
@@ -251,6 +251,48 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-5", in: controller.view) == nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-more", in: controller.view) != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "+2 more feedback") != nil)
+    }
+
+    @Test func inlineFeedbackPlacementGroupsLineAnchoredItemsByMatchingHunk() throws {
+        let model = displayModel()
+        let firstGroup = try #require(model.groups.first)
+        let feedback = [
+            DiffReviewInlineFeedback(
+                id: "thread-new-line",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Review this new line.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
+                evidenceItemID: "thread-new-line"
+            ),
+            DiffReviewInlineFeedback(
+                id: "thread-file",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Review the whole file.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+                evidenceItemID: "thread-file"
+            ),
+            DiffReviewInlineFeedback(
+                id: "thread-unmatched",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Review a line outside the diff.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 42, side: .new),
+                evidenceItemID: "thread-unmatched"
+            ),
+        ]
+
+        let placement = DiffReviewInlineFeedbackPlacement.position(feedback, in: model.groups)
+
+        #expect(placement.byGroupID[firstGroup.id]?.map(\.id) == ["thread-new-line"])
+        #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
     @Test func textDocumentViewClearsInactivePaneLSPContextWhenLayoutChanges() {
@@ -567,7 +609,11 @@ struct DiffReviewSurfaceTests {
         )
     }
 
-    private func inlineFeedbackItems(count: Int, path: String) -> [DiffReviewInlineFeedback] {
+    private func inlineFeedbackItems(
+        count: Int,
+        path: String,
+        lineAnchored: Bool = true
+    ) -> [DiffReviewInlineFeedback] {
         (1...count).map { index in
             DiffReviewInlineFeedback(
                 id: "thread-\(index)",
@@ -576,7 +622,11 @@ struct DiffReviewSurfaceTests {
                 bodyPreview: "Feedback \(index).",
                 status: .actionable,
                 providerURL: nil,
-                anchor: DiffReviewInlineFeedbackAnchor(path: path, line: index, side: .new),
+                anchor: DiffReviewInlineFeedbackAnchor(
+                    path: path,
+                    line: lineAnchored ? index : nil,
+                    side: lineAnchored ? .new : .unknown
+                ),
                 evidenceItemID: "thread-\(index)"
             )
         }

@@ -16,7 +16,7 @@ struct DiffReviewFileSection: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            inlineFeedbackStack
+            fileLevelInlineFeedbackStack
             content
         }
         .background(theme.color("bg-1"))
@@ -88,9 +88,17 @@ struct DiffReviewFileSection: View {
     }
 
     @ViewBuilder
-    private var inlineFeedbackStack: some View {
-        if !inlineFeedback.isEmpty {
-            let display = DiffReviewInlineFeedbackDisplayPolicy.display(for: inlineFeedback)
+    private var fileLevelInlineFeedbackStack: some View {
+        let fileLevel = inlineFeedbackPlacement.fileLevel
+        if !fileLevel.isEmpty {
+            inlineFeedbackStack(fileLevel)
+        }
+    }
+
+    @ViewBuilder
+    private func inlineFeedbackStack(_ items: [DiffReviewInlineFeedback]) -> some View {
+        if !items.isEmpty {
+            let display = DiffReviewInlineFeedbackDisplayPolicy.display(for: items)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(display.visibleItems) { item in
                     DiffReviewInlineFeedbackCard(item: item)
@@ -106,22 +114,37 @@ struct DiffReviewFileSection: View {
         }
     }
 
+    private var inlineFeedbackPlacement: DiffReviewInlineFeedbackPlacement.Result {
+        guard let displayModel = file.displayModel else {
+            return DiffReviewInlineFeedbackPlacement.Result(fileLevel: inlineFeedback, byGroupID: [:])
+        }
+        return DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: displayModel.groups)
+    }
+
     @ViewBuilder
     private var content: some View {
         if let displayModel = file.displayModel {
-            DiffPaneView(
-                model: displayModel,
-                fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                layoutMode: $layoutMode,
-                wrapLines: $wrapLines,
-                showWhitespace: $showWhitespace,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                showsToolbar: false,
-                verticalScrollMode: .staticHeight,
-                lspContext: lspContext,
-                hunkActions: { _ in DiffPaneHunkActions() }
-            )
+            let placement = inlineFeedbackPlacement
+            VStack(spacing: 0) {
+                ForEach(displayModel.groups) { group in
+                    if let groupFeedback = placement.byGroupID[group.id], !groupFeedback.isEmpty {
+                        inlineFeedbackStack(groupFeedback)
+                    }
+                    DiffPaneView(
+                        model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
+                        fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                        layoutMode: $layoutMode,
+                        wrapLines: $wrapLines,
+                        showWhitespace: $showWhitespace,
+                        codeFontFamily: codeFontFamily,
+                        codeFontSize: codeFontSize,
+                        showsToolbar: false,
+                        verticalScrollMode: .staticHeight,
+                        lspContext: lspContext,
+                        hunkActions: { _ in DiffPaneHunkActions() }
+                    )
+                }
+            }
         } else {
             let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
             Text(message)
@@ -182,6 +205,71 @@ struct DiffReviewFileSection: View {
             theme.color("warn")
         case .modified, .unknown:
             theme.color("fg-dim")
+        }
+    }
+}
+
+enum DiffReviewInlineFeedbackPlacement {
+    struct Result: Equatable {
+        let fileLevel: [DiffReviewInlineFeedback]
+        let byGroupID: [String: [DiffReviewInlineFeedback]]
+    }
+
+    static func position(
+        _ items: [DiffReviewInlineFeedback],
+        in groups: [DiffDisplayGroup]
+    ) -> Result {
+        var fileLevel: [DiffReviewInlineFeedback] = []
+        var byGroupID: [String: [DiffReviewInlineFeedback]] = [:]
+
+        for item in items {
+            guard let line = item.anchor.line,
+                  let group = groups.first(where: { contains(line: line, side: item.anchor.side, in: $0) })
+            else {
+                fileLevel.append(item)
+                continue
+            }
+            byGroupID[group.id, default: []].append(item)
+        }
+
+        return Result(fileLevel: fileLevel, byGroupID: byGroupID)
+    }
+
+    private static func contains(
+        line: Int,
+        side: DiffReviewInlineFeedbackSide,
+        in group: DiffDisplayGroup
+    ) -> Bool {
+        group.rows.contains { row in
+            contains(line: line, side: side, in: row)
+        }
+    }
+
+    private static func contains(
+        line: Int,
+        side: DiffReviewInlineFeedbackSide,
+        in row: DiffDisplayRow
+    ) -> Bool {
+        if rowMatches(line: line, side: side, row: row) {
+            return true
+        }
+        return row.collapsedRows.contains { collapsedRow in
+            contains(line: line, side: side, in: collapsedRow)
+        }
+    }
+
+    private static func rowMatches(
+        line: Int,
+        side: DiffReviewInlineFeedbackSide,
+        row: DiffDisplayRow
+    ) -> Bool {
+        switch side {
+        case .new:
+            return row.new?.lineNumber == line
+        case .old:
+            return row.old?.lineNumber == line
+        case .unknown:
+            return row.new?.lineNumber == line || row.old?.lineNumber == line
         }
     }
 }

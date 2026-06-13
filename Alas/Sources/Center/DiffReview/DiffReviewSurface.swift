@@ -125,7 +125,7 @@ struct DiffReviewSurface: View {
                 file: file,
                 estimatedHeight: DiffReviewFileSectionHeightEstimator.estimatedHeight(
                     for: file,
-                    inlineFeedbackCount: inlineFeedback.count
+                    inlineFeedback: inlineFeedback
                 ),
                 showsSourceBadge: showsSourceBadges,
                 codeFontFamily: codeFontFamily,
@@ -260,6 +260,25 @@ extension DiffReviewFileSectionHeightEstimator {
     static func estimatedHeight(for file: DiffReviewFileSectionModel, inlineFeedbackCount: Int) -> CGFloat {
         estimatedHeight(for: file)
             + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: inlineFeedbackCount)
+    }
+
+    static func estimatedHeight(
+        for file: DiffReviewFileSectionModel,
+        inlineFeedback: [DiffReviewInlineFeedback]
+    ) -> CGFloat {
+        guard let displayModel = file.displayModel else {
+            return estimatedHeight(for: file, inlineFeedbackCount: inlineFeedback.count)
+        }
+
+        let placement = DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: displayModel.groups)
+        let fileLevelHeight = DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(
+            for: placement.fileLevel.count
+        )
+        let groupHeights = placement.byGroupID.values.reduce(CGFloat(0)) { total, groupFeedback in
+            total + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: groupFeedback.count)
+        }
+
+        return estimatedHeight(for: file) + fileLevelHeight + groupHeights
     }
 }
 
