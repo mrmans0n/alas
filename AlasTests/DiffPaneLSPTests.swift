@@ -271,6 +271,100 @@ struct DiffPaneLSPLineMapTests {
         controller.tearDown()
     }
 
+    @MainActor
+    @Test func controllerRejectsStaleSourceLineBeforeLSPRequest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lsp-stale-\(UUID().uuidString)")
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "let current = value\n".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let textView = DiffPaneCodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 80),
+            textContainer: NSTextContainer()
+        )
+        let renderedLine = DiffDisplayLine(
+            id: "file:new:0:0",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 1),
+            text: "let stale = value",
+            lineNumber: 1,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        textView.lineMetadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .add,
+                range: NSRange(location: 0, length: 17),
+                tone: .add,
+                sourceLine: renderedLine
+            ),
+        ]
+        let controller = DiffPaneLSPController(textView: textView)
+        controller.update(context: nil, allowedSide: .new)
+        let match = try #require(controller.lspMatch(forCharacterIndex: 4))
+        let context = DiffPaneLSPContext(
+            worktreeId: "worktree-1",
+            worktreeRoot: root,
+            relativePath: "Sources/App.swift",
+            language: "swift",
+            lsp: WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [])),
+            openTarget: { _, _, _ in }
+        )
+
+        let isCurrent = await controller.matchesCurrentSourceForTesting(match, context: context)
+
+        #expect(!isCurrent)
+        controller.tearDown()
+    }
+
+    @MainActor
+    @Test func controllerAcceptsMatchingSourceLineBeforeLSPRequest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lsp-current-\(UUID().uuidString)")
+        let source = root.appendingPathComponent("Sources/App.swift")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "let current = value\n".write(to: source, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let textView = DiffPaneCodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 80),
+            textContainer: NSTextContainer()
+        )
+        let renderedLine = DiffDisplayLine(
+            id: "file:new:0:0",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 1),
+            text: "let current = value",
+            lineNumber: 1,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        textView.lineMetadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .add,
+                range: NSRange(location: 0, length: 19),
+                tone: .add,
+                sourceLine: renderedLine
+            ),
+        ]
+        let controller = DiffPaneLSPController(textView: textView)
+        controller.update(context: nil, allowedSide: .new)
+        let match = try #require(controller.lspMatch(forCharacterIndex: 4))
+        let context = DiffPaneLSPContext(
+            worktreeId: "worktree-1",
+            worktreeRoot: root,
+            relativePath: "Sources/App.swift",
+            language: "swift",
+            lsp: WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [])),
+            openTarget: { _, _, _ in }
+        )
+
+        let isCurrent = await controller.matchesCurrentSourceForTesting(match, context: context)
+
+        #expect(isCurrent)
+        controller.tearDown()
+    }
+
     private func theme() -> Theme {
         try! ThemeStore().current
     }

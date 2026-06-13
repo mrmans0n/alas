@@ -21,11 +21,24 @@ struct DiffPaneLSPContext {
 }
 
 enum DiffPaneLSPLineMap {
+    struct Match: Equatable {
+        let position: LSPPosition
+        let sourceText: String
+    }
+
     static func position(
         at characterIndex: Int,
         metadata: [DiffPaneTextDocumentBuilder.LineMetadata],
         allowedSide: DiffLineSide
     ) -> LSPPosition? {
+        match(at: characterIndex, metadata: metadata, allowedSide: allowedSide)?.position
+    }
+
+    static func match(
+        at characterIndex: Int,
+        metadata: [DiffPaneTextDocumentBuilder.LineMetadata],
+        allowedSide: DiffLineSide
+    ) -> Match? {
         guard let line = metadata.first(where: { NSLocationInRange(characterIndex, $0.range) }) else {
             return nil
         }
@@ -46,7 +59,10 @@ enum DiffPaneLSPLineMap {
         guard character >= 0, character < source.text.utf16.count else {
             return nil
         }
-        return LSPPosition(line: newLine - 1, character: character)
+        return Match(
+            position: LSPPosition(line: newLine - 1, character: character),
+            sourceText: source.text
+        )
     }
 }
 
@@ -205,15 +221,26 @@ final class DiffPaneLSPController {
         )
     }
 
+    func lspMatch(forCharacterIndex characterIndex: Int) -> DiffPaneLSPLineMap.Match? {
+        guard let textView else { return nil }
+        return DiffPaneLSPLineMap.match(
+            at: characterIndex,
+            metadata: textView.lineMetadata,
+            allowedSide: allowedSide
+        )
+    }
+
     private func requestHover(at point: NSPoint) {
         guard let textView,
               let context,
-              let position = lspPosition(at: point),
+              let characterIndex = textView.characterIndex(at: point),
+              let match = lspMatch(forCharacterIndex: characterIndex),
               let symbolRange = textView.symbolRange(at: point)
         else {
             hideHover()
             return
         }
+        let position = match.position
 
         hoverRequestID &+= 1
         let currentRequestID = hoverRequestID
@@ -222,6 +249,11 @@ final class DiffPaneLSPController {
         hoverTask?.cancel()
         hoverTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            guard await self.matchesCurrentSource(match, context: context) else {
+                guard self.isCurrentHover(currentRequestID, contextKey: contextKey) else { return }
+                self.hideHover()
+                return
+            }
             guard let client = await self.client(for: context, expectedKey: contextKey) else { return }
             let result: LSPHoverResult?
             do {
@@ -240,7 +272,12 @@ final class DiffPaneLSPController {
     }
 
     private func requestDefinition(at point: NSPoint) {
-        guard let context, let position = lspPosition(at: point) else { return }
+        guard let textView,
+              let context,
+              let characterIndex = textView.characterIndex(at: point),
+              let match = lspMatch(forCharacterIndex: characterIndex)
+        else { return }
+        let position = match.position
 
         definitionRequestID &+= 1
         let currentRequestID = definitionRequestID
@@ -249,6 +286,7 @@ final class DiffPaneLSPController {
         definitionTask?.cancel()
         definitionTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            guard await self.matchesCurrentSource(match, context: context) else { return }
             guard let client = await self.client(for: context, expectedKey: contextKey) else { return }
             let locations = (try? await client.definition(uri: context.uri, position: position)) ?? []
             guard self.isCurrentDefinition(currentRequestID, contextKey: contextKey),
@@ -257,6 +295,32 @@ final class DiffPaneLSPController {
             else { return }
             self.handleDefinition(locations: locations, anchorPoint: point, context: context)
         }
+    }
+
+    func matchesCurrentSourceForTesting(
+        _ match: DiffPaneLSPLineMap.Match,
+        context: DiffPaneLSPContext
+    ) async -> Bool {
+        await matchesCurrentSource(match, context: context)
+    }
+
+    private func matchesCurrentSource(
+        _ match: DiffPaneLSPLineMap.Match,
+        context: DiffPaneLSPContext
+    ) async -> Bool {
+        let fileURL = context.fileURL
+        let lineNumber = match.position.line
+        let sourceText = match.sourceText
+        return await Task.detached(priority: .userInitiated) {
+            guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
+                return false
+            }
+            let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            guard lineNumber >= 0, lineNumber < lines.count else {
+                return false
+            }
+            return String(lines[lineNumber]) == sourceText
+        }.value
     }
 
     private func client(for context: DiffPaneLSPContext, expectedKey: ContextKey) async -> LSPClient? {
