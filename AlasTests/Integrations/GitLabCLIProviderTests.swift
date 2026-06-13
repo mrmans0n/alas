@@ -572,8 +572,8 @@ struct GitLabCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(evidence.map(\.title) == ["build", "test", "lint"])
-        #expect(evidence.map(\.status) == [.passed, .failed, .failed])
+        #expect(evidence.map(\.title) == ["build", "test", "lint", "deploy"])
+        #expect(evidence.map(\.status) == [.passed, .failed, .failed, .pending])
     }
 
     @Test func checkEvidenceDetailLoadsGitLabTraceForJobID() async throws {
@@ -1442,6 +1442,12 @@ struct GitLabCLIProviderTests {
           "name": "lint",
           "status": "failed",
           "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/103"
+        },
+        {
+          "id": 104,
+          "name": "deploy",
+          "status": "running",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/104"
         }
       ]
     }
