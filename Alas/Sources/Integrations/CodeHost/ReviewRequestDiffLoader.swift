@@ -348,13 +348,21 @@ private struct ProviderDiffFileSection {
     }
 
     private static func pathHeader(in lines: [String], prefix: String) -> String? {
-        guard let rawPath = firstHeaderValue(in: lines, prefix: prefix) else { return nil }
+        guard let rawPath = (lines
+            .first { $0.hasPrefix(prefix) }
+            .map { String($0.dropFirst(prefix.count)) })
+        else { return nil }
         guard rawPath != "/dev/null" else { return nil }
         var index = rawPath.startIndex
         if let quotedPath = quotedPathToken(in: rawPath, index: &index) {
             return stripGitPrefix(quotedPath)
         }
-        return stripGitPrefix(rawPath)
+        return stripGitPrefix(pathWithoutTabMetadata(rawPath))
+    }
+
+    private static func pathWithoutTabMetadata(_ path: String) -> String {
+        guard let tabIndex = path.firstIndex(of: "\t") else { return path }
+        return String(path[..<tabIndex])
     }
 
     private static func stripGitPrefix(_ path: String) -> String {

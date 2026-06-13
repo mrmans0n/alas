@@ -78,6 +78,28 @@ struct ReviewRequestDiffLoaderTests {
         #expect(file.summary.isRenderable == false)
     }
 
+    @Test func unquotedPathHeadersDropTabMetadata() async throws {
+        let provider = FakeDiffProvider(diff: """
+        diff --git a/Foo Bar.swift b/Foo Bar.swift
+        index 111..222 100644
+        --- a/Foo Bar.swift\t2026-06-13 12:00:00
+        +++ b/Foo Bar.swift\t2026-06-13 12:00:01
+        @@ -1 +1 @@
+        -let old = true
+        +let new = true
+        """)
+        let loader = ReviewRequestDiffLoader(provider: provider)
+
+        let session = try await loader.load(
+            remote: Self.remote(),
+            request: Self.reviewRequest(),
+            cwd: URL(fileURLWithPath: "/tmp/repo")
+        )
+
+        let file = try #require(session.files.first)
+        #expect(file.summary.path == "Foo Bar.swift")
+    }
+
     @Test func quotedPathHeadersDecodeEscapedTab() async throws {
         let provider = FakeDiffProvider(diff: """
         diff --git "a/tab\\tfile.swift" "b/tab\\tfile.swift"
