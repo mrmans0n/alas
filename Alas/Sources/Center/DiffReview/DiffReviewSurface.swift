@@ -107,10 +107,11 @@ struct DiffReviewSurface: View {
 
     @ViewBuilder
     private func fileSection(_ file: DiffReviewFileSectionModel, isRendered: Bool) -> some View {
+        let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
         if isRendered {
             DiffReviewFileSection(
                 file: file,
-                inlineFeedback: inlineFeedbackByFileID[file.id] ?? [],
+                inlineFeedback: inlineFeedback,
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
                 showWhitespace: $showWhitespace,
@@ -122,7 +123,10 @@ struct DiffReviewSurface: View {
         } else {
             DiffReviewFileSectionPlaceholder(
                 file: file,
-                estimatedHeight: DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file),
+                estimatedHeight: DiffReviewFileSectionHeightEstimator.estimatedHeight(
+                    for: file,
+                    inlineFeedbackCount: inlineFeedback.count
+                ),
                 showsSourceBadge: showsSourceBadges,
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize
@@ -249,6 +253,13 @@ enum DiffReviewSurfaceSelectionSync {
             fileSetKey: nextFileSetKey,
             programmaticScroll: didChangeFileSet ? DiffReviewProgrammaticScrollController() : programmaticScroll
         )
+    }
+}
+
+extension DiffReviewFileSectionHeightEstimator {
+    static func estimatedHeight(for file: DiffReviewFileSectionModel, inlineFeedbackCount: Int) -> CGFloat {
+        estimatedHeight(for: file)
+            + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: inlineFeedbackCount)
     }
 }
 

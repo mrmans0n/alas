@@ -90,9 +90,13 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private var inlineFeedbackStack: some View {
         if !inlineFeedback.isEmpty {
+            let display = DiffReviewInlineFeedbackDisplayPolicy.display(for: inlineFeedback)
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(inlineFeedback) { item in
+                ForEach(display.visibleItems) { item in
                     DiffReviewInlineFeedbackCard(item: item)
+                }
+                if display.hiddenCount > 0 {
+                    DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
                 }
             }
             .padding(.horizontal, 14)
@@ -182,6 +186,40 @@ struct DiffReviewFileSection: View {
     }
 }
 
+enum DiffReviewInlineFeedbackDisplayPolicy {
+    static let maximumVisibleCards = 3
+    static let cardEstimatedHeight: CGFloat = 54
+    static let moreRowEstimatedHeight: CGFloat = 20
+    private static let stackVerticalPadding: CGFloat = 20
+    private static let rowSpacing: CGFloat = 6
+
+    struct Display {
+        let visibleItems: [DiffReviewInlineFeedback]
+        let hiddenCount: Int
+    }
+
+    static func display(for items: [DiffReviewInlineFeedback]) -> Display {
+        let visibleItems = Array(items.prefix(maximumVisibleCards))
+        return Display(
+            visibleItems: visibleItems,
+            hiddenCount: max(0, items.count - visibleItems.count)
+        )
+    }
+
+    static func estimatedHeight(for itemCount: Int) -> CGFloat {
+        guard itemCount > 0 else { return 0 }
+
+        let visibleCount = min(itemCount, maximumVisibleCards)
+        let hiddenCount = max(0, itemCount - visibleCount)
+        let rowCount = visibleCount + (hiddenCount > 0 ? 1 : 0)
+        let rowHeights = CGFloat(visibleCount) * cardEstimatedHeight
+            + (hiddenCount > 0 ? moreRowEstimatedHeight : 0)
+        let spacingHeight = CGFloat(max(0, rowCount - 1)) * rowSpacing
+
+        return stackVerticalPadding + rowHeights + spacingHeight
+    }
+}
+
 private struct DiffReviewInlineFeedbackCard: View {
     let item: DiffReviewInlineFeedback
 
@@ -262,6 +300,29 @@ private struct DiffReviewInlineFeedbackCard: View {
         case .cancelled, .unknown:
             theme.color("fg-muted")
         }
+    }
+}
+
+private struct DiffReviewInlineFeedbackMoreRow: View {
+    let hiddenCount: Int
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text("+\(hiddenCount) more feedback")
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundColor(theme.color("fg-muted"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .frame(height: 20)
+            .background(theme.color("bg-2"))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .background(
+                DiffReviewAccessibilityMarker(
+                    identifier: "diff-review-inline-feedback-more",
+                    label: "+\(hiddenCount) more feedback"
+                )
+            )
     }
 }
 
