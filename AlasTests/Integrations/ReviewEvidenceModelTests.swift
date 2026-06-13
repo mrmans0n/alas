@@ -25,6 +25,210 @@ struct ReviewEvidenceModelTests {
         #expect(counts.feedback == 0)
     }
 
+    @Test func inlineFeedbackMappingUsesLocatedActionableThreads() {
+        let files = [
+            DiffReviewFileSummary(
+                path: "Sources/App.swift",
+                namespace: "github-pr",
+                groupID: nil,
+                groupTitle: nil,
+                status: .modified,
+                additions: 2,
+                deletions: 1,
+                isRenderable: true
+            ),
+        ]
+        let threads = [
+            ReviewThreadSummary(
+                id: "thread-2",
+                author: "reviewer",
+                body: "Second inline comment.",
+                url: URL(string: "https://github.com/discussion/2"),
+                isResolved: false,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/App.swift",
+                    originalPath: nil,
+                    line: 20,
+                    side: .new,
+                    providerPosition: "2"
+                )
+            ),
+            ReviewThreadSummary(
+                id: "thread-1",
+                author: "reviewer",
+                body: "File level comment.",
+                url: URL(string: "https://github.com/discussion/1"),
+                isResolved: false,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/App.swift",
+                    originalPath: nil,
+                    line: nil,
+                    side: .new,
+                    providerPosition: "1"
+                )
+            ),
+            ReviewThreadSummary(
+                id: "thread-resolved",
+                author: "reviewer",
+                body: "Resolved comment.",
+                url: nil,
+                isResolved: true,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/App.swift",
+                    originalPath: nil,
+                    line: 10,
+                    side: .new,
+                    providerPosition: "resolved"
+                )
+            ),
+        ]
+
+        let feedback = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: threads,
+            files: files,
+            providerName: "GitHub"
+        )
+
+        let fileFeedback = feedback[files[0].id]
+        #expect(fileFeedback?.map(\.id) == ["thread-1", "thread-2"])
+        #expect(fileFeedback?.first?.providerName == "GitHub")
+        #expect(fileFeedback?.first?.anchor == DiffReviewInlineFeedbackAnchor(
+            path: "Sources/App.swift",
+            line: nil,
+            side: .new
+        ))
+        #expect(fileFeedback?.last?.anchor == DiffReviewInlineFeedbackAnchor(
+            path: "Sources/App.swift",
+            line: 20,
+            side: .new
+        ))
+        #expect(fileFeedback?.last?.evidenceItemID == "thread-2")
+    }
+
+    @Test func inlineFeedbackMappingSkipsMissingLocation() {
+        let files = [
+            DiffReviewFileSummary(
+                path: "Sources/App.swift",
+                namespace: "github-pr",
+                groupID: nil,
+                groupTitle: nil,
+                status: .modified,
+                additions: 2,
+                deletions: 1,
+                isRenderable: true
+            ),
+        ]
+        let threads = [
+            ReviewThreadSummary(
+                id: "thread-without-location",
+                author: "reviewer",
+                body: "Still appears in feedback evidence.",
+                url: URL(string: "https://github.com/discussion/1"),
+                isResolved: false,
+                isActionable: true,
+                location: nil
+            ),
+        ]
+
+        let feedback = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: threads,
+            files: files,
+            providerName: "GitHub"
+        )
+
+        #expect(feedback.isEmpty)
+    }
+
+    @Test func inlineFeedbackMappingMatchesRenamedOldSideToOriginalPath() {
+        let renamedFile = DiffReviewFileSummary(
+            path: "Sources/NewApp.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .renamed,
+            additions: 4,
+            deletions: 3,
+            isRenderable: true,
+            originalPath: "Sources/OldApp.swift"
+        )
+        let threads = [
+            ReviewThreadSummary(
+                id: "thread-old-side",
+                author: "reviewer",
+                body: "Old side feedback.",
+                url: URL(string: "https://github.com/discussion/old"),
+                isResolved: false,
+                isActionable: true,
+                location: ReviewThreadLocation(
+                    path: "Sources/NewApp.swift",
+                    originalPath: "Sources/OldApp.swift",
+                    line: 12,
+                    side: .old,
+                    providerPosition: "old"
+                )
+            ),
+        ]
+
+        let feedback = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: threads,
+            files: [renamedFile],
+            providerName: "GitHub"
+        )
+
+        #expect(feedback[renamedFile.id]?.map(\.id) == ["thread-old-side"])
+        #expect(feedback[renamedFile.id]?.first?.anchor == DiffReviewInlineFeedbackAnchor(
+            path: "Sources/OldApp.swift",
+            line: 12,
+            side: .old
+        ))
+    }
+
+    @Test func modelPublishesInlineFeedbackAfterFilesAndEvidenceLoad() async throws {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: Self.reviewRequest(threads: [
+                ReviewThreadSummary(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please simplify this.",
+                    url: URL(string: "https://github.com/discussion"),
+                    isResolved: false,
+                    isActionable: true,
+                    location: ReviewThreadLocation(
+                        path: "Sources/App.swift",
+                        originalPath: nil,
+                        line: 1,
+                        side: .new,
+                        providerPosition: "thread-1"
+                    )
+                ),
+            ])),
+            provider: FakeCodeHostProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        let fileID = try #require(model.fileSession?.files.first?.id)
+        #expect(model.inlineFeedbackByFileID[fileID]?.map(\.id) == ["thread-1"])
+    }
+
+    @Test func modelClearsInlineFeedbackWithoutReviewRequest() async {
+        let model = ReviewEvidenceModel(
+            snapshot: Self.snapshot(reviewRequest: nil),
+            provider: FakeCodeHostProvider(),
+            cwd: URL(fileURLWithPath: "/tmp/alas"),
+            initialSection: nil
+        )
+
+        await model.load()
+
+        #expect(model.inlineFeedbackByFileID.isEmpty)
+    }
+
     @Test func fileLoaderFailureLeavesEvidenceLoadedAndSetsFileError() async {
         let model = ReviewEvidenceModel(
             snapshot: Self.snapshot(),
@@ -470,7 +674,7 @@ struct ReviewEvidenceModelTests {
         )
     }
 
-    private static func reviewRequest() -> ReviewRequest {
+    private static func reviewRequest(threads: [ReviewThreadSummary] = []) -> ReviewRequest {
         let remote = Self.remote()
         let request = ReviewRequest(
             remote: remote,
@@ -484,7 +688,7 @@ struct ReviewEvidenceModelTests {
             reviewDecision: .changesRequested,
             mergeState: .blocked,
             checks: [],
-            threads: []
+            threads: threads
         )
         return request
     }

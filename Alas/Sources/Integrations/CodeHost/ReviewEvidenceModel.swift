@@ -12,6 +12,7 @@ final class ReviewEvidenceModel {
 
     private(set) var ciItems: [ReviewEvidenceItem] = []
     private(set) var feedbackItems: [ReviewEvidenceItem] = []
+    private(set) var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     private(set) var fileSession: DiffReviewLoadedSession?
     private(set) var selectedSection: ReviewEvidenceSection
     private(set) var selectedItemID: String?
@@ -46,6 +47,7 @@ final class ReviewEvidenceModel {
         guard let remote = snapshot.remote, let request = snapshot.reviewRequest else {
             isLoadingList = false
             isLoadingFiles = false
+            inlineFeedbackByFileID = [:]
             errorMessage = "Review request not found."
             return
         }
@@ -54,6 +56,7 @@ final class ReviewEvidenceModel {
         isLoadingFiles = true
         errorMessage = nil
         fileErrorMessage = nil
+        inlineFeedbackByFileID = [:]
 
         async let files: Void = loadAndPublishFiles(remote: remote, request: request)
         async let evidence: Void = loadAndPublishEvidence(remote: remote, request: request)
@@ -201,8 +204,10 @@ final class ReviewEvidenceModel {
         switch result {
         case .success(let loadedFiles):
             fileSession = loadedFiles
+            refreshInlineFeedback()
         case .failure(let error):
             fileSession = nil
+            inlineFeedbackByFileID = [:]
             fileErrorMessage = error.localizedDescription
         }
         isLoadingFiles = false
@@ -219,8 +224,10 @@ final class ReviewEvidenceModel {
             let (loadedCI, loadedFeedback) = loadedEvidence
             ciItems = loadedCI
             feedbackItems = loadedFeedback
+            refreshInlineFeedback()
             chooseInitialSelection()
         case .failure(let error):
+            refreshInlineFeedback()
             errorMessage = error.localizedDescription
         }
         isLoadingList = false
@@ -229,6 +236,21 @@ final class ReviewEvidenceModel {
     private func loadAndPublishEvidence(remote: CodeHostRemote, request: ReviewRequest) async {
         let result = await Self.loadEvidence(provider: provider, remote: remote, request: request, cwd: cwd)
         publishEvidence(result)
+    }
+
+    private func refreshInlineFeedback() {
+        guard let request = snapshot.reviewRequest,
+              let fileSession
+        else {
+            inlineFeedbackByFileID = [:]
+            return
+        }
+
+        inlineFeedbackByFileID = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: request.threads,
+            files: fileSession.summary.files,
+            providerName: request.provider.displayName
+        )
     }
 
     private nonisolated static func loadFiles(
