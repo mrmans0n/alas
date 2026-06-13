@@ -141,7 +141,7 @@ struct GitLabCLIProvider: CodeHostProvider {
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
         let result = try await runner.run(
             "glab",
-            args: ["mr", "diff", "\(request.number)", "-R", remote.repositorySlug],
+            args: ["mr", "diff", "\(request.number)", "--raw", "--color=never", "-R", remote.repositorySlug],
             cwd: cwd
         )
         guard result.exitCode == 0 else {

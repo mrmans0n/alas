@@ -704,7 +704,7 @@ struct GitLabCLIProviderTests {
         #expect(await runner.commands == [
             FakeRunner.Command(
                 executable: "glab",
-                args: ["mr", "diff", "42", "-R", "platform/mobile/alas"],
+                args: ["mr", "diff", "42", "--raw", "--color=never", "-R", "platform/mobile/alas"],
                 cwd: Self.cwd
             ),
         ])
