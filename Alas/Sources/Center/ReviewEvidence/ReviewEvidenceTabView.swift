@@ -206,11 +206,8 @@ struct ReviewEvidenceTabView: View {
             && feedbackItemsAreEmpty
         guard hasOnlyModelError else { return false }
 
-        if fileSession != nil {
-            return false
-        }
-
-        if selectedSection == .files, isLoadingFiles || fileErrorMessage != nil {
+        if selectedSection == .files,
+           fileSession != nil || isLoadingFiles || fileErrorMessage != nil {
             return false
         }
 

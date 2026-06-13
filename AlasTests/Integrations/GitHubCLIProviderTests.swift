@@ -559,6 +559,31 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func checkEvidenceDetailDoesNotLoadFailedLogsForNonFailedCheck() async throws {
+        let request = Self.makeRequest(checks: [])
+        let runner = FakeRunner(results: [])
+        let provider = GitHubCLIProvider(runner: runner)
+        let item = ReviewEvidenceItem(
+            id: "ci:lint",
+            section: .ci,
+            title: "lint",
+            subtitle: "CI",
+            status: .pending,
+            providerURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/1")
+        )
+
+        let detail = try await provider.checkEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(detail.body == "Open this check in GitHub to inspect current status.")
+        #expect(detail.isTruncated == false)
+        #expect(await runner.commands.isEmpty)
+    }
+
     @Test func feedbackEvidenceDetailUsesThreadBody() async throws {
         let threads = try GitHubCLIProvider.parseReviewThreads(Self.reviewThreadsOutput)
         let request = Self.makeRequest(threads: threads)

@@ -186,6 +186,15 @@ struct GitHubCLIProvider: CodeHostProvider {
         cwd: URL
     ) async throws -> ReviewEvidenceDetail {
         _ = request
+        guard item.status == .failed else {
+            return ReviewEvidenceDetail(
+                item: item,
+                body: "Open this check in GitHub to inspect current status.",
+                filePath: nil,
+                line: nil,
+                isTruncated: false
+            )
+        }
         guard let runID = Self.githubRunID(from: item.providerURL) else {
             return ReviewEvidenceDetail(
                 item: item,
