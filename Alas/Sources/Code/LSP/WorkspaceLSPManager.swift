@@ -357,7 +357,14 @@ final class WorkspaceLSPManager: DocumentFormatter {
         // newer content wins even if an earlier opener's continuation
         // resumes first.
         if !h.openedURIs.contains(uri) {
-            let openText = h.pendingOpenText[uri] ?? text
+            let openText: String
+            if normalRefCount(forURI: uri, in: h) == 0,
+               (h.temporaryRefsByURI[uri] ?? 0) > 0,
+               let temporaryText = h.temporaryTextsByURI[uri] {
+                openText = temporaryText
+            } else {
+                openText = h.pendingOpenText[uri] ?? text
+            }
             if var holder = holders[key] {
                 holder.openedURIs.insert(uri)
                 holder.versions[uri] = 1
@@ -474,6 +481,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
         holder.refsByURI = refs
         holder.temporaryRefsByURI = temporaryRefs
         holders[key] = holder
+        if ownership == .editor {
+            restorePendingTemporaryTextIfNeeded(key: key, holder: holder, uri: uri)
+        }
 
         // If the holder never reached `.ready` (init failed), it lingers
         // in the dict so the badge can show `.problem(.dead)` and offer
@@ -520,6 +530,30 @@ final class WorkspaceLSPManager: DocumentFormatter {
             holders.removeValue(forKey: key)
             bumpStateTick()
         }
+    }
+
+    private func restorePendingTemporaryTextIfNeeded(
+        key: Key,
+        holder: Holder,
+        uri: String
+    ) {
+        guard !holder.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: holder) == 0,
+              (holder.temporaryRefsByURI[uri] ?? 0) > 0,
+              let temporaryText = holder.temporaryTextsByURI[uri]
+        else {
+            return
+        }
+        guard var current = holders[key],
+              current.client === holder.client,
+              !current.openedURIs.contains(uri),
+              normalRefCount(forURI: uri, in: current) == 0,
+              (current.temporaryRefsByURI[uri] ?? 0) > 0
+        else {
+            return
+        }
+        current.pendingOpenText[uri] = temporaryText
+        holders[key] = current
     }
 
     private func restoreTemporaryTextIfNeeded(
