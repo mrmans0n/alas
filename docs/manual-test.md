@@ -186,7 +186,10 @@ Pre-req: a Swift project, `sourcekit-lsp` available via `xcrun --find sourcekit-
 
 1. Stage a Swift change. Open the diff tab.
 2. Confirm hunks render with colored keywords / types / strings.
-3. Confirm hover does nothing (intentional — diff pane is highlight-only, no LSP).
+3. Wait for `sourcekit-lsp` to settle. Hover a symbol on the new/current side and confirm a type/docs popover appears.
+4. Cmd-click a symbol on the new/current side and confirm the editor jumps to its definition.
+5. Hover or Cmd-click deleted/old-side lines and confirm no LSP popover or navigation occurs.
+6. Switch between split and stacked diff layouts and repeat the hover / Cmd-click checks on the new/current side.
 
 ### Settings → Code
 
