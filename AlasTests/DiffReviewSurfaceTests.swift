@@ -529,6 +529,10 @@ struct DiffReviewSurfaceTests {
         #expect(manyFeedback == cappedFeedback)
     }
 
+    @Test func inlineFeedbackCardEstimateReservesThreeLinePreviewHeight() {
+        #expect(DiffReviewInlineFeedbackDisplayPolicy.cardEstimatedHeight >= 78)
+    }
+
     private func parsedDiff() -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(

@@ -188,7 +188,7 @@ struct DiffReviewFileSection: View {
 
 enum DiffReviewInlineFeedbackDisplayPolicy {
     static let maximumVisibleCards = 3
-    static let cardEstimatedHeight: CGFloat = 54
+    static let cardEstimatedHeight: CGFloat = 78
     static let moreRowEstimatedHeight: CGFloat = 20
     private static let stackVerticalPadding: CGFloat = 20
     private static let rowSpacing: CGFloat = 6
@@ -255,12 +255,12 @@ private struct DiffReviewInlineFeedbackCard: View {
                     .font(.system(size: 11.5))
                     .foregroundColor(theme.color("fg"))
                     .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 0)
         }
         .padding(8)
+        .frame(height: DiffReviewInlineFeedbackDisplayPolicy.cardEstimatedHeight, alignment: .top)
         .background(theme.color("bg-2"))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
