@@ -729,6 +729,55 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
     }
 
+    @Test func fileSectionDraftCommentCardCanDismissComment() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-dismiss-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var dismissedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: true,
+                    canCopyPrompt: false,
+                    canSendToAgent: false
+                )
+            },
+            dismiss: { dismissedID = $0.id }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-dismiss-draft-dismiss-inline",
+            in: controller.view
+        ))
+        #expect(dismissedID == "draft-dismiss-inline")
+    }
+
     @Test func inlineFeedbackContextFormatterIncludesReviewMetadata() {
         let file = summary(path: "Sources/App.swift")
         let item = DiffReviewInlineFeedback(
@@ -1059,6 +1108,7 @@ struct DiffReviewSurfaceTests {
                     canEdit: false,
                     canDelete: false,
                     canResolve: false,
+                    canDismiss: false,
                     canCopyPrompt: true,
                     canSendToAgent: true
                 )
@@ -1084,6 +1134,52 @@ struct DiffReviewSurfaceTests {
         #expect(recorder.sent == bundle)
     }
 
+    @Test func summaryRailCanDismissDraftComment() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-dismiss-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        var dismissedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: true,
+                    canCopyPrompt: false,
+                    canSendToAgent: false
+                )
+            },
+            dismiss: { dismissedID = $0.id }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-dismiss-draft-dismiss-summary",
+            in: controller.view
+        ))
+        #expect(dismissedID == "draft-dismiss-summary")
+    }
+
     @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {
         let file = summary(path: "Sources/App.swift")
         let comment = draftComment(id: "draft-collapsed", fileID: file.id, path: file.path, side: .new, startLine: 2)
@@ -1104,6 +1200,7 @@ struct DiffReviewSurfaceTests {
                     canEdit: false,
                     canDelete: false,
                     canResolve: false,
+                    canDismiss: false,
                     canCopyPrompt: true,
                     canSendToAgent: true
                 )

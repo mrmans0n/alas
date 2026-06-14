@@ -916,6 +916,7 @@ private struct ReviewDraftCommentCard: View {
         if availability.canEdit
             || availability.canDelete
             || availability.canResolve
+            || availability.canDismiss
             || availability.canCopyPrompt
             || availability.canSendToAgent
         {
@@ -934,6 +935,11 @@ private struct ReviewDraftCommentCard: View {
                 if availability.canResolve {
                     actionButton(id: "resolve", title: "Resolve") {
                         actions.resolve(comment)
+                    }
+                }
+                if availability.canDismiss {
+                    actionButton(id: "dismiss", title: "Dismiss") {
+                        actions.dismiss(comment)
                     }
                 }
                 if availability.canCopyPrompt {
@@ -968,6 +974,13 @@ private struct ReviewDraftCommentCard: View {
             DiffReviewAccessibilityMarker(
                 identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
                 label: title
+            )
+        )
+        .background(
+            ReviewDraftCommentActionPressMarker(
+                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                label: title,
+                action: action
             )
         )
     }
@@ -1015,6 +1028,37 @@ private struct ReviewDraftCommentCard: View {
         case .dismissed:
             theme.color("fg-muted")
         }
+    }
+}
+
+private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
+    let identifier: String
+    let label: String
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> ReviewDraftCommentActionPressView {
+        let view = ReviewDraftCommentActionPressView(frame: .zero)
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: ReviewDraftCommentActionPressView, context: Context) {
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.action = action
+    }
+}
+
+private final class ReviewDraftCommentActionPressView: NSView {
+    var action: () -> Void = {}
+
+    override func accessibilityPerformPress() -> Bool {
+        action()
+        return true
     }
 }
 

@@ -2,6 +2,7 @@ struct ReviewDraftCommentActionAvailability: Equatable, Sendable {
     var canEdit: Bool
     var canDelete: Bool
     var canResolve: Bool
+    var canDismiss: Bool
     var canCopyPrompt: Bool
     var canSendToAgent: Bool
 
@@ -9,6 +10,7 @@ struct ReviewDraftCommentActionAvailability: Equatable, Sendable {
         canEdit: false,
         canDelete: false,
         canResolve: false,
+        canDismiss: false,
         canCopyPrompt: false,
         canSendToAgent: false
     )
@@ -19,6 +21,7 @@ struct ReviewDraftCommentActions: Sendable {
     var edit: @Sendable (ReviewDraftComment) -> Void
     var delete: @Sendable (ReviewDraftComment) -> Void
     var resolve: @Sendable (ReviewDraftComment) -> Void
+    var dismiss: @Sendable (ReviewDraftComment) -> Void
     var copyPrompt: @Sendable (ReviewFeedbackBundle) -> Void
     var sendToAgent: @Sendable (ReviewFeedbackBundle) -> Void
 
@@ -27,6 +30,7 @@ struct ReviewDraftCommentActions: Sendable {
         edit: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
         delete: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
         resolve: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
+        dismiss: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
         copyPrompt: @escaping @Sendable (ReviewFeedbackBundle) -> Void = { _ in },
         sendToAgent: @escaping @Sendable (ReviewFeedbackBundle) -> Void = { _ in }
     ) {
@@ -34,6 +38,7 @@ struct ReviewDraftCommentActions: Sendable {
         self.edit = edit
         self.delete = delete
         self.resolve = resolve
+        self.dismiss = dismiss
         self.copyPrompt = copyPrompt
         self.sendToAgent = sendToAgent
     }

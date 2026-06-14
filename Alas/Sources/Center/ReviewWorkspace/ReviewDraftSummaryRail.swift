@@ -275,7 +275,7 @@ struct ReviewDraftSummaryRail: View {
             .accessibilityIdentifier("review-draft-summary-comment-\(comment.id)")
             .accessibilityLabel(accessibilityLabel(for: comment))
 
-            if availability.canEdit || availability.canDelete || availability.canResolve {
+            if availability.canEdit || availability.canDelete || availability.canResolve || availability.canDismiss {
                 HStack(spacing: 5) {
                     Spacer(minLength: 0)
                     if availability.canEdit {
@@ -286,6 +286,11 @@ struct ReviewDraftSummaryRail: View {
                     if availability.canResolve {
                         commentActionButton(id: "resolve", commentID: comment.id, systemName: "checkmark", tooltip: "Resolve") {
                             draftCommentActions.resolve(comment)
+                        }
+                    }
+                    if availability.canDismiss {
+                        commentActionButton(id: "dismiss", commentID: comment.id, systemName: "xmark", tooltip: "Dismiss") {
+                            draftCommentActions.dismiss(comment)
                         }
                     }
                     if availability.canDelete {
@@ -332,6 +337,13 @@ struct ReviewDraftSummaryRail: View {
         .help(tooltip)
         .accessibilityIdentifier("review-draft-summary-\(id)-\(commentID)")
         .accessibilityLabel(tooltip)
+        .background(
+            ReviewDraftSummaryPressMarker(
+                identifier: "review-draft-summary-\(id)-\(commentID)",
+                label: tooltip,
+                action: action
+            )
+        )
     }
 
     private func lineDescription(for comment: ReviewDraftComment) -> String {

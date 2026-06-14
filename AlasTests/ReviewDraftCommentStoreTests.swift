@@ -55,6 +55,10 @@ struct ReviewDraftCommentStoreTests {
         #expect(controller.comments.single?.state == .resolved)
         #expect(try store.load(sessionID: session).single?.state == .resolved)
 
+        try controller.dismiss(commentID: added.id)
+        #expect(controller.comments.single?.state == .dismissed)
+        #expect(try store.load(sessionID: session).single?.state == .dismissed)
+
         try controller.delete(commentID: added.id)
         #expect(controller.comments.isEmpty)
         #expect(try store.load(sessionID: session).isEmpty)

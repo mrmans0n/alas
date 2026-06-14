@@ -73,6 +73,13 @@ final class ReviewDraftCommentController {
         try saveAndReload(comment)
     }
 
+    func dismiss(commentID: String) throws {
+        guard var comment = comments.first(where: { $0.id == commentID }) else { return }
+        comment.state = .dismissed
+        comment.updatedAt = now()
+        try saveAndReload(comment)
+    }
+
     func delete(commentID: String) throws {
         do {
             try store.delete(commentID: commentID, sessionID: sessionID)
