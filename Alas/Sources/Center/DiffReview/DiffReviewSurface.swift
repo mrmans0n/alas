@@ -127,6 +127,7 @@ struct DiffReviewSurface: View {
                 file: file,
                 inlineFeedback: inlineFeedback,
                 focusedFeedbackID: focusedFeedbackID,
+                inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
                 showWhitespace: $showWhitespace,
@@ -149,6 +150,14 @@ struct DiffReviewSurface: View {
                 codeFontSize: codeFontSize
             )
         }
+    }
+
+    private func inlineFeedbackScrollTargetID(for fileID: DiffReviewFileID) -> String? {
+        guard let command = inlineFeedbackScrollCommand,
+              command.fileID == fileID
+        else { return nil }
+
+        return command.feedbackID
     }
 
     private func scrollToInlineFeedback(

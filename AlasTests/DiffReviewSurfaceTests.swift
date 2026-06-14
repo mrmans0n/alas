@@ -268,13 +268,84 @@ struct DiffReviewSurfaceTests {
 
         let controller = host(view, width: 900, height: 500)
 
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-1", in: controller.view) != nil)
         #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-open-thread-1", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-copy-thread-1", in: controller.view) != nil)
-        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-send-thread-1", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-open-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-copy-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-send-thread-1", in: controller.view) == nil)
+        #expect(subviews(withAccessibilityIdentifier: "diff-review-inline-feedback-open-thread-1", in: controller.view).count <= 1)
+        #expect(subviews(withAccessibilityIdentifier: "diff-review-inline-feedback-copy-thread-1", in: controller.view).count <= 1)
     }
 
-    @Test func inlineFeedbackCardSelectionInvokesSelectionHandler() {
+    @Test func focusedInlineFeedbackPastDisplayCapRemainsVisibleWithMoreRow() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: feedback,
+            focusedFeedbackID: "thread-5",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 600)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-2", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-3", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-4", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-5", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-5", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "+1 more feedback") != nil)
+    }
+
+    @Test func inlineFeedbackScrollTargetPastDisplayCapRemainsVisible() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: feedback,
+            inlineFeedbackScrollTargetID: "thread-5",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 600)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-5", in: controller.view) != nil)
+    }
+
+    @Test func inlineFeedbackCardInteractionRoutesSelectionAndActionsIndependently() {
         let feedback = DiffReviewInlineFeedback(
             id: "thread-1",
             providerName: "GitHub",
@@ -286,6 +357,24 @@ struct DiffReviewSurfaceTests {
             evidenceItemID: "thread-1"
         )
         var selectedFeedbackID: String?
+        var openedFeedbackID: String?
+        var copiedFeedbackID: String?
+        var sentFeedbackID: String?
+
+        DiffReviewInlineFeedbackCardInteraction.open(feedback) {
+            openedFeedbackID = $0.id
+        }
+        DiffReviewInlineFeedbackCardInteraction.copy(feedback) {
+            copiedFeedbackID = $0.id
+        }
+        DiffReviewInlineFeedbackCardInteraction.send(feedback) {
+            sentFeedbackID = $0.id
+        }
+
+        #expect(selectedFeedbackID == nil)
+        #expect(openedFeedbackID == "thread-1")
+        #expect(copiedFeedbackID == "thread-1")
+        #expect(sentFeedbackID == "thread-1")
 
         DiffReviewInlineFeedbackCardInteraction.select(feedback) {
             selectedFeedbackID = $0.id
@@ -928,6 +1017,15 @@ struct DiffReviewSurfaceTests {
             return view
         }
         return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
+    }
+
+    private func subviews(withAccessibilityIdentifier identifier: String, in view: NSView) -> [NSView] {
+        var matches: [NSView] = []
+        if view.accessibilityIdentifier() == identifier {
+            matches.append(view)
+        }
+        matches.append(contentsOf: view.subviews.flatMap { subviews(withAccessibilityIdentifier: identifier, in: $0) })
+        return matches
     }
 
     private func accessibilityLabel(in view: NSView, containing text: String) -> String? {

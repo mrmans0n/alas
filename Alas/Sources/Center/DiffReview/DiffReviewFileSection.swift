@@ -4,6 +4,7 @@ struct DiffReviewFileSection: View {
     let file: DiffReviewFileSectionModel
     var inlineFeedback: [DiffReviewInlineFeedback] = []
     var focusedFeedbackID: String? = nil
+    var inlineFeedbackScrollTargetID: String? = nil
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -101,7 +102,10 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private func inlineFeedbackStack(_ items: [DiffReviewInlineFeedback], file: DiffReviewFileSummary) -> some View {
         if !items.isEmpty {
-            let display = DiffReviewInlineFeedbackDisplayPolicy.display(for: items)
+            let display = DiffReviewInlineFeedbackDisplayPolicy.display(
+                for: items,
+                includingRequiredIDs: requiredInlineFeedbackIDs
+            )
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(display.visibleItems) { item in
                     DiffReviewInlineFeedbackCard(
@@ -122,6 +126,10 @@ struct DiffReviewFileSection: View {
             .background(theme.color("bg-1"))
             .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
+    }
+
+    private var requiredInlineFeedbackIDs: Set<String> {
+        Set([focusedFeedbackID, inlineFeedbackScrollTargetID].compactMap(\.self))
     }
 
     private var inlineFeedbackPlacement: DiffReviewInlineFeedbackPlacement.Result {
@@ -300,10 +308,20 @@ enum DiffReviewInlineFeedbackDisplayPolicy {
     }
 
     static func display(for items: [DiffReviewInlineFeedback]) -> Display {
+        display(for: items, includingRequiredIDs: [])
+    }
+
+    static func display(
+        for items: [DiffReviewInlineFeedback],
+        includingRequiredIDs requiredIDs: Set<String>
+    ) -> Display {
         let visibleItems = Array(items.prefix(maximumVisibleCards))
+        let visibleIDs = Set(visibleItems.map(\.id))
+        let requiredItems = items.filter { requiredIDs.contains($0.id) && !visibleIDs.contains($0.id) }
+        let visible = visibleItems + requiredItems
         return Display(
-            visibleItems: visibleItems,
-            hiddenCount: max(0, items.count - visibleItems.count)
+            visibleItems: visible,
+            hiddenCount: max(0, items.count - visible.count)
         )
     }
 
@@ -426,12 +444,21 @@ private struct DiffReviewInlineFeedbackCard: View {
         )
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: isFocused
-                    ? "diff-review-inline-feedback-focused-\(item.id)"
-                    : "diff-review-inline-feedback-\(item.id)",
+                identifier: "diff-review-inline-feedback-\(item.id)",
                 label: accessibilityLabel
             )
         )
+        .background(focusedMarker)
+    }
+
+    @ViewBuilder
+    private var focusedMarker: some View {
+        if isFocused {
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-inline-feedback-focused-\(item.id)",
+                label: accessibilityLabel
+            )
+        }
     }
 
     @ViewBuilder
@@ -442,17 +469,23 @@ private struct DiffReviewInlineFeedbackCard: View {
                 Spacer(minLength: 0)
                 if availability.canOpenProvider {
                     inlineActionButton(id: "open", title: "Open") {
-                        actions.openProvider(item, file)
+                        DiffReviewInlineFeedbackCardInteraction.open(item) { feedback in
+                            actions.openProvider(feedback, file)
+                        }
                     }
                 }
                 if availability.canCopyContext {
                     inlineActionButton(id: "copy", title: "Copy") {
-                        actions.copyContext(item, file)
+                        DiffReviewInlineFeedbackCardInteraction.copy(item) { feedback in
+                            actions.copyContext(feedback, file)
+                        }
                     }
                 }
                 if availability.canSendToAgent {
                     inlineActionButton(id: "send", title: "Send") {
-                        actions.sendToAgent(item, file)
+                        DiffReviewInlineFeedbackCardInteraction.send(item) { feedback in
+                            actions.sendToAgent(feedback, file)
+                        }
                     }
                 }
             }
@@ -472,9 +505,10 @@ private struct DiffReviewInlineFeedbackCard: View {
         .buttonStyle(.plain)
         .help(title)
         .accessibilityIdentifier("diff-review-inline-feedback-\(id)-\(item.id)")
+        .accessibilityLabel(title)
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: "diff-review-inline-feedback-\(id)-\(item.id)",
+                identifier: "diff-review-inline-feedback-action-\(id)-\(item.id)",
                 label: title
             )
         )
@@ -514,6 +548,27 @@ enum DiffReviewInlineFeedbackCardInteraction {
         onSelect: (DiffReviewInlineFeedback) -> Void
     ) {
         onSelect(item)
+    }
+
+    static func open(
+        _ item: DiffReviewInlineFeedback,
+        action: (DiffReviewInlineFeedback) -> Void
+    ) {
+        action(item)
+    }
+
+    static func copy(
+        _ item: DiffReviewInlineFeedback,
+        action: (DiffReviewInlineFeedback) -> Void
+    ) {
+        action(item)
+    }
+
+    static func send(
+        _ item: DiffReviewInlineFeedback,
+        action: (DiffReviewInlineFeedback) -> Void
+    ) {
+        action(item)
     }
 }
 
