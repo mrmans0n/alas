@@ -89,6 +89,80 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains("This behavior regressed."))
     }
 
+    @Test func promptPreservesMultilineMarkdownBodies() {
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Local changes",
+            repositoryPath: nil,
+            providerDescription: nil,
+            sourceDescription: "local changes"
+        )
+        let body = """
+        This needs a guard.
+
+        ```swift
+        if value == nil {
+            return
+        }
+        ```
+        """
+        let bundle = ReviewFeedbackBundle(target: target, comments: [
+            comment(id: "a", session: session, path: "A.swift", line: 4, body: body),
+        ])
+
+        let prompt = bundle.promptMarkdown()
+
+        #expect(prompt.contains("- `A.swift:4 (new)`"))
+        #expect(prompt.contains("""
+        This needs a guard.
+
+        ```swift
+        if value == nil {
+            return
+        }
+        ```
+        """))
+        #expect(!prompt.contains("This needs a guard. ```swift if value == nil"))
+    }
+
+    @Test func promptPreservesSelectedTextIndentation() {
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Local changes",
+            repositoryPath: nil,
+            providerDescription: nil,
+            sourceDescription: "local changes"
+        )
+        let selectedText = """
+            if condition {
+                run()
+            }
+        """
+        let bundle = ReviewFeedbackBundle(target: target, comments: [
+            comment(
+                id: "a",
+                session: session,
+                path: "A.swift",
+                line: 4,
+                selectedText: selectedText,
+                body: "Keep indentation."
+            ),
+        ])
+
+        let prompt = bundle.promptMarkdown()
+
+        #expect(prompt.contains(">     if condition {"))
+        #expect(prompt.contains(">         run()"))
+    }
+
     private func comment(
         id: String,
         session: ReviewDraftSessionID,

@@ -41,12 +41,21 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
             lines.append("## \(path)")
 
             for comment in comments {
-                lines.append("- `\(path):\(lineDescription(for: comment)) (\(comment.side.rawValue))` — \(singleLineBody(comment.bodyMarkdown))")
+                let bodyLines = markdownBodyLines(comment.bodyMarkdown)
+                if bodyLines.count <= 1 {
+                    let suffix = bodyLines.first.map { " — \($0)" } ?? ""
+                    lines.append("- `\(path):\(lineDescription(for: comment)) (\(comment.side.rawValue))`\(suffix)")
+                } else {
+                    lines.append("- `\(path):\(lineDescription(for: comment)) (\(comment.side.rawValue))`")
+                    lines.append(contentsOf: bodyLines)
+                }
 
-                if let selectedText = comment.selectedText?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !selectedText.isEmpty {
-                    for selectedLine in selectedText.components(separatedBy: .newlines) {
-                        lines.append("> \(selectedLine)")
+                if let selectedText = comment.selectedText {
+                    let selectedTextForDisplay = selectedText.trimmingCharacters(in: .newlines)
+                    if !selectedTextForDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        for selectedLine in selectedTextForDisplay.components(separatedBy: .newlines) {
+                            lines.append("> \(selectedLine)")
+                        }
                     }
                 }
             }
@@ -81,10 +90,15 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
         return "\(range.lowerBound)-\(range.upperBound)"
     }
 
-    private func singleLineBody(_ body: String) -> String {
-        body.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+    private func markdownBodyLines(_ body: String) -> [String] {
+        let trimmedBody = body.trimmingCharacters(in: .newlines)
+        guard !trimmedBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return []
+        }
+        let lines = trimmedBody.components(separatedBy: .newlines)
+        if lines.count == 1 {
+            return [lines[0].trimmingCharacters(in: .whitespacesAndNewlines)]
+        }
+        return lines
     }
 }
