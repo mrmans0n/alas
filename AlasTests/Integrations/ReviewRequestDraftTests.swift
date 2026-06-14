@@ -9,7 +9,7 @@ struct ReviewRequestDraftTests {
             commitSubjects: [],
             commits: [],
             changedFiles: [
-                CommitChangedFile(path: path, originalPath: "Sources/OldA.swift", status: "R", add: 1, del: 1),
+                CommitChangedFile(path: path, originalPath: nil, status: "M", add: 1, del: 1),
             ],
             diff: Self.modifiedSwiftDiff(path: path),
             fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
@@ -36,11 +36,11 @@ struct ReviewRequestDraftTests {
         #expect(section.summary.namespace == "draft-review-request")
         #expect(section.summary.groupID == nil)
         #expect(section.summary.groupTitle == nil)
-        #expect(section.summary.status == .renamed)
+        #expect(section.summary.status == .modified)
         #expect(section.summary.additions == 1)
         #expect(section.summary.deletions == 1)
         #expect(section.summary.isRenderable)
-        #expect(section.summary.originalPath == "Sources/OldA.swift")
+        #expect(section.summary.originalPath == nil)
         #expect(section.parsedDiff?.hunks.count == 1)
         #expect(section.displayModel?.filePath == path)
         #expect(section.displayModel?.groups.count == 1)
