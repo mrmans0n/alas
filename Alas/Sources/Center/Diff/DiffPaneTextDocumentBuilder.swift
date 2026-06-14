@@ -115,7 +115,9 @@ struct DiffPaneTextDocumentBuilder {
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
         )
 
-        for row in rows {
+        var index = 0
+        while index < rows.count {
+            let row = rows[index]
             if row.kind == .collapsed {
                 gutter.append("", side: .paired)
                 codeColumn.append(
@@ -124,10 +126,16 @@ struct DiffPaneTextDocumentBuilder {
                     tone: .collapsed,
                     sourceLine: nil
                 )
+                index += 1
                 continue
             }
 
-            for line in DiffPaneRowProjection.stackedLines(for: row) {
+            let rowStart = index
+            while index < rows.count, rows[index].kind != .collapsed {
+                index += 1
+            }
+            let lines = DiffPaneRowProjection.stackedLines(for: Array(rows[rowStart..<index]))
+            for (row, line) in lines {
                 gutter.append(marker(for: line, emptyKind: row.kind, side: line.anchor.side), side: line.anchor.side)
                 codeColumn.append(
                     code(
@@ -164,6 +172,15 @@ struct DiffPaneTextDocumentBuilder {
             in: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
         )
+        if layoutMode == .stacked {
+            return buildStackedSingleDocument(
+                rows: rows,
+                fileExtension: fileExtension,
+                font: font,
+                showWhitespace: showWhitespace,
+                theme: theme
+            )
+        }
 
         for row in rows {
             if output.length > 0 {
@@ -175,28 +192,14 @@ struct DiffPaneTextDocumentBuilder {
             case .collapsed:
                 output.append(collapsedLine(row, font: font, theme: theme))
             case .context, .add, .delete, .replacement:
-                switch layoutMode {
-                case .split:
-                    output.append(splitLine(
-                        row,
-                        fileExtension: fileExtension,
-                        font: font,
-                        showWhitespace: showWhitespace,
-                        theme: theme,
-                        splitColumnCharacterWidth: splitColumnCharacterWidth
-                    ))
-                case .stacked:
-                    appendStackedLines(
-                        row,
-                        to: output,
-                        lines: &lines,
-                        fileExtension: fileExtension,
-                        font: font,
-                        showWhitespace: showWhitespace,
-                        theme: theme
-                    )
-                    continue
-                }
+                output.append(splitLine(
+                    row,
+                    fileExtension: fileExtension,
+                    font: font,
+                    showWhitespace: showWhitespace,
+                    theme: theme,
+                    splitColumnCharacterWidth: splitColumnCharacterWidth
+                ))
             }
 
             lines.append(LineMetadata(kind: row.kind, range: NSRange(location: start, length: output.length - start)))
@@ -205,8 +208,51 @@ struct DiffPaneTextDocumentBuilder {
         return Result(attributedString: output, lines: lines)
     }
 
+    private static func buildStackedSingleDocument(
+        rows: [DiffDisplayRow],
+        fileExtension: String,
+        font: NSFont,
+        showWhitespace: Bool,
+        theme: Theme
+    ) -> Result {
+        let output = NSMutableAttributedString()
+        var lines: [LineMetadata] = []
+        var index = 0
+
+        while index < rows.count {
+            let row = rows[index]
+            if output.length > 0 {
+                output.append(NSAttributedString(string: "\n", attributes: baseAttributes(font: font, theme: theme)))
+            }
+
+            if row.kind == .collapsed {
+                let start = output.length
+                output.append(collapsedLine(row, font: font, theme: theme))
+                lines.append(LineMetadata(kind: row.kind, range: NSRange(location: start, length: output.length - start)))
+                index += 1
+                continue
+            }
+
+            let rowStart = index
+            while index < rows.count, rows[index].kind != .collapsed {
+                index += 1
+            }
+            appendStackedLines(
+                DiffPaneRowProjection.stackedLines(for: Array(rows[rowStart..<index])),
+                to: output,
+                lines: &lines,
+                fileExtension: fileExtension,
+                font: font,
+                showWhitespace: showWhitespace,
+                theme: theme
+            )
+        }
+
+        return Result(attributedString: output, lines: lines)
+    }
+
     private static func appendStackedLines(
-        _ row: DiffDisplayRow,
+        _ stackedLines: [(row: DiffDisplayRow, line: DiffDisplayLine)],
         to output: NSMutableAttributedString,
         lines: inout [LineMetadata],
         fileExtension: String,
@@ -214,7 +260,9 @@ struct DiffPaneTextDocumentBuilder {
         showWhitespace: Bool,
         theme: Theme
     ) {
-        for (index, line) in DiffPaneRowProjection.stackedLines(for: row).enumerated() {
+        for (index, entry) in stackedLines.enumerated() {
+            let row = entry.row
+            let line = entry.line
             if index > 0 {
                 output.append(NSAttributedString(string: "\n", attributes: baseAttributes(font: font, theme: theme)))
             }

@@ -753,6 +753,119 @@ struct DiffPaneViewTests {
         #expect(result.code.lines.contains { $0.kind == .replacement })
     }
 
+    @Test func stackedDocumentGroupsConsecutiveReplacementBlocksBySide() throws {
+        let model = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,4 +1,4 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: "before", oldNumber: 1, newNumber: 1),
+                        .init(kind: .delete, text: "old one", oldNumber: 2, newNumber: nil),
+                        .init(kind: .delete, text: "old two", oldNumber: 3, newNumber: nil),
+                        .init(kind: .add, text: "new one", oldNumber: nil, newNumber: 2),
+                        .init(kind: .add, text: "new two", oldNumber: nil, newNumber: 3),
+                        .init(kind: .context, text: "after", oldNumber: 4, newNumber: 4),
+                    ]
+                )
+            ]),
+            filePath: "a.swift"
+        )
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.code.attributedString.string.components(separatedBy: "\n") == [
+            "before",
+            "old one",
+            "old two",
+            "new one",
+            "new two",
+            "after",
+        ])
+        #expect(result.gutter.string.components(separatedBy: "\n") == ["1", "2", "3", "2", "3", "4"])
+    }
+
+    @Test func stackedDocumentKeepsExtraDeletedLinesWithDeleteBlock() throws {
+        let model = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,4 +1,3 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: "before", oldNumber: 1, newNumber: 1),
+                        .init(kind: .delete, text: "old one", oldNumber: 2, newNumber: nil),
+                        .init(kind: .delete, text: "old two", oldNumber: 3, newNumber: nil),
+                        .init(kind: .add, text: "new one", oldNumber: nil, newNumber: 2),
+                        .init(kind: .context, text: "after", oldNumber: 4, newNumber: 3),
+                    ]
+                )
+            ]),
+            filePath: "a.swift"
+        )
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.code.attributedString.string.components(separatedBy: "\n") == [
+            "before",
+            "old one",
+            "old two",
+            "new one",
+            "after",
+        ])
+        #expect(result.gutter.string.components(separatedBy: "\n") == ["1", "2", "3", "2", "3"])
+    }
+
+    @Test func stackedDocumentKeepsExtraAddedLinesWithAddBlock() throws {
+        let model = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,3 +1,4 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: "before", oldNumber: 1, newNumber: 1),
+                        .init(kind: .delete, text: "old one", oldNumber: 2, newNumber: nil),
+                        .init(kind: .add, text: "new one", oldNumber: nil, newNumber: 2),
+                        .init(kind: .add, text: "new two", oldNumber: nil, newNumber: 3),
+                        .init(kind: .context, text: "after", oldNumber: 3, newNumber: 4),
+                    ]
+                )
+            ]),
+            filePath: "a.swift"
+        )
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.code.attributedString.string.components(separatedBy: "\n") == [
+            "before",
+            "old one",
+            "new one",
+            "new two",
+            "after",
+        ])
+        #expect(result.gutter.string.components(separatedBy: "\n") == ["1", "2", "2", "3", "4"])
+    }
+
     @Test func splitDocumentUsesInvisibleLayoutGlyphsForEmptyCounterparts() throws {
         let model = DiffDisplayModelBuilder.build(
             diff: ParsedDiff(hunks: [
