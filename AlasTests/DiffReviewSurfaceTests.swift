@@ -768,6 +768,36 @@ struct DiffReviewSurfaceTests {
         #expect(!result.programmaticScroll.isSuppressing)
     }
 
+    @Test func initialRestoredNonFirstSelectionRequestsScroll() {
+        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
+        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
+
+        #expect(
+            DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+                previousFileSetKey: nil,
+                previousSelection: second,
+                selectedFileID: second,
+                firstFileID: first
+            )
+        )
+        #expect(
+            !DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+                previousFileSetKey: nil,
+                previousSelection: first,
+                selectedFileID: first,
+                firstFileID: first
+            )
+        )
+        #expect(
+            !DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+                previousFileSetKey: DiffReviewSurfaceSelectionSync.fileSetKey(for: [first, second]),
+                previousSelection: second,
+                selectedFileID: second,
+                firstFileID: first
+            )
+        )
+    }
+
     @Test func scrollCommandAdvancesGenerationForRepeatedFileSelections() {
         let file = DiffReviewFileID(namespace: "commit", path: "Sources/App.swift")
         var controller = DiffReviewScrollCommandController()

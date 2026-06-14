@@ -14,7 +14,7 @@ enum DraftReviewRequestDiffSessionBuilder {
         for file in context.changedFiles {
             try Task.checkCancellation()
             let rawDiff = context.fileDiffsByPath[file.path] ?? ""
-            let parsed = DiffParser.parse(rawDiff)
+            let parsed = try await parseDraftDiff(rawDiff)
             try Task.checkCancellation()
 
             sections.append(try await fileSection(
@@ -28,6 +28,17 @@ enum DraftReviewRequestDiffSessionBuilder {
             files: sections,
             summary: DiffReviewSessionModel(files: sections.map(\.summary), groupsEnabled: false)
         )
+    }
+
+    static func parseDraftDiff(
+        _ rawDiff: String,
+        parser: @escaping @Sendable (String) -> ParsedDiff = DiffParser.parse
+    ) async throws -> ParsedDiff {
+        let parsed = await Task.detached(priority: .userInitiated) {
+            parser(rawDiff)
+        }.value
+        try Task.checkCancellation()
+        return parsed
     }
 
     static func selectedFileID(for path: String?) -> DiffReviewFileID? {

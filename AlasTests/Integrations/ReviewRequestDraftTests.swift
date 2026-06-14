@@ -56,6 +56,17 @@ struct ReviewRequestDraftTests {
         #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == section.summary.id)
     }
 
+    @Test @MainActor func draftReviewRequestDiffParsingRunsOffMainThread() async throws {
+        let box = ThreadObservationBox()
+
+        _ = try await DraftReviewRequestDiffSessionBuilder.parseDraftDiff("diff --git a/A.swift b/A.swift") { _ in
+            box.record(isMainThread: Thread.isMainThread)
+            return ParsedDiff(hunks: [])
+        }
+
+        #expect(box.isMainThread == false)
+    }
+
     @Test @MainActor func draftReviewRequestSessionRendersWithSharedDiffReviewSurface() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(
@@ -446,5 +457,22 @@ struct ReviewRequestDraftTests {
 
     private func theme() -> Theme {
         try! ThemeStore().current
+    }
+}
+
+private final class ThreadObservationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observed: Bool?
+
+    var isMainThread: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return observed
+    }
+
+    func record(isMainThread: Bool) {
+        lock.lock()
+        observed = isMainThread
+        lock.unlock()
     }
 }
