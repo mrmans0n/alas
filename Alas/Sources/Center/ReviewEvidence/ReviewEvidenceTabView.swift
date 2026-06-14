@@ -63,35 +63,11 @@ struct ReviewEvidenceTabView: View {
     static func reviewEvidenceRevisionKey(for request: ReviewRequest) -> String {
         let checks = request.checks
             .sorted { $0.id < $1.id }
-            .map { check in
-                let completedAt = check.completedAt.map { String($0.timeIntervalSince1970) } ?? "nil"
-                return [
-                    check.id,
-                    check.name,
-                    check.workflow ?? "nil",
-                    check.bucket.rawValue,
-                    check.detailURL?.absoluteString ?? "nil",
-                    completedAt
-                ].joined(separator: ",")
-            }
+            .map(reviewEvidenceCheckRevisionKey)
             .joined(separator: ";")
         let threads = request.threads
             .sorted { $0.id < $1.id }
-            .map { thread in
-                [
-                    thread.id,
-                    thread.author ?? "nil",
-                    thread.body,
-                    thread.url?.absoluteString ?? "nil",
-                    String(thread.isResolved),
-                    String(thread.isActionable),
-                    thread.location?.path ?? "nil",
-                    thread.location?.originalPath ?? "nil",
-                    thread.location?.line.map(String.init) ?? "nil",
-                    thread.location?.side.rawValue ?? "nil",
-                    thread.location?.providerPosition ?? "nil"
-                ].joined(separator: ",")
-            }
+            .map(reviewEvidenceThreadRevisionKey)
             .joined(separator: ";")
         return [
             request.id,
@@ -102,6 +78,40 @@ struct ReviewEvidenceTabView: View {
             checks,
             threads
         ].joined(separator: "|")
+    }
+
+    private static func reviewEvidenceCheckRevisionKey(for check: ReviewCheck) -> String {
+        let completedAt = check.completedAt.map { String($0.timeIntervalSince1970) } ?? "nil"
+        return [
+            check.id,
+            check.name,
+            check.workflow ?? "nil",
+            check.bucket.rawValue,
+            check.detailURL?.absoluteString ?? "nil",
+            completedAt
+        ].joined(separator: ",")
+    }
+
+    private static func reviewEvidenceThreadRevisionKey(for thread: ReviewThreadSummary) -> String {
+        let location = thread.location
+        let url = thread.url?.absoluteString ?? "nil"
+        let originalPath = location?.originalPath ?? "nil"
+        let line = location?.line.map(String.init) ?? "nil"
+        let providerPosition = location?.providerPosition ?? "nil"
+        let parts: [String] = [
+            thread.id,
+            thread.author ?? "nil",
+            thread.body,
+            url,
+            String(thread.isResolved),
+            String(thread.isActionable),
+            location?.path ?? "nil",
+            originalPath,
+            line,
+            location?.side.rawValue ?? "nil",
+            providerPosition
+        ]
+        return parts.joined(separator: ",")
     }
 
     var body: some View {

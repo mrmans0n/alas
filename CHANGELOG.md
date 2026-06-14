@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-06-14
+
+### ✨ Features
+
+- Unify the working tree changes list for review-oriented change browsing (#513).
+- Add a multi-file review diff pane for PR and review workflows (#514).
+- Use the review stack diff surface in commit details (#516).
+- Add LSP-aware diff review support (#517).
+- Add files-first PR review details (#518).
+
+### 🐛 Fixes
+
+- Suppress empty ACP context restore warnings (#511).
+- Remediate Kotlin LSP Gatekeeper issues (#515).
+
 ## [0.7.8] - 2026-06-12
 
 ### ✨ Features
