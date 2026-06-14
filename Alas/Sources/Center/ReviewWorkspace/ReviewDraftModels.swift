@@ -83,8 +83,6 @@ enum ReviewDraftCommentState: String, Codable, Equatable, Hashable, Sendable {
     case dismissed
 }
 
-extension DiffReviewFileID: @unchecked Sendable {}
-
 struct ReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var sessionID: ReviewDraftSessionID

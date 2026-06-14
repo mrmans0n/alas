@@ -61,6 +61,52 @@ struct ReviewDraftCommentStoreTests {
         #expect(try store.load(sessionID: session).isEmpty)
         #expect(!FileManager.default.fileExists(atPath: url.path))
     }
+
+    @Test func loadUsesDeterministicTieBreakersForSameLineComments() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("review-draft-comments.json")
+        let store = ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let date = Date(timeIntervalSince1970: 10)
+        let laterRange = makeComment(id: "b", session: session, startLine: 4, endLine: 6, createdAt: date)
+        let earlierRange = makeComment(id: "a", session: session, startLine: 4, endLine: 5, createdAt: date)
+        let sameRangeLaterID = makeComment(id: "c", session: session, startLine: 4, endLine: 5, createdAt: date)
+
+        try store.save(laterRange)
+        try store.save(sameRangeLaterID)
+        try store.save(earlierRange)
+
+        #expect(try store.load(sessionID: session).map(\.id) == ["a", "c", "b"])
+    }
+
+    private func makeComment(
+        id: String,
+        session: ReviewDraftSessionID,
+        startLine: Int,
+        endLine: Int?,
+        createdAt: Date
+    ) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: session,
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "A.swift"),
+            path: "A.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: nil,
+            bodyMarkdown: "Comment \(id)",
+            state: .active,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+    }
 }
 
 private extension Array {

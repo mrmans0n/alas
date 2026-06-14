@@ -59,7 +59,13 @@ struct ReviewDraftCommentStore {
         if lhs.normalizedLineRange.lowerBound != rhs.normalizedLineRange.lowerBound {
             return lhs.normalizedLineRange.lowerBound < rhs.normalizedLineRange.lowerBound
         }
-        return lhs.createdAt < rhs.createdAt
+        if lhs.normalizedLineRange.upperBound != rhs.normalizedLineRange.upperBound {
+            return lhs.normalizedLineRange.upperBound < rhs.normalizedLineRange.upperBound
+        }
+        if lhs.createdAt != rhs.createdAt {
+            return lhs.createdAt < rhs.createdAt
+        }
+        return lhs.id < rhs.id
     }
 
     private struct Snapshot: Codable, Equatable {

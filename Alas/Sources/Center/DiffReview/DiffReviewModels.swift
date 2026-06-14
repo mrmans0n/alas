@@ -1,6 +1,6 @@
 import Foundation
 
-struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable {
+struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable, Sendable {
     let namespace: String
     let path: String
 
