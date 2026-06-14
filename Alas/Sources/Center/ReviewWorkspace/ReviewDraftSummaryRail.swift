@@ -310,45 +310,19 @@ struct ReviewDraftSummaryRail: View {
         let isFocused = comment.id == focusedDraftCommentID
 
         return VStack(alignment: .leading, spacing: 6) {
-            Button {
-                onSelectDraftComment(comment)
-            } label: {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Text(lineDescription(for: comment))
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(statusColor(for: comment))
-                        if let stateLabel = stateLabel(for: comment) {
-                            Text(stateLabel)
-                                .font(.system(size: 10))
-                                .foregroundColor(theme.color("fg-faint"))
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    if editingCommentID == comment.id {
-                        TextEditor(text: $editingBody)
-                            .font(.system(size: 11.5))
-                            .foregroundColor(theme.color("fg"))
-                            .scrollContentBackground(.hidden)
-                            .frame(minHeight: 62)
-                            .background(theme.color("bg-2"))
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
-                            .accessibilityIdentifier("review-draft-summary-editor-\(comment.id)")
-                    } else {
-                        Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
-                            .font(.system(size: 11.5))
-                            .foregroundColor(theme.color("fg"))
-                            .lineLimit(4)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+            if editingCommentID == comment.id {
+                summaryCardContent(comment)
+            } else {
+                Button {
+                    onSelectDraftComment(comment)
+                } label: {
+                    summaryCardContent(comment)
+                        .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("review-draft-summary-comment-\(comment.id)")
+                .accessibilityLabel(accessibilityLabel(for: comment))
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("review-draft-summary-comment-\(comment.id)")
-            .accessibilityLabel(accessibilityLabel(for: comment))
 
             if availability.canEdit || availability.canDelete || availability.canResolve || availability.canDismiss {
                 HStack(spacing: 5) {
@@ -397,11 +371,46 @@ struct ReviewDraftSummaryRail: View {
         .background(
             ReviewDraftSummaryPressMarker(
                 identifier: "review-draft-summary-comment-\(comment.id)",
-                label: accessibilityLabel(for: comment)
+                label: accessibilityLabel(for: comment),
+                isEnabled: editingCommentID != comment.id
             ) {
                 onSelectDraftComment(comment)
             }
         )
+    }
+
+    private func summaryCardContent(_ comment: ReviewDraftComment) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(lineDescription(for: comment))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(statusColor(for: comment))
+                if let stateLabel = stateLabel(for: comment) {
+                    Text(stateLabel)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-faint"))
+                }
+                Spacer(minLength: 0)
+            }
+
+            if editingCommentID == comment.id {
+                TextEditor(text: $editingBody)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("fg"))
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 62)
+                    .background(theme.color("bg-2"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .accessibilityIdentifier("review-draft-summary-editor-\(comment.id)")
+            } else {
+                Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func commentActionButton(

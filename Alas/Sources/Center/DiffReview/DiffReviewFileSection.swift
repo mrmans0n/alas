@@ -844,56 +844,18 @@ private struct ReviewDraftCommentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                onSelect(comment)
-            } label: {
-                HStack(alignment: .top, spacing: 8) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(statusColor)
-                        .frame(width: 3)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Text("Local draft")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(statusColor)
-
-                            Text(lineDescription)
-                                .font(.system(size: 10))
-                                .foregroundColor(theme.color("fg-faint"))
-
-                            if comment.state == .resolved {
-                                Text("resolved")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(theme.color("fg-faint"))
-                            }
-                        }
-                        .lineLimit(1)
-
-                        if isEditing {
-                            TextEditor(text: $editingBody)
-                                .font(.system(size: 11.5))
-                                .foregroundColor(theme.color("fg"))
-                                .scrollContentBackground(.hidden)
-                                .frame(minHeight: 72)
-                                .background(theme.color("bg-1"))
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
-                                .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
-                        } else {
-                            Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
-                                .font(.system(size: 11.5))
-                                .foregroundColor(theme.color("fg"))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Spacer(minLength: 0)
+            if isEditing {
+                cardContent
+            } else {
+                Button {
+                    onSelect(comment)
+                } label: {
+                    cardContent
+                        .contentShape(Rectangle())
                 }
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("diff-review-draft-comment-select-\(comment.id)")
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("diff-review-draft-comment-select-\(comment.id)")
 
             actionRow
         }
@@ -912,6 +874,52 @@ private struct ReviewDraftCommentCard: View {
             )
         )
         .background(focusedMarker)
+    }
+
+    private var cardContent: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(statusColor)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Local draft")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(statusColor)
+
+                    Text(lineDescription)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-faint"))
+
+                    if comment.state == .resolved {
+                        Text("resolved")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-faint"))
+                    }
+                }
+                .lineLimit(1)
+
+                if isEditing {
+                    TextEditor(text: $editingBody)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.color("fg"))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 72)
+                        .background(theme.color("bg-1"))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
+                } else {
+                    Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.color("fg"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
     }
 
     @ViewBuilder
@@ -995,25 +1003,30 @@ private struct ReviewDraftCommentCard: View {
             .help("Send")
             .accessibilityIdentifier("diff-review-draft-comment-action-send-\(comment.id)")
         } else {
-            actionButton(id: "send", title: "Send") {
+            actionButton(id: "send", title: "Send", enabled: isEnabled) {
                 guard let target = targets.first else { return }
                 actions.sendToAgent(feedbackBundle, target)
             }
-            .disabled(!isEnabled)
         }
     }
 
-    private func actionButton(id: String, title: String, action: @escaping () -> Void) -> some View {
+    private func actionButton(
+        id: String,
+        title: String,
+        enabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(theme.color("fg-muted"))
+                .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
                 .padding(.horizontal, 7)
                 .frame(height: 22)
                 .background(theme.color("bg-3"))
                 .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
+        .disabled(!enabled)
         .help(title)
         .accessibilityIdentifier("diff-review-draft-comment-\(id)-\(comment.id)")
         .accessibilityLabel(title)
@@ -1027,6 +1040,7 @@ private struct ReviewDraftCommentCard: View {
             ReviewDraftCommentActionPressMarker(
                 identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
                 label: title,
+                isEnabled: enabled,
                 action: action
             )
         )
@@ -1081,6 +1095,7 @@ private struct ReviewDraftCommentCard: View {
 private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
     let identifier: String
     let label: String
+    var isEnabled = true
     let action: () -> Void
 
     func makeNSView(context: Context) -> ReviewDraftCommentActionPressView {
@@ -1088,6 +1103,8 @@ private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
         view.setAccessibilityIdentifier(identifier)
         view.setAccessibilityLabel(label)
         view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
         view.action = action
         return view
     }
@@ -1096,14 +1113,18 @@ private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
         view.setAccessibilityIdentifier(identifier)
         view.setAccessibilityLabel(label)
         view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
         view.action = action
     }
 }
 
 private final class ReviewDraftCommentActionPressView: NSView {
+    var isEnabled = true
     var action: () -> Void = {}
 
     override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
         action()
         return true
     }

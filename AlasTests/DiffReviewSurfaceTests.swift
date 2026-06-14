@@ -779,6 +779,115 @@ struct DiffReviewSurfaceTests {
         #expect(dismissedID == "draft-dismiss-inline")
     }
 
+    @Test func fileSectionDraftCommentCardDoesNotFireDisabledSendAction() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(
+            id: "draft-disabled-send-inline",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 2,
+            state: .resolved
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: true,
+                    canSendToAgent: false
+                )
+            },
+            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
+            sendToAgent: { _, _ in Issue.record("disabled send action fired") }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(!pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-send-draft-disabled-send-inline",
+            in: controller.view
+        ))
+    }
+
+    @Test func fileSectionDraftCommentEditorDoesNotKeepCardSelectionButtonActive() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-edit-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var selectedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions,
+            onSelectDraftComment: { selectedID = $0.id }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-draft-edit-inline",
+            in: controller.view
+        ))
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-action-save-draft-edit-inline", in: controller.view) != nil)
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-draft-comment-select-draft-edit-inline", in: controller.view))
+        #expect(selectedID == nil)
+    }
+
     @Test func inlineFeedbackContextFormatterIncludesReviewMetadata() {
         let file = summary(path: "Sources/App.swift")
         let item = DiffReviewInlineFeedback(
@@ -1252,6 +1361,55 @@ struct DiffReviewSurfaceTests {
             in: controller.view
         ))
         #expect(dismissedID == "draft-dismiss-summary")
+    }
+
+    @Test func summaryRailEditorDoesNotKeepCardSelectionPressActive() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-edit-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        var selectedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { selectedID = $0.id }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-edit-draft-edit-summary",
+            in: controller.view
+        ))
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-save-draft-edit-summary", in: controller.view) != nil)
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-comment-draft-edit-summary", in: controller.view))
+        #expect(selectedID == nil)
     }
 
     @Test func summaryRailShowsDismissedCommentsWithSideAndStatus() throws {
