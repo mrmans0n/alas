@@ -398,7 +398,7 @@ extension DiffReviewFileSectionHeightEstimator {
         let draftPlacement = ReviewDraftCommentPlacement.position(draftComments, in: displayModel.groups)
         let draftFileLevelHeight = ReviewDraftCommentDisplayPolicy.estimatedHeight(for: draftPlacement.fileLevel)
         let draftGroupHeights = displayModel.groups.reduce(CGFloat(0)) { total, group in
-            let rowKeys = ReviewDraftCommentPlacement.visibleRowKeys(in: group)
+            let rowKeys = ReviewDraftCommentPlacement.allRowKeys(in: group)
             let groupDraftComments = ReviewDraftCommentPlacement.sorted(
                 rowKeys.flatMap { draftPlacement.byRowAnchor[$0] ?? [] }
             )

@@ -593,7 +593,27 @@ struct DiffReviewSurfaceTests {
         #expect(ReviewDraftCommentPlacement.visibleRowKeys(in: row).isEmpty)
         #expect(ReviewDraftCommentPlacement.allRowKeys(in: row) == [
             ReviewDraftCommentPlacement.RowKey(side: .old, line: 7),
+            ReviewDraftCommentPlacement.RowKey(side: .unknown, line: 7),
         ])
+    }
+
+    @Test func localDraftCommentsWithUnknownSideMatchContextRows() throws {
+        let model = displayModel()
+        let comment = draftComment(id: "draft-unknown", path: "A.swift", side: .unknown, startLine: 1)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: try #require(model.groups.first),
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(placement.fileLevel.isEmpty)
+        #expect(
+            placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .unknown, line: 1)]?.map(\.id)
+                == ["draft-unknown"]
+        )
+        #expect(segments.items.first?.draftComments.map(\.id) == ["draft-unknown"])
     }
 
     @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
@@ -1095,6 +1115,56 @@ struct DiffReviewSurfaceTests {
             openFile: nil
         )
         let comment = draftComment(id: "draft-height", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+
+        #expect(
+            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [comment])
+                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [])
+        )
+    }
+
+    @Test func estimatedSectionHeightGrowsWithDraftCommentsOnCollapsedRows() {
+        let hiddenLine = diffLine(id: "hidden-new", side: .new, newLine: 12, text: "let hidden = true")
+        let collapsedParent = DiffDisplayRow(
+            id: "collapsed-parent",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: 1,
+            collapsedRows: [
+                DiffDisplayRow(
+                    id: "hidden-row",
+                    kind: .context,
+                    old: nil,
+                    new: hiddenLine,
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let displayModel = DiffDisplayModel(
+            filePath: "Sources/App.swift",
+            groups: [
+                DiffDisplayGroup(
+                    id: "group",
+                    header: "@@ -10,3 +10,3 @@",
+                    sourceHunk: parsedDiff().hunks[0],
+                    rows: [collapsedParent]
+                ),
+            ]
+        )
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel,
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(
+            id: "draft-collapsed-height",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 12
+        )
 
         #expect(
             DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [comment])

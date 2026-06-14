@@ -516,6 +516,9 @@ enum ReviewDraftCommentPlacement {
         if let newLine = row.new?.lineNumber {
             keys.append(RowKey(side: .new, line: newLine))
         }
+        for line in Set([row.old?.lineNumber, row.new?.lineNumber].compactMap(\.self)).sorted() {
+            keys.append(RowKey(side: .unknown, line: line))
+        }
         return keys
     }
 
