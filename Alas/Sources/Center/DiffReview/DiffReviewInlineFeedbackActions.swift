@@ -60,6 +60,7 @@ enum DiffReviewInlineFeedbackContextFormatter {
             lines.append("Line: \(line)")
         }
         lines.append("Side: \(item.anchor.side.rawValue)")
+        lines.append("Status: \(item.status.rawValue)")
         if let providerURL = item.providerURL {
             lines.append("URL: \(providerURL.absoluteString)")
         }

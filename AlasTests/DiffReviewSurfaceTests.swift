@@ -315,6 +315,7 @@ struct DiffReviewSurfaceTests {
         #expect(context.contains("File: Sources/App.swift"))
         #expect(context.contains("Line: 56"))
         #expect(context.contains("Side: new"))
+        #expect(context.contains("Status: actionable"))
         #expect(context.contains("URL: https://github.com/org/repo/pull/1#discussion_r1"))
         #expect(context.contains("Please update `configId`."))
     }
