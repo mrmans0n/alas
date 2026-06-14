@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -52,6 +54,59 @@ struct ReviewRequestDraftTests {
         #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: section.summary.id) == path)
         #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: path, session: session) == section.summary.id)
         #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == section.summary.id)
+    }
+
+    @Test @MainActor func draftReviewRequestSessionRendersWithSharedDiffReviewSurface() async throws {
+        let path = "Sources/A.swift"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: path, originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: path),
+            fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+        var selectedFileID = DraftReviewRequestDiffSessionBuilder.selectedFileID(for: path)
+        var railCollapsed = false
+        var layoutMode = DiffLayoutMode.split
+        var wrapLines = false
+        var showWhitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            layoutMode: Binding(get: { layoutMode }, set: { layoutMode = $0 }),
+            wrapLines: Binding(get: { wrapLines }, set: { wrapLines = $0 }),
+            showWhitespace: Binding(get: { showWhitespace }, set: { showWhitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadges: false,
+            showsRailDisplayControls: true
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1000, height: 700)
+        await Task.yield()
+        controller.view.layoutSubtreeIfNeeded()
+
+        let visibleTextScrollViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter(isEffectivelyVisible)
+        let visibleText = visibleTextScrollViews
+            .compactMap { ($0.documentView as? NSTextView)?.string }
+            .joined(separator: "\n")
+
+        #expect(visibleTextScrollViews.count == 2)
+        #expect(visibleText.contains("let value = 1"))
+        #expect(visibleText.contains("let value = 2"))
     }
 
     @Test func draftReviewRequestDiffSessionSelectionKeepsExistingPath() async throws {
@@ -324,5 +379,36 @@ struct ReviewRequestDraftTests {
         -let value = 1
         +let value = 2
         """
+    }
+
+    @MainActor
+    private func host<Content: View>(
+        _ view: Content,
+        width: CGFloat,
+        height: CGFloat
+    ) -> NSHostingController<Content> {
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        controller.view.layoutSubtreeIfNeeded()
+        return controller
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func isEffectivelyVisible(_ view: NSView) -> Bool {
+        var current: NSView? = view
+        while let candidate = current {
+            if candidate.isHidden {
+                return false
+            }
+            current = candidate.superview
+        }
+        return true
+    }
+
+    private func theme() -> Theme {
+        try! ThemeStore().current
     }
 }
