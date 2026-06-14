@@ -473,6 +473,7 @@ enum ReviewDraftCommentPlacement {
     struct Result: Equatable {
         let fileLevel: [ReviewDraftComment]
         let byRowAnchor: [RowKey: [ReviewDraftComment]]
+        let groupIDByCommentID: [String: String]
     }
 
     static func position(
@@ -480,13 +481,18 @@ enum ReviewDraftCommentPlacement {
         in groups: [DiffDisplayGroup]
     ) -> Result {
         let visibleKeys = Set(groups.flatMap(allRowKeys))
+        let groupIDByKey = firstGroupIDByRowKey(in: groups)
         var fileLevel: [ReviewDraftComment] = []
         var byRowAnchor: [RowKey: [ReviewDraftComment]] = [:]
+        var groupIDByCommentID: [String: String] = [:]
 
         for comment in comments where comment.state != .dismissed {
             let key = RowKey(side: comment.side, line: comment.normalizedLineRange.upperBound)
             if visibleKeys.contains(key) {
                 byRowAnchor[key, default: []].append(comment)
+                if let groupID = groupIDByKey[key] {
+                    groupIDByCommentID[comment.id] = groupID
+                }
             } else {
                 fileLevel.append(comment)
             }
@@ -494,8 +500,19 @@ enum ReviewDraftCommentPlacement {
 
         return Result(
             fileLevel: sorted(fileLevel),
-            byRowAnchor: byRowAnchor.mapValues(sorted)
+            byRowAnchor: byRowAnchor.mapValues(sorted),
+            groupIDByCommentID: groupIDByCommentID
         )
+    }
+
+    private static func firstGroupIDByRowKey(in groups: [DiffDisplayGroup]) -> [RowKey: String] {
+        var output: [RowKey: String] = [:]
+        for group in groups {
+            for key in allRowKeys(in: group) where output[key] == nil {
+                output[key] = group.id
+            }
+        }
+        return output
     }
 
     static func visibleRowKeys(in group: DiffDisplayGroup) -> [RowKey] {
@@ -547,12 +564,17 @@ enum ReviewDraftCommentPlacement {
     static func comments(
         matching keys: [RowKey],
         in placement: Result,
+        groupID: String? = nil,
         excludingIDs excludedIDs: Set<String> = []
     ) -> [ReviewDraftComment] {
         var seenIDs = excludedIDs
         var comments: [ReviewDraftComment] = []
         for key in keys {
-            for comment in placement.byRowAnchor[key] ?? [] where seenIDs.insert(comment.id).inserted {
+            for comment in placement.byRowAnchor[key] ?? [] {
+                if let groupID, placement.groupIDByCommentID[comment.id] != groupID {
+                    continue
+                }
+                guard seenIDs.insert(comment.id).inserted else { continue }
                 comments.append(comment)
             }
         }
@@ -594,6 +616,7 @@ enum ReviewDraftCommentRowSegmentation {
             let comments = ReviewDraftCommentPlacement.comments(
                 matching: keys,
                 in: placement,
+                groupID: group.id,
                 excludingIDs: emittedCommentIDs
             )
             emittedCommentIDs.formUnion(comments.map(\.id))

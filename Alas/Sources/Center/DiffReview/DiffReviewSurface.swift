@@ -401,7 +401,8 @@ extension DiffReviewFileSectionHeightEstimator {
             let rowKeys = ReviewDraftCommentPlacement.allRowKeys(in: group)
             let groupDraftComments = ReviewDraftCommentPlacement.comments(
                 matching: rowKeys,
-                in: draftPlacement
+                in: draftPlacement,
+                groupID: group.id
             )
             return total + ReviewDraftCommentDisplayPolicy.estimatedHeight(for: groupDraftComments)
         }

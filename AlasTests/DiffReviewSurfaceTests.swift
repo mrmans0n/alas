@@ -649,6 +649,54 @@ struct DiffReviewSurfaceTests {
         #expect(segments.items.flatMap(\.draftComments).map(\.id) == ["draft-shifted"])
     }
 
+    @Test func localDraftCommentsWithUnknownSideDoNotDuplicateAcrossMatchingHunks() {
+        let firstGroup = DiffDisplayGroup(
+            id: "first-group",
+            header: "@@ -1,1 +2,1 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [
+                DiffDisplayRow(
+                    id: "first-row",
+                    kind: .context,
+                    old: diffLine(id: "first-old", side: .old, oldLine: 1, text: "one"),
+                    new: diffLine(id: "first-new", side: .new, newLine: 2, text: "two"),
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let secondGroup = DiffDisplayGroup(
+            id: "second-group",
+            header: "@@ -2,1 +3,1 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [
+                DiffDisplayRow(
+                    id: "second-row",
+                    kind: .context,
+                    old: diffLine(id: "second-old", side: .old, oldLine: 2, text: "two"),
+                    new: diffLine(id: "second-new", side: .new, newLine: 3, text: "three"),
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let comment = draftComment(id: "draft-cross-hunk", path: "A.swift", side: .unknown, startLine: 2)
+        let placement = ReviewDraftCommentPlacement.position([comment], in: [firstGroup, secondGroup])
+
+        let firstSegments = ReviewDraftCommentRowSegmentation.segments(
+            for: firstGroup,
+            placement: placement,
+            pendingAnchor: nil
+        )
+        let secondSegments = ReviewDraftCommentRowSegmentation.segments(
+            for: secondGroup,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(placement.groupIDByCommentID["draft-cross-hunk"] == "first-group")
+        #expect(firstSegments.items.flatMap(\.draftComments).map(\.id) == ["draft-cross-hunk"])
+        #expect(secondSegments.items.flatMap(\.draftComments).isEmpty)
+    }
+
     @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
