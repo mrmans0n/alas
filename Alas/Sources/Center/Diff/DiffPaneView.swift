@@ -57,6 +57,38 @@ enum DiffPaneRowProjection {
         }
     }
 
+    static func stackedLines(for rows: [DiffDisplayRow]) -> [(row: DiffDisplayRow, line: DiffDisplayLine)] {
+        var output: [(row: DiffDisplayRow, line: DiffDisplayLine)] = []
+        var index = 0
+
+        while index < rows.count {
+            let row = rows[index]
+            guard isChanged(row) else {
+                output.append(contentsOf: stackedLines(for: row).map { (row, $0) })
+                index += 1
+                continue
+            }
+
+            let start = index
+            while index < rows.count, isChanged(rows[index]) {
+                index += 1
+            }
+            let changedRows = Array(rows[start..<index])
+            output.append(contentsOf: changedRows.compactMap { row in
+                row.old.map { (row, $0) }
+            })
+            output.append(contentsOf: changedRows.compactMap { row in
+                row.new.map { (row, $0) }
+            })
+        }
+
+        return output
+    }
+
+    private static func isChanged(_ row: DiffDisplayRow) -> Bool {
+        row.kind == .replacement || row.kind == .delete || row.kind == .add
+    }
+
     static func stackedLines(for row: DiffDisplayRow) -> [DiffDisplayLine] {
         if row.kind == .context {
             if let new = row.new { return [new] }
