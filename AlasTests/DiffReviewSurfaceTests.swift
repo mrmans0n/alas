@@ -616,6 +616,39 @@ struct DiffReviewSurfaceTests {
         #expect(segments.items.first?.draftComments.map(\.id) == ["draft-unknown"])
     }
 
+    @Test func localDraftCommentsWithUnknownSideDoNotDuplicateAcrossShiftedContextRows() {
+        let firstRow = DiffDisplayRow(
+            id: "row-1",
+            kind: .context,
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "one"),
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "two"),
+            collapsedLineCount: 0
+        )
+        let secondRow = DiffDisplayRow(
+            id: "row-2",
+            kind: .context,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two"),
+            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three"),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,2 +2,2 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [firstRow, secondRow]
+        )
+        let comment = draftComment(id: "draft-shifted", path: "A.swift", side: .unknown, startLine: 2)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(segments.items.flatMap(\.draftComments).map(\.id) == ["draft-shifted"])
+    }
+
     @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),

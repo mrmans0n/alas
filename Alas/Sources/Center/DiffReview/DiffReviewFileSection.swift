@@ -543,6 +543,21 @@ enum ReviewDraftCommentPlacement {
             return lhs.id < rhs.id
         }
     }
+
+    static func comments(
+        matching keys: [RowKey],
+        in placement: Result,
+        excludingIDs excludedIDs: Set<String> = []
+    ) -> [ReviewDraftComment] {
+        var seenIDs = excludedIDs
+        var comments: [ReviewDraftComment] = []
+        for key in keys {
+            for comment in placement.byRowAnchor[key] ?? [] where seenIDs.insert(comment.id).inserted {
+                comments.append(comment)
+            }
+        }
+        return sorted(comments)
+    }
 }
 
 enum ReviewDraftCommentRowSegmentation {
@@ -571,11 +586,17 @@ enum ReviewDraftCommentRowSegmentation {
         }
         var segments: [Segment] = []
         var bufferedRows: [DiffDisplayRow] = []
+        var emittedCommentIDs: Set<String> = []
 
         for row in group.rows {
             bufferedRows.append(row)
             let keys = ReviewDraftCommentPlacement.allRowKeys(in: row)
-            let comments = ReviewDraftCommentPlacement.sorted(keys.flatMap { placement.byRowAnchor[$0] ?? [] })
+            let comments = ReviewDraftCommentPlacement.comments(
+                matching: keys,
+                in: placement,
+                excludingIDs: emittedCommentIDs
+            )
+            emittedCommentIDs.formUnion(comments.map(\.id))
             let showsComposer = pendingKey.map { keys.contains($0) } ?? false
             guard !comments.isEmpty || showsComposer else { continue }
 
