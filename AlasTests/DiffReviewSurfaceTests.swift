@@ -217,6 +217,106 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "Please review this file.") != nil)
     }
 
+    @Test func fileSectionHighlightsFocusedInlineFeedbackAndShowsAvailableActions() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please update this.",
+            status: .actionable,
+            providerURL: URL(string: "https://github.com/thread")!,
+            anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: 2, side: .new),
+            evidenceItemID: "thread-1"
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let actions = DiffReviewInlineFeedbackActions(
+            availability: { _, _ in
+                DiffReviewInlineFeedbackActionAvailability(
+                    canOpenProvider: true,
+                    canCopyContext: true,
+                    canSendToAgent: false
+                )
+            },
+            openProvider: { _, _ in },
+            copyContext: { _, _ in },
+            sendToAgent: { _, _ in }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: [feedback],
+            focusedFeedbackID: "thread-1",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            inlineFeedbackActions: actions,
+            onSelectInlineFeedback: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-open-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-copy-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-send-thread-1", in: controller.view) == nil)
+    }
+
+    @Test func inlineFeedbackCardSelectionInvokesSelectionHandler() {
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please update this.",
+            status: .actionable,
+            providerURL: URL(string: "https://github.com/thread")!,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
+            evidenceItemID: "thread-1"
+        )
+        var selectedFeedbackID: String?
+
+        DiffReviewInlineFeedbackCardInteraction.select(feedback) {
+            selectedFeedbackID = $0.id
+        }
+
+        #expect(selectedFeedbackID == "thread-1")
+    }
+
+    @Test func renderWindowKeepsInlineFeedbackScrollTargetFileRendered() {
+        let fileScrollTarget = DiffReviewFileID(namespace: "commit", path: "Selected.swift")
+        let inlineTarget = DiffReviewFileID(namespace: "commit", path: "InlineTarget.swift")
+        let command = DiffReviewInlineFeedbackScrollCommand(
+            feedbackID: "thread-inline",
+            fileID: inlineTarget,
+            generation: 1
+        )
+
+        #expect(
+            DiffReviewSurfaceSelectionSync.renderedTargetFileID(
+                fileScrollTarget: fileScrollTarget,
+                inlineFeedbackScrollCommand: nil
+            ) == fileScrollTarget
+        )
+        #expect(
+            DiffReviewSurfaceSelectionSync.renderedTargetFileID(
+                fileScrollTarget: nil,
+                inlineFeedbackScrollCommand: command
+            ) == inlineTarget
+        )
+    }
+
     @Test func fileSectionCapsInlineFeedbackCardsWithMoreRow() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),

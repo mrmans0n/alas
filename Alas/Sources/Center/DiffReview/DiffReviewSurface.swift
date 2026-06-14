@@ -13,6 +13,10 @@ struct DiffReviewSurface: View {
     var showsRailDisplayControls: Bool = false
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
+    var focusedFeedbackID: String? = nil
+    var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil
+    var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
+    var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -100,6 +104,16 @@ struct DiffReviewSurface: View {
                         scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
                     }
                 }
+                .onAppear {
+                    guard let command = inlineFeedbackScrollCommand else { return }
+                    Task { @MainActor in
+                        scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
+                    }
+                }
+                .onChange(of: inlineFeedbackScrollCommand) { _, command in
+                    guard let command else { return }
+                    scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: true)
+                }
             }
         }
         .background(theme.color("bg-1"))
@@ -112,13 +126,16 @@ struct DiffReviewSurface: View {
             DiffReviewFileSection(
                 file: file,
                 inlineFeedback: inlineFeedback,
+                focusedFeedbackID: focusedFeedbackID,
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
                 showWhitespace: $showWhitespace,
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 showsSourceBadge: showsSourceBadges,
-                lspContext: lspContextForFile(file)
+                lspContext: lspContextForFile(file),
+                inlineFeedbackActions: inlineFeedbackActions,
+                onSelectInlineFeedback: onSelectInlineFeedback
             )
         } else {
             DiffReviewFileSectionPlaceholder(
@@ -134,13 +151,31 @@ struct DiffReviewSurface: View {
         }
     }
 
+    private func scrollToInlineFeedback(
+        _ command: DiffReviewInlineFeedbackScrollCommand,
+        scrollProxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        selectedFileID = command.fileID
+        if animated {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                scrollProxy.scrollTo(command.targetID, anchor: .center)
+            }
+        } else {
+            scrollProxy.scrollTo(command.targetID, anchor: .center)
+        }
+    }
+
     private func effectiveRenderedFileIDs(firstFileID: DiffReviewFileID) -> Set<DiffReviewFileID> {
         DiffReviewRenderWindow.renderedFileIDs(
             current: renderedFileIDs,
             frames: [],
             viewportHeight: 0,
             selectedFileID: selectedFileID,
-            programmaticTarget: programmaticScroll.target,
+            programmaticTarget: DiffReviewSurfaceSelectionSync.renderedTargetFileID(
+                fileScrollTarget: programmaticScroll.target,
+                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand
+            ),
             firstFileID: firstFileID
         )
     }
@@ -181,7 +216,10 @@ struct DiffReviewSurface: View {
             frames: frames,
             viewportHeight: viewportHeight,
             selectedFileID: selectedFileID,
-            programmaticTarget: programmaticScroll.target,
+            programmaticTarget: DiffReviewSurfaceSelectionSync.renderedTargetFileID(
+                fileScrollTarget: programmaticScroll.target,
+                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand
+            ),
             firstFileID: firstFileID
         )
         guard updated != renderedFileIDs else { return }
@@ -237,6 +275,13 @@ enum DiffReviewSurfaceSelectionSync {
         }
 
         return first
+    }
+
+    static func renderedTargetFileID(
+        fileScrollTarget: DiffReviewFileID?,
+        inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
+    ) -> DiffReviewFileID? {
+        inlineFeedbackScrollCommand?.fileID ?? fileScrollTarget
     }
 
     static func synchronize(

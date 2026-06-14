@@ -3,6 +3,7 @@ import SwiftUI
 struct DiffReviewFileSection: View {
     let file: DiffReviewFileSectionModel
     var inlineFeedback: [DiffReviewInlineFeedback] = []
+    var focusedFeedbackID: String? = nil
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -10,6 +11,8 @@ struct DiffReviewFileSection: View {
     let codeFontSize: CGFloat
     let showsSourceBadge: Bool
     var lspContext: DiffPaneLSPContext? = nil
+    var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
+    var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
 
@@ -91,17 +94,24 @@ struct DiffReviewFileSection: View {
     private var fileLevelInlineFeedbackStack: some View {
         let fileLevel = inlineFeedbackPlacement.fileLevel
         if !fileLevel.isEmpty {
-            inlineFeedbackStack(fileLevel)
+            inlineFeedbackStack(fileLevel, file: file.summary)
         }
     }
 
     @ViewBuilder
-    private func inlineFeedbackStack(_ items: [DiffReviewInlineFeedback]) -> some View {
+    private func inlineFeedbackStack(_ items: [DiffReviewInlineFeedback], file: DiffReviewFileSummary) -> some View {
         if !items.isEmpty {
             let display = DiffReviewInlineFeedbackDisplayPolicy.display(for: items)
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(display.visibleItems) { item in
-                    DiffReviewInlineFeedbackCard(item: item)
+                    DiffReviewInlineFeedbackCard(
+                        item: item,
+                        file: file,
+                        isFocused: item.id == focusedFeedbackID,
+                        actions: inlineFeedbackActions,
+                        onSelect: onSelectInlineFeedback
+                    )
+                    .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
                 }
                 if display.hiddenCount > 0 {
                     DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
@@ -128,7 +138,7 @@ struct DiffReviewFileSection: View {
             VStack(spacing: 0) {
                 ForEach(displayModel.groups) { group in
                     if let groupFeedback = placement.byGroupID[group.id], !groupFeedback.isEmpty {
-                        inlineFeedbackStack(groupFeedback)
+                        inlineFeedbackStack(groupFeedback, file: file.summary)
                     }
                     DiffPaneView(
                         model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
@@ -353,56 +363,119 @@ enum DiffReviewInlineFeedbackMarkdown {
 
 private struct DiffReviewInlineFeedbackCard: View {
     let item: DiffReviewInlineFeedback
+    let file: DiffReviewFileSummary
+    let isFocused: Bool
+    let actions: DiffReviewInlineFeedbackActions
+    let onSelect: (DiffReviewInlineFeedback) -> Void
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(statusColor)
-                .frame(width: 3)
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                DiffReviewInlineFeedbackCardInteraction.select(item, onSelect: onSelect)
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(statusColor)
+                        .frame(width: 3)
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(item.providerName)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundColor(statusColor)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(item.providerName)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(statusColor)
 
-                    if let author = item.author, !author.isEmpty {
-                        Text(author)
-                            .font(.system(size: 10))
-                            .foregroundColor(theme.color("fg-muted"))
+                            if let author = item.author, !author.isEmpty {
+                                Text(author)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(theme.color("fg-muted"))
+                            }
+
+                            if let line = item.anchor.line {
+                                Text("line \(line)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(theme.color("fg-faint"))
+                            }
+                        }
+                        .lineLimit(1)
+
+                        Text(DiffReviewInlineFeedbackMarkdown.render(item.bodyPreview))
+                            .font(.system(size: 11.5))
+                            .foregroundColor(theme.color("fg"))
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if let line = item.anchor.line {
-                        Text("line \(line)")
-                            .font(.system(size: 10))
-                            .foregroundColor(theme.color("fg-faint"))
-                    }
+                    Spacer(minLength: 0)
                 }
-                .lineLimit(1)
-
-                Text(DiffReviewInlineFeedbackMarkdown.render(item.bodyPreview))
-                    .font(.system(size: 11.5))
-                    .foregroundColor(theme.color("fg"))
-                    .fixedSize(horizontal: false, vertical: true)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("diff-review-inline-feedback-select-\(item.id)")
 
-            Spacer(minLength: 0)
+            actionRow
         }
         .padding(8)
         .frame(minHeight: DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight, alignment: .top)
-        .background(theme.color("bg-2"))
+        .background(isFocused ? theme.color("accent-soft") : theme.color("bg-2"))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(theme.color("line"), lineWidth: 0.5)
+                .stroke(isFocused ? theme.color("accent") : theme.color("line"), lineWidth: isFocused ? 1 : 0.5)
         )
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: "diff-review-inline-feedback-\(item.id)",
+                identifier: isFocused
+                    ? "diff-review-inline-feedback-focused-\(item.id)"
+                    : "diff-review-inline-feedback-\(item.id)",
                 label: accessibilityLabel
+            )
+        )
+    }
+
+    @ViewBuilder
+    private var actionRow: some View {
+        let availability = actions.availability(item, file)
+        if availability.canOpenProvider || availability.canCopyContext || availability.canSendToAgent {
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                if availability.canOpenProvider {
+                    inlineActionButton(id: "open", title: "Open") {
+                        actions.openProvider(item, file)
+                    }
+                }
+                if availability.canCopyContext {
+                    inlineActionButton(id: "copy", title: "Copy") {
+                        actions.copyContext(item, file)
+                    }
+                }
+                if availability.canSendToAgent {
+                    inlineActionButton(id: "send", title: "Send") {
+                        actions.sendToAgent(item, file)
+                    }
+                }
+            }
+        }
+    }
+
+    private func inlineActionButton(id: String, title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.horizontal, 7)
+                .frame(height: 22)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityIdentifier("diff-review-inline-feedback-\(id)-\(item.id)")
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-inline-feedback-\(id)-\(item.id)",
+                label: title
             )
         )
     }
@@ -432,6 +505,15 @@ private struct DiffReviewInlineFeedbackCard: View {
         case .cancelled, .unknown:
             theme.color("fg-muted")
         }
+    }
+}
+
+enum DiffReviewInlineFeedbackCardInteraction {
+    static func select(
+        _ item: DiffReviewInlineFeedback,
+        onSelect: (DiffReviewInlineFeedback) -> Void
+    ) {
+        onSelect(item)
     }
 }
 
