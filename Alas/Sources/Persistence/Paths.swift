@@ -56,6 +56,12 @@ extension Paths {
 }
 
 extension Paths {
+    static var reviewDraftCommentsFile: URL {
+        appSupportRoot.appendingPathComponent("review-draft-comments.json")
+    }
+}
+
+extension Paths {
     static var acpAttachmentsRoot: URL { appSupportRoot.appendingPathComponent("acp-attachments", isDirectory: true) }
 
     static func acpAttachmentsDir(forWorktreeId id: String) -> URL {
