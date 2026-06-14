@@ -23,6 +23,7 @@ struct DiffReviewFileSection: View {
     @Environment(\.theme) private var theme
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
+    @State private var expandedCollapsedRowIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -193,30 +194,7 @@ struct DiffReviewFileSection: View {
                     if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
                         inlineFeedbackStack(groupFeedback, file: file.summary)
                     }
-                    let groupDraftComments = draftComments(for: group, placement: draftPlacement)
-                    if !groupDraftComments.isEmpty {
-                        draftCommentStack(groupDraftComments)
-                    }
-                    if pendingDraftAnchorBelongs(to: group) {
-                        draftComposer
-                    }
-                    DiffPaneView(
-                        model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
-                        fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                        layoutMode: $layoutMode,
-                        wrapLines: $wrapLines,
-                        showWhitespace: $showWhitespace,
-                        codeFontFamily: codeFontFamily,
-                        codeFontSize: codeFontSize,
-                        showsToolbar: false,
-                        verticalScrollMode: .staticHeight,
-                        lspContext: lspContext,
-                        onReviewLineSelected: { anchor in
-                            pendingDraftAnchor = anchor
-                            pendingDraftBody = ""
-                        },
-                        hunkActions: { _ in DiffPaneHunkActions() }
-                    )
+                    reviewGroup(group, displayModel: displayModel, placement: draftPlacement)
                 }
             }
         } else {
@@ -235,6 +213,111 @@ struct DiffReviewFileSection: View {
                     )
                 )
         }
+    }
+
+    @ViewBuilder
+    private func reviewGroup(
+        _ group: DiffDisplayGroup,
+        displayModel: DiffDisplayModel,
+        placement: ReviewDraftCommentPlacement.Result
+    ) -> some View {
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: pendingDraftAnchor
+        )
+        if segments.containsLocalAccessories {
+            VStack(alignment: .leading, spacing: 0) {
+                segmentedHunkHeader(group)
+                ForEach(segments.items) { segment in
+                    if !segment.rows.isEmpty {
+                        DiffPaneTextDocumentView(
+                            group: DiffDisplayGroup(
+                                id: segment.id,
+                                header: group.header,
+                                sourceHunk: group.sourceHunk,
+                                rows: segment.rows
+                            ),
+                            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                            layoutMode: layoutMode,
+                            wrapLines: wrapLines,
+                            showWhitespace: showWhitespace,
+                            fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize,
+                            theme: theme,
+                            lspContext: lspContext,
+                            onReviewLineSelected: { anchor in
+                                pendingDraftAnchor = anchor
+                                pendingDraftBody = ""
+                            }
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !segment.draftComments.isEmpty {
+                        draftCommentStack(segment.draftComments)
+                    }
+                    if segment.showsComposer {
+                        draftComposer
+                    }
+                }
+            }
+            .background(theme.color("bg-1"))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(theme.color("line"), lineWidth: 0.75)
+            )
+            .padding(.bottom, 10)
+        } else {
+            DiffPaneView(
+                model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
+                fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                layoutMode: $layoutMode,
+                wrapLines: $wrapLines,
+                showWhitespace: $showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsToolbar: false,
+                verticalScrollMode: .staticHeight,
+                lspContext: lspContext,
+                onReviewLineSelected: { anchor in
+                    pendingDraftAnchor = anchor
+                    pendingDraftBody = ""
+                },
+                hunkActions: { _ in DiffPaneHunkActions() }
+            )
+        }
+    }
+
+    private func segmentedHunkHeader(_ group: DiffDisplayGroup) -> some View {
+        HStack(spacing: 8) {
+            Text(group.header)
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
+                .foregroundColor(theme.color("fg-muted"))
+                .lineLimit(1)
+            Spacer(minLength: 12)
+            if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
+                let expanded = DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedCollapsedRowIDs)
+                Button {
+                    expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
+                        group,
+                        expandedIDs: expandedCollapsedRowIDs
+                    )
+                } label: {
+                    Image(systemName: expanded ? "minus.square" : "plus.square")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .frame(width: 22, height: 20)
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "Collapse context" : "Expand context")
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 
     @ViewBuilder
@@ -300,22 +383,6 @@ struct DiffReviewFileSection: View {
         onSaveDraftComment(pendingDraftAnchor, body)
         self.pendingDraftAnchor = nil
         pendingDraftBody = ""
-    }
-
-    private func pendingDraftAnchorBelongs(to group: DiffDisplayGroup) -> Bool {
-        guard let pendingDraftAnchor else { return false }
-        return ReviewDraftCommentPlacement.visibleRowKeys(in: group).contains(
-            ReviewDraftCommentPlacement.RowKey(side: pendingDraftAnchor.side, line: pendingDraftAnchor.line)
-        )
-    }
-
-    private func draftComments(
-        for group: DiffDisplayGroup,
-        placement: ReviewDraftCommentPlacement.Result
-    ) -> [ReviewDraftComment] {
-        let rowKeys = ReviewDraftCommentPlacement.visibleRowKeys(in: group)
-        let comments = rowKeys.flatMap { placement.byRowAnchor[$0] ?? [] }
-        return ReviewDraftCommentPlacement.sorted(comments)
     }
 
     @ViewBuilder
@@ -400,15 +467,19 @@ enum ReviewDraftCommentPlacement {
 
     static func visibleRowKeys(in group: DiffDisplayGroup) -> [RowKey] {
         group.rows.flatMap { row -> [RowKey] in
-            var keys: [RowKey] = []
-            if let oldLine = row.old?.lineNumber {
-                keys.append(RowKey(side: .old, line: oldLine))
-            }
-            if let newLine = row.new?.lineNumber {
-                keys.append(RowKey(side: .new, line: newLine))
-            }
-            return keys
+            visibleRowKeys(in: row)
         }
+    }
+
+    static func visibleRowKeys(in row: DiffDisplayRow) -> [RowKey] {
+        var keys: [RowKey] = []
+        if let oldLine = row.old?.lineNumber {
+            keys.append(RowKey(side: .old, line: oldLine))
+        }
+        if let newLine = row.new?.lineNumber {
+            keys.append(RowKey(side: .new, line: newLine))
+        }
+        return keys
     }
 
     static func sorted(_ comments: [ReviewDraftComment]) -> [ReviewDraftComment] {
@@ -427,6 +498,62 @@ enum ReviewDraftCommentPlacement {
             }
             return lhs.id < rhs.id
         }
+    }
+}
+
+enum ReviewDraftCommentRowSegmentation {
+    struct Segment: Equatable, Identifiable {
+        let id: String
+        let rows: [DiffDisplayRow]
+        let draftComments: [ReviewDraftComment]
+        let showsComposer: Bool
+    }
+
+    struct Result: Equatable {
+        let items: [Segment]
+
+        var containsLocalAccessories: Bool {
+            items.contains { !$0.draftComments.isEmpty || $0.showsComposer }
+        }
+    }
+
+    static func segments(
+        for group: DiffDisplayGroup,
+        placement: ReviewDraftCommentPlacement.Result,
+        pendingAnchor: DiffReviewLineAnchor?
+    ) -> Result {
+        let pendingKey = pendingAnchor.map {
+            ReviewDraftCommentPlacement.RowKey(side: $0.side, line: $0.line)
+        }
+        var segments: [Segment] = []
+        var bufferedRows: [DiffDisplayRow] = []
+
+        for row in group.rows {
+            bufferedRows.append(row)
+            let keys = ReviewDraftCommentPlacement.visibleRowKeys(in: row)
+            let comments = ReviewDraftCommentPlacement.sorted(keys.flatMap { placement.byRowAnchor[$0] ?? [] })
+            let showsComposer = pendingKey.map { keys.contains($0) } ?? false
+            guard !comments.isEmpty || showsComposer else { continue }
+
+            segments.append(Segment(
+                id: "\(group.id)-segment-\(segments.count)",
+                rows: bufferedRows,
+                draftComments: comments,
+                showsComposer: showsComposer
+            ))
+            bufferedRows = []
+        }
+
+        if !bufferedRows.isEmpty {
+            segments.append(Segment(
+                id: "\(group.id)-segment-\(segments.count)",
+                rows: bufferedRows,
+                draftComments: [],
+                showsComposer: false
+            ))
+        }
+
+        return Result(items: segments)
     }
 }
 

@@ -506,6 +506,26 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["draft-unmatched"])
     }
 
+    @Test func localDraftCommentsSegmentSameHunkByExactRow() throws {
+        let model = displayModel()
+        let group = try #require(model.groups.first)
+        let firstLine = draftComment(id: "draft-first", path: "A.swift", side: .new, startLine: 1)
+        let secondLine = draftComment(id: "draft-second", path: "A.swift", side: .new, startLine: 2)
+        let placement = ReviewDraftCommentPlacement.position([secondLine, firstLine], in: model.groups)
+
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(segments.items.count == 2)
+        #expect(segments.items[0].rows.map(\.id) == [group.rows[0].id])
+        #expect(segments.items[0].draftComments.map(\.id) == ["draft-first"])
+        #expect(segments.items[1].rows.map(\.id) == [group.rows[1].id])
+        #expect(segments.items[1].draftComments.map(\.id) == ["draft-second"])
+    }
+
     @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
