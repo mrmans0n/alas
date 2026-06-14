@@ -768,6 +768,36 @@ struct DiffReviewSurfaceTests {
         #expect(!result.programmaticScroll.isSuppressing)
     }
 
+    @Test func initialRestoredNonFirstSelectionRequestsScroll() {
+        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
+        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
+
+        #expect(
+            DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+                previousFileSetKey: nil,
+                previousSelection: second,
+                selectedFileID: second,
+                firstFileID: first
+            )
+        )
+        #expect(
+            !DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+                previousFileSetKey: nil,
+                previousSelection: first,
+                selectedFileID: first,
+                firstFileID: first
+            )
+        )
+        #expect(
+            !DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+                previousFileSetKey: DiffReviewSurfaceSelectionSync.fileSetKey(for: [first, second]),
+                previousSelection: second,
+                selectedFileID: second,
+                firstFileID: first
+            )
+        )
+    }
+
     @Test func scrollCommandAdvancesGenerationForRepeatedFileSelections() {
         let file = DiffReviewFileID(namespace: "commit", path: "Sources/App.swift")
         var controller = DiffReviewScrollCommandController()
@@ -778,6 +808,28 @@ struct DiffReviewSurfaceTests {
         #expect(first.id == file)
         #expect(second.id == file)
         #expect(second.generation == first.generation + 1)
+    }
+
+    @Test func scrollCommandConsumptionClearsOnlyConsumedCommand() {
+        let file = DiffReviewFileID(namespace: "commit", path: "Sources/App.swift")
+        let other = DiffReviewFileID(namespace: "commit", path: "Sources/Other.swift")
+        var controller = DiffReviewScrollCommandController()
+
+        let first = controller.command(to: file)
+        let second = controller.command(to: other)
+
+        #expect(
+            DiffReviewScrollCommandConsumption.consume(
+                current: first,
+                consumed: first
+            ) == nil
+        )
+        #expect(
+            DiffReviewScrollCommandConsumption.consume(
+                current: second,
+                consumed: first
+            ) == second
+        )
     }
 
     @Test func renderWindowKeepsSelectedTargetAndNearViewportFiles() {

@@ -5,119 +5,259 @@ import Testing
 @testable import Alas
 
 struct ReviewRequestDraftTests {
-    @Test func parsesSelectedFileDiffPreviewIntoHunks() {
-        let raw = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let value = 1
-        +let value = 2
-        """
+    @Test func draftReviewRequestDiffSessionBuilderCreatesRenderableFileSection() async throws {
+        let path = "Sources/A.swift"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: path, originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: path),
+            fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
+            hasUncommittedChanges: false
+        )
+        var openedPaths: [String] = []
 
-        let preview = DraftReviewRequestDiffPreview(
-            path: "Sources/A.swift",
-            file: CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1),
-            rawDiff: raw
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { path in
+                { openedPaths.append(path) }
+            }
         )
 
-        #expect(preview.parsedDiff.hunks.count == 1)
-        #expect(preview.fileExtension == "swift")
-        #expect(preview.title == "A.swift")
-        #expect(preview.directory == "Sources")
+        let section = try #require(session.files.first)
+        #expect(session.files.count == 1)
+        #expect(session.summary.groupsEnabled == false)
+        #expect(session.summary.groups.isEmpty)
+        #expect(session.summary.fileCount == 1)
+        #expect(session.summary.totalAdditions == 1)
+        #expect(session.summary.totalDeletions == 1)
+        #expect(section.summary.id == DiffReviewFileID(namespace: "draft-review-request", path: path))
+        #expect(section.summary.namespace == "draft-review-request")
+        #expect(section.summary.groupID == nil)
+        #expect(section.summary.groupTitle == nil)
+        #expect(section.summary.status == .modified)
+        #expect(section.summary.additions == 1)
+        #expect(section.summary.deletions == 1)
+        #expect(section.summary.isRenderable)
+        #expect(section.summary.originalPath == nil)
+        #expect(section.parsedDiff?.hunks.count == 1)
+        #expect(section.displayModel?.filePath == path)
+        #expect(section.displayModel?.groups.count == 1)
+        #expect(section.placeholderMessage == nil)
+
+        section.openFile?()
+        #expect(openedPaths == [path])
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedFileID(for: path) == section.summary.id)
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: section.summary.id) == path)
+        #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: path, session: session) == section.summary.id)
+        #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == section.summary.id)
     }
 
-    @Test func buildsSelectedFileDiffDisplayPreviewKey() {
-        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
-        let rawDiff = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let value = 1
-        +let value = 2
-        """
+    @Test @MainActor func draftReviewRequestDiffParsingRunsOffMainThread() async throws {
+        let box = ThreadObservationBox()
 
-        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
+        _ = try await DraftReviewRequestDiffSessionBuilder.parseDraftDiff("diff --git a/A.swift b/A.swift") { _ in
+            box.record(isMainThread: Thread.isMainThread)
+            return ParsedDiff(hunks: [])
+        }
 
-        #expect(key.path == file.path)
-        #expect(key.file == file)
-        #expect(key.rawDiff == rawDiff)
+        #expect(box.isMainThread == false)
     }
 
-    @Test func preparesSelectedFileDiffDisplayPreviewModelAsync() async {
-        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
-        let rawDiff = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let value = 1
-        +let value = 2
-        """
-        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
+    @Test @MainActor func draftReviewRequestSessionRendersWithSharedDiffReviewSurface() async throws {
+        let path = "Sources/A.swift"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: path, originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: path),
+            fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+        var selectedFileID = DraftReviewRequestDiffSessionBuilder.selectedFileID(for: path)
+        var railCollapsed = false
+        var layoutMode = DiffLayoutMode.split
+        var wrapLines = false
+        var showWhitespace = false
 
-        let preview = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
-
-        #expect(preview.key == key)
-        #expect(preview.parsedDiff.hunks.count == 1)
-        #expect(preview.displayModel.filePath == "Sources/A.swift")
-        #expect(preview.displayModel.groups.count == 1)
-        #expect(preview.fileExtension == "swift")
-        #expect(preview.title == "A.swift")
-        #expect(preview.directory == "Sources")
-    }
-
-    @Test @MainActor func draftReviewRequestDiffPreviewUsesSharedDiffPane() async throws {
-        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
-        let rawDiff = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let a = 1
-        +let a = 2
-        """
-        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
-        let preview = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-        let view = DraftReviewRequestDiffPreviewView(
-            preview: preview,
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            layoutMode: Binding(get: { layoutMode }, set: { layoutMode = $0 }),
+            wrapLines: Binding(get: { wrapLines }, set: { wrapLines = $0 }),
+            showWhitespace: Binding(get: { showWhitespace }, set: { showWhitespace = $0 }),
             codeFontFamily: "",
             codeFontSize: 13,
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 })
+            showsSourceBadges: false,
+            showsRailDisplayControls: true
         )
-        .environment(\.theme, try! ThemeStore().current)
+        .environment(\.theme, theme())
 
-        let controller = NSHostingController(rootView: view)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+        let controller = host(view, width: 1000, height: 700)
+        await Task.yield()
         controller.view.layoutSubtreeIfNeeded()
 
-        let subviews = allSubviews(of: controller.view)
-        let visiblePaneScrollViews = subviews
+        let visibleTextScrollViews = allSubviews(of: controller.view)
             .compactMap { $0 as? DiffPaneTextScrollView }
             .filter(isEffectivelyVisible)
-        let outerScrollViews = subviews
-            .compactMap { $0 as? NSScrollView }
-            .filter { !($0 is DiffPaneTextScrollView) }
-            .filter(isEffectivelyVisible)
-        let visibleText = visiblePaneScrollViews
-            .compactMap { $0.documentView as? NSTextView }
-            .map(\.string)
+        let visibleText = visibleTextScrollViews
+            .compactMap { ($0.documentView as? NSTextView)?.string }
             .joined(separator: "\n")
 
-        #expect(visiblePaneScrollViews.count == 2)
-        #expect(!outerScrollViews.isEmpty)
-        #expect(visibleText.contains("let a = 1"))
-        #expect(visibleText.contains("let a = 2"))
+        #expect(visibleTextScrollViews.count == 2)
+        #expect(visibleText.contains("let value = 1"))
+        #expect(visibleText.contains("let value = 2"))
+    }
+
+    @Test func draftReviewRequestDiffOpenFileActionUsesNormalAvailability() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("alas-draft-open-\(UUID().uuidString)")
+        let fileURL = root.appendingPathComponent("Sources/A.swift")
+        let dirURL = root.appendingPathComponent("Assets")
+        try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        try "let value = 1\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? fm.removeItem(at: root) }
+
+        var opened: [String] = []
+        let action = DraftReviewRequestTabView.draftDiffOpenFileAction(
+            worktreePath: root,
+            relativePath: "Sources/A.swift"
+        ) { path in
+            opened.append(path)
+        }
+
+        action?()
+        #expect(opened == ["Sources/A.swift"])
+        #expect(
+            DraftReviewRequestTabView.draftDiffOpenFileAction(
+                worktreePath: root,
+                relativePath: "Assets",
+                openFile: { opened.append($0) }
+            ) == nil
+        )
+        #expect(
+            DraftReviewRequestTabView.draftDiffOpenFileAction(
+                worktreePath: root,
+                relativePath: "Missing.swift",
+                openFile: { opened.append($0) }
+            ) == nil
+        )
+    }
+
+    @Test func draftReviewRequestDiffSessionSelectionKeepsExistingPath() async throws {
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: "A.swift", originalPath: nil, status: "M", add: 1, del: 1),
+                CommitChangedFile(path: "B.swift", originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: "A.swift") + "\n" + Self.modifiedSwiftDiff(path: "B.swift"),
+            fileDiffsByPath: [
+                "A.swift": Self.modifiedSwiftDiff(path: "A.swift"),
+                "B.swift": Self.modifiedSwiftDiff(path: "B.swift"),
+            ],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+
+        let selected = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
+            selectedPath: "B.swift",
+            session: session
+        )
+
+        #expect(selected == DiffReviewFileID(namespace: "draft-review-request", path: "B.swift"))
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: selected) == "B.swift")
+    }
+
+    @Test func draftReviewRequestDiffSessionSelectionFallsBackToFirstFile() async throws {
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: "A.swift", originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: "A.swift"),
+            fileDiffsByPath: ["A.swift": Self.modifiedSwiftDiff(path: "A.swift")],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+
+        let selected = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
+            selectedPath: "Missing.swift",
+            session: session
+        )
+
+        #expect(selected == DiffReviewFileID(namespace: "draft-review-request", path: "A.swift"))
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: selected) == "A.swift")
+    }
+
+    @Test func draftReviewRequestDiffSessionBuilderKeepsImagePlaceholderWithFileCounts() async throws {
+        let imagePath = "Assets/logo.png"
+        let textPath = "Docs/README.md"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: imagePath, originalPath: nil, status: "M", add: 12, del: 4),
+                CommitChangedFile(path: textPath, originalPath: nil, status: "A", add: 3, del: 0),
+            ],
+            diff: "",
+            fileDiffsByPath: [
+                imagePath: """
+                diff --git a/Assets/logo.png b/Assets/logo.png
+                index 1111111..2222222 100644
+                Binary files a/Assets/logo.png and b/Assets/logo.png differ
+                """,
+            ],
+            hasUncommittedChanges: false
+        )
+
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+
+        #expect(session.files.map(\.summary.path) == [imagePath, textPath])
+        #expect(session.summary.totalAdditions == 15)
+        #expect(session.summary.totalDeletions == 4)
+
+        let imageSection = try #require(session.files.first)
+        #expect(imageSection.summary.additions == 12)
+        #expect(imageSection.summary.deletions == 4)
+        #expect(imageSection.summary.isRenderable == false)
+        #expect(imageSection.displayModel == nil)
+        #expect(imageSection.parsedDiff?.hunks.isEmpty == true)
+        #expect(imageSection.placeholderMessage == "Image changes are not available in this review view yet.")
+
+        let textSection = try #require(session.files.last)
+        #expect(textSection.summary.additions == 3)
+        #expect(textSection.summary.deletions == 0)
+        #expect(textSection.summary.isRenderable == false)
+        #expect(textSection.displayModel == nil)
+        #expect(textSection.parsedDiff?.hunks.isEmpty == true)
+        #expect(textSection.placeholderMessage == "No text diff is available for this file.")
     }
 
     @Test func parsesGeneratedTitleAndBody() throws {
@@ -275,17 +415,64 @@ struct ReviewRequestDraftTests {
             threads: []
         )
     }
-}
 
-private func allSubviews(of view: NSView) -> [NSView] {
-    view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
-}
-
-private func isEffectivelyVisible(_ view: NSView) -> Bool {
-    var current: NSView? = view
-    while let candidate = current {
-        if candidate.isHidden { return false }
-        current = candidate.superview
+    private static func modifiedSwiftDiff(path: String) -> String {
+        """
+        diff --git a/\(path) b/\(path)
+        index 1111111..2222222 100644
+        --- a/\(path)
+        +++ b/\(path)
+        @@ -1,1 +1,1 @@
+        -let value = 1
+        +let value = 2
+        """
     }
-    return true
+
+    @MainActor
+    private func host<Content: View>(
+        _ view: Content,
+        width: CGFloat,
+        height: CGFloat
+    ) -> NSHostingController<Content> {
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        controller.view.layoutSubtreeIfNeeded()
+        return controller
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func isEffectivelyVisible(_ view: NSView) -> Bool {
+        var current: NSView? = view
+        while let candidate = current {
+            if candidate.isHidden {
+                return false
+            }
+            current = candidate.superview
+        }
+        return true
+    }
+
+    private func theme() -> Theme {
+        try! ThemeStore().current
+    }
+}
+
+private final class ThreadObservationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observed: Bool?
+
+    var isMainThread: Bool? {
+        lock.lock()
+        defer { lock.unlock() }
+        return observed
+    }
+
+    func record(isMainThread: Bool) {
+        lock.lock()
+        observed = isMainThread
+        lock.unlock()
+    }
 }

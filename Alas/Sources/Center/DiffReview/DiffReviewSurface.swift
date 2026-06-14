@@ -103,8 +103,19 @@ struct DiffReviewSurface: View {
                     withAnimation(.easeInOut(duration: 0.18)) {
                         scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
                     }
+                    scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                        current: scrollCommand,
+                        consumed: command
+                    )
                 }
                 .onAppear {
+                    if let command = scrollCommand {
+                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
+                        scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                            current: scrollCommand,
+                            consumed: command
+                        )
+                    }
                     guard let command = inlineFeedbackScrollCommand else { return }
                     Task { @MainActor in
                         scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
@@ -237,9 +248,11 @@ struct DiffReviewSurface: View {
     }
 
     private func synchronizeSelectionWithSession() {
+        let previousFileSetKey = synchronizedFileSetKey
+        let previousSelection = selectedFileID
         let result = DiffReviewSurfaceSelectionSync.synchronize(
-            current: selectedFileID,
-            previousFileSetKey: synchronizedFileSetKey,
+            current: previousSelection,
+            previousFileSetKey: previousFileSetKey,
             fileIDs: fileIDs,
             programmaticScroll: programmaticScroll
         )
@@ -248,10 +261,22 @@ struct DiffReviewSurface: View {
         synchronizedFileSetKey = result.fileSetKey
         programmaticScroll = result.programmaticScroll
         renderedFileIDs = []
+        if DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
+            previousFileSetKey: previousFileSetKey,
+            previousSelection: previousSelection,
+            selectedFileID: result.selectedFileID,
+            firstFileID: fileIDs.first
+        ), let selectedFileID = result.selectedFileID {
+            queueProgrammaticFileScroll(to: selectedFileID)
+        }
     }
 
     private func scrollToFile(_ id: DiffReviewFileID) {
         selectedFileID = id
+        queueProgrammaticFileScroll(to: id)
+    }
+
+    private func queueProgrammaticFileScroll(to id: DiffReviewFileID) {
         let token = programmaticScroll.beginProgrammaticScroll(to: id)
         scrollCommand = scrollCommandController.command(to: id)
 
@@ -307,6 +332,23 @@ enum DiffReviewSurfaceSelectionSync {
             fileSetKey: nextFileSetKey,
             programmaticScroll: didChangeFileSet ? DiffReviewProgrammaticScrollController() : programmaticScroll
         )
+    }
+
+    static func shouldScrollRestoredSelection(
+        previousFileSetKey: String?,
+        previousSelection: DiffReviewFileID?,
+        selectedFileID: DiffReviewFileID?,
+        firstFileID: DiffReviewFileID?
+    ) -> Bool {
+        guard previousFileSetKey == nil,
+              let previousSelection,
+              previousSelection == selectedFileID,
+              previousSelection != firstFileID
+        else {
+            return false
+        }
+
+        return true
     }
 }
 

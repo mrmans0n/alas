@@ -112,6 +112,15 @@ struct DiffReviewScrollCommandController: Equatable {
     }
 }
 
+enum DiffReviewScrollCommandConsumption {
+    static func consume(
+        current: DiffReviewScrollCommand?,
+        consumed: DiffReviewScrollCommand
+    ) -> DiffReviewScrollCommand? {
+        current == consumed ? nil : current
+    }
+}
+
 enum DiffReviewRenderWindow {
     private static let leadingScreens: CGFloat = 1.25
     private static let trailingScreens: CGFloat = 2.5

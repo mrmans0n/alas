@@ -17,16 +17,15 @@ struct DraftReviewRequestTabView: View {
     @State private var warning: String?
     @State private var loadingContext = false
     @State private var loadedContextKey: String?
-    @State private var selectedDisplayPreview: DraftReviewRequestDiffDisplayPreview?
-    @State private var selectedDisplayPreviewLoadingKey: DraftReviewRequestDiffDisplayPreview.Key?
-    @State private var selectedDisplayPreviewTask: Task<Void, Never>?
+    @State private var draftReviewSession: DiffReviewLoadedSession?
+    @State private var selectedFileID: DiffReviewFileID?
+    @State private var railCollapsed = false
     @State private var generation: Task<Void, Never>? = nil
 
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
 
     private let git = GitService()
-    private static let minPaneWidth: CGFloat = 140
 
     private enum Field: Hashable { case title, body }
 
@@ -81,12 +80,15 @@ struct DraftReviewRequestTabView: View {
         .onChange(of: createAsDraft) { _, new in persist(createAsDraft: new) }
         .onChange(of: selectedPath) { _, new in
             persist(selectedPath: new)
-            refreshSelectedDisplayPreview()
+        }
+        .onChange(of: selectedFileID) { _, new in
+            let path = DraftReviewRequestDiffSessionBuilder.selectedPath(for: new)
+            guard selectedPath != path else { return }
+            selectedPath = path
         }
         .task(id: contextKey) { await loadContext() }
         .onDisappear {
             generation?.cancel()
-            selectedDisplayPreviewTask?.cancel()
         }
     }
 
@@ -293,159 +295,138 @@ struct DraftReviewRequestTabView: View {
     }
 
     private var contextBrowser: some View {
-        GeometryReader { proxy in
-            let total = proxy.size.width
-            let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
-            let leftWidth = max(Self.minPaneWidth, total * ratio)
-            HStack(spacing: 0) {
-                leftContextPane
-                    .frame(width: leftWidth)
-                DragHandle(axis: .horizontal, onDrag: { delta in
-                    guard total > 0 else { return }
-                    let newWidth = max(Self.minPaneWidth, min(total - Self.minPaneWidth, leftWidth + delta))
-                    appState.config.commitDetailSplitRatio = newWidth / total
-                    appState.saveConfig()
-                })
-                rightContextPane
-            }
-        }
-    }
-
-    private var leftContextPane: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            contextSectionTitle("Commits")
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array((context?.commits ?? []).enumerated()), id: \.element.id) { index, commit in
-                        CommitRow(
-                            commit: commit,
-                            isLast: index == (context?.commits.count ?? 0) - 1,
-                            onSelect: {},
-                            onCopySHA: { Clipboard.copy(commit.sha) }
-                        )
-                    }
-                }
-            }
-            .frame(minHeight: 74)
-            Divider()
-            contextSectionTitle("Files")
-            fileList
+        VStack(spacing: 0) {
+            draftContextHeader
+            draftCommitStrip
+            Divider().overlay(theme.color("line"))
+            draftContextContent
         }
         .background(theme.color("bg-1"))
     }
 
-    private var fileList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(context?.changedFiles ?? []) { file in
-                    Button {
-                        selectedPath = file.path
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text(file.status)
-                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                .foregroundColor(statusColor(file.status))
-                                .frame(width: 18, alignment: .leading)
-                            Text(file.path)
-                                .font(.system(size: 11))
-                                .foregroundColor(theme.color("fg"))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Text("+\(file.add) -\(file.del)")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundColor(theme.color("fg-faint"))
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(selectedPath == file.path ? theme.color("accent").opacity(0.2) : Color.clear)
-                    }
-                    .buttonStyle(.plain)
+    private var draftContextHeader: some View {
+        HStack(spacing: 10) {
+            Text("Branch diff")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            Text("\(tabState.baseBranch) -> HEAD")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(theme.color("fg-dim"))
+            if let context {
+                Text("\(context.commits.count) commits")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                Text("\(context.changedFiles.count) files")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                if let summary = draftReviewSession?.summary {
+                    Text("+\(summary.totalAdditions)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.color("add"))
+                    Text("-\(summary.totalDeletions)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(theme.color("del"))
                 }
             }
+            Spacer()
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
     }
 
-    private var rightContextPane: some View {
-        Group {
-            if loadingContext {
-                Spinner()
-                    .frame(width: 20, height: 20)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let context {
-                VStack(alignment: .leading, spacing: 8) {
-                    let preview = selectedDiffPreview(in: context)
-                    if let selectedPath,
-                       let file = context.changedFiles.first(where: { $0.path == selectedPath }),
-                       let rawDiff = context.fileDiffsByPath[selectedPath] {
-                        if let displayPreview = selectedDisplayPreview,
-                           displayPreview.key == DraftReviewRequestDiffDisplayPreview.Key(
-                               path: selectedPath,
-                               file: file,
-                               rawDiff: rawDiff
-                           ) {
-                            DraftReviewRequestDiffPreviewView(
-                                preview: displayPreview,
-                                codeFontFamily: appState.config.code.fontFamily,
-                                codeFontSize: CGFloat(appState.config.code.fontSize),
-                                layoutMode: diffPreferences.layoutMode,
-                                wrapLines: diffPreferences.wrapLines,
-                                showWhitespace: diffPreferences.showWhitespace
+    @ViewBuilder
+    private var draftCommitStrip: some View {
+        if let context, !context.commits.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(context.commits) { commit in
+                        Button {
+                            Clipboard.copy(commit.sha)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(commit.shortSha)
+                                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                                    .foregroundColor(theme.color("accent"))
+                                Text(commit.subject)
+                                    .font(.system(size: 11))
+                                    .foregroundColor(theme.color("fg-dim"))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(theme.color("bg-1"))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(theme.color("line"), lineWidth: 0.5)
                             )
-                        } else {
-                            Spinner()
-                                .frame(width: 16, height: 16)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
-                    } else {
-                        Text("Branch diff")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(theme.color("fg"))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                        ScrollView([.horizontal, .vertical]) {
-                            Text(preview.diff.isEmpty ? "No committed diff." : preview.diff)
-                                .font(CenterTypography.codeFont(
-                                    family: appState.config.code.fontFamily,
-                                    size: CGFloat(appState.config.code.fontSize)
-                                ))
-                                .foregroundColor(theme.color("fg"))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .topLeading)
-                                .padding(12)
-                        }
-                        .background(theme.color("field-bg"))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .buttonStyle(.plain)
+                        .help("Copy commit SHA")
                     }
                 }
-                .padding(12)
-            } else {
-                VStack(spacing: 8) {
-                    Text("No committed branch context.")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(theme.color("fg-dim"))
-                    AlasButton(title: "Reload", icon: "arrow.clockwise") {
-                        Task { await loadContext() }
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
             }
+            .background(theme.color("bg-0"))
         }
-        .background(theme.color("bg-0"))
     }
 
-    private func contextSectionTitle(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundColor(theme.color("fg-faint"))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.color("bg-2"))
+    @ViewBuilder
+    private var draftContextContent: some View {
+        if loadingContext {
+            Spinner()
+                .frame(width: 20, height: 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let context, context.changedFiles.isEmpty {
+            stateMessage(
+                "No committed branch diff.",
+                detail: "There are no committed changes between \(tabState.baseBranch) and HEAD."
+            )
+        } else if let draftReviewSession {
+            DiffReviewSurface(
+                session: draftReviewSession,
+                selectedFileID: $selectedFileID,
+                railCollapsed: $railCollapsed,
+                layoutMode: diffPreferences.layoutMode,
+                wrapLines: diffPreferences.wrapLines,
+                showWhitespace: diffPreferences.showWhitespace,
+                codeFontFamily: appState.config.code.fontFamily,
+                codeFontSize: CGFloat(appState.config.code.fontSize),
+                showsSourceBadges: false,
+                showsRailDisplayControls: true,
+                lspContextForFile: { file in
+                    makeLSPContext(relativePath: file.summary.path)
+                }
+            )
+        } else {
+            VStack(spacing: 8) {
+                Text("No committed branch context.")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(theme.color("fg-dim"))
+                AlasButton(title: "Reload", icon: "arrow.clockwise") {
+                    Task { await loadContext() }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func stateMessage(_ title: String, detail: String?) -> some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(theme.color("fg-dim"))
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-faint"))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func hydrateFromTabState() {
@@ -475,8 +456,8 @@ struct DraftReviewRequestTabView: View {
         let key = contextKey
         loadingContext = true
         context = nil
+        draftReviewSession = nil
         loadedContextKey = nil
-        clearSelectedDisplayPreview()
         warning = nil
         error = nil
         defer {
@@ -494,20 +475,49 @@ struct DraftReviewRequestTabView: View {
                 baseRef: tabState.baseBranch
             )
             guard !Task.isCancelled, key == contextKey else { return }
+            let session = try await DraftReviewRequestDiffSessionBuilder.build(
+                context: loaded,
+                worktreePath: worktreePath,
+                openFileForPath: { path in
+                    Self.draftDiffOpenFileAction(
+                        worktreePath: worktreePath,
+                        relativePath: path
+                    ) { path in
+                        appState.openFile(relativePath: path, worktreeId: worktreeId)
+                    }
+                }
+            )
+            guard !Task.isCancelled, key == contextKey else { return }
             context = loaded
             loadedContextKey = key
+            draftReviewSession = session
+            selectedFileID = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
+                selectedPath: selectedPath,
+                session: session
+            )
+            selectedPath = DraftReviewRequestDiffSessionBuilder.selectedPath(for: selectedFileID)
             warning = loaded.hasUncommittedChanges
                 ? "Uncommitted changes are present but excluded from this \(tabState.provider.reviewRequestLabel)."
                 : nil
-            if let selectedPath, loaded.changedFiles.contains(where: { $0.path == selectedPath }) {
-                refreshSelectedDisplayPreview()
-                return
-            }
-            selectedPath = loaded.changedFiles.first?.path
-            refreshSelectedDisplayPreview()
         } catch {
             guard !Task.isCancelled, key == contextKey else { return }
             self.error = (error as NSError).localizedDescription
+        }
+    }
+
+    static func draftDiffOpenFileAction(
+        worktreePath: URL,
+        relativePath: String,
+        openFile: @escaping (String) -> Void
+    ) -> (() -> Void)? {
+        guard DiffOpenFileAvailability.isAvailable(
+            worktreePath: worktreePath,
+            relativePath: relativePath
+        ) else {
+            return nil
+        }
+        return {
+            openFile(relativePath)
         }
     }
 
@@ -602,232 +612,56 @@ struct DraftReviewRequestTabView: View {
         }
     }
 
-    private func selectedDiffPreview(in context: ReviewRequestDraftContext) -> (path: String?, diff: String) {
-        guard let selectedPath,
-              let diff = context.fileDiffsByPath[selectedPath]
-        else {
-            return (nil, context.diff)
-        }
-        return (selectedPath, diff)
-    }
-
-    private func refreshSelectedDisplayPreview() {
-        guard let key = selectedDisplayPreviewKey() else {
-            clearSelectedDisplayPreview()
-            return
-        }
-
-        guard selectedDisplayPreview?.key != key else { return }
-        guard selectedDisplayPreviewLoadingKey != key else { return }
-
-        selectedDisplayPreviewTask?.cancel()
-        selectedDisplayPreview = nil
-        selectedDisplayPreviewLoadingKey = key
-        selectedDisplayPreviewTask = Task { @MainActor in
-            let prepared = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
-            guard !Task.isCancelled else { return }
-            guard selectedDisplayPreviewKey() == key else {
-                if selectedDisplayPreviewLoadingKey == key {
-                    selectedDisplayPreviewLoadingKey = nil
-                    selectedDisplayPreviewTask = nil
-                }
-                return
-            }
-
-            selectedDisplayPreview = prepared
-            selectedDisplayPreviewLoadingKey = nil
-            selectedDisplayPreviewTask = nil
-        }
-    }
-
-    private func selectedDisplayPreviewKey() -> DraftReviewRequestDiffDisplayPreview.Key? {
-        guard let context,
-              let selectedPath,
-              let file = context.changedFiles.first(where: { $0.path == selectedPath }),
-              let rawDiff = context.fileDiffsByPath[selectedPath]
+    private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {
+        let fileURL = worktreePath.appendingPathComponent(relativePath)
+        guard FileManager.default.fileExists(atPath: fileURL.path),
+              let language = appState.lsp.language(forFileExtension: (relativePath as NSString).pathExtension)
         else {
             return nil
         }
-
-        return DraftReviewRequestDiffDisplayPreview.Key(path: selectedPath, file: file, rawDiff: rawDiff)
-    }
-
-    private func clearSelectedDisplayPreview() {
-        selectedDisplayPreviewTask?.cancel()
-        selectedDisplayPreviewTask = nil
-        selectedDisplayPreviewLoadingKey = nil
-        selectedDisplayPreview = nil
-    }
-
-    private func statusColor(_ status: String) -> Color {
-        switch status {
-        case "A": return theme.color("add")
-        case "D": return theme.color("del")
-        case "R", "C": return theme.color("accent")
-        default: return theme.color("fg-dim")
-        }
-    }
-}
-
-struct DraftReviewRequestDiffPreview {
-    let path: String
-    let file: CommitChangedFile
-    let rawDiff: String
-
-    var parsedDiff: ParsedDiff {
-        DiffParser.parse(rawDiff)
-    }
-
-    var fileExtension: String {
-        LanguageRegistry.highlighterExtension(forPath: path)
-    }
-
-    var title: String {
-        (path as NSString).lastPathComponent
-    }
-
-    var directory: String {
-        (path as NSString).deletingLastPathComponent
-    }
-}
-
-struct DraftReviewRequestDiffDisplayPreview {
-    struct Key: Equatable {
-        let path: String
-        let originalPath: String?
-        let status: String
-        let add: Int
-        let del: Int
-        let rawDiff: String
-
-        init(path: String, file: CommitChangedFile, rawDiff: String) {
-            self.path = path
-            self.originalPath = file.originalPath
-            self.status = file.status
-            self.add = file.add
-            self.del = file.del
-            self.rawDiff = rawDiff
-        }
-
-        var file: CommitChangedFile {
-            CommitChangedFile(
-                path: path,
-                originalPath: originalPath,
-                status: status,
-                add: add,
-                del: del
-            )
-        }
-    }
-
-    let path: String
-    let file: CommitChangedFile
-    let rawDiff: String
-    let parsedDiff: ParsedDiff
-    let displayModel: DiffDisplayModel
-
-    static func prepare(key: Key) async -> DraftReviewRequestDiffDisplayPreview {
-        await Task.detached(priority: .userInitiated) {
-            let parsed = DiffParser.parse(key.rawDiff)
-            let model = DiffDisplayModelBuilder.build(diff: parsed, filePath: key.path)
-            return DraftReviewRequestDiffDisplayPreview(key: key, parsedDiff: parsed, displayModel: model)
-        }.value
-    }
-
-    var key: Key {
-        Key(path: path, file: file, rawDiff: rawDiff)
-    }
-
-    private init(key: Key, parsedDiff: ParsedDiff, displayModel: DiffDisplayModel) {
-        self.path = key.path
-        self.file = key.file
-        self.rawDiff = key.rawDiff
-        self.parsedDiff = parsedDiff
-        self.displayModel = displayModel
-    }
-
-    var fileExtension: String {
-        LanguageRegistry.highlighterExtension(forPath: path)
-    }
-
-    var title: String {
-        (path as NSString).lastPathComponent
-    }
-
-    var directory: String {
-        (path as NSString).deletingLastPathComponent
-    }
-}
-
-struct DraftReviewRequestDiffPreviewView: View {
-    let preview: DraftReviewRequestDiffDisplayPreview
-    let codeFontFamily: String
-    let codeFontSize: CGFloat
-    @Binding var layoutMode: DiffLayoutMode
-    @Binding var wrapLines: Bool
-    @Binding var showWhitespace: Bool
-
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            content
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(theme.color("bg-1"))
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(theme.color("line"), lineWidth: 0.5)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text(preview.title)
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
-                .foregroundColor(theme.color("fg"))
-                .lineLimit(1)
-            if !preview.directory.isEmpty {
-                Text("·").foregroundColor(theme.color("fg-faint"))
-                Text(preview.directory)
-                    .font(.system(size: codeFontSize - 2))
-                    .foregroundColor(theme.color("fg-dim"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        return DiffPaneLSPContext(
+            worktreeId: worktreeId,
+            worktreeRoot: worktreePath,
+            relativePath: relativePath,
+            language: language,
+            lsp: appState.lsp,
+            openTarget: { url, line, character in
+                openLSPTarget(
+                    url: url,
+                    originatingRelativePath: relativePath,
+                    language: language,
+                    line: line,
+                    character: character
+                )
             }
-            Spacer()
-            Text("\(preview.file.status)  +\(preview.file.add) -\(preview.file.del)")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(theme.color("fg-dim"))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(theme.color("bg-2"))
-        .overlay(Divider().opacity(0.4), alignment: .bottom)
+        )
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if preview.parsedDiff.hunks.isEmpty {
-            Text("No changes for \(preview.path)")
-                .foregroundColor(theme.color("fg-dim"))
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private func openLSPTarget(
+        url: URL,
+        originatingRelativePath: String,
+        language: String,
+        line: Int,
+        character: Int
+    ) {
+        let prefix = worktreePath.path + "/"
+        if url.path.hasPrefix(prefix) {
+            let relativeTarget = String(url.path.dropFirst(prefix.count))
+            appState.tabs.openEditor(
+                worktreeId: worktreeId,
+                relativePath: relativeTarget,
+                revealLine: line,
+                revealCharacter: character
+            )
         } else {
-            DiffPaneView(
-                model: preview.displayModel,
-                fileExtension: preview.fileExtension,
-                layoutMode: $layoutMode,
-                wrapLines: $wrapLines,
-                showWhitespace: $showWhitespace,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                showsToolbar: false,
-                verticalScrollMode: .internalScroll,
-                lspContext: nil,
-                hunkActions: { _ in DiffPaneHunkActions() }
+            appState.tabs.openExternalEditor(
+                worktreeId: worktreeId,
+                absoluteURL: url,
+                revealLine: line,
+                revealCharacter: character,
+                originatingRelativePath: originatingRelativePath,
+                originatingWorktreeRoot: worktreePath,
+                language: language
             )
         }
     }
