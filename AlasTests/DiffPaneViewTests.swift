@@ -26,6 +26,24 @@ struct DiffPaneViewTests {
         )
     }
 
+    private func reviewAnchorModel() -> DiffDisplayModel {
+        DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [
+                ParsedDiff.Hunk(
+                    header: "@@ -1,2 +1,2 @@",
+                    oldStart: 1,
+                    newStart: 1,
+                    lines: [
+                        .init(kind: .context, text: "let a = 1", oldNumber: 1, newNumber: 1),
+                        .init(kind: .delete, text: "let b = 2", oldNumber: 2, newNumber: nil),
+                        .init(kind: .add, text: "let b = 3", oldNumber: nil, newNumber: 2),
+                    ]
+                )
+            ]),
+            filePath: "Sources/App.swift"
+        )
+    }
+
     private func collapsedContextModel() -> DiffDisplayModel {
         DiffDisplayModelBuilder.build(
             diff: ParsedDiff(hunks: [
@@ -211,6 +229,113 @@ struct DiffPaneViewTests {
         #expect(!selectableText.contains("|"))
         #expect(!selectableText.contains("+2"))
         #expect(!selectableText.contains("-2"))
+    }
+
+    @Test @MainActor func splitTextDocumentExposesSourceLineMetadataForBothSides() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: reviewAnchorModel(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let codeViews = visibleCodeTextViews(in: controller.view)
+        #expect(codeViews.count == 2)
+        let oldCodeView = try #require(codeViews.first)
+        let newCodeView = try #require(codeViews.last)
+
+        #expect(oldCodeView.reviewLineAnchor(atRow: 0)?.side == .old)
+        #expect(newCodeView.reviewLineAnchor(atRow: 0)?.side == .new)
+
+        let changedAnchor = try #require(newCodeView.reviewLineAnchor(atRow: 1))
+        #expect(changedAnchor.path == "Sources/App.swift")
+        #expect(changedAnchor.side == .new)
+        #expect(changedAnchor.line == 2)
+        #expect(changedAnchor.rowIndex == 1)
+        #expect(changedAnchor.selectedText == "let b = 3")
+    }
+
+    @Test @MainActor func stackedTextDocumentExposesSourceLineMetadataForAddedAndDeletedLines() throws {
+        let view = DiffPaneTextDocumentView(
+            group: try #require(reviewAnchorModel().groups.first),
+            expandedCollapsedRowIDs: [],
+            layoutMode: .stacked,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: theme(),
+            lspContext: nil
+        )
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(visibleCodeTextViews(in: controller.view).first)
+        let deletedAnchor = try #require(codeView.reviewLineAnchor(atRow: 1))
+        let addedAnchor = try #require(codeView.reviewLineAnchor(atRow: 2))
+
+        #expect(deletedAnchor.path == "Sources/App.swift")
+        #expect(deletedAnchor.side == .old)
+        #expect(deletedAnchor.line == 2)
+        #expect(deletedAnchor.rowIndex == 1)
+        #expect(deletedAnchor.selectedText == "let b = 2")
+
+        #expect(addedAnchor.path == "Sources/App.swift")
+        #expect(addedAnchor.side == .new)
+        #expect(addedAnchor.line == 2)
+        #expect(addedAnchor.rowIndex == 2)
+        #expect(addedAnchor.selectedText == "let b = 3")
+    }
+
+    @Test @MainActor func rowHitTestingReturnsLocalReviewAnchorForCodePoint() throws {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffPaneView(
+            model: reviewAnchorModel(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let newCodeView = try #require(visibleCodeTextViews(in: controller.view).last)
+        let changedRowRect = try #require(newCodeView.diffRowRects().dropFirst().first)
+        let point = NSPoint(x: changedRowRect.minX + 8, y: changedRowRect.midY)
+
+        let anchor = try #require(newCodeView.reviewLineAnchor(at: point))
+        #expect(anchor.path == "Sources/App.swift")
+        #expect(anchor.line == 2)
+        #expect(anchor.side == .new)
+        #expect(anchor.rowIndex == 1)
+        #expect(anchor.selectedText == "let b = 3")
     }
 
     @Test func splitPaneExposesDiffLineTonesForRailsAndPlaceholders() throws {
@@ -1155,6 +1280,14 @@ struct DiffPaneViewTests {
             return view
         }
         return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
+    }
+
+    private func visibleCodeTextViews(in view: NSView) -> [DiffPaneCodeTextView] {
+        allSubviews(of: view)
+            .compactMap { $0 as? DiffPaneTextScrollView }
+            .filter(isEffectivelyVisible)
+            .sorted { $0.frame.minX < $1.frame.minX }
+            .compactMap { $0.documentView as? DiffPaneCodeTextView }
     }
 
     private func isEffectivelyVisible(_ view: NSView) -> Bool {

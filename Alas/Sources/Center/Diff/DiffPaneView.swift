@@ -115,10 +115,39 @@ struct DiffPaneView: View {
     var showsToolbar: Bool = true
     var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
     var lspContext: DiffPaneLSPContext? = nil
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
     @State private var expandedCollapsedRowIDs: Set<String> = []
+
+    init(
+        model: DiffDisplayModel,
+        fileExtension: String,
+        layoutMode: Binding<DiffLayoutMode>,
+        wrapLines: Binding<Bool>,
+        showWhitespace: Binding<Bool>,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        showsToolbar: Bool = true,
+        verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll,
+        lspContext: DiffPaneLSPContext? = nil,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
+        hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
+    ) {
+        self.model = model
+        self.fileExtension = fileExtension
+        self._layoutMode = layoutMode
+        self._wrapLines = wrapLines
+        self._showWhitespace = showWhitespace
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.showsToolbar = showsToolbar
+        self.verticalScrollMode = verticalScrollMode
+        self.lspContext = lspContext
+        self.onReviewLineSelected = onReviewLineSelected
+        self.hunkActions = hunkActions
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -254,7 +283,8 @@ struct DiffPaneView: View {
                 codeFontFamily: codeFontFamily,
                 codeFontSize: codeFontSize,
                 theme: theme,
-                lspContext: lspContext
+                lspContext: lspContext,
+                onReviewLineSelected: onReviewLineSelected
             )
             .fixedSize(horizontal: false, vertical: true)
         }

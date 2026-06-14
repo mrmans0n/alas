@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
+    let path: String
+    let side: DiffReviewInlineFeedbackSide
+    let line: Int
+    let rowIndex: Int
+    let selectedText: String
+}
+
 struct DiffPaneTextDocumentView: NSViewRepresentable {
     let group: DiffDisplayGroup
     let expandedCollapsedRowIDs: Set<String>
@@ -12,6 +20,33 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let codeFontSize: CGFloat
     let theme: Theme
     let lspContext: DiffPaneLSPContext?
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+
+    init(
+        group: DiffDisplayGroup,
+        expandedCollapsedRowIDs: Set<String>,
+        layoutMode: DiffLayoutMode,
+        wrapLines: Bool,
+        showWhitespace: Bool,
+        fileExtension: String,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in }
+    ) {
+        self.group = group
+        self.expandedCollapsedRowIDs = expandedCollapsedRowIDs
+        self.layoutMode = layoutMode
+        self.wrapLines = wrapLines
+        self.showWhitespace = showWhitespace
+        self.fileExtension = fileExtension
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.theme = theme
+        self.lspContext = lspContext
+        self.onReviewLineSelected = onReviewLineSelected
+    }
 
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
         DiffPaneTextDocumentContainerView()
@@ -27,7 +62,8 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             fileExtension: fileExtension,
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme,
-            lspContext: lspContext
+            lspContext: lspContext,
+            onReviewLineSelected: onReviewLineSelected
         )
     }
 }
@@ -72,8 +108,13 @@ final class DiffPaneTextDocumentContainerView: NSView {
         fileExtension: String,
         font: NSFont,
         theme: Theme,
-        lspContext: DiffPaneLSPContext?
+        lspContext: DiffPaneLSPContext?,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in }
     ) {
+        oldPane.onReviewLineSelected = onReviewLineSelected
+        newPane.onReviewLineSelected = onReviewLineSelected
+        stackedPane.onReviewLineSelected = onReviewLineSelected
+
         let signature = UpdateSignature(
             group: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs,
@@ -258,6 +299,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
 
     var documentHeight: CGFloat {
         if let lastRow = textView.diffRowRects().last {
@@ -292,7 +334,11 @@ final class DiffPaneTextScrollView: NSScrollView {
         documentView = textView
         hasVerticalRuler = true
         rulersVisible = true
-        verticalRulerView = DiffPaneLineNumberRulerView(scrollView: self)
+        let ruler = DiffPaneLineNumberRulerView(scrollView: self)
+        ruler.onReviewLineSelected = { [weak self] anchor in
+            self?.onReviewLineSelected(anchor)
+        }
+        verticalRulerView = ruler
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -761,6 +807,17 @@ final class DiffPaneCodeTextView: NSTextView {
         lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
     }
 
+    func reviewLineAnchor(atRow row: Int) -> DiffReviewLineAnchor? {
+        guard lineMetadata.indices.contains(row) else { return nil }
+        return lineMetadata[row].reviewLineAnchor(rowIndex: row)
+    }
+
+    func reviewLineAnchor(at point: NSPoint) -> DiffReviewLineAnchor? {
+        let rowRects = diffRowRects()
+        guard let row = rowRects.firstIndex(where: { $0.contains(point) }) else { return nil }
+        return reviewLineAnchor(atRow: row)
+    }
+
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
         guard let theme else { return }
         let rowRects = diffRowRects()
@@ -886,6 +943,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     private var lineTones: [DiffPaneLineTone] = []
     private var theme: Theme?
     var rowHeight: CGFloat = 16
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     private var contentTopInset: CGFloat = 6
     private var boundsObserver: NSObjectProtocol?
 
@@ -920,6 +978,26 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         self.theme = theme
         updateThickness()
         needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let scrollView,
+              let textView = scrollView.documentView as? DiffPaneCodeTextView
+        else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+        let sourcePoint = NSPoint(
+            x: point.x,
+            y: point.y + scrollView.contentView.bounds.origin.y
+        )
+        guard let anchor = textView.reviewLineAnchor(at: sourcePoint) else {
+            super.mouseDown(with: event)
+            return
+        }
+        onReviewLineSelected(anchor)
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -1126,5 +1204,33 @@ final class DiffPaneLeadingClipView: NSClipView {
         let maxX = max(documentView.frame.width - bounds.width, 0)
         bounds.origin.x = min(max(bounds.origin.x, 0), maxX)
         return bounds
+    }
+}
+
+private extension DiffPaneTextDocumentBuilder.LineMetadata {
+    func reviewLineAnchor(rowIndex: Int) -> DiffReviewLineAnchor? {
+        guard let sourceLine,
+              let lineNumber = sourceLine.lineNumber
+        else {
+            return nil
+        }
+
+        let side: DiffReviewInlineFeedbackSide
+        switch sourceLine.anchor.side {
+        case .old:
+            side = .old
+        case .new:
+            side = .new
+        case .paired:
+            side = .unknown
+        }
+
+        return DiffReviewLineAnchor(
+            path: sourceLine.anchor.filePath,
+            side: side,
+            line: lineNumber,
+            rowIndex: rowIndex,
+            selectedText: sourceLine.text
+        )
     }
 }
