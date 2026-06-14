@@ -13,6 +13,63 @@ enum ReviewEvidenceContentRoute: Equatable {
     case evidenceBrowser
 }
 
+enum ReviewEvidenceInlineFeedbackNavigator {
+    struct Match: Equatable {
+        let fileID: DiffReviewFileID
+        let feedback: DiffReviewInlineFeedback
+    }
+
+    enum SelectionRoute: Equatable {
+        case files(Match)
+        case evidence
+    }
+
+    static func match(
+        item: ReviewEvidenceItem,
+        inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]]
+    ) -> Match? {
+        guard item.section == .feedback else { return nil }
+
+        for (fileID, feedbackItems) in inlineFeedbackByFileID {
+            if let feedback = feedbackItems.first(where: { $0.evidenceItemID == item.id }) {
+                return Match(fileID: fileID, feedback: feedback)
+            }
+        }
+
+        return nil
+    }
+
+    static func selectionRoute(
+        item: ReviewEvidenceItem,
+        inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]]
+    ) -> SelectionRoute {
+        guard let match = match(item: item, inlineFeedbackByFileID: inlineFeedbackByFileID) else {
+            return .evidence
+        }
+        return .files(match)
+    }
+
+    static func detail(
+        feedback: DiffReviewInlineFeedback,
+        file: DiffReviewFileSummary
+    ) -> ReviewEvidenceDetail {
+        ReviewEvidenceDetail(
+            item: ReviewEvidenceItem(
+                id: feedback.evidenceItemID,
+                section: .feedback,
+                title: feedback.author ?? "\(feedback.providerName) feedback",
+                subtitle: file.path,
+                status: feedback.status,
+                providerURL: feedback.providerURL
+            ),
+            body: DiffReviewInlineFeedbackContextFormatter.format(item: feedback, file: file),
+            filePath: feedback.anchor.path,
+            line: feedback.anchor.line,
+            isTruncated: false
+        )
+    }
+}
+
 struct ReviewEvidenceTabView: View {
     let worktreePath: URL
     let tabState: ReviewEvidenceTabState
@@ -25,6 +82,9 @@ struct ReviewEvidenceTabView: View {
     @State private var loadGeneration = 0
     @State private var selectedFileID: DiffReviewFileID?
     @State private var railCollapsed = false
+    @State private var focusedFeedbackID: String?
+    @State private var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
+    @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
 
     @Environment(\.theme) private var theme
 
@@ -331,7 +391,11 @@ struct ReviewEvidenceTabView: View {
                     codeFontSize: CGFloat(appState.config.code.fontSize),
                     showsSourceBadges: true,
                     showsRailDisplayControls: true,
-                    inlineFeedbackByFileID: inlineFeedbackByFileID
+                    inlineFeedbackByFileID: inlineFeedbackByFileID,
+                    focusedFeedbackID: focusedFeedbackID,
+                    inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
+                    inlineFeedbackActions: inlineFeedbackActions(),
+                    onSelectInlineFeedback: selectInlineFeedback
                 )
             } else {
                 filesEmptyState
@@ -553,6 +617,9 @@ struct ReviewEvidenceTabView: View {
         loadGeneration += 1
         let generation = loadGeneration
         let initialSection = selectedSection
+        focusedFeedbackID = nil
+        inlineFeedbackScrollCommand = nil
+        inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
         let loaded = ReviewEvidenceModel(
             snapshot: snapshot,
             provider: provider,
@@ -724,11 +791,23 @@ struct ReviewEvidenceTabView: View {
     private func applySelectedSection(_ section: ReviewEvidenceSection, loadDetail: Bool) {
         selectedSection = section
         if section == .files {
-            model?.select(section: section)
+            if focusedFeedbackID == nil {
+                model?.select(section: section)
+            }
             persistSelection(section: section, itemID: nil)
             return
         }
-        guard let model, let item = model.items(for: section).first else {
+        guard let model else {
+            persistSelection(section: section, itemID: nil)
+            return
+        }
+        if model.selectedSection == section, let item = model.selectedItem {
+            persistSelection(section: section, itemID: item.id)
+            guard loadDetail else { return }
+            Task { await model.loadSelectedDetail() }
+            return
+        }
+        guard let item = model.items(for: section).first else {
             persistSelection(section: section, itemID: nil)
             return
         }
@@ -736,11 +815,46 @@ struct ReviewEvidenceTabView: View {
     }
 
     private func selectItem(_ item: ReviewEvidenceItem, in model: ReviewEvidenceModel, loadDetail: Bool) {
+        switch ReviewEvidenceInlineFeedbackNavigator.selectionRoute(
+            item: item,
+            inlineFeedbackByFileID: model.inlineFeedbackByFileID
+        ) {
+        case .files(let match):
+            selectedSection = .files
+            model.select(itemID: item.id, section: item.section)
+            focusInlineFeedback(match)
+            persistSelection(section: .files, itemID: nil)
+            guard loadDetail else { return }
+            Task { await model.loadSelectedDetail() }
+            return
+        case .evidence:
+            break
+        }
+
+        focusedFeedbackID = nil
+        inlineFeedbackScrollCommand = nil
         selectedSection = item.section
         model.select(itemID: item.id, section: item.section)
         persistSelection(section: item.section, itemID: item.id)
         guard loadDetail else { return }
         Task { await model.loadSelectedDetail() }
+    }
+
+    private func focusInlineFeedback(_ match: ReviewEvidenceInlineFeedbackNavigator.Match) {
+        focusedFeedbackID = match.feedback.id
+        selectedFileID = match.fileID
+        inlineFeedbackScrollCommand = inlineFeedbackScrollController.command(
+            feedbackID: match.feedback.id,
+            fileID: match.fileID
+        )
+    }
+
+    private func selectInlineFeedback(_ feedback: DiffReviewInlineFeedback) {
+        focusedFeedbackID = feedback.id
+        if let model,
+           model.feedbackItems.contains(where: { $0.id == feedback.evidenceItemID }) {
+            model.select(itemID: feedback.evidenceItemID, section: .feedback)
+        }
     }
 
     private func persistSelection(section: ReviewEvidenceSection, itemID: String?) {
@@ -787,6 +901,40 @@ struct ReviewEvidenceTabView: View {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(ReviewEvidenceContextFormatter.format(detail), forType: .string)
+    }
+
+    private func inlineFeedbackActions() -> DiffReviewInlineFeedbackActions {
+        DiffReviewInlineFeedbackActions(
+            availability: { item, _ in
+                DiffReviewInlineFeedbackActionAvailability(
+                    canOpenProvider: item.providerURL != nil,
+                    canCopyContext: true,
+                    canSendToAgent: canSendToAgent
+                )
+            },
+            openProvider: { item, _ in
+                selectInlineFeedback(item)
+                guard let url = item.providerURL else { return }
+                NSWorkspace.shared.open(url)
+            },
+            copyContext: { item, file in
+                selectInlineFeedback(item)
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(
+                    DiffReviewInlineFeedbackContextFormatter.format(item: item, file: file),
+                    forType: .string
+                )
+            },
+            sendToAgent: { item, file in
+                selectInlineFeedback(item)
+                guard let snapshot else { return }
+                appState.openReviewEvidenceHandoff(
+                    snapshot: snapshot,
+                    detail: ReviewEvidenceInlineFeedbackNavigator.detail(feedback: item, file: file)
+                )
+            }
+        )
     }
 
     private func statusDot(for status: ReviewEvidenceStatus) -> some View {

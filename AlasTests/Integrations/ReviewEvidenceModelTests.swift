@@ -514,6 +514,94 @@ struct ReviewEvidenceModelTests {
         #expect(feedback[fileID]?.map(\.id) == ["thread-1"])
     }
 
+    @Test func inlineFeedbackNavigatorMatchesFeedbackEvidenceItem() throws {
+        let primaryFile = DiffReviewFileID(namespace: "github-pr", path: "Sources/App.swift")
+        let secondaryFile = DiffReviewFileID(namespace: "github-pr", path: "Sources/Other.swift")
+        let target = Self.inlineFeedback(
+            id: "thread-2",
+            evidenceItemID: "feedback:thread-2",
+            path: "Sources/Other.swift"
+        )
+        let inlineFeedbackByFileID = [
+            primaryFile: [
+                Self.inlineFeedback(
+                    id: "thread-1",
+                    evidenceItemID: "feedback:thread-1",
+                    path: "Sources/App.swift"
+                ),
+            ],
+            secondaryFile: [target],
+        ]
+
+        let match = try #require(ReviewEvidenceInlineFeedbackNavigator.match(
+            item: Self.feedbackItem(id: "feedback:thread-2", title: "reviewer", body: "Second comment."),
+            inlineFeedbackByFileID: inlineFeedbackByFileID
+        ))
+
+        #expect(match.fileID == secondaryFile)
+        #expect(match.feedback == target)
+    }
+
+    @Test func inlineFeedbackNavigatorDoesNotMatchNonFeedbackOrUnmappedItems() {
+        let fileID = DiffReviewFileID(namespace: "github-pr", path: "Sources/App.swift")
+        let inlineFeedbackByFileID = [
+            fileID: [
+                Self.inlineFeedback(
+                    id: "thread-1",
+                    evidenceItemID: "feedback:thread-1",
+                    path: "Sources/App.swift"
+                ),
+            ],
+        ]
+        let ciItem = ReviewEvidenceItem(
+            id: "feedback:thread-1",
+            section: .ci,
+            title: "Tests",
+            subtitle: nil,
+            status: .failed,
+            providerURL: nil
+        )
+
+        #expect(ReviewEvidenceInlineFeedbackNavigator.match(
+            item: ciItem,
+            inlineFeedbackByFileID: inlineFeedbackByFileID
+        ) == nil)
+        #expect(ReviewEvidenceInlineFeedbackNavigator.match(
+            item: Self.feedbackItem(id: "feedback:missing", title: "reviewer", body: "Missing."),
+            inlineFeedbackByFileID: inlineFeedbackByFileID
+        ) == nil)
+    }
+
+    @Test func inlineFeedbackNavigatorRoutesMappedFeedbackToFiles() throws {
+        let fileID = DiffReviewFileID(namespace: "github-pr", path: "Sources/App.swift")
+        let feedback = Self.inlineFeedback(
+            id: "thread-1",
+            evidenceItemID: "feedback:thread-1",
+            path: "Sources/App.swift"
+        )
+
+        let route = ReviewEvidenceInlineFeedbackNavigator.selectionRoute(
+            item: Self.feedbackItem(id: "feedback:thread-1", title: "reviewer", body: "Please simplify."),
+            inlineFeedbackByFileID: [fileID: [feedback]]
+        )
+
+        guard case .files(let match) = route else {
+            Issue.record("Expected mapped feedback to route to files")
+            return
+        }
+        #expect(match.fileID == fileID)
+        #expect(match.feedback == feedback)
+    }
+
+    @Test func inlineFeedbackNavigatorRoutesUnmappedFeedbackToEvidence() {
+        let route = ReviewEvidenceInlineFeedbackNavigator.selectionRoute(
+            item: Self.feedbackItem(id: "feedback:missing", title: "reviewer", body: "Missing."),
+            inlineFeedbackByFileID: [:]
+        )
+
+        #expect(route == .evidence)
+    }
+
     @Test func modelClearsInlineFeedbackWithoutReviewRequest() async {
         let model = ReviewEvidenceModel(
             snapshot: Self.snapshot(reviewRequest: nil),
@@ -1076,6 +1164,23 @@ struct ReviewEvidenceModelTests {
             subtitle: body,
             status: .actionable,
             providerURL: URL(string: "https://github.com/discussion/\(id)")
+        )
+    }
+
+    private static func inlineFeedback(
+        id: String,
+        evidenceItemID: String,
+        path: String
+    ) -> DiffReviewInlineFeedback {
+        DiffReviewInlineFeedback(
+            id: id,
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please simplify this.",
+            status: .actionable,
+            providerURL: URL(string: "https://github.com/discussion/\(id)"),
+            anchor: DiffReviewInlineFeedbackAnchor(path: path, line: 12, side: .new),
+            evidenceItemID: evidenceItemID
         )
     }
 
