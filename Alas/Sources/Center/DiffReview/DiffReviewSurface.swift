@@ -98,7 +98,7 @@ struct DiffReviewSurface: View {
     }
 
     private var shouldShowReviewSummaryRail: Bool {
-        showsDraftSummaryRail || allDraftComments.contains { $0.state != .dismissed }
+        showsDraftSummaryRail || !allDraftComments.isEmpty
     }
 
     private var reviewFeedbackBundle: ReviewFeedbackBundle {

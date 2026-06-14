@@ -128,9 +128,9 @@ struct ReviewDraftSummaryRail: View {
                 .background(
                     ReviewDraftSummaryPressMarker(
                         identifier: "review-draft-summary-copy-prompt",
-                        label: "Copy prompt"
+                        label: "Copy prompt",
+                        isEnabled: canCopyPrompt
                     ) {
-                        guard canCopyPrompt else { return }
                         draftCommentActions.copyPrompt(bundle)
                     }
                 )
@@ -153,9 +153,9 @@ struct ReviewDraftSummaryRail: View {
                 .background(
                     ReviewDraftSummaryPressMarker(
                         identifier: "review-draft-summary-send-agent",
-                        label: "Send to agent"
+                        label: "Send to agent",
+                        isEnabled: canSendToAgent
                     ) {
-                        guard canSendToAgent else { return }
                         draftCommentActions.sendToAgent(bundle)
                     }
                 )
@@ -220,8 +220,7 @@ struct ReviewDraftSummaryRail: View {
         .accessibilityIdentifier(id)
         .accessibilityLabel(label)
         .background(
-            ReviewDraftSummaryPressMarker(identifier: id, label: label) {
-                guard enabled else { return }
+            ReviewDraftSummaryPressMarker(identifier: id, label: label, isEnabled: enabled) {
                 action()
             }
         )
@@ -341,6 +340,7 @@ struct ReviewDraftSummaryRail: View {
             ReviewDraftSummaryPressMarker(
                 identifier: "review-draft-summary-\(id)-\(commentID)",
                 label: tooltip,
+                isEnabled: true,
                 action: action
             )
         )
@@ -413,6 +413,7 @@ private struct CommentGroup: Identifiable {
 private struct ReviewDraftSummaryPressMarker: NSViewRepresentable {
     let identifier: String
     let label: String?
+    var isEnabled = true
     let action: () -> Void
 
     func makeNSView(context: Context) -> ReviewDraftSummaryPressView {
@@ -420,6 +421,8 @@ private struct ReviewDraftSummaryPressMarker: NSViewRepresentable {
         view.setAccessibilityIdentifier(identifier)
         view.setAccessibilityLabel(label)
         view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
         view.action = action
         return view
     }
@@ -428,14 +431,18 @@ private struct ReviewDraftSummaryPressMarker: NSViewRepresentable {
         view.setAccessibilityIdentifier(identifier)
         view.setAccessibilityLabel(label)
         view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
         view.action = action
     }
 }
 
 private final class ReviewDraftSummaryPressView: NSView {
+    var isEnabled = true
     var action: () -> Void = {}
 
     override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
         action()
         return true
     }
