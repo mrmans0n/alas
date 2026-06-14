@@ -1147,7 +1147,11 @@ struct DiffReviewSurfaceTests {
                 )
             },
             copyPrompt: { recorder.copied = $0 },
-            sendToAgent: { recorder.sent = $0 }
+            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
+            sendToAgent: { bundle, target in
+                recorder.sent = bundle
+                recorder.sentTarget = target
+            }
         )
 
         let view = ReviewDraftSummaryRail(
@@ -1165,6 +1169,7 @@ struct DiffReviewSurfaceTests {
 
         #expect(recorder.copied == bundle)
         #expect(recorder.sent == bundle)
+        #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
     }
 
     @Test func summaryRailHidesSendActionWhenNoAgentTargetExists() throws {
@@ -1183,7 +1188,8 @@ struct DiffReviewSurfaceTests {
         let actions = ReviewDraftCommentActions(
             availability: { _ in .none },
             copyPrompt: { _ in Issue.record("disabled copy action fired") },
-            sendToAgent: { _ in Issue.record("hidden send action fired") }
+            agentTargets: { [] },
+            sendToAgent: { _, _ in Issue.record("hidden send action fired") }
         )
 
         let view = ReviewDraftSummaryRail(
@@ -1312,7 +1318,11 @@ struct DiffReviewSurfaceTests {
                 )
             },
             copyPrompt: { recorder.copied = $0 },
-            sendToAgent: { recorder.sent = $0 }
+            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
+            sendToAgent: { bundle, target in
+                recorder.sent = bundle
+                recorder.sentTarget = target
+            }
         )
 
         let view = ReviewDraftSummaryRail(
@@ -1330,6 +1340,7 @@ struct DiffReviewSurfaceTests {
 
         #expect(recorder.copied == bundle)
         #expect(recorder.sent == bundle)
+        #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
     }
 
     @Test func selectionSynchronizationClearsEmptySessions() {
@@ -1827,4 +1838,5 @@ struct DiffReviewSurfaceTests {
 private final class ReviewBundleActionRecorder: @unchecked Sendable {
     var copied: ReviewFeedbackBundle?
     var sent: ReviewFeedbackBundle?
+    var sentTarget: ReviewFeedbackAgentTarget?
 }

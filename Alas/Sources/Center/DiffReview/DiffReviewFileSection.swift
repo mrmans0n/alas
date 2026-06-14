@@ -839,6 +839,8 @@ private struct ReviewDraftCommentCard: View {
     let onSelect: (ReviewDraftComment) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var isEditing = false
+    @State private var editingBody = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -868,10 +870,21 @@ private struct ReviewDraftCommentCard: View {
                         }
                         .lineLimit(1)
 
-                        Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
-                            .font(.system(size: 11.5))
-                            .foregroundColor(theme.color("fg"))
-                            .fixedSize(horizontal: false, vertical: true)
+                        if isEditing {
+                            TextEditor(text: $editingBody)
+                                .font(.system(size: 11.5))
+                                .foregroundColor(theme.color("fg"))
+                                .scrollContentBackground(.hidden)
+                                .frame(minHeight: 72)
+                                .background(theme.color("bg-1"))
+                                .clipShape(RoundedRectangle(cornerRadius: 5))
+                                .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
+                        } else {
+                            Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
+                                .font(.system(size: 11.5))
+                                .foregroundColor(theme.color("fg"))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -919,13 +932,24 @@ private struct ReviewDraftCommentCard: View {
             || availability.canResolve
             || availability.canDismiss
             || availability.canCopyPrompt
-            || availability.canSendToAgent
+            || availability.canShowSendToAgent
         {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
-                if availability.canEdit {
+                if isEditing {
+                    actionButton(id: "save", title: "Save") {
+                        actions.edit(comment, editingBody)
+                        isEditing = false
+                        editingBody = ""
+                    }
+                    actionButton(id: "cancel", title: "Cancel") {
+                        isEditing = false
+                        editingBody = ""
+                    }
+                } else if availability.canEdit {
                     actionButton(id: "edit", title: "Edit") {
-                        actions.edit(comment)
+                        editingBody = comment.bodyMarkdown
+                        isEditing = true
                     }
                 }
                 if availability.canDelete {
@@ -948,12 +972,34 @@ private struct ReviewDraftCommentCard: View {
                         actions.copyPrompt(feedbackBundle)
                     }
                 }
-                if availability.canSendToAgent {
-                    actionButton(id: "send", title: "Send") {
-                        actions.sendToAgent(feedbackBundle)
+                if availability.canShowSendToAgent {
+                    sendToAgentControl(isEnabled: availability.canSendToAgent)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sendToAgentControl(isEnabled: Bool) -> some View {
+        let targets = actions.agentTargets()
+        if targets.count > 1 {
+            Menu("Send") {
+                ForEach(targets) { target in
+                    Button(target.title) {
+                        actions.sendToAgent(feedbackBundle, target)
                     }
                 }
             }
+            .menuStyle(.borderlessButton)
+            .disabled(!isEnabled)
+            .help("Send")
+            .accessibilityIdentifier("diff-review-draft-comment-action-send-\(comment.id)")
+        } else {
+            actionButton(id: "send", title: "Send") {
+                guard let target = targets.first else { return }
+                actions.sendToAgent(feedbackBundle, target)
+            }
+            .disabled(!isEnabled)
         }
     }
 

@@ -103,19 +103,21 @@ enum ReviewDraftWorkspaceActions {
             pasteboard.setString(prompt, forType: .string)
         }
     ) -> ReviewDraftCommentActions {
-        let hasSendTarget = !sender.availableTargets().isEmpty
-
         return ReviewDraftCommentActions(
             availability: { comment in
-                ReviewDraftCommentActionAvailability(
-                    canEdit: false,
+                let hasCurrentSendTarget = !sender.availableTargets().isEmpty
+                return ReviewDraftCommentActionAvailability(
+                    canEdit: comment.isActive,
                     canDelete: true,
                     canResolve: comment.isActive,
                     canDismiss: comment.isActive,
                     canCopyPrompt: comment.isActive,
-                    canShowSendToAgent: hasSendTarget,
-                    canSendToAgent: comment.isActive && hasSendTarget
+                    canShowSendToAgent: hasCurrentSendTarget,
+                    canSendToAgent: comment.isActive && hasCurrentSendTarget
                 )
+            },
+            edit: { comment, bodyMarkdown in
+                try? controller?.edit(commentID: comment.id, bodyMarkdown: bodyMarkdown)
             },
             delete: { comment in
                 try? controller?.delete(commentID: comment.id)
@@ -129,8 +131,10 @@ enum ReviewDraftWorkspaceActions {
             copyPrompt: { bundle in
                 ReviewFeedbackPromptActions.copyPrompt(bundle, pasteboard: pasteboard)
             },
-            sendToAgent: { bundle in
-                guard let target = sender.availableTargets().first else { return }
+            agentTargets: {
+                sender.availableTargets()
+            },
+            sendToAgent: { bundle, target in
                 ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
             }
         )

@@ -10,6 +10,8 @@ struct ReviewDraftSummaryRail: View {
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
+    @State private var editingCommentID: String?
+    @State private var editingBody = ""
 
     private var visibleComments: [ReviewDraftComment] {
         ReviewDraftCommentPlacement.sorted(comments)
@@ -38,6 +40,10 @@ struct ReviewDraftSummaryRail: View {
 
     private var shouldShowSendToAgent: Bool {
         visibleComments.contains { draftCommentActions.availability($0).canShowSendToAgent }
+    }
+
+    private var agentTargets: [ReviewFeedbackAgentTarget] {
+        draftCommentActions.agentTargets()
     }
 
     var body: some View {
@@ -89,14 +95,7 @@ struct ReviewDraftSummaryRail: View {
                 draftCommentActions.copyPrompt(bundle)
             }
             if shouldShowSendToAgent {
-                collapsedActionButton(
-                    id: "review-draft-summary-send-agent",
-                    systemName: "paperplane",
-                    label: "Send to agent",
-                    enabled: canSendToAgent
-                ) {
-                    draftCommentActions.sendToAgent(bundle)
-                }
+                collapsedSendToAgentControl
             }
             Spacer(minLength: 0)
         }
@@ -142,30 +141,7 @@ struct ReviewDraftSummaryRail: View {
                 )
 
                 if shouldShowSendToAgent {
-                    Button {
-                        draftCommentActions.sendToAgent(bundle)
-                    } label: {
-                        Image(systemName: "paperplane")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(canSendToAgent ? theme.color("fg-muted") : theme.color("fg-faint"))
-                            .frame(width: 28, height: 24)
-                            .background(theme.color("bg-3"))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSendToAgent)
-                    .help("Send to agent")
-                    .accessibilityIdentifier("review-draft-summary-send-agent")
-                    .accessibilityLabel("Send to agent")
-                    .background(
-                        ReviewDraftSummaryPressMarker(
-                            identifier: "review-draft-summary-send-agent",
-                            label: "Send to agent",
-                            isEnabled: canSendToAgent
-                        ) {
-                            draftCommentActions.sendToAgent(bundle)
-                        }
-                    )
+                    expandedSendToAgentControl
                 }
 
                 Spacer(minLength: 0)
@@ -234,6 +210,87 @@ struct ReviewDraftSummaryRail: View {
         )
     }
 
+    @ViewBuilder
+    private var collapsedSendToAgentControl: some View {
+        if agentTargets.count > 1 {
+            Menu {
+                ForEach(agentTargets) { target in
+                    Button(target.title) {
+                        draftCommentActions.sendToAgent(bundle, target)
+                    }
+                }
+            } label: {
+                summaryActionIcon(systemName: "paperplane", enabled: canSendToAgent)
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(!canSendToAgent)
+            .help("Send to agent")
+            .accessibilityIdentifier("review-draft-summary-send-agent")
+            .accessibilityLabel("Send to agent")
+        } else {
+            collapsedActionButton(
+                id: "review-draft-summary-send-agent",
+                systemName: "paperplane",
+                label: "Send to agent",
+                enabled: canSendToAgent
+            ) {
+                guard let target = agentTargets.first else { return }
+                draftCommentActions.sendToAgent(bundle, target)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var expandedSendToAgentControl: some View {
+        if agentTargets.count > 1 {
+            Menu {
+                ForEach(agentTargets) { target in
+                    Button(target.title) {
+                        draftCommentActions.sendToAgent(bundle, target)
+                    }
+                }
+            } label: {
+                summaryActionIcon(systemName: "paperplane", enabled: canSendToAgent)
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(!canSendToAgent)
+            .help("Send to agent")
+            .accessibilityIdentifier("review-draft-summary-send-agent")
+            .accessibilityLabel("Send to agent")
+        } else {
+            Button {
+                guard let target = agentTargets.first else { return }
+                draftCommentActions.sendToAgent(bundle, target)
+            } label: {
+                summaryActionIcon(systemName: "paperplane", enabled: canSendToAgent)
+            }
+            .buttonStyle(.plain)
+            .disabled(!canSendToAgent)
+            .help("Send to agent")
+            .accessibilityIdentifier("review-draft-summary-send-agent")
+            .accessibilityLabel("Send to agent")
+            .background(
+                ReviewDraftSummaryPressMarker(
+                    identifier: "review-draft-summary-send-agent",
+                    label: "Send to agent",
+                    isEnabled: canSendToAgent
+                ) {
+                    guard let target = agentTargets.first else { return }
+                    draftCommentActions.sendToAgent(bundle, target)
+                }
+            )
+        }
+    }
+
+    private func summaryActionIcon(systemName: String, enabled: Bool) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
+            .frame(width: 28, height: 24)
+            .background(theme.color("bg-3"))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
     private func commentGroup(_ group: CommentGroup) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(group.path)
@@ -269,11 +326,22 @@ struct ReviewDraftSummaryRail: View {
                         Spacer(minLength: 0)
                     }
 
-                    Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
-                        .font(.system(size: 11.5))
-                        .foregroundColor(theme.color("fg"))
-                        .lineLimit(4)
-                        .fixedSize(horizontal: false, vertical: true)
+                    if editingCommentID == comment.id {
+                        TextEditor(text: $editingBody)
+                            .font(.system(size: 11.5))
+                            .foregroundColor(theme.color("fg"))
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 62)
+                            .background(theme.color("bg-2"))
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                            .accessibilityIdentifier("review-draft-summary-editor-\(comment.id)")
+                    } else {
+                        Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
+                            .font(.system(size: 11.5))
+                            .foregroundColor(theme.color("fg"))
+                            .lineLimit(4)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -285,9 +353,20 @@ struct ReviewDraftSummaryRail: View {
             if availability.canEdit || availability.canDelete || availability.canResolve || availability.canDismiss {
                 HStack(spacing: 5) {
                     Spacer(minLength: 0)
-                    if availability.canEdit {
+                    if editingCommentID == comment.id {
+                        commentActionButton(id: "save", commentID: comment.id, systemName: "checkmark", tooltip: "Save") {
+                            draftCommentActions.edit(comment, editingBody)
+                            editingCommentID = nil
+                            editingBody = ""
+                        }
+                        commentActionButton(id: "cancel", commentID: comment.id, systemName: "xmark", tooltip: "Cancel") {
+                            editingCommentID = nil
+                            editingBody = ""
+                        }
+                    } else if availability.canEdit {
                         commentActionButton(id: "edit", commentID: comment.id, systemName: "pencil", tooltip: "Edit") {
-                            draftCommentActions.edit(comment)
+                            editingCommentID = comment.id
+                            editingBody = comment.bodyMarkdown
                         }
                     }
                     if availability.canResolve {
