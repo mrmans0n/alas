@@ -109,6 +109,42 @@ struct ReviewRequestDraftTests {
         #expect(visibleText.contains("let value = 2"))
     }
 
+    @Test func draftReviewRequestDiffOpenFileActionUsesNormalAvailability() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("alas-draft-open-\(UUID().uuidString)")
+        let fileURL = root.appendingPathComponent("Sources/A.swift")
+        let dirURL = root.appendingPathComponent("Assets")
+        try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        try "let value = 1\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? fm.removeItem(at: root) }
+
+        var opened: [String] = []
+        let action = DraftReviewRequestTabView.draftDiffOpenFileAction(
+            worktreePath: root,
+            relativePath: "Sources/A.swift"
+        ) { path in
+            opened.append(path)
+        }
+
+        action?()
+        #expect(opened == ["Sources/A.swift"])
+        #expect(
+            DraftReviewRequestTabView.draftDiffOpenFileAction(
+                worktreePath: root,
+                relativePath: "Assets",
+                openFile: { opened.append($0) }
+            ) == nil
+        )
+        #expect(
+            DraftReviewRequestTabView.draftDiffOpenFileAction(
+                worktreePath: root,
+                relativePath: "Missing.swift",
+                openFile: { opened.append($0) }
+            ) == nil
+        )
+    }
+
     @Test func draftReviewRequestDiffSessionSelectionKeepsExistingPath() async throws {
         let context = ReviewRequestDraftContext(
             commitSubjects: [],

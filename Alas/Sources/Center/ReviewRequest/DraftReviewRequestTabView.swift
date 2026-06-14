@@ -479,15 +479,11 @@ struct DraftReviewRequestTabView: View {
                 context: loaded,
                 worktreePath: worktreePath,
                 openFileForPath: { path in
-                    let url = worktreePath.appendingPathComponent(path)
-                    guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-                    return {
-                        appState.tabs.openEditor(
-                            worktreeId: worktreeId,
-                            relativePath: path,
-                            revealLine: nil,
-                            revealCharacter: nil
-                        )
+                    Self.draftDiffOpenFileAction(
+                        worktreePath: worktreePath,
+                        relativePath: path
+                    ) { path in
+                        appState.openFile(relativePath: path, worktreeId: worktreeId)
                     }
                 }
             )
@@ -506,6 +502,22 @@ struct DraftReviewRequestTabView: View {
         } catch {
             guard !Task.isCancelled, key == contextKey else { return }
             self.error = (error as NSError).localizedDescription
+        }
+    }
+
+    static func draftDiffOpenFileAction(
+        worktreePath: URL,
+        relativePath: String,
+        openFile: @escaping (String) -> Void
+    ) -> (() -> Void)? {
+        guard DiffOpenFileAvailability.isAvailable(
+            worktreePath: worktreePath,
+            relativePath: relativePath
+        ) else {
+            return nil
+        }
+        return {
+            openFile(relativePath)
         }
     }
 
