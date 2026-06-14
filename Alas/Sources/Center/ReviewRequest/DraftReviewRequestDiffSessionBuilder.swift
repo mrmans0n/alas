@@ -41,8 +41,11 @@ enum DraftReviewRequestDiffSessionBuilder {
     }
 
     static func synchronizedSelection(selectedPath: String?, session: DiffReviewLoadedSession) -> DiffReviewFileID? {
-        guard let id = selectedFileID(for: selectedPath) else { return nil }
-        return session.summary.files.contains { $0.id == id } ? id : nil
+        if let id = selectedFileID(for: selectedPath),
+           session.summary.files.contains(where: { $0.id == id }) {
+            return id
+        }
+        return session.summary.files.first?.id
     }
 
     private static func fileSection(

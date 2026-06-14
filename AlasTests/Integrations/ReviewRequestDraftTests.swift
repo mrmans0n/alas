@@ -51,7 +51,63 @@ struct ReviewRequestDraftTests {
         #expect(DraftReviewRequestDiffSessionBuilder.selectedFileID(for: path) == section.summary.id)
         #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: section.summary.id) == path)
         #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: path, session: session) == section.summary.id)
-        #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == nil)
+        #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == section.summary.id)
+    }
+
+    @Test func draftReviewRequestDiffSessionSelectionKeepsExistingPath() async throws {
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: "A.swift", originalPath: nil, status: "M", add: 1, del: 1),
+                CommitChangedFile(path: "B.swift", originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: "A.swift") + "\n" + Self.modifiedSwiftDiff(path: "B.swift"),
+            fileDiffsByPath: [
+                "A.swift": Self.modifiedSwiftDiff(path: "A.swift"),
+                "B.swift": Self.modifiedSwiftDiff(path: "B.swift"),
+            ],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+
+        let selected = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
+            selectedPath: "B.swift",
+            session: session
+        )
+
+        #expect(selected == DiffReviewFileID(namespace: "draft-review-request", path: "B.swift"))
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: selected) == "B.swift")
+    }
+
+    @Test func draftReviewRequestDiffSessionSelectionFallsBackToFirstFile() async throws {
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: "A.swift", originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: "A.swift"),
+            fileDiffsByPath: ["A.swift": Self.modifiedSwiftDiff(path: "A.swift")],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
+
+        let selected = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
+            selectedPath: "Missing.swift",
+            session: session
+        )
+
+        #expect(selected == DiffReviewFileID(namespace: "draft-review-request", path: "A.swift"))
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: selected) == "A.swift")
     }
 
     @Test func draftReviewRequestDiffSessionBuilderKeepsImagePlaceholderWithFileCounts() async throws {
