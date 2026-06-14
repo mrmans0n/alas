@@ -1,123 +1,105 @@
-import AppKit
 import Foundation
-import SwiftUI
 import Testing
 @testable import Alas
 
 struct ReviewRequestDraftTests {
-    @Test func parsesSelectedFileDiffPreviewIntoHunks() {
-        let raw = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let value = 1
-        +let value = 2
-        """
+    @Test func draftReviewRequestDiffSessionBuilderCreatesRenderableFileSection() async throws {
+        let path = "Sources/A.swift"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: path, originalPath: "Sources/OldA.swift", status: "R", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: path),
+            fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
+            hasUncommittedChanges: false
+        )
+        var openedPaths: [String] = []
 
-        let preview = DraftReviewRequestDiffPreview(
-            path: "Sources/A.swift",
-            file: CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1),
-            rawDiff: raw
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { path in
+                { openedPaths.append(path) }
+            }
         )
 
-        #expect(preview.parsedDiff.hunks.count == 1)
-        #expect(preview.fileExtension == "swift")
-        #expect(preview.title == "A.swift")
-        #expect(preview.directory == "Sources")
+        let section = try #require(session.files.first)
+        #expect(session.files.count == 1)
+        #expect(session.summary.groupsEnabled == false)
+        #expect(session.summary.groups.isEmpty)
+        #expect(session.summary.fileCount == 1)
+        #expect(session.summary.totalAdditions == 1)
+        #expect(session.summary.totalDeletions == 1)
+        #expect(section.summary.id == DiffReviewFileID(namespace: "draft-review-request", path: path))
+        #expect(section.summary.namespace == "draft-review-request")
+        #expect(section.summary.groupID == nil)
+        #expect(section.summary.groupTitle == nil)
+        #expect(section.summary.status == .renamed)
+        #expect(section.summary.additions == 1)
+        #expect(section.summary.deletions == 1)
+        #expect(section.summary.isRenderable)
+        #expect(section.summary.originalPath == "Sources/OldA.swift")
+        #expect(section.parsedDiff?.hunks.count == 1)
+        #expect(section.displayModel?.filePath == path)
+        #expect(section.displayModel?.groups.count == 1)
+        #expect(section.placeholderMessage == nil)
+
+        section.openFile?()
+        #expect(openedPaths == [path])
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedFileID(for: path) == section.summary.id)
+        #expect(DraftReviewRequestDiffSessionBuilder.selectedPath(for: section.summary.id) == path)
+        #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: path, session: session) == section.summary.id)
+        #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == nil)
     }
 
-    @Test func buildsSelectedFileDiffDisplayPreviewKey() {
-        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
-        let rawDiff = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let value = 1
-        +let value = 2
-        """
-
-        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
-
-        #expect(key.path == file.path)
-        #expect(key.file == file)
-        #expect(key.rawDiff == rawDiff)
-    }
-
-    @Test func preparesSelectedFileDiffDisplayPreviewModelAsync() async {
-        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
-        let rawDiff = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let value = 1
-        +let value = 2
-        """
-        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
-
-        let preview = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
-
-        #expect(preview.key == key)
-        #expect(preview.parsedDiff.hunks.count == 1)
-        #expect(preview.displayModel.filePath == "Sources/A.swift")
-        #expect(preview.displayModel.groups.count == 1)
-        #expect(preview.fileExtension == "swift")
-        #expect(preview.title == "A.swift")
-        #expect(preview.directory == "Sources")
-    }
-
-    @Test @MainActor func draftReviewRequestDiffPreviewUsesSharedDiffPane() async throws {
-        let file = CommitChangedFile(path: "Sources/A.swift", originalPath: nil, status: "M", add: 1, del: 1)
-        let rawDiff = """
-        diff --git a/Sources/A.swift b/Sources/A.swift
-        index 1111111..2222222 100644
-        --- a/Sources/A.swift
-        +++ b/Sources/A.swift
-        @@ -1,1 +1,1 @@
-        -let a = 1
-        +let a = 2
-        """
-        let key = DraftReviewRequestDiffDisplayPreview.Key(path: file.path, file: file, rawDiff: rawDiff)
-        let preview = await DraftReviewRequestDiffDisplayPreview.prepare(key: key)
-        var layout = DiffLayoutMode.split
-        var wrap = false
-        var whitespace = false
-        let view = DraftReviewRequestDiffPreviewView(
-            preview: preview,
-            codeFontFamily: "",
-            codeFontSize: 13,
-            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
-            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
-            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 })
+    @Test func draftReviewRequestDiffSessionBuilderKeepsImagePlaceholderWithFileCounts() async throws {
+        let imagePath = "Assets/logo.png"
+        let textPath = "Docs/README.md"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: imagePath, originalPath: nil, status: "M", add: 12, del: 4),
+                CommitChangedFile(path: textPath, originalPath: nil, status: "A", add: 3, del: 0),
+            ],
+            diff: "",
+            fileDiffsByPath: [
+                imagePath: """
+                diff --git a/Assets/logo.png b/Assets/logo.png
+                index 1111111..2222222 100644
+                Binary files a/Assets/logo.png and b/Assets/logo.png differ
+                """,
+            ],
+            hasUncommittedChanges: false
         )
-        .environment(\.theme, try! ThemeStore().current)
 
-        let controller = NSHostingController(rootView: view)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
-        controller.view.layoutSubtreeIfNeeded()
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ in nil }
+        )
 
-        let subviews = allSubviews(of: controller.view)
-        let visiblePaneScrollViews = subviews
-            .compactMap { $0 as? DiffPaneTextScrollView }
-            .filter(isEffectivelyVisible)
-        let outerScrollViews = subviews
-            .compactMap { $0 as? NSScrollView }
-            .filter { !($0 is DiffPaneTextScrollView) }
-            .filter(isEffectivelyVisible)
-        let visibleText = visiblePaneScrollViews
-            .compactMap { $0.documentView as? NSTextView }
-            .map(\.string)
-            .joined(separator: "\n")
+        #expect(session.files.map(\.summary.path) == [imagePath, textPath])
+        #expect(session.summary.totalAdditions == 15)
+        #expect(session.summary.totalDeletions == 4)
 
-        #expect(visiblePaneScrollViews.count == 2)
-        #expect(!outerScrollViews.isEmpty)
-        #expect(visibleText.contains("let a = 1"))
-        #expect(visibleText.contains("let a = 2"))
+        let imageSection = try #require(session.files.first)
+        #expect(imageSection.summary.additions == 12)
+        #expect(imageSection.summary.deletions == 4)
+        #expect(imageSection.summary.isRenderable == false)
+        #expect(imageSection.displayModel == nil)
+        #expect(imageSection.parsedDiff?.hunks.isEmpty == true)
+        #expect(imageSection.placeholderMessage == "Image changes are not available in this review view yet.")
+
+        let textSection = try #require(session.files.last)
+        #expect(textSection.summary.additions == 3)
+        #expect(textSection.summary.deletions == 0)
+        #expect(textSection.summary.isRenderable == false)
+        #expect(textSection.displayModel == nil)
+        #expect(textSection.parsedDiff?.hunks.isEmpty == true)
+        #expect(textSection.placeholderMessage == "No text diff is available for this file.")
     }
 
     @Test func parsesGeneratedTitleAndBody() throws {
@@ -275,17 +257,16 @@ struct ReviewRequestDraftTests {
             threads: []
         )
     }
-}
 
-private func allSubviews(of view: NSView) -> [NSView] {
-    view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
-}
-
-private func isEffectivelyVisible(_ view: NSView) -> Bool {
-    var current: NSView? = view
-    while let candidate = current {
-        if candidate.isHidden { return false }
-        current = candidate.superview
+    private static func modifiedSwiftDiff(path: String) -> String {
+        """
+        diff --git a/\(path) b/\(path)
+        index 1111111..2222222 100644
+        --- a/\(path)
+        +++ b/\(path)
+        @@ -1,1 +1,1 @@
+        -let value = 1
+        +let value = 2
+        """
     }
-    return true
 }
