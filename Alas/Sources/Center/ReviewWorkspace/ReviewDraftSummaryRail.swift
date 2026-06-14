@@ -76,6 +76,22 @@ struct ReviewDraftSummaryRail: View {
             collapseButton
                 .padding(.top, 8)
             activeCountPill(compact: true)
+            collapsedActionButton(
+                id: "review-draft-summary-copy-prompt",
+                systemName: "doc.on.doc",
+                label: "Copy prompt",
+                enabled: canCopyPrompt
+            ) {
+                draftCommentActions.copyPrompt(bundle)
+            }
+            collapsedActionButton(
+                id: "review-draft-summary-send-agent",
+                systemName: "paperplane",
+                label: "Send to agent",
+                enabled: canSendToAgent
+            ) {
+                draftCommentActions.sendToAgent(bundle)
+            }
             Spacer(minLength: 0)
         }
     }
@@ -178,6 +194,37 @@ struct ReviewDraftSummaryRail: View {
             .background((activeCount > 0 ? theme.color("warn") : theme.color("fg-muted")).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: compact ? 6 : 5))
             .accessibilityLabel("\(activeCount) active draft comments")
+    }
+
+    private func collapsedActionButton(
+        id: String,
+        systemName: String,
+        label: String,
+        enabled: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            guard enabled else { return }
+            action()
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
+                .frame(width: 26, height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .help(label)
+        .accessibilityIdentifier(id)
+        .accessibilityLabel(label)
+        .background(
+            ReviewDraftSummaryPressMarker(identifier: id, label: label) {
+                guard enabled else { return }
+                action()
+            }
+        )
     }
 
     private func commentGroup(_ group: CommentGroup) -> some View {

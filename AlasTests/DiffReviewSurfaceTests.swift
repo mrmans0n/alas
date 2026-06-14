@@ -1010,6 +1010,35 @@ struct DiffReviewSurfaceTests {
         #expect(selectedDraftID == "draft-summary")
     }
 
+    @Test func surfaceCanShowDraftSummaryRailBeforeCommentsExist() throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsDraftSummaryRail: true
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1200, height: 700)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
+    }
+
     @Test func summaryRailUsesProvidedBundleForCopyAndSendActions() throws {
         let file = summary(path: "Sources/App.swift")
         let comment = draftComment(id: "draft-bundle", fileID: file.id, path: file.path, side: .new, startLine: 2)
@@ -1048,6 +1077,51 @@ struct DiffReviewSurfaceTests {
         .environment(\.theme, theme())
 
         let controller = host(view, width: 280, height: 500)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
+
+        #expect(recorder.copied == bundle)
+        #expect(recorder.sent == bundle)
+    }
+
+    @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-collapsed", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = true
+        let recorder = ReviewBundleActionRecorder()
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canCopyPrompt: true,
+                    canSendToAgent: true
+                )
+            },
+            copyPrompt: { recorder.copied = $0 },
+            sendToAgent: { recorder.sent = $0 }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 80, height: 500)
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
 

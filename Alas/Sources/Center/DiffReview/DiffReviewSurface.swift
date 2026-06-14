@@ -12,6 +12,7 @@ struct DiffReviewSurface: View {
     let codeFontSize: CGFloat
     var showsSourceBadges: Bool = true
     var showsRailDisplayControls: Bool = false
+    var showsDraftSummaryRail: Bool = false
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     var focusedFeedbackID: String? = nil
@@ -45,6 +46,7 @@ struct DiffReviewSurface: View {
         codeFontSize: CGFloat,
         showsSourceBadges: Bool = true,
         showsRailDisplayControls: Bool = false,
+        showsDraftSummaryRail: Bool = false,
         lspContextForFile: @escaping (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil },
         inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:],
         focusedFeedbackID: String? = nil,
@@ -68,6 +70,7 @@ struct DiffReviewSurface: View {
         self.codeFontSize = codeFontSize
         self.showsSourceBadges = showsSourceBadges
         self.showsRailDisplayControls = showsRailDisplayControls
+        self.showsDraftSummaryRail = showsDraftSummaryRail
         self.lspContextForFile = lspContextForFile
         self.inlineFeedbackByFileID = inlineFeedbackByFileID
         self.focusedFeedbackID = focusedFeedbackID
@@ -95,7 +98,7 @@ struct DiffReviewSurface: View {
     }
 
     private var shouldShowReviewSummaryRail: Bool {
-        allDraftComments.contains { $0.state != .dismissed }
+        showsDraftSummaryRail || allDraftComments.contains { $0.state != .dismissed }
     }
 
     private var reviewFeedbackBundle: ReviewFeedbackBundle {
