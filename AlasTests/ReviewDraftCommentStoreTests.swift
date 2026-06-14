@@ -4,6 +4,63 @@ import Testing
 
 @Suite("Review draft comment store")
 struct ReviewDraftCommentStoreTests {
+    @Test @MainActor func controllerAddsEditsDeletesAndResolvesComments() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("review-draft-comments.json")
+        let store = ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: session,
+            store: store,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        let anchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .new,
+            line: 42,
+            rowIndex: 3,
+            selectedText: "let value = 1"
+        )
+        let fileID = DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift")
+
+        try controller.load()
+        #expect(controller.comments.isEmpty)
+
+        try controller.add(anchor: anchor, fileID: fileID, bodyMarkdown: "Please revisit this.")
+        let added = try #require(controller.comments.single)
+        #expect(added.sessionID == session)
+        #expect(added.fileID == fileID)
+        #expect(added.path == "Sources/App.swift")
+        #expect(added.originalPath == nil)
+        #expect(added.side == .new)
+        #expect(added.startLine == 42)
+        #expect(added.endLine == nil)
+        #expect(added.selectedText == "let value = 1")
+        #expect(added.bodyMarkdown == "Please revisit this.")
+        #expect(added.state == .active)
+        #expect(added.createdAt == Date(timeIntervalSince1970: 100))
+        #expect(added.updatedAt == Date(timeIntervalSince1970: 100))
+        #expect(try store.load(sessionID: session).single?.id == added.id)
+
+        try controller.edit(commentID: added.id, bodyMarkdown: "Updated")
+        #expect(controller.comments.single?.bodyMarkdown == "Updated")
+        #expect(try store.load(sessionID: session).single?.bodyMarkdown == "Updated")
+
+        try controller.resolve(commentID: added.id)
+        #expect(controller.comments.single?.state == .resolved)
+        #expect(try store.load(sessionID: session).single?.state == .resolved)
+
+        try controller.delete(commentID: added.id)
+        #expect(controller.comments.isEmpty)
+        #expect(try store.load(sessionID: session).isEmpty)
+        #expect(controller.errorMessage == nil)
+    }
+
     @Test func savesLoadsAndDeletesCommentsBySession() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

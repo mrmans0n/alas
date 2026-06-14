@@ -4,6 +4,7 @@ struct DiffReviewSurface: View {
     let session: DiffReviewLoadedSession
     @Binding var selectedFileID: DiffReviewFileID?
     @Binding var railCollapsed: Bool
+    @Binding var reviewSummaryCollapsed: Bool
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -32,8 +33,95 @@ struct DiffReviewSurface: View {
 
     private static let scrollCoordinateSpace = "diff-review-scroll"
 
+    init(
+        session: DiffReviewLoadedSession,
+        selectedFileID: Binding<DiffReviewFileID?>,
+        railCollapsed: Binding<Bool>,
+        reviewSummaryCollapsed: Binding<Bool> = .constant(false),
+        layoutMode: Binding<DiffLayoutMode>,
+        wrapLines: Binding<Bool>,
+        showWhitespace: Binding<Bool>,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        showsSourceBadges: Bool = true,
+        showsRailDisplayControls: Bool = false,
+        lspContextForFile: @escaping (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil },
+        inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:],
+        focusedFeedbackID: String? = nil,
+        inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil,
+        inlineFeedbackActions: DiffReviewInlineFeedbackActions = DiffReviewInlineFeedbackActions(),
+        onSelectInlineFeedback: @escaping (DiffReviewInlineFeedback) -> Void = { _ in },
+        draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:],
+        focusedDraftCommentID: String? = nil,
+        draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
+        onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
+        onSaveDraftComment: @escaping (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    ) {
+        self.session = session
+        self._selectedFileID = selectedFileID
+        self._railCollapsed = railCollapsed
+        self._reviewSummaryCollapsed = reviewSummaryCollapsed
+        self._layoutMode = layoutMode
+        self._wrapLines = wrapLines
+        self._showWhitespace = showWhitespace
+        self.codeFontFamily = codeFontFamily
+        self.codeFontSize = codeFontSize
+        self.showsSourceBadges = showsSourceBadges
+        self.showsRailDisplayControls = showsRailDisplayControls
+        self.lspContextForFile = lspContextForFile
+        self.inlineFeedbackByFileID = inlineFeedbackByFileID
+        self.focusedFeedbackID = focusedFeedbackID
+        self.inlineFeedbackScrollCommand = inlineFeedbackScrollCommand
+        self.inlineFeedbackActions = inlineFeedbackActions
+        self.onSelectInlineFeedback = onSelectInlineFeedback
+        self.draftCommentsByFileID = draftCommentsByFileID
+        self.focusedDraftCommentID = focusedDraftCommentID
+        self.draftCommentActions = draftCommentActions
+        self.onSelectDraftComment = onSelectDraftComment
+        self.onSaveDraftComment = onSaveDraftComment
+    }
+
     private var fileIDs: [DiffReviewFileID] {
         session.summary.files.map(\.id)
+    }
+
+    private var allDraftComments: [ReviewDraftComment] {
+        let commentsForSessionFiles = session.summary.files.flatMap { draftCommentsByFileID[$0.id] ?? [] }
+        let sessionFileIDs = Set(session.summary.files.map(\.id))
+        let orphanComments = draftCommentsByFileID
+            .filter { !sessionFileIDs.contains($0.key) }
+            .flatMap(\.value)
+        return ReviewDraftCommentPlacement.sorted(commentsForSessionFiles + orphanComments)
+    }
+
+    private var shouldShowReviewSummaryRail: Bool {
+        allDraftComments.contains { $0.state != .dismissed }
+    }
+
+    private var reviewFeedbackBundle: ReviewFeedbackBundle {
+        ReviewFeedbackBundle(target: reviewFeedbackTarget, comments: allDraftComments)
+    }
+
+    private var reviewFeedbackTarget: ReviewFeedbackTarget {
+        ReviewFeedbackTarget(
+            title: reviewFeedbackTargetTitle,
+            repositoryPath: nil,
+            providerDescription: nil,
+            sourceDescription: reviewFeedbackSourceDescription
+        )
+    }
+
+    private var reviewFeedbackTargetTitle: String {
+        if session.summary.files.count == 1, let path = session.summary.files.first?.path {
+            return path
+        }
+        return "\(session.summary.fileCount) changed \(session.summary.fileCount == 1 ? "file" : "files")"
+    }
+
+    private var reviewFeedbackSourceDescription: String {
+        let sources = Set(session.summary.files.map { $0.groupTitle ?? $0.groupID ?? $0.namespace })
+        let sortedSources = sources.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return sortedSources.isEmpty ? "Diff review" : sortedSources.joined(separator: ", ")
     }
 
     private var fileSetKey: String {
@@ -77,6 +165,16 @@ struct DiffReviewSurface: View {
                 onSelectFile: scrollToFile
             )
             mainReviewStream(session, firstFileID: firstFileID)
+            if shouldShowReviewSummaryRail {
+                ReviewDraftSummaryRail(
+                    comments: allDraftComments,
+                    bundle: reviewFeedbackBundle,
+                    collapsed: $reviewSummaryCollapsed,
+                    focusedDraftCommentID: focusedDraftCommentID,
+                    draftCommentActions: draftCommentActions,
+                    onSelectDraftComment: onSelectDraftComment
+                )
+            }
         }
     }
 
