@@ -19,7 +19,6 @@ struct DraftReviewRequestTabView: View {
     @State private var loadedContextKey: String?
     @State private var draftReviewSession: DiffReviewLoadedSession?
     @State private var selectedFileID: DiffReviewFileID?
-    @State private var syncingLoadedSelection = false
     @State private var railCollapsed = false
     @State private var generation: Task<Void, Never>? = nil
 
@@ -83,7 +82,6 @@ struct DraftReviewRequestTabView: View {
             persist(selectedPath: new)
         }
         .onChange(of: selectedFileID) { _, new in
-            guard !syncingLoadedSelection else { return }
             let path = DraftReviewRequestDiffSessionBuilder.selectedPath(for: new)
             guard selectedPath != path else { return }
             selectedPath = path
@@ -459,9 +457,6 @@ struct DraftReviewRequestTabView: View {
         loadingContext = true
         context = nil
         draftReviewSession = nil
-        syncingLoadedSelection = true
-        selectedFileID = nil
-        syncingLoadedSelection = false
         loadedContextKey = nil
         warning = nil
         error = nil
@@ -500,12 +495,10 @@ struct DraftReviewRequestTabView: View {
             context = loaded
             loadedContextKey = key
             draftReviewSession = session
-            syncingLoadedSelection = true
             selectedFileID = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
                 selectedPath: selectedPath,
                 session: session
             )
-            syncingLoadedSelection = false
             selectedPath = DraftReviewRequestDiffSessionBuilder.selectedPath(for: selectedFileID)
             warning = loaded.hasUncommittedChanges
                 ? "Uncommitted changes are present but excluded from this \(tabState.provider.reviewRequestLabel)."
