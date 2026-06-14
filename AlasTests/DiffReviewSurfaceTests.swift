@@ -526,6 +526,76 @@ struct DiffReviewSurfaceTests {
         #expect(segments.items[1].draftComments.map(\.id) == ["draft-second"])
     }
 
+    @Test func localDraftCommentsOnCollapsedRowsAttachToCollapsedParent() throws {
+        let hiddenLine = diffLine(
+            id: "hidden-new",
+            side: .new,
+            newLine: 12,
+            text: "let hidden = true"
+        )
+        let collapsedParent = DiffDisplayRow(
+            id: "collapsed-parent",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: 1,
+            collapsedRows: [
+                DiffDisplayRow(
+                    id: "hidden-row",
+                    kind: .context,
+                    old: nil,
+                    new: hiddenLine,
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -10,3 +10,3 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [collapsedParent]
+        )
+        let comment = draftComment(id: "draft-collapsed", path: "A.swift", side: .new, startLine: 12)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(placement.fileLevel.isEmpty)
+        #expect(placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .new, line: 12)]?.map(\.id) == ["draft-collapsed"])
+        #expect(segments.items.count == 1)
+        #expect(segments.items[0].rows.map(\.id) == ["collapsed-parent"])
+        #expect(segments.items[0].draftComments.map(\.id) == ["draft-collapsed"])
+    }
+
+    @Test func draftPlacementIndexesCollapsedChildRows() {
+        let line = diffLine(id: "old-hidden", side: .old, oldLine: 7, text: "let old = true")
+        let row = DiffDisplayRow(
+            id: "collapsed-parent",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: 1,
+            collapsedRows: [
+                DiffDisplayRow(
+                    id: "old-hidden-row",
+                    kind: .context,
+                    old: line,
+                    new: nil,
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+
+        #expect(ReviewDraftCommentPlacement.visibleRowKeys(in: row).isEmpty)
+        #expect(ReviewDraftCommentPlacement.allRowKeys(in: row) == [
+            ReviewDraftCommentPlacement.RowKey(side: .old, line: 7),
+        ])
+    }
+
     @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -1142,6 +1212,31 @@ struct DiffReviewSurfaceTests {
             state: state,
             createdAt: Date(timeIntervalSince1970: 1),
             updatedAt: Date(timeIntervalSince1970: 2)
+        )
+    }
+
+    private func diffLine(
+        id: String,
+        side: DiffLineSide,
+        oldLine: Int? = nil,
+        newLine: Int? = nil,
+        text: String
+    ) -> DiffDisplayLine {
+        DiffDisplayLine(
+            id: id,
+            anchor: DiffLineAnchor(
+                filePath: "A.swift",
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: side,
+                oldLine: oldLine,
+                newLine: newLine
+            ),
+            text: text,
+            lineNumber: oldLine ?? newLine,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
         )
     }
 

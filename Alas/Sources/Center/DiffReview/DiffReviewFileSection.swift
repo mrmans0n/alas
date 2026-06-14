@@ -44,6 +44,9 @@ struct DiffReviewFileSection: View {
                 label: file.summary.path
             )
         )
+        .onChange(of: draftCommentDisplaySignature) { _, _ in
+            clearPendingDraft()
+        }
     }
 
     private var header: some View {
@@ -338,8 +341,7 @@ struct DiffReviewFileSection: View {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
                 Button("Cancel") {
-                    pendingDraftAnchor = nil
-                    pendingDraftBody = ""
+                    clearPendingDraft()
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 10, weight: .semibold))
@@ -379,10 +381,41 @@ struct DiffReviewFileSection: View {
         guard let pendingDraftAnchor else { return }
         let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
+        guard currentDraftRowKeys.contains(ReviewDraftCommentPlacement.RowKey(
+            side: pendingDraftAnchor.side,
+            line: pendingDraftAnchor.line
+        )) else {
+            clearPendingDraft()
+            return
+        }
 
         onSaveDraftComment(pendingDraftAnchor, body)
-        self.pendingDraftAnchor = nil
+        clearPendingDraft()
+    }
+
+    private func clearPendingDraft() {
+        pendingDraftAnchor = nil
         pendingDraftBody = ""
+    }
+
+    private var currentDraftRowKeys: Set<ReviewDraftCommentPlacement.RowKey> {
+        guard let displayModel = file.displayModel else { return [] }
+        return Set(displayModel.groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
+    }
+
+    private var draftCommentDisplaySignature: String {
+        let groupSignature = file.displayModel?.groups.map { group in
+            let rowSignature = group.rows.map { row in
+                [
+                    row.id,
+                    row.old?.lineNumber.map { "o\($0)" } ?? "o-",
+                    row.new?.lineNumber.map { "n\($0)" } ?? "n-",
+                    "\(row.collapsedRows.count)",
+                ].joined(separator: ":")
+            }.joined(separator: ",")
+            return "\(group.id)[\(rowSignature)]"
+        }.joined(separator: "|") ?? "placeholder"
+        return "\(file.id.rawValue)|\(groupSignature)"
     }
 
     @ViewBuilder
@@ -446,7 +479,7 @@ enum ReviewDraftCommentPlacement {
         _ comments: [ReviewDraftComment],
         in groups: [DiffDisplayGroup]
     ) -> Result {
-        let visibleKeys = Set(groups.flatMap(visibleRowKeys))
+        let visibleKeys = Set(groups.flatMap(allRowKeys))
         var fileLevel: [ReviewDraftComment] = []
         var byRowAnchor: [RowKey: [ReviewDraftComment]] = [:]
 
@@ -471,6 +504,10 @@ enum ReviewDraftCommentPlacement {
         }
     }
 
+    static func allRowKeys(in group: DiffDisplayGroup) -> [RowKey] {
+        group.rows.flatMap(allRowKeys)
+    }
+
     static func visibleRowKeys(in row: DiffDisplayRow) -> [RowKey] {
         var keys: [RowKey] = []
         if let oldLine = row.old?.lineNumber {
@@ -480,6 +517,10 @@ enum ReviewDraftCommentPlacement {
             keys.append(RowKey(side: .new, line: newLine))
         }
         return keys
+    }
+
+    static func allRowKeys(in row: DiffDisplayRow) -> [RowKey] {
+        visibleRowKeys(in: row) + row.collapsedRows.flatMap(allRowKeys)
     }
 
     static func sorted(_ comments: [ReviewDraftComment]) -> [ReviewDraftComment] {
@@ -530,7 +571,7 @@ enum ReviewDraftCommentRowSegmentation {
 
         for row in group.rows {
             bufferedRows.append(row)
-            let keys = ReviewDraftCommentPlacement.visibleRowKeys(in: row)
+            let keys = ReviewDraftCommentPlacement.allRowKeys(in: row)
             let comments = ReviewDraftCommentPlacement.sorted(keys.flatMap { placement.byRowAnchor[$0] ?? [] })
             let showsComposer = pendingKey.map { keys.contains($0) } ?? false
             guard !comments.isEmpty || showsComposer else { continue }
