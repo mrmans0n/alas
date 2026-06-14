@@ -6,6 +6,21 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CommitTabViewTests {
+    @Test func commitReviewDraftSessionIDUsesCommitSHA() {
+        let sessionID = CommitReviewBody.reviewDraftSessionID(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abc"
+        )
+
+        #expect(sessionID == ReviewDraftSessionID.commit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abc"
+        ))
+        #expect(sessionID.sourceKind == .commit)
+    }
+
     @Test func commitReviewBodyHostsReviewSurfaceWithoutSourceBadges() {
         let file = summary(path: "Sources/App.swift")
         let session = DiffReviewLoadedSession(

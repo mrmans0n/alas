@@ -123,6 +123,7 @@ struct DiffReviewFileSection: View {
                         actions: draftCommentActions,
                         onSelect: onSelectDraftComment
                     )
+                    .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
                 }
             }
             .padding(.horizontal, 14)

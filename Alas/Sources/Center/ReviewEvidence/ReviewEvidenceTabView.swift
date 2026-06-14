@@ -85,6 +85,12 @@ struct ReviewEvidenceTabView: View {
     @State private var focusedFeedbackID: String?
     @State private var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
     @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
+    @State private var reviewSummaryCollapsed = false
+    @State private var draftCommentController: ReviewDraftCommentController?
+    @State private var loadedDraftSessionID: ReviewDraftSessionID?
+    @State private var focusedDraftCommentID: String?
+    @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
+    @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
 
     @Environment(\.theme) private var theme
 
@@ -184,9 +190,38 @@ struct ReviewEvidenceTabView: View {
         .task(id: loadKey) {
             await loadEvidence()
         }
+        .task(id: reviewDraftSessionID.rawValue) {
+            loadDraftCommentController()
+        }
         .onChange(of: tabState.selectedSection) { _, section in
             applySelectedSection(section, loadDetail: true)
         }
+    }
+
+    static func reviewDraftSessionID(
+        worktreeID: String,
+        provider: CodeHostKind,
+        host: String,
+        repositorySlug: String,
+        number: Int
+    ) -> ReviewDraftSessionID {
+        ReviewDraftSessionID.reviewRequest(
+            worktreeID: worktreeID,
+            provider: provider,
+            host: host,
+            repositorySlug: repositorySlug,
+            number: number
+        )
+    }
+
+    private var reviewDraftSessionID: ReviewDraftSessionID {
+        Self.reviewDraftSessionID(
+            worktreeID: tabState.worktreeId,
+            provider: snapshotProvider,
+            host: snapshot?.remote?.host ?? tabState.url.host ?? "",
+            repositorySlug: snapshot?.remote?.repositorySlug ?? tabState.repositorySlug,
+            number: snapshot?.reviewRequest?.number ?? tabState.number
+        )
     }
 
     @ViewBuilder
@@ -384,6 +419,7 @@ struct ReviewEvidenceTabView: View {
                     session: session,
                     selectedFileID: $selectedFileID,
                     railCollapsed: $railCollapsed,
+                    reviewSummaryCollapsed: $reviewSummaryCollapsed,
                     layoutMode: diffPreferences.layoutMode,
                     wrapLines: diffPreferences.wrapLines,
                     showWhitespace: diffPreferences.showWhitespace,
@@ -391,11 +427,21 @@ struct ReviewEvidenceTabView: View {
                     codeFontSize: CGFloat(appState.config.code.fontSize),
                     showsSourceBadges: true,
                     showsRailDisplayControls: true,
+                    showsDraftSummaryRail: true,
                     inlineFeedbackByFileID: inlineFeedbackByFileID,
                     focusedFeedbackID: focusedFeedbackID,
                     inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
                     inlineFeedbackActions: inlineFeedbackActions(),
-                    onSelectInlineFeedback: selectInlineFeedback
+                    onSelectInlineFeedback: selectInlineFeedback,
+                    reviewFeedbackTarget: reviewFeedbackTarget,
+                    draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
+                    focusedDraftCommentID: focusedDraftCommentID,
+                    draftCommentScrollCommand: draftCommentScrollCommand,
+                    draftCommentActions: draftCommentActions(),
+                    onSelectDraftComment: selectDraftComment,
+                    onSaveDraftComment: { fileID, anchor, body in
+                        saveDraftComment(fileID: fileID, anchor: anchor, body: body)
+                    }
                 )
             } else {
                 filesEmptyState
@@ -620,6 +666,8 @@ struct ReviewEvidenceTabView: View {
         focusedFeedbackID = nil
         inlineFeedbackScrollCommand = nil
         inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
+        focusedDraftCommentID = nil
+        draftCommentScrollCommand = nil
         let loaded = ReviewEvidenceModel(
             snapshot: snapshot,
             provider: provider,
@@ -647,6 +695,7 @@ struct ReviewEvidenceTabView: View {
             selectedItemID = loaded.selectedItemID
         }
         persistSelection(section: selectedSection, itemID: selectedItemID)
+        loadDraftCommentController()
         guard selectedItemID != nil else { return }
         await loaded.loadSelectedDetail()
     }
@@ -851,6 +900,7 @@ struct ReviewEvidenceTabView: View {
 
     private func selectInlineFeedback(_ feedback: DiffReviewInlineFeedback) {
         focusedFeedbackID = feedback.id
+        focusedDraftCommentID = nil
         if let model,
            model.feedbackItems.contains(where: { $0.id == feedback.evidenceItemID }) {
             model.select(itemID: feedback.evidenceItemID, section: .feedback)
@@ -935,6 +985,60 @@ struct ReviewEvidenceTabView: View {
                 )
             }
         )
+    }
+
+    private var reviewFeedbackTarget: ReviewFeedbackTarget {
+        ReviewFeedbackTarget(
+            title: requestTitle,
+            repositoryPath: worktreePath.path,
+            providerDescription: identityTitle,
+            sourceDescription: "Review evidence files"
+        )
+    }
+
+    private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
+        ReviewFeedbackAgentSender.production(appState: appState, worktreeID: tabState.worktreeId)
+    }
+
+    private func loadDraftCommentController() {
+        let sessionID = reviewDraftSessionID
+        if loadedDraftSessionID != sessionID {
+            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            loadedDraftSessionID = sessionID
+            focusedDraftCommentID = nil
+            draftCommentScrollCommand = nil
+        }
+        do {
+            try draftCommentController?.load()
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
+        }
+    }
+
+    private func draftCommentActions() -> ReviewDraftCommentActions {
+        ReviewDraftWorkspaceActions.make(
+            controller: draftCommentController,
+            sender: reviewFeedbackAgentSender
+        )
+    }
+
+    private func selectDraftComment(_ comment: ReviewDraftComment) {
+        focusedDraftCommentID = comment.id
+        focusedFeedbackID = nil
+        selectedSection = .files
+        selectedFileID = comment.fileID
+        draftCommentScrollCommand = draftCommentScrollController.command(
+            commentID: comment.id,
+            fileID: comment.fileID
+        )
+    }
+
+    private func saveDraftComment(fileID: DiffReviewFileID, anchor: DiffReviewLineAnchor, body: String) {
+        do {
+            try draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
+        }
     }
 
     private func statusDot(for status: ReviewEvidenceStatus) -> some View {

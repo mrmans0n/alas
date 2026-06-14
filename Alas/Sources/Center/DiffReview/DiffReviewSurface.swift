@@ -19,11 +19,13 @@ struct DiffReviewSurface: View {
     var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil
     var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
     var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
+    var reviewFeedbackTargetOverride: ReviewFeedbackTarget? = nil
     var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
     var focusedDraftCommentID: String? = nil
+    var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
-    var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var onSaveDraftComment: (DiffReviewFileID, DiffReviewLineAnchor, String) -> Void = { _, _, _ in }
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -53,11 +55,13 @@ struct DiffReviewSurface: View {
         inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil,
         inlineFeedbackActions: DiffReviewInlineFeedbackActions = DiffReviewInlineFeedbackActions(),
         onSelectInlineFeedback: @escaping (DiffReviewInlineFeedback) -> Void = { _ in },
+        reviewFeedbackTarget: ReviewFeedbackTarget? = nil,
         draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:],
         focusedDraftCommentID: String? = nil,
+        draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil,
         draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
-        onSaveDraftComment: @escaping (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+        onSaveDraftComment: @escaping (DiffReviewFileID, DiffReviewLineAnchor, String) -> Void = { _, _, _ in }
     ) {
         self.session = session
         self._selectedFileID = selectedFileID
@@ -77,8 +81,10 @@ struct DiffReviewSurface: View {
         self.inlineFeedbackScrollCommand = inlineFeedbackScrollCommand
         self.inlineFeedbackActions = inlineFeedbackActions
         self.onSelectInlineFeedback = onSelectInlineFeedback
+        self.reviewFeedbackTargetOverride = reviewFeedbackTarget
         self.draftCommentsByFileID = draftCommentsByFileID
         self.focusedDraftCommentID = focusedDraftCommentID
+        self.draftCommentScrollCommand = draftCommentScrollCommand
         self.draftCommentActions = draftCommentActions
         self.onSelectDraftComment = onSelectDraftComment
         self.onSaveDraftComment = onSaveDraftComment
@@ -102,11 +108,14 @@ struct DiffReviewSurface: View {
     }
 
     private var reviewFeedbackBundle: ReviewFeedbackBundle {
-        ReviewFeedbackBundle(target: reviewFeedbackTarget, comments: allDraftComments)
+        ReviewFeedbackBundle(target: effectiveReviewFeedbackTarget, comments: allDraftComments)
     }
 
-    private var reviewFeedbackTarget: ReviewFeedbackTarget {
-        ReviewFeedbackTarget(
+    private var effectiveReviewFeedbackTarget: ReviewFeedbackTarget {
+        if let reviewFeedbackTargetOverride {
+            return reviewFeedbackTargetOverride
+        }
+        return ReviewFeedbackTarget(
             title: reviewFeedbackTargetTitle,
             repositoryPath: nil,
             providerDescription: nil,
@@ -222,14 +231,24 @@ struct DiffReviewSurface: View {
                             consumed: command
                         )
                     }
-                    guard let command = inlineFeedbackScrollCommand else { return }
-                    Task { @MainActor in
-                        scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
+                    if let command = inlineFeedbackScrollCommand {
+                        Task { @MainActor in
+                            scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
+                        }
+                    }
+                    if let draftCommand = draftCommentScrollCommand {
+                        Task { @MainActor in
+                            scrollToDraftComment(draftCommand, scrollProxy: scrollProxy, animated: false)
+                        }
                     }
                 }
                 .onChange(of: inlineFeedbackScrollCommand) { _, command in
                     guard let command else { return }
                     scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: true)
+                }
+                .onChange(of: draftCommentScrollCommand) { _, command in
+                    guard let command else { return }
+                    scrollToDraftComment(command, scrollProxy: scrollProxy, animated: true)
                 }
             }
         }
@@ -259,7 +278,9 @@ struct DiffReviewSurface: View {
                 onSelectInlineFeedback: onSelectInlineFeedback,
                 draftCommentActions: draftCommentActions,
                 onSelectDraftComment: onSelectDraftComment,
-                onSaveDraftComment: onSaveDraftComment
+                onSaveDraftComment: { anchor, body in
+                    onSaveDraftComment(file.id, anchor, body)
+                }
             )
         } else {
             DiffReviewFileSectionPlaceholder(
@@ -284,8 +305,31 @@ struct DiffReviewSurface: View {
         return command.feedbackID
     }
 
+    private func draftCommentScrollTargetID(for fileID: DiffReviewFileID) -> String? {
+        guard let command = draftCommentScrollCommand,
+              command.fileID == fileID
+        else { return nil }
+
+        return command.commentID
+    }
+
     private func scrollToInlineFeedback(
         _ command: DiffReviewInlineFeedbackScrollCommand,
+        scrollProxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        selectedFileID = command.fileID
+        if animated {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                scrollProxy.scrollTo(command.targetID, anchor: .center)
+            }
+        } else {
+            scrollProxy.scrollTo(command.targetID, anchor: .center)
+        }
+    }
+
+    private func scrollToDraftComment(
+        _ command: DiffReviewDraftCommentScrollCommand,
         scrollProxy: ScrollViewProxy,
         animated: Bool
     ) {
@@ -307,7 +351,8 @@ struct DiffReviewSurface: View {
             selectedFileID: selectedFileID,
             programmaticTarget: DiffReviewSurfaceSelectionSync.renderedTargetFileID(
                 fileScrollTarget: programmaticScroll.target,
-                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand
+                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
+                draftCommentScrollCommand: draftCommentScrollCommand
             ),
             firstFileID: firstFileID
         )
@@ -351,7 +396,8 @@ struct DiffReviewSurface: View {
             selectedFileID: selectedFileID,
             programmaticTarget: DiffReviewSurfaceSelectionSync.renderedTargetFileID(
                 fileScrollTarget: programmaticScroll.target,
-                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand
+                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
+                draftCommentScrollCommand: draftCommentScrollCommand
             ),
             firstFileID: firstFileID
         )
@@ -428,7 +474,19 @@ enum DiffReviewSurfaceSelectionSync {
         fileScrollTarget: DiffReviewFileID?,
         inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
     ) -> DiffReviewFileID? {
-        inlineFeedbackScrollCommand?.fileID ?? fileScrollTarget
+        renderedTargetFileID(
+            fileScrollTarget: fileScrollTarget,
+            inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
+            draftCommentScrollCommand: nil
+        )
+    }
+
+    static func renderedTargetFileID(
+        fileScrollTarget: DiffReviewFileID?,
+        inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?,
+        draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
+    ) -> DiffReviewFileID? {
+        draftCommentScrollCommand?.fileID ?? inlineFeedbackScrollCommand?.fileID ?? fileScrollTarget
     }
 
     static func synchronize(

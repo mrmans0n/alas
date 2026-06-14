@@ -913,6 +913,7 @@
 		DF8CAD5714483408B8BD72F7 /* GitService+Discard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90817EC3BAA727EF6D9FBD97 /* GitService+Discard.swift */; };
 		DF93C8550C7A78C2A03CF56A /* ReviewEvidenceModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FF257B37B6E9EA4D97C67D4 /* ReviewEvidenceModel.swift */; };
 		E0AA2F46C6E53C547FEB6495 /* ClaudeCodeACPInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2FAABB50C8BE2321A1B1DD /* ClaudeCodeACPInstallerTests.swift */; };
+		E0F4EFE612252BDD7F999A70 /* ReviewFeedbackAgentSender.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56E964C72322223859CC6AF8 /* ReviewFeedbackAgentSender.swift */; };
 		E175AE346DFAD0B62827C921 /* ProjectPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CE948F94DB2759E66CD4DEF /* ProjectPicker.swift */; };
 		E1DA1C6BF9D5E157DAF6EE00 /* ClaudeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6016A3CF87F34222C533D350 /* ClaudeInstallerTests.swift */; };
 		E1E4C11CC5BFF761DF397507 /* ACPToolCallContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54897710493742A6DFD6ABF3 /* ACPToolCallContentTests.swift */; };
@@ -1402,6 +1403,7 @@
 		56780EE994E2CA14A3ABBA7B /* MergeActionGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeActionGutter.swift; sourceTree = "<group>"; };
 		56BF141F589820AA91674BD0 /* TreeSitterJavaScript */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TreeSitterJavaScript; path = ThirdParty/TreeSitterJavaScript; sourceTree = SOURCE_ROOT; };
 		56D1AC9E1E00C3C5C234382C /* TouchTargetSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchTargetSmokeTests.swift; sourceTree = "<group>"; };
+		56E964C72322223859CC6AF8 /* ReviewFeedbackAgentSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewFeedbackAgentSender.swift; sourceTree = "<group>"; };
 		5733BF1C52BA0FCFB2724D57 /* ACPQueuedBubbleActionMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPQueuedBubbleActionMetricsTests.swift; sourceTree = "<group>"; };
 		576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsAheadTests.swift; sourceTree = "<group>"; };
 		57713D7143CFD53124E0523F /* AlasHookCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasHookCommand.swift; sourceTree = "<group>"; };
@@ -3661,6 +3663,7 @@
 				B10E5AB5D726C40331681709 /* ReviewDraftCommentStore.swift */,
 				BFA871B5464E4F9D3350851B /* ReviewDraftModels.swift */,
 				C432B6C03738D6ACB4293471 /* ReviewDraftSummaryRail.swift */,
+				56E964C72322223859CC6AF8 /* ReviewFeedbackAgentSender.swift */,
 				B0886F9B3096AC1264E3D337 /* ReviewFeedbackBundle.swift */,
 			);
 			path = ReviewWorkspace;
@@ -4574,6 +4577,7 @@
 				77CDD88F7C517095DE580B50 /* ReviewEvidence.swift in Sources */,
 				DF93C8550C7A78C2A03CF56A /* ReviewEvidenceModel.swift in Sources */,
 				8617CC447747E25550D93CFF /* ReviewEvidenceTabView.swift in Sources */,
+				E0F4EFE612252BDD7F999A70 /* ReviewFeedbackAgentSender.swift in Sources */,
 				D27A85DE79B3B62C6F91174A /* ReviewFeedbackBundle.swift in Sources */,
 				DB29057E7147A0774BC2B835 /* ReviewLoopDrawer.swift in Sources */,
 				877BEC66CEBB5C495536FA20 /* ReviewLoopHandoffBuilder.swift in Sources */,

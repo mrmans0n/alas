@@ -16,23 +16,23 @@ struct ReviewDraftCommentActionAvailability: Equatable, Sendable {
     )
 }
 
-struct ReviewDraftCommentActions: Sendable {
-    var availability: @Sendable (ReviewDraftComment) -> ReviewDraftCommentActionAvailability
-    var edit: @Sendable (ReviewDraftComment) -> Void
-    var delete: @Sendable (ReviewDraftComment) -> Void
-    var resolve: @Sendable (ReviewDraftComment) -> Void
-    var dismiss: @Sendable (ReviewDraftComment) -> Void
-    var copyPrompt: @Sendable (ReviewFeedbackBundle) -> Void
-    var sendToAgent: @Sendable (ReviewFeedbackBundle) -> Void
+struct ReviewDraftCommentActions {
+    var availability: (ReviewDraftComment) -> ReviewDraftCommentActionAvailability
+    var edit: (ReviewDraftComment) -> Void
+    var delete: (ReviewDraftComment) -> Void
+    var resolve: (ReviewDraftComment) -> Void
+    var dismiss: (ReviewDraftComment) -> Void
+    var copyPrompt: (ReviewFeedbackBundle) -> Void
+    var sendToAgent: (ReviewFeedbackBundle) -> Void
 
     init(
-        availability: @escaping @Sendable (ReviewDraftComment) -> ReviewDraftCommentActionAvailability = { _ in .none },
-        edit: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
-        delete: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
-        resolve: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
-        dismiss: @escaping @Sendable (ReviewDraftComment) -> Void = { _ in },
-        copyPrompt: @escaping @Sendable (ReviewFeedbackBundle) -> Void = { _ in },
-        sendToAgent: @escaping @Sendable (ReviewFeedbackBundle) -> Void = { _ in }
+        availability: @escaping (ReviewDraftComment) -> ReviewDraftCommentActionAvailability = { _ in .none },
+        edit: @escaping (ReviewDraftComment) -> Void = { _ in },
+        delete: @escaping (ReviewDraftComment) -> Void = { _ in },
+        resolve: @escaping (ReviewDraftComment) -> Void = { _ in },
+        dismiss: @escaping (ReviewDraftComment) -> Void = { _ in },
+        copyPrompt: @escaping (ReviewFeedbackBundle) -> Void = { _ in },
+        sendToAgent: @escaping (ReviewFeedbackBundle) -> Void = { _ in }
     ) {
         self.availability = availability
         self.edit = edit

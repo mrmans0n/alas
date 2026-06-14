@@ -5,6 +5,110 @@ import Testing
 @testable import Alas
 
 struct ReviewRequestDraftTests {
+    @Test func draftReviewRequestDraftSessionIDUsesBaseAndHeadBranches() {
+        let sessionID = DraftReviewRequestTabView.reviewDraftSessionID(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            base: "main",
+            head: "feature"
+        )
+
+        #expect(sessionID == ReviewDraftSessionID.draftReviewRequest(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            base: "main",
+            head: "feature"
+        ))
+        #expect(sessionID.sourceKind == .draftReviewRequest)
+    }
+
+    @Test @MainActor func selectingDraftSummaryCommentFocusesAndSelectsFile() async throws {
+        let path = "Sources/A.swift"
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: path, originalPath: nil, status: "M", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: path),
+            fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
+            hasUncommittedChanges: false
+        )
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ -> (() -> Void)? in nil }
+        )
+        let fileID = DiffReviewFileID(namespace: "draft-review-request", path: path)
+        let comment = ReviewDraftComment(
+            id: "draft-1",
+            sessionID: .draftReviewRequest(
+                worktreeID: "wt",
+                repositoryPath: URL(fileURLWithPath: "/repo"),
+                base: "main",
+                head: "feature"
+            ),
+            fileID: fileID,
+            path: path,
+            originalPath: nil,
+            side: .new,
+            startLine: 1,
+            endLine: nil,
+            selectedText: "let value = 2",
+            bodyMarkdown: "Prefer a named constant.",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        var selectedFileID: DiffReviewFileID?
+        var focusedDraftCommentID: String?
+        var draftScrollCommand: DiffReviewDraftCommentScrollCommand?
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layoutMode = DiffLayoutMode.split
+        var wrapLines = false
+        var showWhitespace = false
+        var scrollController = DiffReviewDraftCommentScrollController()
+
+        func makeView() -> some View {
+            DiffReviewSurface(
+                session: session,
+                selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+                railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+                reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+                layoutMode: Binding(get: { layoutMode }, set: { layoutMode = $0 }),
+                wrapLines: Binding(get: { wrapLines }, set: { wrapLines = $0 }),
+                showWhitespace: Binding(get: { showWhitespace }, set: { showWhitespace = $0 }),
+                codeFontFamily: "",
+                codeFontSize: 13,
+                showsDraftSummaryRail: true,
+                draftCommentsByFileID: [fileID: [comment]],
+                focusedDraftCommentID: focusedDraftCommentID,
+                draftCommentScrollCommand: draftScrollCommand,
+                onSelectDraftComment: { selected in
+                    focusedDraftCommentID = selected.id
+                    selectedFileID = selected.fileID
+                    draftScrollCommand = scrollController.command(commentID: selected.id, fileID: selected.fileID)
+                }
+            )
+            .environment(\.theme, theme())
+        }
+
+        let controller = host(makeView(), width: 1100, height: 720)
+        await Task.yield()
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-comment-draft-1", in: controller.view))
+        controller.rootView = makeView()
+        await Task.yield()
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(selectedFileID == fileID)
+        #expect(focusedDraftCommentID == "draft-1")
+        #expect(draftScrollCommand?.fileID == fileID)
+        #expect(draftScrollCommand?.commentID == "draft-1")
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-focused-draft-1", in: controller.view) != nil)
+    }
+
     @Test func draftReviewRequestDiffSessionBuilderCreatesRenderableFileSection() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(
@@ -82,7 +186,7 @@ struct ReviewRequestDraftTests {
         let session = try await DraftReviewRequestDiffSessionBuilder.build(
             context: context,
             worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
-            openFileForPath: { _ in nil }
+            openFileForPath: { _ -> (() -> Void)? in nil }
         )
         var selectedFileID = DraftReviewRequestDiffSessionBuilder.selectedFileID(for: path)
         var railCollapsed = false
@@ -174,7 +278,7 @@ struct ReviewRequestDraftTests {
         let session = try await DraftReviewRequestDiffSessionBuilder.build(
             context: context,
             worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
-            openFileForPath: { _ in nil }
+            openFileForPath: { _ -> (() -> Void)? in nil }
         )
 
         let selected = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
@@ -200,7 +304,7 @@ struct ReviewRequestDraftTests {
         let session = try await DraftReviewRequestDiffSessionBuilder.build(
             context: context,
             worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
-            openFileForPath: { _ in nil }
+            openFileForPath: { _ -> (() -> Void)? in nil }
         )
 
         let selected = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
@@ -236,7 +340,7 @@ struct ReviewRequestDraftTests {
         let session = try await DraftReviewRequestDiffSessionBuilder.build(
             context: context,
             worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
-            openFileForPath: { _ in nil }
+            openFileForPath: { _ -> (() -> Void)? in nil }
         )
 
         #expect(session.files.map(\.summary.path) == [imagePath, textPath])
@@ -442,6 +546,31 @@ struct ReviewRequestDraftTests {
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+        if view.accessibilityIdentifier() == identifier {
+            return view
+        }
+        return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
+    }
+
+    private func subviews(withAccessibilityIdentifier identifier: String, in view: NSView) -> [NSView] {
+        var matches: [NSView] = []
+        if view.accessibilityIdentifier() == identifier {
+            matches.append(view)
+        }
+        matches.append(contentsOf: view.subviews.flatMap { subviews(withAccessibilityIdentifier: identifier, in: $0) })
+        return matches
+    }
+
+    private func pressAccessibilityElement(withAccessibilityIdentifier identifier: String, in view: NSView) -> Bool {
+        for match in subviews(withAccessibilityIdentifier: identifier, in: view) {
+            if match.accessibilityPerformPress() {
+                return true
+            }
+        }
+        return false
     }
 
     private func isEffectivelyVisible(_ view: NSView) -> Bool {

@@ -70,6 +70,12 @@ struct ReviewChangesTabView: View {
     @State private var loadError: String?
     @State private var selectedFileID: ReviewChangesFileID?
     @State private var railCollapsed = false
+    @State private var reviewSummaryCollapsed = false
+    @State private var draftCommentController: ReviewDraftCommentController?
+    @State private var loadedDraftSessionID: ReviewDraftSessionID?
+    @State private var focusedDraftCommentID: String?
+    @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
+    @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
 
@@ -84,6 +90,21 @@ struct ReviewChangesTabView: View {
         .task(id: loadKey) {
             await loadSession()
         }
+        .task(id: reviewDraftSessionID.rawValue) {
+            loadDraftCommentController()
+        }
+    }
+
+    static func reviewDraftSessionID(worktree: Worktree) -> ReviewDraftSessionID {
+        ReviewDraftSessionID.localChanges(
+            worktreeID: worktree.id,
+            worktreePath: worktree.path,
+            scope: .all
+        )
+    }
+
+    private var reviewDraftSessionID: ReviewDraftSessionID {
+        Self.reviewDraftSessionID(worktree: worktree)
     }
 
     private var loadKey: String {
@@ -206,9 +227,26 @@ struct ReviewChangesTabView: View {
             codeFontFamily: appState.config.code.fontFamily,
             codeFontSize: CGFloat(appState.config.code.fontSize),
             showsSourceBadges: true,
+            showsDraftSummaryRail: true,
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
-            }
+            },
+            reviewFeedbackTarget: reviewFeedbackTarget,
+            draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
+            focusedDraftCommentID: focusedDraftCommentID,
+            draftCommentScrollCommand: draftCommentScrollCommand,
+            draftCommentActions: draftCommentActions(),
+            onSelectDraftComment: selectDraftComment,
+            onSaveDraftComment: saveDraftComment
+        )
+    }
+
+    private var reviewFeedbackTarget: ReviewFeedbackTarget {
+        ReviewFeedbackTarget(
+            title: "Review Changes",
+            repositoryPath: worktree.path.path,
+            providerDescription: nil,
+            sourceDescription: "Review Changes"
         )
     }
 
@@ -312,6 +350,7 @@ struct ReviewChangesTabView: View {
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
             } ?? loaded.summary.files.first?.id
+            loadDraftCommentController()
         } catch is CancellationError {
         } catch {
             guard
@@ -324,5 +363,48 @@ struct ReviewChangesTabView: View {
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
+    }
+
+    private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
+        ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktree.id)
+    }
+
+    private func loadDraftCommentController() {
+        let sessionID = reviewDraftSessionID
+        if loadedDraftSessionID != sessionID {
+            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            loadedDraftSessionID = sessionID
+            focusedDraftCommentID = nil
+            draftCommentScrollCommand = nil
+        }
+        do {
+            try draftCommentController?.load()
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
+        }
+    }
+
+    private func draftCommentActions() -> ReviewDraftCommentActions {
+        ReviewDraftWorkspaceActions.make(
+            controller: draftCommentController,
+            sender: reviewFeedbackAgentSender
+        )
+    }
+
+    private func selectDraftComment(_ comment: ReviewDraftComment) {
+        focusedDraftCommentID = comment.id
+        selectedFileID = comment.fileID
+        draftCommentScrollCommand = draftCommentScrollController.command(
+            commentID: comment.id,
+            fileID: comment.fileID
+        )
+    }
+
+    private func saveDraftComment(fileID: DiffReviewFileID, anchor: DiffReviewLineAnchor, body: String) {
+        do {
+            try draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
+        }
     }
 }

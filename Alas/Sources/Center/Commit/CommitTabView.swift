@@ -102,6 +102,11 @@ struct CommitTabView: View {
                     codeFontSize: CGFloat(appState.config.code.fontSize),
                     worktreeId: worktreeId,
                     worktreePath: worktreePath,
+                    reviewDraftSessionID: CommitReviewBody.reviewDraftSessionID(
+                        worktreeID: worktreeId,
+                        repositoryPath: worktreePath,
+                        sha: sha
+                    ),
                     appState: appState
                 )
             } else {
@@ -268,7 +273,15 @@ struct CommitReviewBody: View {
     let codeFontSize: CGFloat
     var worktreeId: String? = nil
     var worktreePath: URL? = nil
+    var reviewDraftSessionID: ReviewDraftSessionID? = nil
     var appState: AppState? = nil
+
+    @State private var reviewSummaryCollapsed = false
+    @State private var draftCommentController: ReviewDraftCommentController?
+    @State private var loadedDraftSessionID: ReviewDraftSessionID?
+    @State private var focusedDraftCommentID: String?
+    @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
+    @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
 
     init(
         session: DiffReviewLoadedSession,
@@ -281,6 +294,7 @@ struct CommitReviewBody: View {
         codeFontSize: CGFloat,
         worktreeId: String? = nil,
         worktreePath: URL? = nil,
+        reviewDraftSessionID: ReviewDraftSessionID? = nil,
         appState: AppState? = nil
     ) {
         self.session = session
@@ -293,7 +307,20 @@ struct CommitReviewBody: View {
         self.codeFontSize = codeFontSize
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
+        self.reviewDraftSessionID = reviewDraftSessionID
         self.appState = appState
+    }
+
+    static func reviewDraftSessionID(
+        worktreeID: String,
+        repositoryPath: URL,
+        sha: String
+    ) -> ReviewDraftSessionID {
+        ReviewDraftSessionID.commit(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            sha: sha
+        )
     }
 
     var body: some View {
@@ -301,6 +328,7 @@ struct CommitReviewBody: View {
             session: session,
             selectedFileID: $selectedFileID,
             railCollapsed: $railCollapsed,
+            reviewSummaryCollapsed: $reviewSummaryCollapsed,
             layoutMode: $layoutMode,
             wrapLines: $wrapLines,
             showWhitespace: $showWhitespace,
@@ -308,8 +336,18 @@ struct CommitReviewBody: View {
             codeFontSize: codeFontSize,
             showsSourceBadges: false,
             showsRailDisplayControls: true,
+            showsDraftSummaryRail: reviewDraftSessionID != nil,
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
+            },
+            reviewFeedbackTarget: reviewFeedbackTarget,
+            draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
+            focusedDraftCommentID: focusedDraftCommentID,
+            draftCommentScrollCommand: draftCommentScrollCommand,
+            draftCommentActions: draftCommentActions(),
+            onSelectDraftComment: selectDraftComment,
+            onSaveDraftComment: { fileID, anchor, body in
+                saveDraftComment(fileID: fileID, anchor: anchor, body: body)
             }
         )
         .accessibilityIdentifier("commit-review-body")
@@ -318,6 +356,22 @@ struct CommitReviewBody: View {
                 identifier: "commit-review-body",
                 label: "Commit review"
             )
+        )
+        .onAppear {
+            loadDraftCommentController()
+        }
+        .onChange(of: reviewDraftSessionID?.rawValue) { _, _ in
+            loadDraftCommentController()
+        }
+    }
+
+    private var reviewFeedbackTarget: ReviewFeedbackTarget? {
+        guard let worktreePath else { return nil }
+        return ReviewFeedbackTarget(
+            title: "Commit Review",
+            repositoryPath: worktreePath.path,
+            providerDescription: nil,
+            sourceDescription: "Commit"
         )
     }
 
@@ -379,6 +433,53 @@ struct CommitReviewBody: View {
                 originatingWorktreeRoot: worktreePath,
                 language: language
             )
+        }
+    }
+
+    private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender? {
+        guard let appState, let worktreeId else { return nil }
+        return ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId)
+    }
+
+    private func loadDraftCommentController() {
+        guard let sessionID = reviewDraftSessionID else { return }
+        if loadedDraftSessionID != sessionID {
+            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            loadedDraftSessionID = sessionID
+            focusedDraftCommentID = nil
+            draftCommentScrollCommand = nil
+        }
+        do {
+            try draftCommentController?.load()
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
+        }
+    }
+
+    private func draftCommentActions() -> ReviewDraftCommentActions {
+        guard let reviewFeedbackAgentSender else {
+            return ReviewDraftCommentActions()
+        }
+        return ReviewDraftWorkspaceActions.make(
+            controller: draftCommentController,
+            sender: reviewFeedbackAgentSender
+        )
+    }
+
+    private func selectDraftComment(_ comment: ReviewDraftComment) {
+        focusedDraftCommentID = comment.id
+        selectedFileID = comment.fileID
+        draftCommentScrollCommand = draftCommentScrollController.command(
+            commentID: comment.id,
+            fileID: comment.fileID
+        )
+    }
+
+    private func saveDraftComment(fileID: DiffReviewFileID, anchor: DiffReviewLineAnchor, body: String) {
+        do {
+            try draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
         }
     }
 }
