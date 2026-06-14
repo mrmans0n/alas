@@ -173,6 +173,149 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-pane-toolbar", in: controller.view) == nil)
     }
 
+    @Test func fileSectionRendersFileLevelInlineFeedbackBelowHeader() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = [
+            DiffReviewInlineFeedback(
+                id: "thread-file",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Please review this file.",
+                status: .actionable,
+                providerURL: URL(string: "https://github.com/thread-file")!,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+                evidenceItemID: "thread-file"
+            ),
+        ]
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: feedback,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-file", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "GitHub") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "reviewer") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Please review this file.") != nil)
+    }
+
+    @Test func fileSectionCapsInlineFeedbackCardsWithMoreRow() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: feedback,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-2", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-3", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-4", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-5", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-more", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "+2 more feedback") != nil)
+    }
+
+    @Test func inlineFeedbackPlacementGroupsLineAnchoredItemsByMatchingHunk() throws {
+        let model = displayModel()
+        let firstGroup = try #require(model.groups.first)
+        let feedback = [
+            DiffReviewInlineFeedback(
+                id: "thread-new-line",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Review this new line.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
+                evidenceItemID: "thread-new-line"
+            ),
+            DiffReviewInlineFeedback(
+                id: "thread-file",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Review the whole file.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+                evidenceItemID: "thread-file"
+            ),
+            DiffReviewInlineFeedback(
+                id: "thread-unmatched",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Review a line outside the diff.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 42, side: .new),
+                evidenceItemID: "thread-unmatched"
+            ),
+        ]
+
+        let placement = DiffReviewInlineFeedbackPlacement.position(feedback, in: model.groups)
+
+        #expect(placement.byGroupID[firstGroup.id]?.map(\.id) == ["thread-new-line"])
+        #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
+    }
+
+    @MainActor
+    @Test func inlineFeedbackMarkdownRendersCommonReviewMarkup() throws {
+        let rendered = NSAttributedString(
+            DiffReviewInlineFeedbackMarkdown.render("Use **bold** and `configId`, then see [docs](https://example.com/docs).")
+        )
+
+        #expect(rendered.string == "Use bold and configId, then see docs.")
+
+        let linkRange = (rendered.string as NSString).range(of: "docs")
+        try #require(linkRange.location != NSNotFound)
+        let url = rendered.attribute(NSAttributedString.Key.link, at: linkRange.location, effectiveRange: nil) as? URL
+        #expect(url?.absoluteString == "https://example.com/docs")
+    }
+
+    @MainActor
+    @Test func inlineFeedbackMarkdownPlainTextStripsDelimitersForAccessibility() {
+        let plain = DiffReviewInlineFeedbackMarkdown.plainText("Use **bold** and `configId`.")
+
+        #expect(plain == "Use bold and configId.")
+    }
+
     @Test func textDocumentViewClearsInactivePaneLSPContextWhenLayoutChanges() {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
         let context = DiffPaneLSPContext(
@@ -277,6 +420,53 @@ struct DiffReviewSurfaceTests {
         #expect(selected == first.id)
     }
 
+    @Test func surfacePassesFeedbackToMatchingFileOnly() {
+        let first = summary(path: "Sources/App.swift")
+        let second = summary(path: "Sources/Other.swift")
+        let session = loadedSession(summaries: [first, second])
+        let feedback = [
+            first.id: [
+                DiffReviewInlineFeedback(
+                    id: "thread-app",
+                    providerName: "GitHub",
+                    author: "reviewer",
+                    bodyPreview: "App feedback.",
+                    status: .actionable,
+                    providerURL: nil,
+                    anchor: DiffReviewInlineFeedbackAnchor(path: first.path, line: 2, side: .new),
+                    evidenceItemID: "thread-app"
+                ),
+            ],
+        ]
+        var selected: DiffReviewFileID? = second.id
+        var collapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selected }, set: { selected = $0 }),
+            railCollapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            inlineFeedbackByFileID: feedback
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1000, height: 700)
+
+        let matchingCards = allSubviews(of: controller.view).filter {
+            $0.accessibilityIdentifier() == "diff-review-inline-feedback-thread-app"
+        }
+        #expect(matchingCards.count == 1)
+        #expect(accessibilityLabel(in: controller.view, containing: "line 2") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "App feedback.") != nil)
+    }
+
     @Test func selectionSynchronizationClearsEmptySessions() {
         let selected = DiffReviewFileID(namespace: "commit", path: "Stale.swift")
 
@@ -319,6 +509,154 @@ struct DiffReviewSurfaceTests {
         #expect(!result.programmaticScroll.isSuppressing)
     }
 
+    @Test func scrollCommandAdvancesGenerationForRepeatedFileSelections() {
+        let file = DiffReviewFileID(namespace: "commit", path: "Sources/App.swift")
+        var controller = DiffReviewScrollCommandController()
+
+        let first = controller.command(to: file)
+        let second = controller.command(to: file)
+
+        #expect(first.id == file)
+        #expect(second.id == file)
+        #expect(second.generation == first.generation + 1)
+    }
+
+    @Test func renderWindowKeepsSelectedTargetAndNearViewportFiles() {
+        let selected = DiffReviewFileID(namespace: "commit", path: "Selected.swift")
+        let near = DiffReviewFileID(namespace: "commit", path: "Near.swift")
+        let far = DiffReviewFileID(namespace: "commit", path: "Far.swift")
+        let target = DiffReviewFileID(namespace: "commit", path: "Target.swift")
+        let frames = [
+            DiffReviewSectionFrame(id: near, minY: 520, maxY: 820),
+            DiffReviewSectionFrame(id: far, minY: 5_000, maxY: 5_300),
+        ]
+
+        let rendered = DiffReviewRenderWindow.renderedFileIDs(
+            current: [far],
+            frames: frames,
+            viewportHeight: 500,
+            selectedFileID: selected,
+            programmaticTarget: target,
+            firstFileID: nil
+        )
+
+        #expect(rendered.contains(selected))
+        #expect(rendered.contains(target))
+        #expect(rendered.contains(near))
+        #expect(!rendered.contains(far))
+    }
+
+    @Test func estimatedSectionHeightScalesWithDiffRows() {
+        let small = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/Small.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        var largeRows = Array(
+            repeating: ParsedDiff.Hunk.Line(kind: .add, text: "let value = 1", oldNumber: nil, newNumber: 1),
+            count: 40
+        )
+        largeRows.insert(.init(kind: .context, text: "let before = 0", oldNumber: 1, newNumber: 1), at: 0)
+        let largeDiff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(header: "@@ -1,1 +1,41 @@", oldStart: 1, newStart: 1, lines: largeRows),
+        ])
+        let large = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/Large.swift", additions: 40),
+            parsedDiff: largeDiff,
+            displayModel: DiffDisplayModelBuilder.build(diff: largeDiff, filePath: "Sources/Large.swift"),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+
+        #expect(DiffReviewFileSectionHeightEstimator.estimatedHeight(for: large) > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: small))
+    }
+
+    @Test func estimatedSectionHeightReservesBoundedInlineFeedbackHeight() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+
+        let noFeedback = DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedbackCount: 0)
+        let oneFeedback = DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedbackCount: 1)
+        let cappedFeedback = DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedbackCount: 4)
+        let manyFeedback = DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedbackCount: 10)
+
+        #expect(oneFeedback > noFeedback)
+        #expect(cappedFeedback > oneFeedback)
+        #expect(manyFeedback == cappedFeedback)
+    }
+
+    @Test func estimatedSectionHeightGrowsWithInlineFeedbackBodyLength() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let shortFeedback = [
+            DiffReviewInlineFeedback(
+                id: "short",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Short.",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
+                evidenceItemID: "short"
+            ),
+        ]
+        let longFeedback = [
+            DiffReviewInlineFeedback(
+                id: "long",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: Array(repeating: "This review comment needs to remain fully visible.", count: 12).joined(separator: " "),
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
+                evidenceItemID: "long"
+            ),
+        ]
+
+        #expect(
+            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: longFeedback)
+                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: shortFeedback)
+        )
+    }
+
+    @Test func inlineFeedbackCardEstimateUsesDynamicBodyHeight() {
+        let short = DiffReviewInlineFeedback(
+            id: "short",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Short.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+            evidenceItemID: "short"
+        )
+        let long = DiffReviewInlineFeedback(
+            id: "long",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: Array(repeating: "Long feedback body.", count: 24).joined(separator: " "),
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: nil, side: .unknown),
+            evidenceItemID: "long"
+        )
+
+        #expect(DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: long) > DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: short))
+        #expect(DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: short) >= DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight)
+    }
+
     private func parsedDiff() -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
@@ -351,6 +689,29 @@ struct DiffReviewSurfaceTests {
             },
             summary: DiffReviewSessionModel(files: summaries, groupsEnabled: false)
         )
+    }
+
+    private func inlineFeedbackItems(
+        count: Int,
+        path: String,
+        lineAnchored: Bool = true
+    ) -> [DiffReviewInlineFeedback] {
+        (1...count).map { index in
+            DiffReviewInlineFeedback(
+                id: "thread-\(index)",
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "Feedback \(index).",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(
+                    path: path,
+                    line: lineAnchored ? index : nil,
+                    side: lineAnchored ? .new : .unknown
+                ),
+                evidenceItemID: "thread-\(index)"
+            )
+        }
     }
 
     private func summary(

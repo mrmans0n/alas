@@ -138,19 +138,20 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try Self.parsePipeline(result.stdout)
     }
 
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        let result = try await runner.run(
+            "glab",
+            args: ["mr", "diff", "\(request.number)", "--raw", "--color=never", "-R", remote.repositorySlug],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab mr diff", stderr: result.stderr)
+        }
+        return result.stdout
+    }
+
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        request.checks
-            .filter { $0.bucket == .fail }
-            .map {
-                ReviewEvidenceItem(
-                    id: $0.id,
-                    section: .ci,
-                    title: $0.name,
-                    subtitle: $0.workflow,
-                    status: .failed,
-                    providerURL: $0.detailURL
-                )
-            }
+        ReviewEvidenceCIActivityMapper.items(for: request.checks)
     }
 
     func checkEvidenceDetail(
@@ -445,7 +446,8 @@ struct GitLabCLIProvider: CodeHostProvider {
                 body: note.body,
                 url: try discussionURL(note: note, requestURL: requestURL),
                 isResolved: discussion.isResolved,
-                isActionable: !discussion.isResolved
+                isActionable: !discussion.isResolved,
+                location: reviewThreadLocation(from: note)
             )
         }
     }
@@ -667,6 +669,38 @@ struct GitLabCLIProvider: CodeHostProvider {
         return components?.url
     }
 
+    private static func reviewThreadLocation(from note: GitLabDiscussionNote) -> ReviewThreadLocation? {
+        guard let position = note.position else {
+            return nil
+        }
+        let newPath = normalizedOptionalString(position.newPath)
+        let oldPath = normalizedOptionalString(position.oldPath)
+        guard let path = newPath ?? oldPath else {
+            return nil
+        }
+
+        let side: ReviewThreadSide
+        let line: Int?
+        if let newLine = position.newLine {
+            side = .new
+            line = newLine
+        } else if let oldLine = position.oldLine {
+            side = .old
+            line = oldLine
+        } else {
+            side = .unknown
+            line = nil
+        }
+
+        return ReviewThreadLocation(
+            path: path,
+            originalPath: oldPath,
+            line: line,
+            side: side,
+            providerPosition: note.id.map(String.init)
+        )
+    }
+
     static func gitLabJobID(from url: URL?) -> String? {
         guard let url else {
             return nil
@@ -874,9 +908,22 @@ private struct GitLabDiscussionNote: Decodable {
     let resolvable: Bool?
     let resolved: Bool?
     let webURL: String?
+    let position: GitLabNotePosition?
 
     var isSystem: Bool {
         system ?? false
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decodeIfPresent(Int.self, forKey: .id)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.author = try container.decodeIfPresent(GitLabDiscussionAuthor.self, forKey: .author)
+        self.system = try container.decodeIfPresent(Bool.self, forKey: .system)
+        self.resolvable = try container.decodeIfPresent(Bool.self, forKey: .resolvable)
+        self.resolved = try container.decodeIfPresent(Bool.self, forKey: .resolved)
+        self.webURL = try container.decodeIfPresent(String.self, forKey: .webURL)
+        self.position = try? container.decode(GitLabNotePosition.self, forKey: .position)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -887,11 +934,26 @@ private struct GitLabDiscussionNote: Decodable {
         case resolvable
         case resolved
         case webURL = "web_url"
+        case position
     }
 }
 
 private struct GitLabDiscussionAuthor: Decodable {
     let username: String?
+}
+
+private struct GitLabNotePosition: Decodable {
+    let newPath: String?
+    let oldPath: String?
+    let newLine: Int?
+    let oldLine: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case newPath = "new_path"
+        case oldPath = "old_path"
+        case newLine = "new_line"
+        case oldLine = "old_line"
+    }
 }
 
 private extension CharacterSet {

@@ -547,7 +547,7 @@ struct WorkspaceLSPManagerStatusTests {
             languageId: "swift",
             text: "let unsaved = 2\n"
         )
-        await Task.yield()
+        try? await Task.sleep(nanoseconds: 10_000_000)
         let closeEditor = Task {
             await mgr.closeDocument(worktreeRoot: root, fileURL: fileURL, languageId: "swift")
         }

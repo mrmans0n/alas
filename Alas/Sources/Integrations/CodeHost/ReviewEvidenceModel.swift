@@ -12,12 +12,16 @@ final class ReviewEvidenceModel {
 
     private(set) var ciItems: [ReviewEvidenceItem] = []
     private(set) var feedbackItems: [ReviewEvidenceItem] = []
+    private(set) var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
+    private(set) var fileSession: DiffReviewLoadedSession?
     private(set) var selectedSection: ReviewEvidenceSection
     private(set) var selectedItemID: String?
     private(set) var selectedDetail: ReviewEvidenceDetail?
     private(set) var isLoadingList = false
+    private(set) var isLoadingFiles = false
     private(set) var isLoadingDetail = false
     private(set) var errorMessage: String?
+    private(set) var fileErrorMessage: String?
 
     var selectedItem: ReviewEvidenceItem? {
         guard let selectedItemID else { return nil }
@@ -35,31 +39,29 @@ final class ReviewEvidenceModel {
         self.provider = provider
         self.cwd = cwd
         self.initialSection = initialSection
-        self.selectedSection = initialSection ?? .ci
+        self.selectedSection = initialSection ?? .files
         self.selectedItemID = initialItemID
     }
 
     func load() async {
         guard let remote = snapshot.remote, let request = snapshot.reviewRequest else {
+            isLoadingList = false
+            isLoadingFiles = false
+            inlineFeedbackByFileID = [:]
             errorMessage = "Review request not found."
             return
         }
 
         isLoadingList = true
+        isLoadingFiles = true
         errorMessage = nil
+        fileErrorMessage = nil
+        fileSession = nil
+        inlineFeedbackByFileID = [:]
 
-        do {
-            async let ci = provider.failedCheckEvidence(remote: remote, request: request, cwd: cwd)
-            async let feedback = provider.feedbackEvidence(remote: remote, request: request, cwd: cwd)
-            let (loadedCI, loadedFeedback) = try await (ci, feedback)
-            ciItems = loadedCI
-            feedbackItems = loadedFeedback
-            chooseInitialSelection()
-            isLoadingList = false
-        } catch {
-            isLoadingList = false
-            errorMessage = error.localizedDescription
-        }
+        async let files: Void = loadAndPublishFiles(remote: remote, request: request)
+        async let evidence: Void = loadAndPublishEvidence(remote: remote, request: request)
+        _ = await (files, evidence)
     }
 
     func select(itemID: String, section: ReviewEvidenceSection) {
@@ -70,7 +72,21 @@ final class ReviewEvidenceModel {
         isLoadingDetail = false
     }
 
+    func select(section: ReviewEvidenceSection) {
+        detailRequestID += 1
+        selectedSection = section
+        selectedItemID = nil
+        selectedDetail = nil
+        isLoadingDetail = false
+    }
+
     func loadSelectedDetail() async {
+        guard selectedSection != .files else {
+            selectedDetail = nil
+            isLoadingDetail = false
+            return
+        }
+
         guard let remote = snapshot.remote, let request = snapshot.reviewRequest else {
             errorMessage = "Review request not found."
             return
@@ -90,6 +106,10 @@ final class ReviewEvidenceModel {
         do {
             let detail: ReviewEvidenceDetail
             switch item.section {
+            case .files:
+                selectedDetail = nil
+                isLoadingDetail = false
+                return
             case .ci:
                 detail = try await provider.checkEvidenceDetail(
                     remote: remote,
@@ -129,6 +149,8 @@ final class ReviewEvidenceModel {
 
     func items(for section: ReviewEvidenceSection) -> [ReviewEvidenceItem] {
         switch section {
+        case .files:
+            []
         case .ci:
             ciItems
         case .feedback:
@@ -163,7 +185,11 @@ final class ReviewEvidenceModel {
             return
         }
 
-        if initialSection == .feedback, let item = feedbackItems.first {
+        if initialSection == nil || initialSection == .files {
+            selectedSection = .files
+            selectedItemID = nil
+            selectedDetail = nil
+        } else if initialSection == .feedback, let item = feedbackItems.first {
             select(itemID: item.id, section: .feedback)
         } else if let item = ciItems.first {
             select(itemID: item.id, section: .ci)
@@ -174,4 +200,96 @@ final class ReviewEvidenceModel {
             selectedDetail = nil
         }
     }
+
+    private func publishFiles(_ result: LoadResult<DiffReviewLoadedSession>) {
+        switch result {
+        case .success(let loadedFiles):
+            fileSession = loadedFiles
+            refreshInlineFeedback()
+        case .failure(let error):
+            fileSession = nil
+            inlineFeedbackByFileID = [:]
+            fileErrorMessage = error.localizedDescription
+        }
+        isLoadingFiles = false
+    }
+
+    private func loadAndPublishFiles(remote: CodeHostRemote, request: ReviewRequest) async {
+        let result = await Self.loadFiles(provider: provider, remote: remote, request: request, cwd: cwd)
+        publishFiles(result)
+    }
+
+    private func publishEvidence(_ result: LoadResult<([ReviewEvidenceItem], [ReviewEvidenceItem])>) {
+        switch result {
+        case .success(let loadedEvidence):
+            let (loadedCI, loadedFeedback) = loadedEvidence
+            ciItems = loadedCI
+            feedbackItems = loadedFeedback
+            refreshInlineFeedback()
+            chooseInitialSelection()
+        case .failure(let error):
+            refreshInlineFeedback()
+            errorMessage = error.localizedDescription
+        }
+        isLoadingList = false
+    }
+
+    private func loadAndPublishEvidence(remote: CodeHostRemote, request: ReviewRequest) async {
+        let result = await Self.loadEvidence(provider: provider, remote: remote, request: request, cwd: cwd)
+        publishEvidence(result)
+    }
+
+    private func refreshInlineFeedback() {
+        guard let request = snapshot.reviewRequest,
+              let fileSession
+        else {
+            inlineFeedbackByFileID = [:]
+            return
+        }
+
+        inlineFeedbackByFileID = ReviewEvidenceInlineFeedbackMapper.feedbackByFileID(
+            threads: request.threads,
+            files: fileSession.summary.files,
+            providerName: request.provider.displayName
+        )
+    }
+
+    private nonisolated static func loadFiles(
+        provider: any CodeHostProvider,
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async -> LoadResult<DiffReviewLoadedSession> {
+        do {
+            let session = try await ReviewRequestDiffLoader(provider: provider).load(
+                remote: remote,
+                request: request,
+                cwd: cwd
+            )
+            return .success(session)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    private nonisolated static func loadEvidence(
+        provider: any CodeHostProvider,
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async -> LoadResult<([ReviewEvidenceItem], [ReviewEvidenceItem])> {
+        do {
+            async let ci = provider.failedCheckEvidence(remote: remote, request: request, cwd: cwd)
+            async let feedback = provider.feedbackEvidence(remote: remote, request: request, cwd: cwd)
+            let loadedEvidence = try await (ci, feedback)
+            return .success(loadedEvidence)
+        } catch {
+            return .failure(error)
+        }
+    }
+}
+
+private enum LoadResult<Value> {
+    case success(Value)
+    case failure(any Error)
 }

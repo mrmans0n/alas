@@ -8,6 +8,31 @@ struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable {
     var rawValue: String { "\(namespace):\(path)" }
 }
 
+enum DiffReviewInlineFeedbackSide: String, Codable, Equatable, Sendable {
+    case old
+    case new
+    case unknown
+}
+
+struct DiffReviewInlineFeedbackAnchor: Hashable, Codable, Equatable, Sendable {
+    let path: String
+    let line: Int?
+    let side: DiffReviewInlineFeedbackSide
+
+    var isFileLevel: Bool { line == nil }
+}
+
+struct DiffReviewInlineFeedback: Identifiable, Codable, Equatable, Sendable {
+    let id: String
+    let providerName: String
+    let author: String?
+    let bodyPreview: String
+    let status: ReviewEvidenceStatus
+    let providerURL: URL?
+    let anchor: DiffReviewInlineFeedbackAnchor
+    let evidenceItemID: String
+}
+
 enum DiffReviewFileStatus: String, Codable, Equatable, Hashable {
     case added
     case modified

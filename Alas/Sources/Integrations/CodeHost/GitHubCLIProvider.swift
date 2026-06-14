@@ -12,6 +12,10 @@ struct GitHubCLIProvider: CodeHostProvider {
               id
               isResolved
               isOutdated
+              path
+              line
+              originalLine
+              diffSide
               comments(first: 50) {
                 nodes {
                   id
@@ -159,19 +163,20 @@ struct GitHubCLIProvider: CodeHostProvider {
         return try Self.parseChecks(result.stdout)
     }
 
+    func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        let result = try await runner.run(
+            "gh",
+            args: ["pr", "diff", "\(request.number)", "-R", remote.repositorySlug],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr diff", stderr: result.stderr)
+        }
+        return result.stdout
+    }
+
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
-        request.checks
-            .filter { $0.bucket == .fail }
-            .map {
-                ReviewEvidenceItem(
-                    id: $0.id,
-                    section: .ci,
-                    title: $0.name,
-                    subtitle: $0.workflow,
-                    status: .failed,
-                    providerURL: $0.detailURL
-                )
-            }
+        ReviewEvidenceCIActivityMapper.items(for: request.checks)
     }
 
     func checkEvidenceDetail(
@@ -181,6 +186,15 @@ struct GitHubCLIProvider: CodeHostProvider {
         cwd: URL
     ) async throws -> ReviewEvidenceDetail {
         _ = request
+        guard item.status == .failed else {
+            return ReviewEvidenceDetail(
+                item: item,
+                body: "Open this check in GitHub to inspect current status.",
+                filePath: nil,
+                line: nil,
+                isTruncated: false
+            )
+        }
         guard let runID = Self.githubRunID(from: item.providerURL) else {
             return ReviewEvidenceDetail(
                 item: item,
@@ -447,7 +461,8 @@ struct GitHubCLIProvider: CodeHostProvider {
                 body: comment.body,
                 url: url,
                 isResolved: thread.isResolved,
-                isActionable: !thread.isResolved && !thread.isOutdated
+                isActionable: !thread.isResolved && !thread.isOutdated,
+                location: reviewThreadLocation(from: thread)
             )
         }
         return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
@@ -528,6 +543,40 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput(context)
         }
         return url
+    }
+
+    private static func normalizedOptionalString(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func reviewThreadLocation(from thread: ReviewThreadNode) -> ReviewThreadLocation? {
+        guard let path = normalizedOptionalString(thread.path) else {
+            return nil
+        }
+        let side: ReviewThreadSide
+        let line: Int?
+        switch thread.diffSide?.uppercased() {
+        case "LEFT":
+            side = .old
+            line = thread.originalLine ?? thread.line
+        case "RIGHT":
+            side = .new
+            line = thread.line ?? thread.originalLine
+        default:
+            side = .unknown
+            line = thread.line ?? thread.originalLine
+        }
+        return ReviewThreadLocation(
+            path: path,
+            originalPath: nil,
+            line: line,
+            side: side,
+            providerPosition: thread.id
+        )
     }
 
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
@@ -655,7 +704,34 @@ private struct ReviewThreadNode: Decodable {
     let id: String
     let isResolved: Bool
     let isOutdated: Bool
+    let path: String?
+    let line: Int?
+    let originalLine: Int?
+    let diffSide: String?
     let comments: ReviewThreadCommentsConnection
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.isResolved = try container.decode(Bool.self, forKey: .isResolved)
+        self.isOutdated = try container.decode(Bool.self, forKey: .isOutdated)
+        self.path = try? container.decode(String.self, forKey: .path)
+        self.line = try? container.decode(Int.self, forKey: .line)
+        self.originalLine = try? container.decode(Int.self, forKey: .originalLine)
+        self.diffSide = try? container.decode(String.self, forKey: .diffSide)
+        self.comments = try container.decode(ReviewThreadCommentsConnection.self, forKey: .comments)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case isResolved
+        case isOutdated
+        case path
+        case line
+        case originalLine
+        case diffSide
+        case comments
+    }
 }
 
 private struct ReviewThreadCommentsConnection: Decodable {

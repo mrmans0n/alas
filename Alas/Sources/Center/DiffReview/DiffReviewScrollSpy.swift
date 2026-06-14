@@ -97,3 +97,85 @@ struct DiffReviewProgrammaticScrollController: Equatable {
         !isSuppressing || id == target
     }
 }
+
+struct DiffReviewScrollCommand: Equatable {
+    let id: DiffReviewFileID
+    let generation: Int
+}
+
+struct DiffReviewScrollCommandController: Equatable {
+    private var generation = 0
+
+    mutating func command(to id: DiffReviewFileID) -> DiffReviewScrollCommand {
+        generation += 1
+        return DiffReviewScrollCommand(id: id, generation: generation)
+    }
+}
+
+enum DiffReviewRenderWindow {
+    private static let leadingScreens: CGFloat = 1.25
+    private static let trailingScreens: CGFloat = 2.5
+
+    static func renderedFileIDs(
+        current: Set<DiffReviewFileID>,
+        frames: [DiffReviewSectionFrame],
+        viewportHeight: CGFloat,
+        selectedFileID: DiffReviewFileID?,
+        programmaticTarget: DiffReviewFileID?,
+        firstFileID: DiffReviewFileID?
+    ) -> Set<DiffReviewFileID> {
+        var rendered = Set(frames.compactMap { frame -> DiffReviewFileID? in
+            guard isNearViewport(frame, viewportHeight: viewportHeight) else { return nil }
+            return frame.id
+        })
+
+        if frames.isEmpty || rendered.isEmpty {
+            rendered.formUnion(current)
+        }
+
+        if let selectedFileID {
+            rendered.insert(selectedFileID)
+        }
+        if let programmaticTarget {
+            rendered.insert(programmaticTarget)
+        }
+        if let firstFileID {
+            rendered.insert(firstFileID)
+        }
+
+        return rendered
+    }
+
+    private static func isNearViewport(_ frame: DiffReviewSectionFrame, viewportHeight: CGFloat) -> Bool {
+        let height = max(viewportHeight, 1)
+        let minY = -height * leadingScreens
+        let maxY = height * trailingScreens
+        return frame.maxY >= minY && frame.minY <= maxY
+    }
+}
+
+enum DiffReviewFileSectionHeightEstimator {
+    private static let fileHeaderHeight: CGFloat = 45
+    private static let hunkHeaderHeight: CGFloat = 38
+    private static let hunkVerticalPadding: CGFloat = 20
+    private static let rowHeight: CGFloat = 22
+    private static let hunkSpacing: CGFloat = 10
+    private static let minimumHeight: CGFloat = 116
+
+    static func estimatedHeight(for file: DiffReviewFileSectionModel) -> CGFloat {
+        guard let displayModel = file.displayModel else {
+            return minimumHeight
+        }
+
+        let bodyHeight = displayModel.groups.reduce(CGFloat(0)) { total, group in
+            let rowCount = max(group.rows.count, 1)
+            return total
+                + hunkHeaderHeight
+                + hunkVerticalPadding
+                + CGFloat(rowCount) * rowHeight
+                + hunkSpacing
+        }
+
+        return max(minimumHeight, fileHeaderHeight + bodyHeight)
+    }
+}

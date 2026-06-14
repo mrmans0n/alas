@@ -220,6 +220,43 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func reviewDiffUsesPRDiffCommand() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
+        ])
+        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
+
+        let diff = try await GitHubCLIProvider(runner: runner).reviewDiff(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(diff == "diff --git a/A.swift b/A.swift\n")
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: ["pr", "diff", "42", "-R", "mrmans0n/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func reviewDiffSurfacesGitHubCommandFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+        ])
+        let request = try #require(try GitHubCLIProvider.parsePRList(Self.prListOutput, remote: Self.remote))
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "gh pr diff", stderr: "not found")) {
+            _ = try await GitHubCLIProvider(runner: runner).reviewDiff(
+                remote: Self.remote,
+                request: request,
+                cwd: Self.cwd
+            )
+        }
+    }
+
     @Test func currentReviewRequestKeepsRequestWhenReviewThreadFetchFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
@@ -274,6 +311,93 @@ struct GitHubCLIProviderTests {
         #expect(threads[0].isActionable == true)
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable == false)
+    }
+
+    @Test func reviewThreadsJSONPreservesLocationMetadata() throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(
+            """
+            {
+              "data": {
+                "repository": {
+                  "pullRequest": {
+                    "reviewThreads": {
+                      "nodes": [
+                        {
+                          "id": "PRRT_kwDO",
+                          "isResolved": false,
+                          "isOutdated": false,
+                          "path": "Sources/App.swift",
+                          "line": 56,
+                          "originalLine": null,
+                          "diffSide": "RIGHT",
+                          "comments": {
+                            "nodes": [
+                              {
+                                "id": "PRRC_kwDO",
+                                "body": "Please simplify this.",
+                                "url": "https://github.com/mrmans0n/alas/pull/1#discussion_r1",
+                                "author": { "login": "reviewer" }
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
+                  }
+                }
+              }
+            }
+            """
+        )
+
+        #expect(threads.first?.location?.path == "Sources/App.swift")
+        #expect(threads.first?.location?.line == 56)
+        #expect(threads.first?.location?.side == .new)
+        #expect(threads.first?.location?.providerPosition == "PRRT_kwDO")
+    }
+
+    @Test func reviewThreadsJSONIgnoresMalformedLocationMetadata() throws {
+        let threads = try GitHubCLIProvider.parseReviewThreads(
+            """
+            {
+              "data": {
+                "repository": {
+                  "pullRequest": {
+                    "reviewThreads": {
+                      "nodes": [
+                        {
+                          "id": "PRRT_malformed",
+                          "isResolved": false,
+                          "isOutdated": false,
+                          "path": 123,
+                          "line": "56",
+                          "originalLine": "55",
+                          "diffSide": true,
+                          "comments": {
+                            "nodes": [
+                              {
+                                "id": "PRRC_malformed",
+                                "body": "Keep this feedback.",
+                                "url": "https://github.com/mrmans0n/alas/pull/1#discussion_r2",
+                                "author": { "login": "reviewer" }
+                              }
+                            ]
+                          }
+                        }
+                      ],
+                      "pageInfo": { "hasNextPage": false, "endCursor": null }
+                    }
+                  }
+                }
+              }
+            }
+            """
+        )
+
+        #expect(threads.map(\.id) == ["PRRT_malformed"])
+        #expect(threads.first?.body == "Keep this feedback.")
+        #expect(threads.first?.location == nil)
     }
 
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
@@ -356,8 +480,8 @@ struct GitHubCLIProviderTests {
         #expect(checks[0].bucket == .fail)
     }
 
-    @Test func failedCheckEvidenceUsesFailedChecksOnly() async throws {
-        let checks = try GitHubCLIProvider.parseChecks(Self.failedChecksOutput)
+    @Test func failedCheckEvidenceUsesCIActivityChecks() async throws {
+        let checks = try GitHubCLIProvider.parseChecks(Self.ciActivityChecksOutput)
         let request = Self.makeRequest(checks: checks)
 
         let evidence = try await GitHubCLIProvider().failedCheckEvidence(
@@ -366,16 +490,11 @@ struct GitHubCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(evidence == [
-            ReviewEvidenceItem(
-                id: checks[0].id,
-                section: .ci,
-                title: "test",
-                subtitle: "CI",
-                status: .failed,
-                providerURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/1/job/3")
-            ),
-        ])
+        #expect(evidence.map(\.id) == checks.map(\.id))
+        #expect(evidence.map(\.title) == ["build", "test", "lint", "docs", "deploy"])
+        #expect(evidence.map(\.subtitle) == ["CI", "CI", "CI", "Docs", "Deploy"])
+        #expect(evidence.map(\.status) == [.passed, .failed, .pending, .unknown, .cancelled])
+        #expect(evidence.map(\.providerURL) == checks.map(\.detailURL))
     }
 
     @Test func checkEvidenceDetailLoadsRunLogForWorkflowCheck() async throws {
@@ -438,6 +557,31 @@ struct GitHubCLIProviderTests {
                 cwd: Self.cwd
             ),
         ])
+    }
+
+    @Test func checkEvidenceDetailDoesNotLoadFailedLogsForNonFailedCheck() async throws {
+        let request = Self.makeRequest(checks: [])
+        let runner = FakeRunner(results: [])
+        let provider = GitHubCLIProvider(runner: runner)
+        let item = ReviewEvidenceItem(
+            id: "ci:lint",
+            section: .ci,
+            title: "lint",
+            subtitle: "CI",
+            status: .pending,
+            providerURL: URL(string: "https://github.com/mrmans0n/alas/actions/runs/1")
+        )
+
+        let detail = try await provider.checkEvidenceDetail(
+            remote: Self.remote,
+            request: request,
+            item: item,
+            cwd: Self.cwd
+        )
+
+        #expect(detail.body == "Open this check in GitHub to inspect current status.")
+        #expect(detail.isTruncated == false)
+        #expect(await runner.commands.isEmpty)
     }
 
     @Test func feedbackEvidenceDetailUsesThreadBody() async throws {
@@ -748,6 +892,66 @@ struct GitHubCLIProviderTests {
         "startedAt": "2026-06-01T12:31:00Z",
         "state": "FAILURE",
         "workflow": "CI"
+      }
+    ]
+    """
+
+    private static let ciActivityChecksOutput = """
+    [
+      {
+        "bucket": "pass",
+        "completedAt": "2026-06-01T12:34:56Z",
+        "description": "Build passed",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/1",
+        "name": "build",
+        "startedAt": "2026-06-01T12:30:00Z",
+        "state": "SUCCESS",
+        "workflow": "CI"
+      },
+      {
+        "bucket": "fail",
+        "completedAt": "2026-06-01T12:35:56Z",
+        "description": "Unit tests failed",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/3",
+        "name": "test",
+        "startedAt": "2026-06-01T12:31:00Z",
+        "state": "FAILURE",
+        "workflow": "CI"
+      },
+      {
+        "bucket": "pending",
+        "completedAt": null,
+        "description": "Lint is running",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/4",
+        "name": "lint",
+        "startedAt": "2026-06-01T12:32:00Z",
+        "state": "PENDING",
+        "workflow": "CI"
+      },
+      {
+        "bucket": "skipping",
+        "completedAt": null,
+        "description": "Docs skipped",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/5",
+        "name": "docs",
+        "startedAt": null,
+        "state": "SKIPPED",
+        "workflow": "Docs"
+      },
+      {
+        "bucket": "cancel",
+        "completedAt": "2026-06-01T12:36:56Z",
+        "description": "Deploy cancelled",
+        "event": "push",
+        "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/6",
+        "name": "deploy",
+        "startedAt": "2026-06-01T12:33:00Z",
+        "state": "CANCELLED",
+        "workflow": "Deploy"
       }
     ]
     """

@@ -141,6 +141,88 @@ struct GitLabCLIProviderTests {
         #expect(threads[1].isActionable)
     }
 
+    @Test func discussionsJSONPreservesLocationMetadata() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            """
+            [
+              {
+                "id": "discussion-1",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 100,
+                    "body": "This needs a guard.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_100",
+                    "author": { "username": "reviewer" },
+                    "position": {
+                      "new_path": "Sources/App.swift",
+                      "old_path": "Sources/OldApp.swift",
+                      "new_line": 24,
+                      "old_line": null
+                    }
+                  }
+                ]
+              }
+            ]
+            """,
+            requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
+        )
+
+        #expect(threads.first?.location?.path == "Sources/App.swift")
+        #expect(threads.first?.location?.originalPath == "Sources/OldApp.swift")
+        #expect(threads.first?.location?.line == 24)
+        #expect(threads.first?.location?.side == .new)
+        #expect(threads.first?.location?.providerPosition == "100")
+    }
+
+    @Test func discussionsJSONIgnoresMalformedPositionMetadata() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            """
+            [
+              {
+                "id": "discussion-malformed",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 101,
+                    "body": "Keep this discussion.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_101",
+                    "author": { "username": "reviewer" },
+                    "position": {
+                      "new_path": 123,
+                      "old_path": "Sources/OldApp.swift",
+                      "new_line": "24",
+                      "old_line": false
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "discussion-position-string",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 102,
+                    "body": "Keep this non-object position discussion.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_102",
+                    "author": { "username": "reviewer" },
+                    "position": "not-a-position-object"
+                  }
+                ]
+              }
+            ]
+            """,
+            requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
+        )
+
+        #expect(threads.map(\.id) == ["discussion-malformed", "discussion-position-string"])
+        #expect(threads.first?.body == "Keep this discussion.")
+        #expect(threads.allSatisfy { $0.location == nil })
+    }
+
     @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
         let threads = try GitLabCLIProvider.parseDiscussions(
             Self.systemOnlyDiscussionsOutput,
@@ -480,7 +562,7 @@ struct GitLabCLIProviderTests {
         }
     }
 
-    @Test func failedCheckEvidenceUsesFailedPipelineJobs() async throws {
+    @Test func failedCheckEvidenceUsesPipelineJobs() async throws {
         let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
         let request = Self.makeRequest(checks: checks)
 
@@ -490,8 +572,8 @@ struct GitLabCLIProviderTests {
             cwd: Self.cwd
         )
 
-        #expect(evidence.map(\.title) == ["test", "lint"])
-        #expect(evidence.allSatisfy { $0.status == .failed })
+        #expect(evidence.map(\.title) == ["build", "test", "lint", "deploy"])
+        #expect(evidence.map(\.status) == [.passed, .failed, .failed, .pending])
     }
 
     @Test func checkEvidenceDetailLoadsGitLabTraceForJobID() async throws {
@@ -500,11 +582,12 @@ struct GitLabCLIProviderTests {
         ])
         let checks = try GitLabCLIProvider.parsePipeline(Self.pipelineWithFailedJobsOutput)
         let request = Self.makeRequest(checks: checks)
-        let item = try #require(try await GitLabCLIProvider(runner: runner).failedCheckEvidence(
+        let evidence = try await GitLabCLIProvider(runner: runner).failedCheckEvidence(
             remote: Self.remote,
             request: request,
             cwd: Self.cwd
-        ).first)
+        )
+        let item = try #require(evidence.first { $0.title == "test" })
 
         let detail = try await GitLabCLIProvider(runner: runner).checkEvidenceDetail(
             remote: Self.remote,
@@ -603,6 +686,43 @@ struct GitLabCLIProviderTests {
             ],
             cwd: Self.cwd
         ))
+    }
+
+    @Test func reviewDiffUsesMRDiffCommand() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "diff --git a/A.swift b/A.swift\n", stderr: ""),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        let diff = try await GitLabCLIProvider(runner: runner).reviewDiff(
+            remote: Self.remote,
+            request: request,
+            cwd: Self.cwd
+        )
+
+        #expect(diff == "diff --git a/A.swift b/A.swift\n")
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: ["mr", "diff", "42", "--raw", "--color=never", "-R", "platform/mobile/alas"],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func reviewDiffSurfacesGitLabCommandFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not found"),
+        ])
+        let request = try GitLabCLIProvider.parseMRView(Self.mrViewOutput, remote: Self.remote)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab mr diff", stderr: "not found")) {
+            _ = try await GitLabCLIProvider(runner: runner).reviewDiff(
+                remote: Self.remote,
+                request: request,
+                cwd: Self.cwd
+            )
+        }
     }
 
     @Test func currentReviewRequestResolvesSourceProjectIDsBeforeFilteringForkMRs() async throws {
@@ -1322,6 +1442,12 @@ struct GitLabCLIProviderTests {
           "name": "lint",
           "status": "failed",
           "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/103"
+        },
+        {
+          "id": 104,
+          "name": "deploy",
+          "status": "running",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/jobs/104"
         }
       ]
     }
