@@ -810,6 +810,28 @@ struct DiffReviewSurfaceTests {
         #expect(second.generation == first.generation + 1)
     }
 
+    @Test func scrollCommandConsumptionClearsOnlyConsumedCommand() {
+        let file = DiffReviewFileID(namespace: "commit", path: "Sources/App.swift")
+        let other = DiffReviewFileID(namespace: "commit", path: "Sources/Other.swift")
+        var controller = DiffReviewScrollCommandController()
+
+        let first = controller.command(to: file)
+        let second = controller.command(to: other)
+
+        #expect(
+            DiffReviewScrollCommandConsumption.consume(
+                current: first,
+                consumed: first
+            ) == nil
+        )
+        #expect(
+            DiffReviewScrollCommandConsumption.consume(
+                current: second,
+                consumed: first
+            ) == second
+        )
+    }
+
     @Test func renderWindowKeepsSelectedTargetAndNearViewportFiles() {
         let selected = DiffReviewFileID(namespace: "commit", path: "Selected.swift")
         let near = DiffReviewFileID(namespace: "commit", path: "Near.swift")

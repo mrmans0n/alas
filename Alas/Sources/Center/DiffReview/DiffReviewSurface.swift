@@ -103,10 +103,18 @@ struct DiffReviewSurface: View {
                     withAnimation(.easeInOut(duration: 0.18)) {
                         scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
                     }
+                    scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                        current: scrollCommand,
+                        consumed: command
+                    )
                 }
                 .onAppear {
                     if let command = scrollCommand {
                         scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
+                        scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                            current: scrollCommand,
+                            consumed: command
+                        )
                     }
                     guard let command = inlineFeedbackScrollCommand else { return }
                     Task { @MainActor in
