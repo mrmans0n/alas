@@ -5,7 +5,7 @@ struct DiffReviewInlineFeedbackScrollCommand: Equatable {
     let fileID: DiffReviewFileID
     let generation: Int
 
-    var targetID: String {
+    var targetID: DiffReviewInlineFeedbackTargetID {
         DiffReviewInlineFeedbackTargetID.targetID(feedbackID: feedbackID, fileID: fileID)
     }
 }
@@ -23,9 +23,12 @@ struct DiffReviewInlineFeedbackScrollController: Equatable {
     }
 }
 
-enum DiffReviewInlineFeedbackTargetID {
-    static func targetID(feedbackID: String, fileID: DiffReviewFileID) -> String {
-        "diff-review-inline-feedback-target-\(fileID.rawValue)-\(feedbackID)"
+struct DiffReviewInlineFeedbackTargetID: Hashable, Equatable {
+    let fileID: DiffReviewFileID
+    let feedbackID: String
+
+    static func targetID(feedbackID: String, fileID: DiffReviewFileID) -> DiffReviewInlineFeedbackTargetID {
+        DiffReviewInlineFeedbackTargetID(fileID: fileID, feedbackID: feedbackID)
     }
 }
 
@@ -56,6 +59,9 @@ enum DiffReviewInlineFeedbackContextFormatter {
             lines.append("Author: \(author)")
         }
         lines.append("File: \(file.path)")
+        if item.anchor.path != file.path {
+            lines.append("Anchor file: \(item.anchor.path)")
+        }
         if let line = item.anchor.line {
             lines.append("Line: \(line)")
         }

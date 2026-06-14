@@ -320,6 +320,27 @@ struct DiffReviewSurfaceTests {
         #expect(context.contains("Please update `configId`."))
     }
 
+    @Test func inlineFeedbackContextFormatterIncludesDistinctAnchorPath() {
+        let file = summary(path: "Sources/NewApp.swift", originalPath: "Sources/OldApp.swift")
+        let item = DiffReviewInlineFeedback(
+            id: "thread-rename",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Check the old-side mapping.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/OldApp.swift", line: 12, side: .old),
+            evidenceItemID: "thread-rename"
+        )
+
+        let context = DiffReviewInlineFeedbackContextFormatter.format(item: item, file: file)
+
+        #expect(context.contains("File: Sources/NewApp.swift"))
+        #expect(context.contains("Anchor file: Sources/OldApp.swift"))
+        #expect(context.contains("Line: 12"))
+        #expect(context.contains("Side: old"))
+    }
+
     @Test func inlineFeedbackScrollCommandAdvancesForRepeatedSelections() {
         let fileID = DiffReviewFileID(namespace: "github-pr", path: "Sources/App.swift")
         var controller = DiffReviewInlineFeedbackScrollController()
@@ -330,7 +351,18 @@ struct DiffReviewSurfaceTests {
         #expect(first.feedbackID == "thread-1")
         #expect(first.fileID == fileID)
         #expect(second.generation == first.generation + 1)
-        #expect(second.targetID == "diff-review-inline-feedback-target-\(fileID.rawValue)-thread-1")
+        #expect(second.targetID == DiffReviewInlineFeedbackTargetID(fileID: fileID, feedbackID: "thread-1"))
+    }
+
+    @Test func inlineFeedbackTargetIDDoesNotCollideForAmbiguousFlattenedStrings() {
+        let firstFileID = DiffReviewFileID(namespace: "github-pr", path: "Sources/App-a")
+        let secondFileID = DiffReviewFileID(namespace: "github-pr", path: "Sources/App")
+
+        let first = DiffReviewInlineFeedbackTargetID(fileID: firstFileID, feedbackID: "b")
+        let second = DiffReviewInlineFeedbackTargetID(fileID: secondFileID, feedbackID: "a-b")
+
+        #expect("\(firstFileID.rawValue)-b" == "\(secondFileID.rawValue)-a-b")
+        #expect(first != second)
     }
 
     @MainActor
