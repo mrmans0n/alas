@@ -51,7 +51,7 @@ final class ReviewDraftCommentController {
 
         do {
             try store.save(comment)
-            comments = try store.load(sessionID: sessionID)
+            comments = ReviewDraftCommentPlacement.sorted(comments + [comment])
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -81,22 +81,30 @@ final class ReviewDraftCommentController {
     }
 
     func delete(commentID: String) throws {
+        let previous = comments
+        let updated = comments.filter { $0.id != commentID }
         do {
             try store.delete(commentID: commentID, sessionID: sessionID)
-            comments = try store.load(sessionID: sessionID)
+            comments = updated
             errorMessage = nil
         } catch {
+            comments = previous
             errorMessage = error.localizedDescription
             throw error
         }
     }
 
     private func saveAndReload(_ comment: ReviewDraftComment) throws {
+        let previous = comments
+        let updated = ReviewDraftCommentPlacement.sorted(comments.map { existing in
+            existing.id == comment.id ? comment : existing
+        })
         do {
             try store.save(comment)
-            comments = try store.load(sessionID: sessionID)
+            comments = updated
             errorMessage = nil
         } catch {
+            comments = previous
             errorMessage = error.localizedDescription
             throw error
         }

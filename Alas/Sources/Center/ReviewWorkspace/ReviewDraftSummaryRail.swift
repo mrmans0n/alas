@@ -12,7 +12,7 @@ struct ReviewDraftSummaryRail: View {
     @Environment(\.theme) private var theme
 
     private var visibleComments: [ReviewDraftComment] {
-        ReviewDraftCommentPlacement.sorted(comments.filter { $0.state != .dismissed })
+        ReviewDraftCommentPlacement.sorted(comments)
     }
 
     private var activeCount: Int {
@@ -254,8 +254,8 @@ struct ReviewDraftSummaryRail: View {
                         Text(lineDescription(for: comment))
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(statusColor(for: comment))
-                        if comment.state == .resolved {
-                            Text("resolved")
+                        if let stateLabel = stateLabel(for: comment) {
+                            Text(stateLabel)
                                 .font(.system(size: 10))
                                 .foregroundColor(theme.color("fg-faint"))
                         }
@@ -349,9 +349,9 @@ struct ReviewDraftSummaryRail: View {
     private func lineDescription(for comment: ReviewDraftComment) -> String {
         let range = comment.normalizedLineRange
         if range.lowerBound == range.upperBound {
-            return "line \(range.lowerBound)"
+            return "\(sideLabel(for: comment.side)) line \(range.lowerBound)"
         }
-        return "lines \(range.lowerBound)-\(range.upperBound)"
+        return "\(sideLabel(for: comment.side)) lines \(range.lowerBound)-\(range.upperBound)"
     }
 
     private func accessibilityLabel(for comment: ReviewDraftComment) -> String {
@@ -359,14 +359,36 @@ struct ReviewDraftSummaryRail: View {
             "Draft comment",
             comment.path,
             lineDescription(for: comment),
-            comment.state == .resolved ? "resolved" : nil,
+            stateLabel(for: comment),
             DiffReviewInlineFeedbackMarkdown.plainText(comment.bodyMarkdown),
         ]
         .compactMap { part in
             guard let part, !part.isEmpty else { return nil }
             return part
         }
-        .joined(separator: ", ")
+            .joined(separator: ", ")
+    }
+
+    private func stateLabel(for comment: ReviewDraftComment) -> String? {
+        switch comment.state {
+        case .active:
+            nil
+        case .resolved:
+            "resolved"
+        case .dismissed:
+            "dismissed"
+        }
+    }
+
+    private func sideLabel(for side: DiffReviewInlineFeedbackSide) -> String {
+        switch side {
+        case .old:
+            "old"
+        case .new:
+            "new"
+        case .unknown:
+            "unknown"
+        }
     }
 
     private func statusColor(for comment: ReviewDraftComment) -> Color {

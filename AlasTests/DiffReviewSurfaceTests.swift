@@ -1180,6 +1180,43 @@ struct DiffReviewSurfaceTests {
         #expect(dismissedID == "draft-dismiss-summary")
     }
 
+    @Test func summaryRailShowsDismissedCommentsWithSideAndStatus() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(
+            id: "draft-dismissed-visible",
+            fileID: file.id,
+            path: file.path,
+            side: .old,
+            startLine: 7,
+            state: .dismissed
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: ReviewDraftCommentActions(),
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-comment-draft-dismissed-visible", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "old line 7") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "dismissed") != nil)
+    }
+
     @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {
         let file = summary(path: "Sources/App.swift")
         let comment = draftComment(id: "draft-collapsed", fileID: file.id, path: file.path, side: .new, startLine: 2)
