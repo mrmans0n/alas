@@ -295,6 +295,43 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
+    @Test func inlineFeedbackContextFormatterIncludesReviewMetadata() {
+        let file = summary(path: "Sources/App.swift")
+        let item = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please update `configId`.",
+            status: .actionable,
+            providerURL: URL(string: "https://github.com/org/repo/pull/1#discussion_r1"),
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 56, side: .new),
+            evidenceItemID: "thread-1"
+        )
+
+        let context = DiffReviewInlineFeedbackContextFormatter.format(item: item, file: file)
+
+        #expect(context.contains("GitHub feedback"))
+        #expect(context.contains("Author: reviewer"))
+        #expect(context.contains("File: Sources/App.swift"))
+        #expect(context.contains("Line: 56"))
+        #expect(context.contains("Side: new"))
+        #expect(context.contains("URL: https://github.com/org/repo/pull/1#discussion_r1"))
+        #expect(context.contains("Please update `configId`."))
+    }
+
+    @Test func inlineFeedbackScrollCommandAdvancesForRepeatedSelections() {
+        let fileID = DiffReviewFileID(namespace: "github-pr", path: "Sources/App.swift")
+        var controller = DiffReviewInlineFeedbackScrollController()
+
+        let first = controller.command(feedbackID: "thread-1", fileID: fileID)
+        let second = controller.command(feedbackID: "thread-1", fileID: fileID)
+
+        #expect(first.feedbackID == "thread-1")
+        #expect(first.fileID == fileID)
+        #expect(second.generation == first.generation + 1)
+        #expect(second.targetID == "diff-review-inline-feedback-target-\(fileID.rawValue)-thread-1")
+    }
+
     @MainActor
     @Test func inlineFeedbackMarkdownRendersCommonReviewMarkup() throws {
         let rendered = NSAttributedString(
