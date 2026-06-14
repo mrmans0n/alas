@@ -8,7 +8,7 @@ struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable, Sendable {
     var rawValue: String { "\(namespace):\(path)" }
 }
 
-enum DiffReviewInlineFeedbackSide: String, Codable, Equatable, Sendable {
+enum DiffReviewInlineFeedbackSide: String, Codable, Equatable, Hashable, Sendable {
     case old
     case new
     case unknown

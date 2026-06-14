@@ -17,6 +17,11 @@ struct DiffReviewSurface: View {
     var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil
     var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
     var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
+    var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
+    var focusedDraftCommentID: String? = nil
+    var draftCommentActions = ReviewDraftCommentActions()
+    var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
+    var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -133,12 +138,15 @@ struct DiffReviewSurface: View {
     @ViewBuilder
     private func fileSection(_ file: DiffReviewFileSectionModel, isRendered: Bool) -> some View {
         let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
+        let draftComments = draftCommentsByFileID[file.id] ?? []
         if isRendered {
             DiffReviewFileSection(
                 file: file,
                 inlineFeedback: inlineFeedback,
                 focusedFeedbackID: focusedFeedbackID,
                 inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
+                draftComments: draftComments,
+                focusedDraftCommentID: focusedDraftCommentID,
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
                 showWhitespace: $showWhitespace,
@@ -147,14 +155,18 @@ struct DiffReviewSurface: View {
                 showsSourceBadge: showsSourceBadges,
                 lspContext: lspContextForFile(file),
                 inlineFeedbackActions: inlineFeedbackActions,
-                onSelectInlineFeedback: onSelectInlineFeedback
+                onSelectInlineFeedback: onSelectInlineFeedback,
+                draftCommentActions: draftCommentActions,
+                onSelectDraftComment: onSelectDraftComment,
+                onSaveDraftComment: onSaveDraftComment
             )
         } else {
             DiffReviewFileSectionPlaceholder(
                 file: file,
                 estimatedHeight: DiffReviewFileSectionHeightEstimator.estimatedHeight(
                     for: file,
-                    inlineFeedback: inlineFeedback
+                    inlineFeedback: inlineFeedback,
+                    draftComments: draftComments
                 ),
                 showsSourceBadge: showsSourceBadges,
                 codeFontFamily: codeFontFamily,
@@ -362,9 +374,20 @@ extension DiffReviewFileSectionHeightEstimator {
         for file: DiffReviewFileSectionModel,
         inlineFeedback: [DiffReviewInlineFeedback]
     ) -> CGFloat {
+        estimatedHeight(for: file, inlineFeedback: inlineFeedback, draftComments: [])
+    }
+
+    static func estimatedHeight(
+        for file: DiffReviewFileSectionModel,
+        inlineFeedback: [DiffReviewInlineFeedback],
+        draftComments: [ReviewDraftComment]
+    ) -> CGFloat {
         guard let displayModel = file.displayModel else {
             return estimatedHeight(for: file)
                 + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: inlineFeedback)
+                + ReviewDraftCommentDisplayPolicy.estimatedHeight(
+                    for: ReviewDraftCommentPlacement.position(draftComments, in: []).fileLevel
+                )
         }
 
         let placement = DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: displayModel.groups)
@@ -372,8 +395,17 @@ extension DiffReviewFileSectionHeightEstimator {
         let groupHeights = placement.byGroupID.values.reduce(CGFloat(0)) { total, groupFeedback in
             total + DiffReviewInlineFeedbackDisplayPolicy.estimatedHeight(for: groupFeedback)
         }
+        let draftPlacement = ReviewDraftCommentPlacement.position(draftComments, in: displayModel.groups)
+        let draftFileLevelHeight = ReviewDraftCommentDisplayPolicy.estimatedHeight(for: draftPlacement.fileLevel)
+        let draftGroupHeights = displayModel.groups.reduce(CGFloat(0)) { total, group in
+            let rowKeys = ReviewDraftCommentPlacement.visibleRowKeys(in: group)
+            let groupDraftComments = ReviewDraftCommentPlacement.sorted(
+                rowKeys.flatMap { draftPlacement.byRowAnchor[$0] ?? [] }
+            )
+            return total + ReviewDraftCommentDisplayPolicy.estimatedHeight(for: groupDraftComments)
+        }
 
-        return estimatedHeight(for: file) + fileLevelHeight + groupHeights
+        return estimatedHeight(for: file) + fileLevelHeight + groupHeights + draftFileLevelHeight + draftGroupHeights
     }
 }
 

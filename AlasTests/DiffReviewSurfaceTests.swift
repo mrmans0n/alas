@@ -484,6 +484,60 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
+    @Test func localDraftCommentsPositionAtExactMatchingRows() throws {
+        let model = displayModel()
+        let comment = draftComment(id: "draft-line", path: "A.swift", side: .new, startLine: 2)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+
+        #expect(
+            placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .new, line: 2)]?.map(\.id) == ["draft-line"]
+        )
+        #expect(placement.fileLevel.isEmpty)
+    }
+
+    @Test func unmatchedLocalDraftCommentsFallBackToFileLevel() {
+        let model = displayModel()
+        let comment = draftComment(id: "draft-unmatched", path: "A.swift", side: .new, startLine: 99)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+
+        #expect(placement.byRowAnchor.isEmpty)
+        #expect(placement.fileLevel.map(\.id) == ["draft-unmatched"])
+    }
+
+    @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-visible", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Local draft") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
+    }
+
     @Test func inlineFeedbackContextFormatterIncludesReviewMetadata() {
         let file = summary(path: "Sources/App.swift")
         let item = DiffReviewInlineFeedback(
@@ -942,6 +996,22 @@ struct DiffReviewSurfaceTests {
         )
     }
 
+    @Test func estimatedSectionHeightGrowsWithDraftComments() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-height", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+
+        #expect(
+            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [comment])
+                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [])
+        )
+    }
+
     @Test func inlineFeedbackCardEstimateUsesDynamicBodyHeight() {
         let short = DiffReviewInlineFeedback(
             id: "short",
@@ -1023,6 +1093,36 @@ struct DiffReviewSurfaceTests {
                 evidenceItemID: "thread-\(index)"
             )
         }
+    }
+
+    private func draftComment(
+        id: String,
+        fileID: DiffReviewFileID = DiffReviewFileID(namespace: "commit", path: "A.swift"),
+        path: String = "A.swift",
+        side: DiffReviewInlineFeedbackSide = .new,
+        startLine: Int,
+        endLine: Int? = nil,
+        state: ReviewDraftCommentState = .active
+    ) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: .commit(
+                worktreeID: "wt",
+                repositoryPath: URL(fileURLWithPath: "/repo"),
+                sha: "abc123"
+            ),
+            fileID: fileID,
+            path: path,
+            originalPath: nil,
+            side: side,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: "let b = 3",
+            bodyMarkdown: "Please revisit this line.",
+            state: state,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
     }
 
     private func summary(
