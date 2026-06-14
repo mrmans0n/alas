@@ -750,6 +750,7 @@ struct DiffReviewSurfaceTests {
                     canResolve: false,
                     canDismiss: true,
                     canCopyPrompt: false,
+                    canShowSendToAgent: false,
                     canSendToAgent: false
                 )
             },
@@ -1141,6 +1142,7 @@ struct DiffReviewSurfaceTests {
                     canResolve: false,
                     canDismiss: false,
                     canCopyPrompt: true,
+                    canShowSendToAgent: true,
                     canSendToAgent: true
                 )
             },
@@ -1165,7 +1167,7 @@ struct DiffReviewSurfaceTests {
         #expect(recorder.sent == bundle)
     }
 
-    @Test func summaryRailDisabledFinishActionsDoNotReportPressed() throws {
+    @Test func summaryRailHidesSendActionWhenNoAgentTargetExists() throws {
         let file = summary(path: "Sources/App.swift")
         let comment = draftComment(id: "draft-disabled-actions", fileID: file.id, path: file.path, side: .new, startLine: 2)
         let bundle = ReviewFeedbackBundle(
@@ -1181,7 +1183,7 @@ struct DiffReviewSurfaceTests {
         let actions = ReviewDraftCommentActions(
             availability: { _ in .none },
             copyPrompt: { _ in Issue.record("disabled copy action fired") },
-            sendToAgent: { _ in Issue.record("disabled send action fired") }
+            sendToAgent: { _ in Issue.record("hidden send action fired") }
         )
 
         let view = ReviewDraftSummaryRail(
@@ -1196,7 +1198,7 @@ struct DiffReviewSurfaceTests {
         let controller = host(view, width: 280, height: 500)
 
         #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
-        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view) == nil)
     }
 
     @Test func summaryRailCanDismissDraftComment() throws {
@@ -1221,6 +1223,7 @@ struct DiffReviewSurfaceTests {
                     canResolve: false,
                     canDismiss: true,
                     canCopyPrompt: false,
+                    canShowSendToAgent: false,
                     canSendToAgent: false
                 )
             },
@@ -1304,6 +1307,7 @@ struct DiffReviewSurfaceTests {
                     canResolve: false,
                     canDismiss: false,
                     canCopyPrompt: true,
+                    canShowSendToAgent: true,
                     canSendToAgent: true
                 )
             },

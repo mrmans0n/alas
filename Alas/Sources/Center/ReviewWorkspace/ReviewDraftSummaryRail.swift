@@ -36,6 +36,10 @@ struct ReviewDraftSummaryRail: View {
         !bundle.activeComments.isEmpty && visibleComments.contains { draftCommentActions.availability($0).canSendToAgent }
     }
 
+    private var shouldShowSendToAgent: Bool {
+        visibleComments.contains { draftCommentActions.availability($0).canShowSendToAgent }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if collapsed {
@@ -84,13 +88,15 @@ struct ReviewDraftSummaryRail: View {
             ) {
                 draftCommentActions.copyPrompt(bundle)
             }
-            collapsedActionButton(
-                id: "review-draft-summary-send-agent",
-                systemName: "paperplane",
-                label: "Send to agent",
-                enabled: canSendToAgent
-            ) {
-                draftCommentActions.sendToAgent(bundle)
+            if shouldShowSendToAgent {
+                collapsedActionButton(
+                    id: "review-draft-summary-send-agent",
+                    systemName: "paperplane",
+                    label: "Send to agent",
+                    enabled: canSendToAgent
+                ) {
+                    draftCommentActions.sendToAgent(bundle)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -135,30 +141,32 @@ struct ReviewDraftSummaryRail: View {
                     }
                 )
 
-                Button {
-                    draftCommentActions.sendToAgent(bundle)
-                } label: {
-                    Image(systemName: "paperplane")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(canSendToAgent ? theme.color("fg-muted") : theme.color("fg-faint"))
-                        .frame(width: 28, height: 24)
-                        .background(theme.color("bg-3"))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSendToAgent)
-                .help("Send to agent")
-                .accessibilityIdentifier("review-draft-summary-send-agent")
-                .accessibilityLabel("Send to agent")
-                .background(
-                    ReviewDraftSummaryPressMarker(
-                        identifier: "review-draft-summary-send-agent",
-                        label: "Send to agent",
-                        isEnabled: canSendToAgent
-                    ) {
+                if shouldShowSendToAgent {
+                    Button {
                         draftCommentActions.sendToAgent(bundle)
+                    } label: {
+                        Image(systemName: "paperplane")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(canSendToAgent ? theme.color("fg-muted") : theme.color("fg-faint"))
+                            .frame(width: 28, height: 24)
+                            .background(theme.color("bg-3"))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
-                )
+                    .buttonStyle(.plain)
+                    .disabled(!canSendToAgent)
+                    .help("Send to agent")
+                    .accessibilityIdentifier("review-draft-summary-send-agent")
+                    .accessibilityLabel("Send to agent")
+                    .background(
+                        ReviewDraftSummaryPressMarker(
+                            identifier: "review-draft-summary-send-agent",
+                            label: "Send to agent",
+                            isEnabled: canSendToAgent
+                        ) {
+                            draftCommentActions.sendToAgent(bundle)
+                        }
+                    )
+                }
 
                 Spacer(minLength: 0)
             }

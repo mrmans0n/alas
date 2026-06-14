@@ -4,6 +4,7 @@ struct ReviewDraftCommentActionAvailability: Equatable, Sendable {
     var canResolve: Bool
     var canDismiss: Bool
     var canCopyPrompt: Bool
+    var canShowSendToAgent: Bool
     var canSendToAgent: Bool
 
     static let none = ReviewDraftCommentActionAvailability(
@@ -12,6 +13,7 @@ struct ReviewDraftCommentActionAvailability: Equatable, Sendable {
         canResolve: false,
         canDismiss: false,
         canCopyPrompt: false,
+        canShowSendToAgent: false,
         canSendToAgent: false
     )
 }

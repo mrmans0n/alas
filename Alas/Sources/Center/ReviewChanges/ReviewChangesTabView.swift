@@ -221,6 +221,7 @@ struct ReviewChangesTabView: View {
             session: session,
             selectedFileID: $selectedFileID,
             railCollapsed: $railCollapsed,
+            reviewSummaryCollapsed: $reviewSummaryCollapsed,
             layoutMode: diffPreferences.layoutMode,
             wrapLines: diffPreferences.wrapLines,
             showWhitespace: diffPreferences.showWhitespace,

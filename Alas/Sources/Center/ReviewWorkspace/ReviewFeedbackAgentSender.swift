@@ -113,6 +113,7 @@ enum ReviewDraftWorkspaceActions {
                     canResolve: comment.isActive,
                     canDismiss: comment.isActive,
                     canCopyPrompt: comment.isActive,
+                    canShowSendToAgent: hasSendTarget,
                     canSendToAgent: comment.isActive && hasSendTarget
                 )
             },
