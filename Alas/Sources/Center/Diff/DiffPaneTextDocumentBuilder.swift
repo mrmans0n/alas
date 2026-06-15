@@ -53,7 +53,7 @@ struct DiffPaneTextDocumentBuilder {
             oldGutter.append(marker(for: row.old, emptyKind: row.kind, side: .old), side: .old)
             newGutter.append(marker(for: row.new, emptyKind: row.kind, side: .new), side: .new)
 
-            if row.kind == .collapsed {
+            if row.kind == .collapsed || row.kind == .expandableContext {
                 oldColumn.append(
                     collapsedCodeText(row, font: font, theme: theme),
                     kind: row.kind,
@@ -118,7 +118,7 @@ struct DiffPaneTextDocumentBuilder {
         var index = 0
         while index < rows.count {
             let row = rows[index]
-            if row.kind == .collapsed {
+            if row.kind == .collapsed || row.kind == .expandableContext {
                 gutter.append("", side: .paired)
                 codeColumn.append(
                     collapsedCodeText(row, font: font, theme: theme),
@@ -131,7 +131,7 @@ struct DiffPaneTextDocumentBuilder {
             }
 
             let rowStart = index
-            while index < rows.count, rows[index].kind != .collapsed {
+            while index < rows.count, rows[index].kind != .collapsed, rows[index].kind != .expandableContext {
                 index += 1
             }
             let lines = DiffPaneRowProjection.stackedLines(for: Array(rows[rowStart..<index]))
@@ -189,9 +189,9 @@ struct DiffPaneTextDocumentBuilder {
 
             let start = output.length
             switch row.kind {
-            case .collapsed:
+            case .collapsed, .expandableContext:
                 output.append(collapsedLine(row, font: font, theme: theme))
-            case .context, .add, .delete, .replacement:
+            case .context, .expandedContext, .add, .delete, .replacement:
                 output.append(splitLine(
                     row,
                     fileExtension: fileExtension,
@@ -225,7 +225,7 @@ struct DiffPaneTextDocumentBuilder {
                 output.append(NSAttributedString(string: "\n", attributes: baseAttributes(font: font, theme: theme)))
             }
 
-            if row.kind == .collapsed {
+            if row.kind == .collapsed || row.kind == .expandableContext {
                 let start = output.length
                 output.append(collapsedLine(row, font: font, theme: theme))
                 lines.append(LineMetadata(kind: row.kind, range: NSRange(location: start, length: output.length - start)))
@@ -234,7 +234,7 @@ struct DiffPaneTextDocumentBuilder {
             }
 
             let rowStart = index
-            while index < rows.count, rows[index].kind != .collapsed {
+            while index < rows.count, rows[index].kind != .collapsed, rows[index].kind != .expandableContext {
                 index += 1
             }
             appendStackedLines(
@@ -452,7 +452,7 @@ struct DiffPaneTextDocumentBuilder {
 
     private static func tone(for line: DiffDisplayLine?, rowKind: DiffDisplayRow.Kind) -> DiffPaneLineTone {
         guard let line else {
-            return rowKind == .collapsed ? .collapsed : .placeholder
+            return (rowKind == .collapsed || rowKind == .expandableContext) ? .collapsed : .placeholder
         }
         switch line.kind {
         case .add:
@@ -543,9 +543,9 @@ struct DiffPaneTextDocumentBuilder {
             return theme.color("del").opacity(0.12)
         case .replacement:
             return theme.color("mod").opacity(0.10)
-        case .context:
+        case .context, .expandedContext:
             return theme.color("bg-1")
-        case .collapsed:
+        case .collapsed, .expandableContext:
             return theme.color("bg-2")
         }
     }

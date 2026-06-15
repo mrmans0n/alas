@@ -80,6 +80,22 @@ struct DiffDisplayLine: Identifiable, Equatable {
     let noTrailingNewline: Bool
 }
 
+struct DiffContextExpansionKey: Codable, Equatable, Hashable, Sendable {
+    let groupID: String
+    let boundary: DiffContextBoundary
+}
+
+enum DiffContextBoundary: String, Codable, Equatable, Hashable, Sendable {
+    case above
+    case below
+}
+
+struct DiffContextExpansionRow: Codable, Equatable, Hashable, Sendable {
+    let key: DiffContextExpansionKey
+    let boundary: DiffContextBoundary
+    let remainingLineCount: Int
+}
+
 struct DiffDisplayRow: Identifiable, Equatable {
     enum Kind: Equatable {
         case context
@@ -87,6 +103,8 @@ struct DiffDisplayRow: Identifiable, Equatable {
         case delete
         case replacement
         case collapsed
+        case expandedContext
+        case expandableContext
     }
 
     let id: String
@@ -95,6 +113,7 @@ struct DiffDisplayRow: Identifiable, Equatable {
     let new: DiffDisplayLine?
     let collapsedLineCount: Int
     let collapsedRows: [DiffDisplayRow]
+    var contextExpansion: DiffContextExpansionRow?
 
     init(
         id: String,
@@ -102,7 +121,8 @@ struct DiffDisplayRow: Identifiable, Equatable {
         old: DiffDisplayLine?,
         new: DiffDisplayLine?,
         collapsedLineCount: Int,
-        collapsedRows: [DiffDisplayRow] = []
+        collapsedRows: [DiffDisplayRow] = [],
+        contextExpansion: DiffContextExpansionRow? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -110,6 +130,7 @@ struct DiffDisplayRow: Identifiable, Equatable {
         self.new = new
         self.collapsedLineCount = collapsedLineCount
         self.collapsedRows = collapsedRows
+        self.contextExpansion = contextExpansion
     }
 }
 

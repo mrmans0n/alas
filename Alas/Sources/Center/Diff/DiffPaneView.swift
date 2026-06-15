@@ -90,7 +90,7 @@ enum DiffPaneRowProjection {
     }
 
     static func stackedLines(for row: DiffDisplayRow) -> [DiffDisplayLine] {
-        if row.kind == .context {
+        if row.kind == .context || row.kind == .expandedContext {
             if let new = row.new { return [new] }
             if let old = row.old { return [old] }
             return []

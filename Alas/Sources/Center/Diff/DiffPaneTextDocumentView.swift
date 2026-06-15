@@ -582,9 +582,9 @@ enum DiffPaneLineTone: Equatable {
     case collapsed
 
     init(label: String, rowKind: DiffDisplayRow.Kind) {
-        if rowKind == .collapsed {
+        if rowKind == .collapsed || rowKind == .expandableContext {
             self = .collapsed
-        } else if label.isEmpty, rowKind != .context {
+        } else if label.isEmpty, rowKind != .context, rowKind != .expandedContext {
             self = .placeholder
         } else {
             switch rowKind {
@@ -592,9 +592,9 @@ enum DiffPaneLineTone: Equatable {
                 self = .add
             case .delete:
                 self = .delete
-            case .context, .replacement:
+            case .context, .expandedContext, .replacement:
                 self = .context
-            case .collapsed:
+            case .collapsed, .expandableContext:
                 self = .collapsed
             }
         }
