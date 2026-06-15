@@ -541,6 +541,7 @@ struct ReviewSessionTabView: View {
     }
 
     private func confirmProviderPublish() async {
+        guard !isProviderPublishing else { return }
         guard let confirmation = providerPublishConfirmation,
               let loaded,
               let providerContext = loaded.providerContext,

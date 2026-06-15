@@ -28,6 +28,9 @@ struct ProviderReviewMutationController {
             localDraftIDs?.contains(comment.id) ?? true
         }
         let comments = sourceComments.compactMap(ProviderReviewDraftComment.init(localDraft:))
+        if localDraftIDs != nil, comments.isEmpty {
+            throw ProviderReviewMutationControllerError.noPublishableSelectedDrafts
+        }
         let request = ProviderReviewPublishRequest(
             remote: remote,
             reviewRequest: reviewRequest,
@@ -72,5 +75,16 @@ struct ProviderReviewMutationController {
 
     func mutateThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
         try await provider.mutateReviewThread(mutation)
+    }
+}
+
+enum ProviderReviewMutationControllerError: LocalizedError, Equatable {
+    case noPublishableSelectedDrafts
+
+    var errorDescription: String? {
+        switch self {
+        case .noPublishableSelectedDrafts:
+            return "The selected draft is no longer publishable."
+        }
     }
 }

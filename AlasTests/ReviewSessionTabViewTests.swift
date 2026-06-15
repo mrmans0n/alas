@@ -373,6 +373,59 @@ struct ReviewSessionTabViewTests {
         #expect(publishedRequest.comments.map(\.localDraftID) == [selected.id])
     }
 
+    @Test func providerMutationControllerRejectsStaleSelectedDraftWithoutPublishing() async throws {
+        let sessionID = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-provider-stale-selected-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let draftController = ReviewDraftCommentController(
+            sessionID: sessionID,
+            store: ReviewDraftCommentStore(
+                store: PersistenceStore(),
+                url: directory.appendingPathComponent("drafts.json")
+            )
+        )
+        try draftController.load()
+        let request = Self.reviewRequest(provider: .github)
+        let provider = RecordingProviderReviewMutator(
+            kind: .github,
+            publishResult: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let controller = ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftController
+        )
+
+        do {
+            _ = try await controller.publishReview(
+                remote: request.remote,
+                reviewRequest: request,
+                decision: .comment,
+                summaryBody: "Review from Alas",
+                cwd: URL(fileURLWithPath: "/repo"),
+                localDraftIDs: ["missing-draft"]
+            )
+            Issue.record("Expected stale selected draft publish to throw")
+        } catch let error as ProviderReviewMutationControllerError {
+            #expect(error == .noPublishableSelectedDrafts)
+        }
+
+        #expect(provider.publishRequests().isEmpty)
+    }
+
     @Test func providerMutationControllerKeepsFailedDraftsActiveWithError() async throws {
         let sessionID = ReviewDraftSessionID.reviewRequest(
             worktreeID: "wt",
