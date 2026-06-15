@@ -788,6 +788,57 @@ struct DiffReviewSurfaceTests {
         #expect(dismissedID == "draft-dismiss-inline")
     }
 
+    @Test func fileSectionDraftCommentCardCanPublishProviderComment() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-publish-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var publishedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false,
+                    canPublishProvider: true
+                )
+            },
+            publishProvider: { publishedID = $0.id }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-publish-draft-publish-inline",
+            in: controller.view
+        ))
+        #expect(publishedID == "draft-publish-inline")
+    }
+
     @Test func fileSectionDraftCommentCardUsesProvidedReviewTargetForPromptActions() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -1350,6 +1401,41 @@ struct DiffReviewSurfaceTests {
         #expect(recorder.copied == bundle)
         #expect(recorder.sent == bundle)
         #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
+    }
+
+    @Test func summaryRailCanPublishReview() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-publish-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review provider request",
+                repositoryPath: "/repo",
+                providerDescription: "GitHub #527",
+                sourceDescription: "Provider review"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        var didPublish = false
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in .none },
+            canPublishReview: { true },
+            publishReview: { didPublish = true }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: controller.view))
+        #expect(didPublish)
     }
 
     @Test func summaryRailHidesSendActionWhenNoAgentTargetExists() throws {

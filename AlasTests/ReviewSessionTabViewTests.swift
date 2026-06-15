@@ -465,6 +465,32 @@ struct ReviewSessionTabViewTests {
         ) == nil)
     }
 
+    @Test func providerPublishConfirmationListsProviderDecisionAndCommentCount() throws {
+        var selectedDecision = ProviderReviewDecision.comment
+        let view = ProviderReviewPublishConfirmationView(
+            providerName: "GitHub",
+            reviewIdentity: "PR #527",
+            commentCount: 2,
+            unpublishableMessages: ["Sources/Old.swift: line is outdated"],
+            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            isPublishing: false,
+            errorMessage: nil,
+            onCancel: {},
+            onConfirm: {}
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 420, height: 260))
+        host.layoutSubtreeIfNeeded()
+        let description = recursiveDescription(host)
+
+        #expect(description.contains("GitHub"))
+        #expect(description.contains("PR #527"))
+        #expect(description.contains("2 comments"))
+        #expect(description.contains("line is outdated"))
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
+    }
+
     private func recursiveDescription(_ view: NSView) -> String {
         ([view.accessibilityLabel(), view.accessibilityIdentifier()] + view.subviews.map(recursiveDescription))
             .compactMap { $0 }

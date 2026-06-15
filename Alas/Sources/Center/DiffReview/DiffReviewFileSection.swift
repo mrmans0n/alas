@@ -1096,6 +1096,7 @@ private struct ReviewDraftCommentCard: View {
             || availability.canDismiss
             || availability.canCopyPrompt
             || availability.canShowSendToAgent
+            || availability.canPublishProvider
         {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
@@ -1133,6 +1134,11 @@ private struct ReviewDraftCommentCard: View {
                 if availability.canCopyPrompt {
                     actionButton(id: "copy", title: "Copy") {
                         actions.copyPrompt(feedbackBundle)
+                    }
+                }
+                if availability.canPublishProvider {
+                    actionButton(id: "publish", title: "Publish") {
+                        actions.publishProvider(comment)
                     }
                 }
                 if availability.canShowSendToAgent {
@@ -1183,22 +1189,36 @@ private struct ReviewDraftCommentCard: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .help(title)
-        .accessibilityIdentifier("diff-review-draft-comment-\(id)-\(comment.id)")
+        .accessibilityIdentifier(accessibilityIdentifier(forActionID: id))
         .accessibilityLabel(title)
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                identifier: markerIdentifier(forActionID: id),
                 label: title
             )
         )
         .background(
             ReviewDraftCommentActionPressMarker(
-                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                identifier: markerIdentifier(forActionID: id),
                 label: title,
                 isEnabled: enabled,
                 action: action
             )
         )
+    }
+
+    private func accessibilityIdentifier(forActionID id: String) -> String {
+        if id == "publish" {
+            return "diff-review-draft-comment-publish-\(comment.id)"
+        }
+        return "diff-review-draft-comment-\(id)-\(comment.id)"
+    }
+
+    private func markerIdentifier(forActionID id: String) -> String {
+        if id == "publish" {
+            return "diff-review-draft-comment-publish-\(comment.id)"
+        }
+        return "diff-review-draft-comment-action-\(id)-\(comment.id)"
     }
 
     private var feedbackBundle: ReviewFeedbackBundle {

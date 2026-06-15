@@ -76,6 +76,10 @@ struct ReviewDraftSummaryRail: View {
         !bundle.activeComments.isEmpty && visibleComments.contains { draftCommentActions.availability($0).canSendToAgent }
     }
 
+    private var canPublishReview: Bool {
+        draftCommentActions.canPublishReview()
+    }
+
     private var shouldShowSendToAgent: Bool {
         visibleComments.contains { draftCommentActions.availability($0).canShowSendToAgent }
     }
@@ -132,6 +136,16 @@ struct ReviewDraftSummaryRail: View {
             ) {
                 draftCommentActions.copyPrompt(bundle)
             }
+            if canPublishReview {
+                collapsedActionButton(
+                    id: "review-draft-summary-publish-review",
+                    systemName: "arrow.up.doc",
+                    label: "Publish review",
+                    enabled: true
+                ) {
+                    draftCommentActions.publishReview()
+                }
+            }
             if shouldShowSendToAgent {
                 collapsedSendToAgentControl
             }
@@ -177,6 +191,27 @@ struct ReviewDraftSummaryRail: View {
                         draftCommentActions.copyPrompt(bundle)
                     }
                 )
+
+                if canPublishReview {
+                    Button {
+                        draftCommentActions.publishReview()
+                    } label: {
+                        summaryActionIcon(systemName: "arrow.up.doc", enabled: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Publish review")
+                    .accessibilityIdentifier("review-draft-summary-publish-review")
+                    .accessibilityLabel("Publish review")
+                    .background(
+                        ReviewDraftSummaryPressMarker(
+                            identifier: "review-draft-summary-publish-review",
+                            label: "Publish review",
+                            isEnabled: true
+                        ) {
+                            draftCommentActions.publishReview()
+                        }
+                    )
+                }
 
                 if shouldShowSendToAgent {
                     expandedSendToAgentControl
