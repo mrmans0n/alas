@@ -1067,7 +1067,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let rowRects = diffRowRects()
         guard !rowRects.isEmpty else { return }
 
-        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
+        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
         let labelRects = labelDrawRects()
         for index in visibleRowIndices(in: visible) {
             let label = labels[index]
@@ -1085,7 +1085,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
                 width: ruleThickness - horizontalPadding,
                 height: textHeight
             )
-            NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label))
+            NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label, row: index))
         }
     }
 
@@ -1098,7 +1098,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     func labelDrawRects() -> [NSRect] {
-        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
+        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
         let textLineRects: [NSRect]
         if let textView = scrollView?.documentView as? DiffPaneCodeTextView {
             textLineRects = textView.diffFirstLineFragmentRects()
@@ -1137,6 +1137,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         }
     }
 
+    func labelAttributesForTesting(row: Int) -> [NSAttributedString.Key: Any] {
+        labelAttributes(for: labels.indices.contains(row) ? labels[row] : "", row: row)
+    }
+
     private func observe(scrollView: NSScrollView) {
         scrollView.contentView.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(
@@ -1154,18 +1158,19 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             .map(\.count)
             .max() ?? 1
         let sample = String(repeating: "8", count: max(maxDigits, 1)) as NSString
-        let width = ceil(sample.size(withAttributes: labelAttributes(for: "")).width)
+        let width = ceil(sample.size(withAttributes: labelAttributes(for: "", row: nil)).width)
         ruleThickness = max(minimumThickness, width + horizontalPadding * 2)
     }
 
-    private func labelAttributes(for label: String) -> [NSAttributedString.Key: Any] {
+    private func labelAttributes(for label: String, row: Int?) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .right
         let color: NSColor
         if let theme {
-            if label.hasPrefix("+") {
+            let tone = row.flatMap(labelTone(at:))
+            if tone == .add || (tone == nil && label.hasPrefix("+")) {
                 color = NSColor(theme.color("add"))
-            } else if label.hasPrefix("-") {
+            } else if tone == .delete || (tone == nil && label.hasPrefix("-")) {
                 color = NSColor(theme.color("del"))
             } else {
                 color = NSColor(theme.color("fg-faint"))
@@ -1178,6 +1183,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ]
+    }
+
+    private func labelTone(at row: Int) -> DiffPaneLineTone? {
+        lineTones.indices.contains(row) ? lineTones[row] : nil
     }
 
     private func drawRowBackground(index: Int, rowRect: NSRect, theme: Theme) {

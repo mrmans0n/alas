@@ -866,6 +866,41 @@ struct DiffPaneViewTests {
         #expect(DiffPaneCodeTextView.changeRailRect(in: rowRect, tone: .delete) == nil)
     }
 
+    @Test func lineNumberRulerColorsExpandableContextPlusAsBoundaryControl() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "9 unchanged lines above",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: DiffContextExpansionKey(groupID: "hunk-0", boundary: .above),
+                    expansionBoundary: .above
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .old
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        let color = try #require(ruler.labelAttributesForTesting(row: 0)[.foregroundColor] as? NSColor)
+
+        #expect(color == NSColor(theme.color("fg-faint")))
+        #expect(color != NSColor(theme.color("add")))
+    }
+
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
         let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),
