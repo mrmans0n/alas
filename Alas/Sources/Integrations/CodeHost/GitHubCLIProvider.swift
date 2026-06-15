@@ -367,6 +367,14 @@ struct GitHubCLIProvider: CodeHostProvider {
                     message: "GitHub review comments require an old or new side."
                 )
             }
+        guard !publishableComments.isEmpty else {
+            return ProviderReviewPublishResult(
+                published: [],
+                failed: preflightFailures,
+                refreshedRequest: request.reviewRequest,
+                warnings: []
+            )
+        }
         let pullRequestID = try await pullRequestNodeID(
             remote: request.remote,
             request: request.reviewRequest,

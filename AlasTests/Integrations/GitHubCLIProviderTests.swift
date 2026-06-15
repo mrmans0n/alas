@@ -500,6 +500,40 @@ struct GitHubCLIProviderTests {
         #expect(result.refreshedRequest.number == 42)
     }
 
+    @Test func githubPublishReviewDoesNotSubmitDecisionWhenNoDraftsArePublishable() async throws {
+        let runner = FakeRunner(results: [])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-unknown",
+                    path: "Sources/App.swift",
+                    side: .unknown,
+                    startLine: 20,
+                    endLine: nil,
+                    body: "This should not submit a review decision."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.isEmpty)
+        #expect(result.published.isEmpty)
+        #expect(result.failed == [
+            ProviderReviewFailedComment(
+                localDraftID: "draft-unknown",
+                message: "GitHub review comments require an old or new side."
+            ),
+        ])
+        #expect(result.refreshedRequest.number == 42)
+    }
+
     @Test func githubPublishReviewPreservesMappingsWhenRefreshFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
