@@ -135,7 +135,7 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
 
     static func reviewRequest(
         worktreeID: String,
-        repositoryPath: URL = URL(fileURLWithPath: ""),
+        repositoryPath: URL,
         provider: CodeHostKind,
         host: String,
         repositorySlug: String,
@@ -144,10 +144,11 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
         title: String,
         headSHA: String?
     ) -> Self {
+        let path = standardizedPath(repositoryPath)
         let normalizedHost = host.lowercased()
         let normalizedSlug = standardizedRepositorySlug(repositorySlug)
         return ReviewSessionTarget(
-            id: makeID(.reviewRequest, [worktreeID, provider.rawValue, normalizedHost, normalizedSlug, "\(number)"]),
+            id: makeID(.reviewRequest, [worktreeID, path, provider.rawValue, normalizedHost, normalizedSlug, "\(number)"]),
             kind: .reviewRequest,
             worktreeID: worktreeID,
             repositoryPath: standardizedURL(repositoryPath),

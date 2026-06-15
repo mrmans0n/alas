@@ -23,10 +23,10 @@ struct ReviewSessionStore {
 
     func findActive(targetID: ReviewSessionID) throws -> ReviewSessionRecord? {
         let snapshot = try readSnapshot()
-        guard let record = snapshot.recordsByID[targetID.rawValue],
-              record.status != .archived
-        else { return nil }
-        return record
+        return snapshot.recordsByID.values
+            .filter { $0.target.id == targetID && $0.status != .archived }
+            .sorted(by: sortSessions)
+            .first
     }
 
     func save(_ record: ReviewSessionRecord) throws {

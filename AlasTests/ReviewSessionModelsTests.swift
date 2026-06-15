@@ -20,8 +20,10 @@ struct ReviewSessionModelsTests {
     }
 
     @Test func providerTargetIncludesProviderIdentity() {
+        let repositoryPath = URL(fileURLWithPath: "/repo/../repo")
         let target = ReviewSessionTarget.reviewRequest(
             worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
             provider: .github,
             host: "GitHub.com",
             repositorySlug: "mrmans0n/alas",
@@ -32,8 +34,8 @@ struct ReviewSessionModelsTests {
         )
 
         #expect(target.kind == .reviewRequest)
-        #expect(target.id.rawValue.contains("github"))
-        #expect(target.id.rawValue.contains("github.com"))
+        #expect(target.repositoryPath.path == "/repo")
+        #expect(target.id.rawValue == "review-request\u{1f}wt-1\u{1f}/repo\u{1f}github\u{1f}github.com\u{1f}mrmans0n/alas\u{1f}520")
         #expect(target.draftSessionID == .reviewRequest(worktreeID: "wt-1", provider: .github, host: "github.com", repositorySlug: "mrmans0n/alas", number: 520))
         #expect(target.providerDescription == "GitHub mrmans0n/alas #520")
         #expect(target.revisionDescription == "abc123")

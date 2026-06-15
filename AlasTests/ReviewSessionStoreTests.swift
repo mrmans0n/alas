@@ -75,6 +75,30 @@ struct ReviewSessionStoreTests {
         #expect(try store.load(id: target.id)?.status == .archived)
     }
 
+    @Test func findActiveMatchesTargetIDWhenRecordIDDiffers() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abc123",
+            title: "Review abc123"
+        )
+        let record = ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: "session-override"),
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        try store.save(record)
+
+        #expect(try store.load(id: record.id) == record)
+        #expect(try store.findActive(targetID: target.id) == record)
+    }
+
     private func makeRecord(id: String, worktreeID: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
         let target = ReviewSessionTarget.commit(
             worktreeID: worktreeID,
