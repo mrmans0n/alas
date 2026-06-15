@@ -206,9 +206,23 @@ extension GitService {
 
     func refContextSnapshot(worktreePath: URL, baseRef: String, headRef: String, file: String, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
         let oldPath = originalPath?.isEmpty == false ? originalPath! : file
-        let old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: baseRef, path: oldPath)
+        let mergeBase = try await mergeBase(worktreePath: worktreePath, baseRef: baseRef, headRef: headRef)
+        let old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: mergeBase, path: oldPath)
         let new = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: headRef, path: file)
         return DiffReviewFileContextSnapshot(old: old, new: new)
+    }
+
+    private func mergeBase(worktreePath: URL, baseRef: String, headRef: String) async throws -> String {
+        let result = try await Process.git(["merge-base", baseRef, headRef], cwd: worktreePath)
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !stdout.isEmpty else {
+            let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = detail.isEmpty
+                ? "Unable to resolve merge base for \(baseRef) and \(headRef)."
+                : detail
+            throw ProcessError.nonZeroExit(result.exitCode, message)
+        }
+        return stdout
     }
 
     private func firstParentOrEmptyTree(worktreePath: URL, sha: String) async throws -> String {

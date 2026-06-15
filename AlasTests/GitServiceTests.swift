@@ -235,6 +235,11 @@ struct GitServiceTests {
         let sha = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
             .stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        try await gitOK(["checkout", "-q", "main"], cwd: repo)
+        try writeText("main advanced\n", "old.swift", in: repo)
+        try await gitOK(["add", "old.swift"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "advance main"], cwd: repo)
+        try await gitOK(["checkout", "-q", "feature/rename"], cwd: repo)
 
         let service = GitService()
         let commitSnapshot = try await service.commitContextSnapshot(
