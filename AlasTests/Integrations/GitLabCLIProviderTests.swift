@@ -908,6 +908,32 @@ struct GitLabCLIProviderTests {
         })
     }
 
+    @Test func publishReviewDoesNotSubmitDecisionWhenAllGitLabDraftPublishesFail() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new)],
+            decision: .approve,
+            summaryBody: "Looks good.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/:id/merge_requests/42/versions"],
+            ["api", "projects/:id/merge_requests/42/discussions"],
+        ])
+        #expect(result.published.isEmpty)
+        #expect(result.failed.map(\.localDraftID) == ["draft-1"])
+        #expect(result.failed.first?.message.contains("line is not commentable") == true)
+        #expect(result.refreshedRequest == Self.makeRequest())
+    }
+
     @Test func threadMutationsUseDiscussionEndpointsAndRefreshMR() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),

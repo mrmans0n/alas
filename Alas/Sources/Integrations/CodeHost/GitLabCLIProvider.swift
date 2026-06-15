@@ -191,6 +191,14 @@ struct GitLabCLIProvider: CodeHostProvider {
                 failed.append(ProviderReviewFailedComment(localDraftID: comment.localDraftID, message: error.localizedDescription))
             }
         }
+        guard request.comments.isEmpty || !published.isEmpty else {
+            return ProviderReviewPublishResult(
+                published: [],
+                failed: failed,
+                refreshedRequest: request.reviewRequest,
+                warnings: []
+            )
+        }
 
         var warnings: [String] = []
         do {
