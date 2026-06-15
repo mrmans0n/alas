@@ -19,6 +19,7 @@ struct DiffReviewFileSection: View {
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
     var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var reviewFeedbackTarget: ReviewFeedbackTarget?
 
     @Environment(\.theme) private var theme
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
@@ -103,6 +104,18 @@ struct DiffReviewFileSection: View {
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 
+    private var effectiveReviewFeedbackTarget: ReviewFeedbackTarget {
+        if let reviewFeedbackTarget {
+            return reviewFeedbackTarget
+        }
+        return ReviewFeedbackTarget(
+            title: file.summary.path,
+            repositoryPath: nil,
+            providerDescription: nil,
+            sourceDescription: "Local draft comment"
+        )
+    }
+
     @ViewBuilder
     private var fileLevelDraftCommentStack: some View {
         let fileLevel = draftCommentPlacement.fileLevel
@@ -121,6 +134,7 @@ struct DiffReviewFileSection: View {
                         file: file.summary,
                         isFocused: comment.id == focusedDraftCommentID,
                         actions: draftCommentActions,
+                        reviewFeedbackTarget: effectiveReviewFeedbackTarget,
                         onSelect: onSelectDraftComment
                     )
                     .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
@@ -836,6 +850,7 @@ private struct ReviewDraftCommentCard: View {
     let file: DiffReviewFileSummary
     let isFocused: Bool
     let actions: ReviewDraftCommentActions
+    let reviewFeedbackTarget: ReviewFeedbackTarget
     let onSelect: (ReviewDraftComment) -> Void
 
     @Environment(\.theme) private var theme
@@ -1048,12 +1063,7 @@ private struct ReviewDraftCommentCard: View {
 
     private var feedbackBundle: ReviewFeedbackBundle {
         ReviewFeedbackBundle(
-            target: ReviewFeedbackTarget(
-                title: file.path,
-                repositoryPath: nil,
-                providerDescription: nil,
-                sourceDescription: "Local draft comment"
-            ),
+            target: reviewFeedbackTarget,
             comments: [comment]
         )
     }

@@ -34,19 +34,22 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
             lines.append("Provider: \(providerDescription)")
         }
 
-        let commentsByPath = Dictionary(grouping: sortedActiveComments(), by: \.path)
-        for path in commentsByPath.keys.sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending }) {
-            guard let comments = commentsByPath[path] else { continue }
+        let commentsByFile = Dictionary(grouping: sortedActiveComments(), by: ReviewFeedbackFileContext.init(comment:))
+        let sortedFiles = commentsByFile.keys.sorted()
+        for fileContext in sortedFiles {
+            guard let comments = commentsByFile[fileContext] else { continue }
+            let path = fileContext.path
             lines.append("")
-            lines.append("## \(path)")
+            lines.append("## \(fileContext.heading)")
 
             for comment in comments {
+                let reference = fileContext.reference(for: comment)
                 let bodyLines = markdownBodyLines(comment.bodyMarkdown)
                 if bodyLines.count <= 1 {
                     let suffix = bodyLines.first.map { " — \($0)" } ?? ""
-                    lines.append("- `\(path):\(lineDescription(for: comment)) (\(comment.side.rawValue))`\(suffix)")
+                    lines.append("- `\(reference)`\(suffix)")
                 } else {
-                    lines.append("- `\(path):\(lineDescription(for: comment)) (\(comment.side.rawValue))`")
+                    lines.append("- `\(reference)`")
                     lines.append(contentsOf: bodyLines)
                 }
 
@@ -82,14 +85,6 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
         }
     }
 
-    private func lineDescription(for comment: ReviewDraftComment) -> String {
-        let range = comment.normalizedLineRange
-        if range.lowerBound == range.upperBound {
-            return "\(range.lowerBound)"
-        }
-        return "\(range.lowerBound)-\(range.upperBound)"
-    }
-
     private func markdownBodyLines(_ body: String) -> [String] {
         let trimmedBody = body.trimmingCharacters(in: .newlines)
         guard !trimmedBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -100,5 +95,48 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
             return [lines[0].trimmingCharacters(in: .whitespacesAndNewlines)]
         }
         return lines
+    }
+}
+
+private struct ReviewFeedbackFileContext: Hashable, Comparable {
+    var path: String
+    var namespace: String
+
+    init(comment: ReviewDraftComment) {
+        self.path = comment.path
+        self.namespace = comment.fileID.namespace
+    }
+
+    var heading: String {
+        guard shouldDisplayNamespace else { return path }
+        return "\(path) [\(namespace)]"
+    }
+
+    func reference(for comment: ReviewDraftComment) -> String {
+        let line = ReviewFeedbackFileContext.lineDescription(for: comment)
+        guard shouldDisplayNamespace else {
+            return "\(path):\(line) (\(comment.side.rawValue))"
+        }
+        return "\(path):\(line) (\(comment.side.rawValue), \(namespace))"
+    }
+
+    static func < (lhs: ReviewFeedbackFileContext, rhs: ReviewFeedbackFileContext) -> Bool {
+        let pathOrder = lhs.path.localizedStandardCompare(rhs.path)
+        if pathOrder != .orderedSame {
+            return pathOrder == .orderedAscending
+        }
+        return lhs.namespace.localizedStandardCompare(rhs.namespace) == .orderedAscending
+    }
+
+    private var shouldDisplayNamespace: Bool {
+        !namespace.isEmpty && namespace != "review"
+    }
+
+    private static func lineDescription(for comment: ReviewDraftComment) -> String {
+        let range = comment.normalizedLineRange
+        if range.lowerBound == range.upperBound {
+            return "\(range.lowerBound)"
+        }
+        return "\(range.lowerBound)-\(range.upperBound)"
     }
 }

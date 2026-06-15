@@ -89,6 +89,46 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains("This behavior regressed."))
     }
 
+    @Test func promptDistinguishesSamePathCommentsFromDifferentNamespaces() {
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Local changes",
+            repositoryPath: "/repo",
+            providerDescription: nil,
+            sourceDescription: "Review Changes"
+        )
+        let bundle = ReviewFeedbackBundle(target: target, comments: [
+            comment(
+                id: "unstaged",
+                session: session,
+                namespace: "unstaged",
+                path: "Sources/App.swift",
+                line: 4,
+                body: "Fix the working tree edit."
+            ),
+            comment(
+                id: "staged",
+                session: session,
+                namespace: "staged",
+                path: "Sources/App.swift",
+                line: 4,
+                body: "Fix the staged edit."
+            ),
+        ])
+
+        let prompt = bundle.promptMarkdown()
+
+        #expect(prompt.contains("## Sources/App.swift [staged]"))
+        #expect(prompt.contains("## Sources/App.swift [unstaged]"))
+        #expect(prompt.contains("- `Sources/App.swift:4 (new, staged)` — Fix the staged edit."))
+        #expect(prompt.contains("- `Sources/App.swift:4 (new, unstaged)` — Fix the working tree edit."))
+    }
+
+
     @Test func promptPreservesMultilineMarkdownBodies() {
         let session = ReviewDraftSessionID.localChanges(
             worktreeID: "wt",
@@ -166,6 +206,7 @@ struct ReviewFeedbackBundleTests {
     private func comment(
         id: String,
         session: ReviewDraftSessionID,
+        namespace: String = "review",
         path: String,
         side: DiffReviewInlineFeedbackSide = .new,
         line: Int,
@@ -177,7 +218,7 @@ struct ReviewFeedbackBundleTests {
         ReviewDraftComment(
             id: id,
             sessionID: session,
-            fileID: DiffReviewFileID(namespace: "review", path: path),
+            fileID: DiffReviewFileID(namespace: namespace, path: path),
             path: path,
             originalPath: nil,
             side: side,

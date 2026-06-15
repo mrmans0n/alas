@@ -280,7 +280,8 @@ struct DiffReviewSurface: View {
                 onSelectDraftComment: onSelectDraftComment,
                 onSaveDraftComment: { anchor, body in
                     onSaveDraftComment(file.id, anchor, body)
-                }
+                },
+                reviewFeedbackTarget: effectiveReviewFeedbackTarget
             )
         } else {
             DiffReviewFileSectionPlaceholder(

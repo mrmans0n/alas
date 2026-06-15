@@ -779,6 +779,64 @@ struct DiffReviewSurfaceTests {
         #expect(dismissedID == "draft-dismiss-inline")
     }
 
+    @Test func fileSectionDraftCommentCardUsesProvidedReviewTargetForPromptActions() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Review working tree",
+            repositoryPath: "/repo",
+            providerDescription: "GitHub #123",
+            sourceDescription: "Review Changes"
+        )
+        let comment = draftComment(id: "draft-target-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let recorder = ReviewBundleActionRecorder()
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: true,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            },
+            copyPrompt: { recorder.copied = $0 }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions,
+            reviewFeedbackTarget: target
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-copy-draft-target-inline",
+            in: controller.view
+        ))
+        #expect(recorder.copied?.target == target)
+        #expect(recorder.copied?.comments == [comment])
+    }
+
     @Test func fileSectionDraftCommentCardDoesNotFireDisabledSendAction() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
