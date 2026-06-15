@@ -79,13 +79,13 @@ struct ProviderReviewPublishConfirmationView: View {
                     .disabled(isPublishing)
                     .accessibilityIdentifier("provider-review-publish-cancel")
                 Button(isPublishing ? "Publishing..." : "Publish", action: onConfirm)
-                    .disabled(isPublishing)
+                    .disabled(isConfirmDisabled)
                     .keyboardShortcut(.defaultAction)
                     .background(
                         ProviderReviewPublishPressMarker(
                             identifier: "provider-review-publish-confirm",
                             label: "Publish",
-                            isEnabled: !isPublishing,
+                            isEnabled: !isConfirmDisabled,
                             action: onConfirm
                         )
                     )
@@ -110,6 +110,10 @@ struct ProviderReviewPublishConfirmationView: View {
 
     private var commentCountText: String {
         "\(commentCount) \(commentCount == 1 ? "comment" : "comments")"
+    }
+
+    private var isConfirmDisabled: Bool {
+        isPublishing || (commentCount == 0 && selectedDecision == .comment)
     }
 }
 

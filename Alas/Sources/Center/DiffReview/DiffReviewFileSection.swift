@@ -1055,6 +1055,15 @@ private struct ReviewDraftCommentCard: View {
                 }
                 .lineLimit(1)
 
+                ForEach(providerStateLabels.indices, id: \.self) { index in
+                    let label = providerStateLabels[index]
+                    Text(label.text)
+                        .font(.system(size: 10))
+                        .foregroundColor(label.color)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if isEditing {
                     TextEditor(text: $editingBody)
                         .font(.system(size: 11.5))
@@ -1241,6 +1250,7 @@ private struct ReviewDraftCommentCard: View {
             "Local draft",
             lineDescription,
             comment.state == .resolved ? "resolved" : nil,
+            providerStateLabels.map(\.text).joined(separator: ", "),
             DiffReviewInlineFeedbackMarkdown.plainText(comment.bodyMarkdown),
         ]
         .compactMap { part in
@@ -1248,6 +1258,17 @@ private struct ReviewDraftCommentCard: View {
             return part
         }
         .joined(separator: ", ")
+    }
+
+    private var providerStateLabels: [(text: String, color: Color)] {
+        var labels: [(text: String, color: Color)] = []
+        if let publish = comment.providerPublish {
+            labels.append(("published to \(publish.provider.displayName)", theme.color("fg-faint")))
+        }
+        if let error = comment.providerError {
+            labels.append(("\(error.provider.displayName) error: \(error.message)", theme.color("warn")))
+        }
+        return labels
     }
 
     private var statusColor: Color {

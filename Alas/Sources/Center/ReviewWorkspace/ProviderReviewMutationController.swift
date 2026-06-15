@@ -24,10 +24,11 @@ struct ProviderReviewMutationController {
         cwd: URL,
         localDraftIDs: Set<String>? = nil
     ) async throws -> ProviderReviewPublishResult {
-        let sourceComments = draftController.activeUnpublishedComments.filter { comment in
+        let sourceComments = draftController.comments.filter { comment in
             localDraftIDs?.contains(comment.id) ?? true
         }
-        let comments = sourceComments.compactMap(ProviderReviewDraftComment.init(localDraft:))
+        let comments = ProviderReviewPublishPlanner.publishableDrafts(sourceComments)
+            .compactMap(ProviderReviewDraftComment.init(localDraft:))
         if localDraftIDs != nil, comments.isEmpty {
             throw ProviderReviewMutationControllerError.noPublishableSelectedDrafts
         }
@@ -75,6 +76,48 @@ struct ProviderReviewMutationController {
 
     func mutateThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
         try await provider.mutateReviewThread(mutation)
+    }
+}
+
+enum ProviderReviewPublishPlanner {
+    static func publishableDrafts(_ drafts: [ReviewDraftComment]) -> [ReviewDraftComment] {
+        drafts.filter { unpublishableReason(for: $0) == nil }
+    }
+
+    static func unpublishableMessages(_ drafts: [ReviewDraftComment]) -> [String] {
+        drafts.compactMap { draft in
+            guard let reason = unpublishableReason(for: draft) else { return nil }
+            return "\(draft.path): \(reason)"
+        }
+    }
+
+    private static func unpublishableReason(for draft: ReviewDraftComment) -> String? {
+        if let publish = draft.providerPublish {
+            return "already published to \(publish.provider.displayName)."
+        }
+        if draft.state != .active {
+            return "draft is \(draft.state.providerPublishDescription)."
+        }
+        if draft.side == .unknown || draft.normalizedLineRange.lowerBound <= 0 {
+            return "missing line anchor."
+        }
+        if draft.bodyMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "empty comment."
+        }
+        return nil
+    }
+}
+
+private extension ReviewDraftCommentState {
+    var providerPublishDescription: String {
+        switch self {
+        case .active:
+            "active"
+        case .resolved:
+            "resolved"
+        case .dismissed:
+            "dismissed"
+        }
     }
 }
 

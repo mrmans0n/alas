@@ -473,20 +473,19 @@ struct ReviewSessionTabView: View {
 
     private func canPublishProvider(_ comment: ReviewDraftComment, in loaded: ReviewSessionLoadedContext) -> Bool {
         guard loaded.providerContext != nil else { return false }
-        return ProviderReviewDraftComment(localDraft: comment) != nil
+        return !ProviderReviewPublishPlanner.publishableDrafts([comment]).isEmpty
     }
 
     private func canPublishProviderReview(in loaded: ReviewSessionLoadedContext) -> Bool {
         guard loaded.providerContext != nil else { return false }
-        return draftCommentController?.activeUnpublishedComments.contains { comment in
-            ProviderReviewDraftComment(localDraft: comment) != nil
-        } ?? false
+        return !ProviderReviewPublishPlanner.publishableDrafts(draftCommentController?.comments ?? []).isEmpty
     }
 
     private func openProviderPublishConfirmation(commentID: String?, loaded: ReviewSessionLoadedContext) {
         guard let providerContext = loaded.providerContext else { return }
         let comments = providerPublishableComments(commentID: commentID)
-        guard !comments.isEmpty else { return }
+        let unpublishableMessages = providerUnpublishableMessages(commentID: commentID)
+        guard !comments.isEmpty || !unpublishableMessages.isEmpty else { return }
         selectedProviderDecision = .comment
         providerPublishError = nil
         providerPublishConfirmation = ProviderReviewPublishConfirmationState(
@@ -494,22 +493,20 @@ struct ReviewSessionTabView: View {
             providerName: providerContext.remote.kind.displayName,
             reviewIdentity: providerContext.reviewRequest.displayIdentity,
             commentCount: comments.count,
-            unpublishableMessages: providerUnpublishableMessages(commentID: commentID)
+            unpublishableMessages: unpublishableMessages
         )
     }
 
     private func providerPublishableComments(commentID: String?) -> [ReviewDraftComment] {
-        let comments = draftCommentController?.activeUnpublishedComments ?? []
+        let comments = draftCommentController?.comments ?? []
         let filtered = commentID.map { id in comments.filter { $0.id == id } } ?? comments
-        return filtered.filter { ProviderReviewDraftComment(localDraft: $0) != nil }
+        return ProviderReviewPublishPlanner.publishableDrafts(filtered)
     }
 
     private func providerUnpublishableMessages(commentID: String?) -> [String] {
-        let comments = draftCommentController?.activeUnpublishedComments ?? []
+        let comments = draftCommentController?.comments ?? []
         let filtered = commentID.map { id in comments.filter { $0.id == id } } ?? comments
-        return filtered.compactMap { comment in
-            ProviderReviewDraftComment(localDraft: comment) == nil ? "\(comment.path): cannot publish this draft" : nil
-        }
+        return ProviderReviewPublishPlanner.unpublishableMessages(filtered)
     }
 
     @ViewBuilder

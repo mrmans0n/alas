@@ -373,6 +373,34 @@ struct ReviewSessionTabViewTests {
         #expect(publishedRequest.comments.map(\.localDraftID) == [selected.id])
     }
 
+    @Test func providerPublishPlannerIgnoresAlreadyPublishedAndInvalidDrafts() {
+        var published = Self.providerDraftComment(id: "published")
+        published.providerPublish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: nil,
+            publishedAt: Date(timeIntervalSince1970: 20)
+        )
+        let valid = Self.providerDraftComment(id: "valid")
+        let resolved = Self.providerDraftComment(id: "resolved", state: .resolved)
+        let missingAnchor = Self.providerDraftComment(id: "missing-anchor", side: .unknown)
+        let empty = Self.providerDraftComment(id: "empty", bodyMarkdown: " \n ")
+
+        let comments = [published, valid, resolved, missingAnchor, empty]
+
+        #expect(ProviderReviewPublishPlanner.publishableDrafts(comments).map(\.id) == ["valid"])
+        #expect(ProviderReviewPublishPlanner.unpublishableMessages(comments) == [
+            "Sources/published.swift: already published to GitHub.",
+            "Sources/resolved.swift: draft is resolved.",
+            "Sources/missing-anchor.swift: missing line anchor.",
+            "Sources/empty.swift: empty comment.",
+        ])
+    }
+
     @Test func providerMutationControllerRejectsStaleSelectedDraftWithoutPublishing() async throws {
         let sessionID = ReviewDraftSessionID.reviewRequest(
             worktreeID: "wt",
@@ -620,6 +648,29 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
     }
 
+    @Test func providerPublishConfirmationDisablesCommentDecisionWithNoComments() throws {
+        var selectedDecision = ProviderReviewDecision.comment
+        var didConfirm = false
+        let view = ProviderReviewPublishConfirmationView(
+            providerName: "GitHub",
+            reviewIdentity: "PR #527",
+            commentCount: 0,
+            unpublishableMessages: ["Sources/App.swift: already published to GitHub."],
+            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            isPublishing: false,
+            errorMessage: nil,
+            onCancel: {},
+            onConfirm: { didConfirm = true }
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 420, height: 260))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host))
+        #expect(!didConfirm)
+    }
+
     @Test func reviewSessionShowsPublishReviewForProviderContextWithDraftsAndOpensPublishConfirmation() async throws {
         let request = Self.reviewRequest(provider: .github)
         let target = Self.reviewRequestTarget(provider: .github, request: request)
@@ -766,6 +817,35 @@ struct ReviewSessionTabViewTests {
             mergeState: .unknown,
             checks: [],
             threads: []
+        )
+    }
+
+    private static func providerDraftComment(
+        id: String,
+        side: DiffReviewInlineFeedbackSide = .new,
+        state: ReviewDraftCommentState = .active,
+        bodyMarkdown: String = "Please fix this."
+    ) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: .reviewRequest(
+                worktreeID: "wt",
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                number: 527
+            ),
+            fileID: DiffReviewFileID(namespace: "github-pr", path: "Sources/\(id).swift"),
+            path: "Sources/\(id).swift",
+            originalPath: nil,
+            side: side,
+            startLine: 12,
+            endLine: nil,
+            selectedText: "let value = 1",
+            bodyMarkdown: bodyMarkdown,
+            state: state,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
         )
     }
 

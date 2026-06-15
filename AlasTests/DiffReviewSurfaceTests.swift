@@ -830,6 +830,53 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
     }
 
+    @Test func fileSectionDraftCommentCardShowsProviderPublishAndErrorState() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        var published = draftComment(id: "draft-published-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        published.providerPublish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: nil,
+            publishedAt: Date(timeIntervalSince1970: 3)
+        )
+        var failed = draftComment(id: "draft-error-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        failed.providerError = ReviewDraftProviderError(
+            provider: .gitlab,
+            message: "Line is no longer commentable.",
+            occurredAt: Date(timeIntervalSince1970: 4)
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [published, failed],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 620)
+
+        #expect(accessibilityLabel(in: controller.view, containing: "published to GitHub") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "GitLab error: Line is no longer commentable.") != nil)
+    }
+
     @Test func fileSectionDraftCommentCardCanDismissComment() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -1697,6 +1744,51 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "review-draft-summary-comment-draft-dismissed-visible", in: controller.view) != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "old line 7") != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "dismissed") != nil)
+    }
+
+    @Test func summaryRailShowsProviderPublishAndErrorState() throws {
+        let file = summary(path: "Sources/App.swift")
+        var published = draftComment(id: "draft-published-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        published.providerPublish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: nil,
+            publishedAt: Date(timeIntervalSince1970: 3)
+        )
+        var failed = draftComment(id: "draft-error-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        failed.providerError = ReviewDraftProviderError(
+            provider: .gitlab,
+            message: "Line is no longer commentable.",
+            occurredAt: Date(timeIntervalSince1970: 4)
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [published, failed]
+        )
+        var collapsed = false
+
+        let view = ReviewDraftSummaryRail(
+            comments: [published, failed],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: ReviewDraftCommentActions(),
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 520)
+
+        #expect(accessibilityLabel(in: controller.view, containing: "published to GitHub") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "GitLab error: Line is no longer commentable.") != nil)
     }
 
     @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {
