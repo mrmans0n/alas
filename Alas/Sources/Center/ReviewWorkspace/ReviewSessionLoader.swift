@@ -78,7 +78,11 @@ struct ReviewSessionLoader {
     }
 
     @MainActor
-    static func production(appState: AppState, worktree: Worktree) -> ReviewSessionLoader {
+    static func production(
+        appState: AppState,
+        worktree: Worktree,
+        providerRegistry: CodeHostProviderRegistry = .live()
+    ) -> ReviewSessionLoader {
         let changesLoader = ReviewChangesLoader()
         let git = GitService()
         let commitLoader = CommitReviewLoader(git: git)
@@ -114,8 +118,49 @@ struct ReviewSessionLoader {
                     }
                 )
             },
-            reviewRequest: { _ in
-                throw ReviewSessionLoaderError.unsupportedTarget
+            reviewRequest: { target in
+                guard case .reviewRequest(let providerKind, let host, let repositorySlug, let number, _) = target.payload,
+                      let provider = providerRegistry.provider(for: providerKind),
+                      let separatorIndex = repositorySlug.lastIndex(of: "/")
+                else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let owner = String(repositorySlug[..<separatorIndex])
+                let repository = String(repositorySlug[repositorySlug.index(after: separatorIndex)...])
+                guard !owner.isEmpty, !repository.isEmpty else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let remote = CodeHostRemote(
+                    kind: providerKind,
+                    host: host,
+                    owner: owner,
+                    repository: repository,
+                    remoteName: "origin",
+                    webURL: target.providerURL ?? URL(string: "https://\(host)/\(repositorySlug)")!
+                )
+                let request = ReviewRequest(
+                    remote: remote,
+                    number: number,
+                    title: target.title,
+                    url: target.providerURL ?? remote.webURL,
+                    state: .open,
+                    isDraft: false,
+                    headRefName: "",
+                    baseRefName: "",
+                    reviewDecision: .unknown,
+                    mergeState: .unknown,
+                    checks: [],
+                    threads: []
+                )
+                let loadedSession = try await ReviewRequestDiffLoader(provider: provider).load(
+                    remote: remote,
+                    request: request,
+                    cwd: target.repositoryPath
+                )
+                return ReviewSessionProviderLoadedSession(
+                    loadedSession: loadedSession,
+                    providerContext: ReviewSessionProviderContext(remote: remote, reviewRequest: request)
+                )
             },
             draftReviewRequest: { target in
                 guard case .draftReviewRequest(_, _, let base, let head, let headSHA) = target.payload else {

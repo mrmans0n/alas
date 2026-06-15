@@ -107,7 +107,7 @@ struct ReviewSessionLoaderTests {
     }
 
     @MainActor
-    @Test func productionLoaderRejectsStoredProviderReviewRequestWithoutSnapshotData() async throws {
+    @Test func productionLoaderLoadsProviderReviewRequestWithProviderContext() async throws {
         let repo = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
@@ -134,17 +134,39 @@ struct ReviewSessionLoaderTests {
             title: "Review loop",
             headSHA: "abc123"
         )
+        let summary = DiffReviewFileSummary(
+            path: "Sources/App.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .modified,
+            additions: 1,
+            deletions: 0,
+            isRenderable: true
+        )
+        let provider = FakeReviewRequestProvider(
+            diff: """
+            diff --git a/Sources/App.swift b/Sources/App.swift
+            index 1111111..2222222 100644
+            --- a/Sources/App.swift
+            +++ b/Sources/App.swift
+            @@ -1 +1 @@
+            -let old = true
+            +let new = true
+            """
+        )
         let loader = ReviewSessionLoader.production(
             appState: AppState(store: MemoryStore()),
-            worktree: worktree
+            worktree: worktree,
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
         )
 
-        do {
-            _ = try await loader.load(target: target)
-            Issue.record("Expected stored provider review request to be unsupported without snapshot data")
-        } catch let error as ReviewSessionLoaderError {
-            #expect(error == .unsupportedTarget)
-        }
+        let loaded = try await loader.load(target: target)
+
+        #expect(loaded.providerContext?.remote.repositorySlug == "mrmans0n/alas")
+        #expect(loaded.providerContext?.reviewRequest.number == 428)
+        #expect(loaded.session.summary.files.map(\.path) == [summary.path])
+        #expect(loaded.session.summary.files.map(\.namespace) == [summary.namespace])
     }
 
     @MainActor
@@ -225,5 +247,61 @@ struct ReviewSessionLoaderTests {
         func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
             nil
         }
+    }
+
+    private struct FakeReviewRequestProvider: CodeHostProvider {
+        let kind: CodeHostKind = .github
+        let diff: String
+
+        func isAvailable() async -> Bool { true }
+        func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+        func currentReviewRequest(
+            remote: CodeHostRemote,
+            branch: String,
+            headOwner: String?,
+            baseBranch: String,
+            cwd: URL
+        ) async throws -> ReviewRequest? {
+            nil
+        }
+        func createReviewRequest(
+            remote: CodeHostRemote,
+            branch: String,
+            headOwner: String?,
+            baseBranch: String,
+            title: String,
+            body: String,
+            isDraft: Bool,
+            cwd: URL
+        ) async throws -> URL {
+            remote.webURL
+        }
+        func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+        func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] { [] }
+        func checkEvidenceDetail(
+            remote: CodeHostRemote,
+            request: ReviewRequest,
+            item: ReviewEvidenceItem,
+            cwd: URL
+        ) async throws -> ReviewEvidenceDetail {
+            throw CodeHostProviderError.malformedOutput("FakeReviewRequestProvider does not provide check evidence details.")
+        }
+        func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] { [] }
+        func feedbackEvidenceDetail(
+            remote: CodeHostRemote,
+            request: ReviewRequest,
+            item: ReviewEvidenceItem,
+            cwd: URL
+        ) async throws -> ReviewEvidenceDetail {
+            throw CodeHostProviderError.malformedOutput("FakeReviewRequestProvider does not provide feedback evidence details.")
+        }
+        func rerunFailedChecks(
+            remote: CodeHostRemote,
+            branch: String,
+            headSHA: String,
+            request: ReviewRequest?,
+            cwd: URL
+        ) async throws {}
     }
 }
