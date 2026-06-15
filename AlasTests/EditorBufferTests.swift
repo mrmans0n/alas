@@ -909,6 +909,40 @@ struct EditorBufferTests {
 
         #expect(textView.undoManager?.canUndo == false)
     }
+
+    @Test func coordinatorDetachClearsTextViewUndoStack() throws {
+        // Regression: AppKit text undo actions target the NSTextView/TextKit
+        // objects that created them. If SwiftUI tears down the editor while
+        // those actions remain in the responder-chain undo manager, a later
+        // Edit > Undo can send _undoRedoTextOperation: to stale objects.
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "let a = 1\n")
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt", tabId: "tab-a",
+            worktreeRoot: root, relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let undoOwner = TestUndoOwner()
+        textView.delegate = undoOwner
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+        coordinator.attach(
+            textView: textView, buffer: buffer, layoutManager: layoutManager,
+            worktreeId: "wt", worktreeRoot: root, tabId: "tab-a",
+            revealLine: nil, revealCharacter: nil, theme: theme
+        )
+
+        textView.undoManager?.registerUndo(withTarget: textView) { _ in }
+        #expect(textView.undoManager?.canUndo == true)
+
+        coordinator.detach()
+
+        #expect(textView.undoManager?.canUndo == false)
+    }
 }
 
 @MainActor
