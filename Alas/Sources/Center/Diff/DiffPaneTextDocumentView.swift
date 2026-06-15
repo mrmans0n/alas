@@ -602,6 +602,11 @@ enum DiffPaneLineTone: Equatable {
 }
 
 final class DiffPaneCodeTextView: NSTextView {
+    private struct RowGeometry {
+        let rowRects: [NSRect]
+        let firstLineFragmentRects: [NSRect]
+    }
+
     static func placeholderHatchRect(in rowRect: NSRect) -> NSRect {
         rowRect.insetBy(dx: 0, dy: 1)
     }
@@ -613,11 +618,22 @@ final class DiffPaneCodeTextView: NSTextView {
     private var ownedTextStorage: NSTextStorage?
     private var customTrackingArea: NSTrackingArea?
     private var lspController: DiffPaneLSPController?
+    private var cachedRowGeometry: RowGeometry?
+    private var rowGeometryComputationCount = 0
+
+    var rowGeometryComputationCountForTesting: Int {
+        rowGeometryComputationCount
+    }
 
     var lineTones: [DiffPaneLineTone] = [] {
-        didSet { needsDisplay = true }
+        didSet {
+            invalidateDiffRowGeometry()
+            needsDisplay = true
+        }
     }
-    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
+    var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] = [] {
+        didSet { invalidateDiffRowGeometry() }
+    }
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
@@ -657,6 +673,19 @@ final class DiffPaneCodeTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         drawLineBackgrounds(in: dirtyRect)
         super.draw(dirtyRect)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let oldSize = frame.size
+        super.setFrameSize(newSize)
+        if abs(oldSize.width - newSize.width) > 0.5 {
+            invalidateDiffRowGeometry()
+        }
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        invalidateDiffRowGeometry()
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -701,33 +730,61 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     func diffRowRects() -> [NSRect] {
-        guard let layoutManager, let textContainer else { return [] }
+        rowGeometry().rowRects
+    }
+
+    func diffFirstLineFragmentRects() -> [NSRect] {
+        rowGeometry().firstLineFragmentRects
+    }
+
+    func invalidateDiffRowGeometry() {
+        cachedRowGeometry = nil
+    }
+
+    private func rowGeometry() -> RowGeometry {
+        if let cachedRowGeometry {
+            return cachedRowGeometry
+        }
+
+        let computed = computeRowGeometry()
+        cachedRowGeometry = computed
+        rowGeometryComputationCount += 1
+        return computed
+    }
+
+    private func computeRowGeometry() -> RowGeometry {
+        guard let layoutManager, let textContainer else {
+            return RowGeometry(rowRects: [], firstLineFragmentRects: [])
+        }
         layoutManager.ensureLayout(for: textContainer)
         let paragraphRanges = paragraphRanges(lineCount: lineTones.count)
+        let origin = textContainerOrigin
         var nextY = textContainerOrigin.y
-        return paragraphRanges.map { range in
+
+        var rowRects: [NSRect] = []
+        var firstLineFragmentRects: [NSRect] = []
+        rowRects.reserveCapacity(paragraphRanges.count)
+        firstLineFragmentRects.reserveCapacity(paragraphRanges.count)
+
+        for range in paragraphRanges {
             let height = measuredRowHeight(for: range, layoutManager: layoutManager)
-            defer { nextY += height }
-            return NSRect(
+            let rowRect = NSRect(
                 x: 0,
                 y: nextY,
                 width: max(bounds.width, visibleRect.width),
                 height: height
             )
-        }
-    }
-
-    func diffFirstLineFragmentRects() -> [NSRect] {
-        guard let layoutManager, let textContainer else { return [] }
-        layoutManager.ensureLayout(for: textContainer)
-        let origin = textContainerOrigin
-        return paragraphRanges(lineCount: lineTones.count).map { range in
-            firstLineFragmentRect(
+            let firstRect = firstLineFragmentRect(
                 for: range,
                 layoutManager: layoutManager,
                 origin: origin
             )
+            rowRects.append(rowRect)
+            firstLineFragmentRects.append(firstRect)
+            nextY += height
         }
+
+        return RowGeometry(rowRects: rowRects, firstLineFragmentRects: firstLineFragmentRects)
     }
 
     func characterIndex(at point: NSPoint) -> Int? {

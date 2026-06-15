@@ -1165,6 +1165,48 @@ struct DiffPaneViewTests {
         #expect(codeView.lineMetadata.first?.sourceLine?.anchor.newLine == 3)
     }
 
+    @Test func diffPaneCodeTextViewCachesMeasuredRowGeometry() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let text = """
+        let first = 1
+        let second = 2
+        """
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: text, attributes: [.font: font]),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(kind: .context, range: NSRange(location: 0, length: 13)),
+                DiffPaneTextDocumentBuilder.LineMetadata(kind: .context, range: NSRange(location: 14, length: 14)),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 120))
+        let theme = try Theme.loadBundled(id: "cool-slate")
+
+        scrollView.update(
+            document: document,
+            lineLabels: [" 1", " 2"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+
+        _ = codeView.diffRowRects()
+        _ = codeView.diffRowRects()
+        _ = codeView.diffFirstLineFragmentRects()
+        _ = codeView.diffFirstLineFragmentRects()
+
+        #expect(codeView.rowGeometryComputationCountForTesting == 1)
+
+        codeView.setFrameSize(NSSize(width: 260, height: codeView.frame.height))
+        _ = codeView.diffRowRects()
+
+        #expect(codeView.rowGeometryComputationCountForTesting == 2)
+    }
+
     @Test func diffPaneCodeTextViewResolvesSymbolsFromPoints() throws {
         let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
         textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))

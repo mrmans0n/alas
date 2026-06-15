@@ -124,6 +124,8 @@ enum DiffReviewScrollCommandConsumption {
 enum DiffReviewRenderWindow {
     private static let leadingScreens: CGFloat = 1.25
     private static let trailingScreens: CGFloat = 2.5
+    private static let retentionLeadingScreens: CGFloat = 3.0
+    private static let retentionTrailingScreens: CGFloat = 4.0
 
     static func renderedFileIDs(
         current: Set<DiffReviewFileID>,
@@ -135,6 +137,12 @@ enum DiffReviewRenderWindow {
     ) -> Set<DiffReviewFileID> {
         var rendered = Set(frames.compactMap { frame -> DiffReviewFileID? in
             guard isNearViewport(frame, viewportHeight: viewportHeight) else { return nil }
+            return frame.id
+        })
+        rendered.formUnion(frames.compactMap { frame -> DiffReviewFileID? in
+            guard current.contains(frame.id),
+                  isWithinRetentionBand(frame, viewportHeight: viewportHeight)
+            else { return nil }
             return frame.id
         })
 
@@ -159,6 +167,13 @@ enum DiffReviewRenderWindow {
         let height = max(viewportHeight, 1)
         let minY = -height * leadingScreens
         let maxY = height * trailingScreens
+        return frame.maxY >= minY && frame.minY <= maxY
+    }
+
+    private static func isWithinRetentionBand(_ frame: DiffReviewSectionFrame, viewportHeight: CGFloat) -> Bool {
+        let height = max(viewportHeight, 1)
+        let minY = -height * retentionLeadingScreens
+        let maxY = height * retentionTrailingScreens
         return frame.maxY >= minY && frame.minY <= maxY
     }
 }
