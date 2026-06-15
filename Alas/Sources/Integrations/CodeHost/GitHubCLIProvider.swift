@@ -574,11 +574,11 @@ struct GitHubCLIProvider: CodeHostProvider {
             providerURL = nil
         }
 
-        let refreshedRequest = try await refreshedReviewRequest(
+        let refreshedRequest = (try? await refreshedReviewRequest(
             remote: mutation.remote,
             request: mutation.reviewRequest,
             cwd: mutation.cwd
-        )
+        )) ?? mutation.reviewRequest
         return ProviderThreadMutationResult(refreshedRequest: refreshedRequest, providerURL: providerURL)
     }
 

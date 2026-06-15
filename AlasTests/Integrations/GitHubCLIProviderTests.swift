@@ -659,6 +659,41 @@ struct GitHubCLIProviderTests {
         #expect(resolveResult.refreshedRequest.number == 42)
     }
 
+    @Test func githubThreadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please tighten this branch lookup.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+            isResolved: false,
+            isActionable: true,
+            providerThreadID: "PRRT_thread_1",
+            providerCommentID: "PRRC_comment_1"
+        )
+        let originalRequest = Self.makeRequest(threads: [thread])
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "temporary API failure"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let replyResult = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: originalRequest,
+            thread: thread,
+            kind: .reply,
+            bodyMarkdown: "Thanks, fixed.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+        #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
+        #expect(commands[1].args.first == "pr")
+        #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
+        #expect(replyResult.refreshedRequest == originalRequest)
+    }
+
     @Test func reviewThreadsJSONPreservesLocationMetadata() throws {
         let threads = try GitHubCLIProvider.parseReviewThreads(
             """
