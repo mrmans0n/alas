@@ -534,6 +534,37 @@ struct GitHubCLIProviderTests {
         #expect(result.refreshedRequest.number == 42)
     }
 
+    @Test func githubPublishReviewSubmitsDecisionWhenNoDraftCommentsExist() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationWithoutCommentsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [],
+            decision: .approve,
+            summaryBody: "Looks good.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 4)
+        let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let publishInput = try #require(publishVariables["input"] as? [String: Any])
+        let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
+        #expect(publishInput["event"] as? String == "APPROVE")
+        #expect(publishInput["body"] as? String == "Looks good.")
+        #expect(publishThreads.isEmpty)
+        #expect(result.published.isEmpty)
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest.number == 42)
+    }
+
     @Test func githubPublishReviewPreservesMappingsWhenRefreshFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
@@ -1395,6 +1426,10 @@ struct GitHubCLIProviderTests {
 
     private static let publishReviewMutationOutput = """
     {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[{"id":"PRRC_comment_1","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r1","pullRequestReviewThread":{"id":"PRRT_thread_1"}}]}}}}}
+    """
+
+    private static let publishReviewMutationWithoutCommentsOutput = """
+    {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[]}}}}}
     """
 
     private static let replyMutationOutput = """

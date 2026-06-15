@@ -367,7 +367,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                     message: "GitHub review comments require an old or new side."
                 )
             }
-        guard !publishableComments.isEmpty else {
+        guard !publishableComments.isEmpty || request.comments.isEmpty else {
             return ProviderReviewPublishResult(
                 published: [],
                 failed: preflightFailures,
