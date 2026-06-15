@@ -21,6 +21,18 @@ struct CommitTabViewTests {
         #expect(sessionID.sourceKind == .commit)
     }
 
+    @Test func commitReviewFeedbackTargetIncludesCommitSHA() {
+        let sha = "abcdef1234567890abcdef1234567890abcdef12"
+        let target = CommitReviewBody.reviewFeedbackTarget(
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: sha
+        )
+
+        #expect(target.title == "Commit Review abcdef1234")
+        #expect(target.repositoryPath == "/repo")
+        #expect(target.sourceDescription == "Commit \(sha)")
+    }
+
     @Test func commitReviewBodyHostsReviewSurfaceWithoutSourceBadges() {
         let file = summary(path: "Sources/App.swift")
         let session = DiffReviewLoadedSession(

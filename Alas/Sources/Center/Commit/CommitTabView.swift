@@ -107,6 +107,7 @@ struct CommitTabView: View {
                         repositoryPath: worktreePath,
                         sha: sha
                     ),
+                    reviewedCommitSHA: sha,
                     appState: appState
                 )
             } else {
@@ -274,6 +275,7 @@ struct CommitReviewBody: View {
     var worktreeId: String? = nil
     var worktreePath: URL? = nil
     var reviewDraftSessionID: ReviewDraftSessionID? = nil
+    var reviewedCommitSHA: String? = nil
     var appState: AppState? = nil
 
     @State private var reviewSummaryCollapsed = false
@@ -295,6 +297,7 @@ struct CommitReviewBody: View {
         worktreeId: String? = nil,
         worktreePath: URL? = nil,
         reviewDraftSessionID: ReviewDraftSessionID? = nil,
+        reviewedCommitSHA: String? = nil,
         appState: AppState? = nil
     ) {
         self.session = session
@@ -308,6 +311,7 @@ struct CommitReviewBody: View {
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
         self.reviewDraftSessionID = reviewDraftSessionID
+        self.reviewedCommitSHA = reviewedCommitSHA
         self.appState = appState
     }
 
@@ -320,6 +324,18 @@ struct CommitReviewBody: View {
             worktreeID: worktreeID,
             repositoryPath: repositoryPath,
             sha: sha
+        )
+    }
+
+    static func reviewFeedbackTarget(repositoryPath: URL, sha: String?) -> ReviewFeedbackTarget {
+        let trimmedSHA = sha?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let commitDescription = trimmedSHA.flatMap { $0.isEmpty ? nil : $0 }
+        let shortSHA = commitDescription.map { String($0.prefix(10)) }
+        return ReviewFeedbackTarget(
+            title: shortSHA.map { "Commit Review \($0)" } ?? "Commit Review",
+            repositoryPath: repositoryPath.path,
+            providerDescription: nil,
+            sourceDescription: commitDescription.map { "Commit \($0)" } ?? "Commit"
         )
     }
 
@@ -367,12 +383,7 @@ struct CommitReviewBody: View {
 
     private var reviewFeedbackTarget: ReviewFeedbackTarget? {
         guard let worktreePath else { return nil }
-        return ReviewFeedbackTarget(
-            title: "Commit Review",
-            repositoryPath: worktreePath.path,
-            providerDescription: nil,
-            sourceDescription: "Commit"
-        )
+        return Self.reviewFeedbackTarget(repositoryPath: worktreePath, sha: reviewedCommitSHA)
     }
 
     private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {
