@@ -32,6 +32,9 @@ struct ProviderReviewMutationController {
         if localDraftIDs != nil, comments.isEmpty {
             throw ProviderReviewMutationControllerError.noPublishableSelectedDrafts
         }
+        if localDraftIDs == nil, decision == .comment, comments.isEmpty {
+            throw ProviderReviewMutationControllerError.noPublishableDraftsForCommentReview
+        }
         let request = ProviderReviewPublishRequest(
             remote: remote,
             reviewRequest: reviewRequest,
@@ -123,11 +126,14 @@ private extension ReviewDraftCommentState {
 
 enum ProviderReviewMutationControllerError: LocalizedError, Equatable {
     case noPublishableSelectedDrafts
+    case noPublishableDraftsForCommentReview
 
     var errorDescription: String? {
         switch self {
         case .noPublishableSelectedDrafts:
             return "The selected draft is no longer publishable."
+        case .noPublishableDraftsForCommentReview:
+            return "There are no publishable draft comments for a comment review."
         }
     }
 }

@@ -454,6 +454,107 @@ struct ReviewSessionTabViewTests {
         #expect(provider.publishRequests().isEmpty)
     }
 
+    @Test func providerMutationControllerRejectsEmptyCommentReviewWithoutPublishing() async throws {
+        let sessionID = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-provider-empty-comment-review-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let draftController = ReviewDraftCommentController(
+            sessionID: sessionID,
+            store: ReviewDraftCommentStore(
+                store: PersistenceStore(),
+                url: directory.appendingPathComponent("drafts.json")
+            )
+        )
+        try draftController.load()
+        let request = Self.reviewRequest(provider: .github)
+        let provider = RecordingProviderReviewMutator(
+            kind: .github,
+            publishResult: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let controller = ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftController
+        )
+
+        do {
+            _ = try await controller.publishReview(
+                remote: request.remote,
+                reviewRequest: request,
+                decision: .comment,
+                summaryBody: "Review from Alas",
+                cwd: URL(fileURLWithPath: "/repo")
+            )
+            Issue.record("Expected empty comment review publish to throw")
+        } catch let error as ProviderReviewMutationControllerError {
+            #expect(error == .noPublishableDraftsForCommentReview)
+        }
+
+        #expect(provider.publishRequests().isEmpty)
+    }
+
+    @Test func providerMutationControllerAllowsDecisionOnlyApproveWithoutDrafts() async throws {
+        let sessionID = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-provider-decision-only-review-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let draftController = ReviewDraftCommentController(
+            sessionID: sessionID,
+            store: ReviewDraftCommentStore(
+                store: PersistenceStore(),
+                url: directory.appendingPathComponent("drafts.json")
+            )
+        )
+        try draftController.load()
+        let request = Self.reviewRequest(provider: .github)
+        let provider = RecordingProviderReviewMutator(
+            kind: .github,
+            publishResult: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let controller = ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftController
+        )
+
+        _ = try await controller.publishReview(
+            remote: request.remote,
+            reviewRequest: request,
+            decision: .approve,
+            summaryBody: "Looks good.",
+            cwd: URL(fileURLWithPath: "/repo")
+        )
+
+        let publishedRequest = try #require(provider.publishRequests().first)
+        #expect(publishedRequest.comments.isEmpty)
+        #expect(publishedRequest.decision == .approve)
+    }
+
     @Test func providerMutationControllerKeepsFailedDraftsActiveWithError() async throws {
         let sessionID = ReviewDraftSessionID.reviewRequest(
             worktreeID: "wt",
