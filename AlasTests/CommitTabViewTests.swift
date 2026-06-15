@@ -21,6 +21,24 @@ struct CommitTabViewTests {
         #expect(sessionID.sourceKind == .commit)
     }
 
+    @Test func commitLauncherBuildsCommitTarget() {
+        let target = CommitTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abcdef1234567890",
+            title: "Add review sessions"
+        )
+
+        #expect(target.kind == .commit)
+        #expect(target.draftSessionID == .commit(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abcdef1234567890"
+        ))
+        #expect(target.title == "Review Add review sessions")
+        #expect(target.revisionDescription == "abcdef1234567890")
+    }
+
     @Test func commitReviewFeedbackTargetIncludesCommitSHA() {
         let sha = "abcdef1234567890abcdef1234567890abcdef12"
         let target = CommitReviewBody.reviewFeedbackTarget(

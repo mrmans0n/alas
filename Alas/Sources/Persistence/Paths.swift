@@ -59,6 +59,10 @@ extension Paths {
     static var reviewDraftCommentsFile: URL {
         appSupportRoot.appendingPathComponent("review-draft-comments.json")
     }
+
+    static var reviewSessionsFile: URL {
+        appSupportRoot.appendingPathComponent("review-sessions.json")
+    }
 }
 
 extension Paths {

@@ -21,6 +21,7 @@ struct CommitTabView: View {
     @State private var activeReviewID = UUID()
 
     @State private var headerExpanded: Bool = false
+    @State private var reviewSessionLaunchError: String?
 
     @Environment(\.theme) private var theme
     private let git = GitService()
@@ -28,6 +29,22 @@ struct CommitTabView: View {
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
+    }
+
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        sha: String,
+        title: String
+    ) -> ReviewSessionTarget {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sessionTitle = trimmedTitle.isEmpty ? "Review \(String(sha.prefix(10)))" : "Review \(trimmedTitle)"
+        return ReviewSessionTarget.commit(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            sha: sha,
+            title: sessionTitle
+        )
     }
 
     var body: some View {
@@ -91,25 +108,29 @@ struct CommitTabView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded:
             if let reviewSession {
-                CommitReviewBody(
-                    session: reviewSession,
-                    selectedFileID: $selectedReviewFileID,
-                    railCollapsed: $railCollapsed,
-                    layoutMode: diffPreferences.layoutMode,
-                    wrapLines: diffPreferences.wrapLines,
-                    showWhitespace: diffPreferences.showWhitespace,
-                    codeFontFamily: appState.config.code.fontFamily,
-                    codeFontSize: CGFloat(appState.config.code.fontSize),
-                    worktreeId: worktreeId,
-                    worktreePath: worktreePath,
-                    reviewDraftSessionID: CommitReviewBody.reviewDraftSessionID(
-                        worktreeID: worktreeId,
-                        repositoryPath: worktreePath,
-                        sha: sha
-                    ),
-                    reviewedCommitSHA: sha,
-                    appState: appState
-                )
+                VStack(spacing: 0) {
+                    commitReviewHeader(details: details)
+                    Divider().overlay(theme.color("line"))
+                    CommitReviewBody(
+                        session: reviewSession,
+                        selectedFileID: $selectedReviewFileID,
+                        railCollapsed: $railCollapsed,
+                        layoutMode: diffPreferences.layoutMode,
+                        wrapLines: diffPreferences.wrapLines,
+                        showWhitespace: diffPreferences.showWhitespace,
+                        codeFontFamily: appState.config.code.fontFamily,
+                        codeFontSize: CGFloat(appState.config.code.fontSize),
+                        worktreeId: worktreeId,
+                        worktreePath: worktreePath,
+                        reviewDraftSessionID: CommitReviewBody.reviewDraftSessionID(
+                            worktreeID: worktreeId,
+                            repositoryPath: worktreePath,
+                            sha: sha
+                        ),
+                        reviewedCommitSHA: sha,
+                        appState: appState
+                    )
+                }
             } else {
                 Spinner()
                     .frame(width: 20, height: 20)
@@ -121,6 +142,38 @@ struct CommitTabView: View {
                 .foregroundColor(theme.color("fg-dim"))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private func commitReviewHeader(details: CommitDetails) -> some View {
+        HStack(spacing: 8) {
+            Text("Commit review")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            Text(details.info.shortSha)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(theme.color("fg-dim"))
+            Spacer()
+            if let reviewSessionLaunchError {
+                Text(reviewSessionLaunchError)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            AlasButton(title: "Review This Commit", icon: "doc.text.magnifyingglass") {
+                openReviewSession(
+                    target: Self.reviewSessionTarget(
+                        worktreeID: worktreeId,
+                        repositoryPath: worktreePath,
+                        sha: sha,
+                        title: details.info.subject
+                    )
+                )
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
     }
 
     private func loadDetails() async {
@@ -216,6 +269,21 @@ struct CommitTabView: View {
             }
             .joined(separator: "\u{1e}")
         return "\(sha)\u{0}\(details.info.sha)\u{0}\(details.files.count)\u{0}\(fileKey)"
+    }
+
+    @MainActor
+    private func openReviewSession(target: ReviewSessionTarget) {
+        let store = ReviewSessionStore()
+        ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { try store.findActive(targetID: $0) },
+            save: { try store.save($0) },
+            open: {
+                reviewSessionLaunchError = nil
+                appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: $0)
+            },
+            onFailure: { reviewSessionLaunchError = $0.localizedDescription }
+        )
     }
 }
 

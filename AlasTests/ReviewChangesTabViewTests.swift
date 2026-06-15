@@ -29,6 +29,77 @@ struct ReviewChangesTabViewTests {
         #expect(sessionID.sourceKind == .localChanges)
     }
 
+    @Test func reviewChangesLauncherBuildsLocalChangesTarget() {
+        let target = ReviewChangesTabView.reviewSessionTarget(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+
+        #expect(target.kind == .localChanges)
+        #expect(target.draftSessionID == .localChanges(
+            worktreeID: "wt-1",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        ))
+        #expect(target.title == "Review all changes")
+    }
+
+    @Test func reviewChangesLauncherUsesDistinctActionLabel() {
+        #expect(ReviewChangesTabView.reviewSessionLauncherLabel == "Open review session")
+    }
+
+    @Test func reviewSessionLauncherOpensExistingRecordWithoutSaving() {
+        let target = ReviewChangesTabView.reviewSessionTarget(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let existing = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        var savedRecords: [ReviewSessionRecord] = []
+        var openedRecords: [ReviewSessionRecord] = []
+
+        let opened = ReviewSessionLauncher.openOrFocus(
+            target: target,
+            now: { Date(timeIntervalSince1970: 10) },
+            findActive: { _ in existing },
+            save: { savedRecords.append($0) },
+            open: { openedRecords.append($0) }
+        )
+
+        #expect(opened)
+        #expect(savedRecords.isEmpty)
+        #expect(openedRecords == [existing])
+    }
+
+    @Test func reviewSessionLauncherDoesNotOpenNewRecordWhenSaveFails() {
+        let target = ReviewChangesTabView.reviewSessionTarget(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        var openedRecords: [ReviewSessionRecord] = []
+        var reportedError: Error?
+
+        let opened = ReviewSessionLauncher.openOrFocus(
+            target: target,
+            now: { Date(timeIntervalSince1970: 10) },
+            findActive: { _ in nil },
+            save: { _ in throw LauncherTestError.saveFailed },
+            open: { openedRecords.append($0) },
+            onFailure: { reportedError = $0 }
+        )
+
+        #expect(!opened)
+        #expect(openedRecords.isEmpty)
+        #expect((reportedError as? LauncherTestError) == .saveFailed)
+    }
+
     @Test func copyReviewPromptUsesPromptMarkdown() {
         var copiedPrompt: String?
         let bundle = ReviewFeedbackBundle(
@@ -52,10 +123,11 @@ struct ReviewChangesTabViewTests {
         let target = ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "New chat")
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [target] },
-            send: { prompt, selectedTarget in
+            send: { prompt, selectedTarget, completion in
                 #expect(prompt.contains("Please address each review comment below."))
                 #expect(prompt.contains("Extract this helper."))
                 #expect(selectedTarget == target)
+                completion(.success(()))
             }
         )
         let bundle = ReviewFeedbackBundle(
@@ -71,6 +143,103 @@ struct ReviewChangesTabViewTests {
         )
 
         ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
+    }
+
+    @Test func sendToAgentRecordsSessionHandoff() {
+        var sentPrompt: String?
+        var recorded: ReviewFeedbackHandoff?
+        let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [target] },
+            send: { prompt, _, completion in
+                sentPrompt = prompt
+                completion(.success(()))
+            }
+        )
+        let sessionID = ReviewSessionID(rawValue: "session-1")
+        let activeComment = draftComment(id: "c1", body: "Fix it")
+        let dismissedComment = ReviewDraftComment(
+            id: "c2",
+            sessionID: activeComment.sessionID,
+            fileID: activeComment.fileID,
+            path: activeComment.path,
+            originalPath: activeComment.originalPath,
+            side: activeComment.side,
+            startLine: activeComment.startLine,
+            endLine: activeComment.endLine,
+            selectedText: activeComment.selectedText,
+            bodyMarkdown: "Ignore it",
+            state: .dismissed,
+            createdAt: activeComment.createdAt,
+            updatedAt: activeComment.updatedAt
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local changes"
+            ),
+            comments: [dismissedComment, activeComment]
+        )
+
+        ReviewFeedbackPromptActions.sendToAgent(
+            bundle,
+            target: target,
+            sender: sender,
+            sessionID: sessionID,
+            recordHandoff: { recorded = $0 },
+            now: { Date(timeIntervalSince1970: 30) },
+            makeID: { "handoff-1" }
+        )
+
+        #expect(sentPrompt?.contains("Fix it") == true)
+        #expect(recorded?.id == "handoff-1")
+        #expect(recorded?.sessionID == sessionID)
+        #expect(recorded?.commentIDs == ["c1"])
+        #expect(recorded?.target == target)
+        #expect(recorded?.createdAt == Date(timeIntervalSince1970: 30))
+        #expect(recorded?.promptRevision == ReviewFeedbackHandoff.revisionKey(commentIDs: ["c1"], prompt: sentPrompt ?? ""))
+        #expect(recorded?.status == .sent)
+    }
+
+    @Test func failedSendDoesNotRecordSessionHandoffAndReportsError() {
+        var sentPrompt: String?
+        var recorded: ReviewFeedbackHandoff?
+        var sendError: Error?
+        let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [target] },
+            send: { prompt, _, completion in
+                sentPrompt = prompt
+                completion(.failure(ReviewFeedbackAgentSendError.rejected))
+            }
+        )
+        let sessionID = ReviewSessionID(rawValue: "session-1")
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local changes"
+            ),
+            comments: [draftComment(id: "c1", body: "Fix it")]
+        )
+
+        ReviewFeedbackPromptActions.sendToAgent(
+            bundle,
+            target: target,
+            sender: sender,
+            sessionID: sessionID,
+            recordHandoff: { recorded = $0 },
+            recordSendFailure: { sendError = $0 },
+            now: { Date(timeIntervalSince1970: 30) },
+            makeID: { "handoff-1" }
+        )
+
+        #expect(sentPrompt?.contains("Fix it") == true)
+        #expect(recorded == nil)
+        #expect((sendError as? ReviewFeedbackAgentSendError) == .rejected)
     }
 
     @Test func draftWorkspaceActionsEditCommentThroughController() throws {
@@ -92,7 +261,7 @@ struct ReviewChangesTabViewTests {
         )
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [] },
-            send: { _, _ in Issue.record("send should not be called") }
+            send: { _, _, _ in Issue.record("send should not be called") }
         )
         let anchor = DiffReviewLineAnchor(
             path: "Sources/App.swift",
@@ -124,7 +293,10 @@ struct ReviewChangesTabViewTests {
         var selectedTarget: ReviewFeedbackAgentTarget?
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [codex, claude] },
-            send: { _, target in selectedTarget = target }
+            send: { _, target, completion in
+                selectedTarget = target
+                completion(.success(()))
+            }
         )
         let comment = draftComment(id: "draft-1", body: "Extract this helper.")
         let bundle = ReviewFeedbackBundle(
@@ -414,5 +586,9 @@ struct ReviewChangesTabViewTests {
             createdAt: Date(timeIntervalSince1970: 1),
             updatedAt: Date(timeIntervalSince1970: 1)
         )
+    }
+
+    private enum LauncherTestError: Error, Equatable {
+        case saveFailed
     }
 }

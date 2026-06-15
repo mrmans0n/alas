@@ -22,6 +22,61 @@ struct ReviewRequestDraftTests {
         #expect(sessionID.sourceKind == .draftReviewRequest)
     }
 
+    @Test func draftReviewRequestLauncherBuildsBranchDiffTarget() {
+        let tabState = DraftReviewRequestTabState(
+            worktreeId: "wt",
+            snapshot: Self.snapshot(needsPush: false, aheadCommitCount: 2)
+        )
+
+        let target = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: tabState
+        )
+
+        #expect(target.kind == .draftReviewRequest)
+        #expect(target.draftSessionID == .draftReviewRequest(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            base: "origin/main",
+            head: "feature/pr-drafts"
+        ))
+        #expect(target.title == "Review draft PR")
+        #expect(target.revisionDescription == "abc123")
+    }
+
+    @Test func draftReviewRequestLauncherIncludesHeadSHAInTargetIdentity() {
+        var firstState = DraftReviewRequestTabState(
+            worktreeId: "wt",
+            snapshot: Self.snapshot(needsPush: false, aheadCommitCount: 2)
+        )
+        var secondState = firstState
+        firstState.headSHA = "abc123"
+        secondState.headSHA = "def456"
+
+        let first = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: firstState
+        )
+        let second = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: secondState
+        )
+
+        #expect(first.id != second.id)
+        #expect(first.id.rawValue.contains("abc123"))
+        #expect(second.id.rawValue.contains("def456"))
+    }
+
+    @Test func draftReviewRequestLauncherIsDisabledForStaleTargets() {
+        #expect(DraftReviewRequestTabView.canLaunchReviewSession(targetMismatchMessage: nil))
+        #expect(!DraftReviewRequestTabView.canLaunchReviewSession(
+            targetMismatchMessage: "Switch back to the original branch state."
+        ))
+    }
+
     @Test @MainActor func selectingDraftSummaryCommentFocusesAndSelectsFile() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(

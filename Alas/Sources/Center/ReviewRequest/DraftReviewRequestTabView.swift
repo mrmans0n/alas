@@ -27,6 +27,7 @@ struct DraftReviewRequestTabView: View {
     @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var generation: Task<Void, Never>? = nil
+    @State private var reviewSessionLaunchError: String?
 
     @Environment(\.theme) private var theme
     @FocusState private var focused: Field?
@@ -113,6 +114,26 @@ struct DraftReviewRequestTabView: View {
             base: base,
             head: head
         )
+    }
+
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        tabState: DraftReviewRequestTabState
+    ) -> ReviewSessionTarget {
+        ReviewSessionTarget.draftReviewRequest(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            provider: tabState.provider,
+            repositorySlug: tabState.repositorySlug,
+            base: tabState.baseBranch,
+            head: tabState.branchName,
+            headSHA: tabState.headSHA
+        )
+    }
+
+    static func canLaunchReviewSession(targetMismatchMessage: String?) -> Bool {
+        targetMismatchMessage == nil
     }
 
     private var reviewDraftSessionID: ReviewDraftSessionID {
@@ -361,6 +382,27 @@ struct DraftReviewRequestTabView: View {
                 }
             }
             Spacer()
+            if let reviewSessionLaunchError {
+                Text(reviewSessionLaunchError)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            AlasButton(title: "Review Branch Diff", icon: "doc.text.magnifyingglass") {
+                if let targetMismatchMessage {
+                    reviewSessionLaunchError = targetMismatchMessage
+                    return
+                }
+                openReviewSession(
+                    target: Self.reviewSessionTarget(
+                        worktreeID: worktreeId,
+                        repositoryPath: worktreePath,
+                        tabState: tabState
+                    )
+                )
+            }
+            .disabled(!Self.canLaunchReviewSession(targetMismatchMessage: targetMismatchMessage))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -724,6 +766,21 @@ struct DraftReviewRequestTabView: View {
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId)
+    }
+
+    @MainActor
+    private func openReviewSession(target: ReviewSessionTarget) {
+        let store = ReviewSessionStore()
+        ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { try store.findActive(targetID: $0) },
+            save: { try store.save($0) },
+            open: {
+                reviewSessionLaunchError = nil
+                appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: $0)
+            },
+            onFailure: { reviewSessionLaunchError = $0.localizedDescription }
+        )
     }
 
     private func loadDraftCommentController() {

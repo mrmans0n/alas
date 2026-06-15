@@ -7,7 +7,7 @@ enum ReviewDraftCommentGrouping {
     }
 }
 
-enum ReviewFeedbackAgentTarget: Equatable, Identifiable {
+enum ReviewFeedbackAgentTarget: Codable, Equatable, Hashable, Identifiable, Sendable {
     case newChat(agentID: String, title: String)
     case existingSession(worktreeID: String, sessionID: String, title: String)
 
@@ -31,7 +31,7 @@ enum ReviewFeedbackAgentTarget: Equatable, Identifiable {
 @MainActor
 struct ReviewFeedbackAgentSender {
     var availableTargets: () -> [ReviewFeedbackAgentTarget]
-    var send: (String, ReviewFeedbackAgentTarget) -> Void
+    var send: (String, ReviewFeedbackAgentTarget, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
 
     static func production(appState: AppState, worktreeID: String) -> ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender(
@@ -56,15 +56,29 @@ struct ReviewFeedbackAgentSender {
                 targets.append(contentsOf: sessionTargets)
                 return targets
             },
-            send: { prompt, target in
+            send: { prompt, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
                     appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
+                    completion(.success(()))
                 case .existingSession(_, let sessionID, _):
-                    appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { _ in }
+                    appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { accepted in
+                        completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+                    }
                 }
             }
         )
+    }
+}
+
+enum ReviewFeedbackAgentSendError: LocalizedError, Equatable {
+    case rejected
+
+    var errorDescription: String? {
+        switch self {
+        case .rejected:
+            "Agent rejected the prompt."
+        }
     }
 }
 
@@ -82,7 +96,47 @@ enum ReviewFeedbackPromptActions {
         target: ReviewFeedbackAgentTarget,
         sender: ReviewFeedbackAgentSender
     ) {
-        sender.send(bundle.promptMarkdown(), target)
+        sendToAgent(
+            bundle,
+            target: target,
+            sender: sender,
+            sessionID: nil,
+            recordHandoff: nil
+        )
+    }
+
+    @MainActor
+    static func sendToAgent(
+        _ bundle: ReviewFeedbackBundle,
+        target: ReviewFeedbackAgentTarget,
+        sender: ReviewFeedbackAgentSender,
+        sessionID: ReviewSessionID?,
+        recordHandoff: ((ReviewFeedbackHandoff) -> Void)?,
+        recordSendFailure: ((Error) -> Void)? = nil,
+        now: @escaping () -> Date = Date.init,
+        makeID: @escaping () -> String = { UUID().uuidString }
+    ) {
+        let prompt = bundle.promptMarkdown()
+        sender.send(prompt, target) { result in
+            switch result {
+            case .success:
+                guard let sessionID, let recordHandoff else { return }
+                let commentIDs = bundle.activeComments.map(\.id).sorted()
+                recordHandoff(
+                    ReviewFeedbackHandoff(
+                        id: makeID(),
+                        sessionID: sessionID,
+                        commentIDs: commentIDs,
+                        target: target,
+                        createdAt: now(),
+                        promptRevision: ReviewFeedbackHandoff.revisionKey(commentIDs: commentIDs, prompt: prompt),
+                        status: .sent
+                    )
+                )
+            case .failure(let error):
+                recordSendFailure?(error)
+            }
+        }
     }
 
     private static func copyReviewPrompt(_ prompt: String) {
@@ -97,6 +151,9 @@ enum ReviewDraftWorkspaceActions {
     static func make(
         controller: ReviewDraftCommentController?,
         sender: ReviewFeedbackAgentSender,
+        sessionID: ReviewSessionID? = nil,
+        recordHandoff: ((ReviewFeedbackHandoff) -> Void)? = nil,
+        recordSendFailure: ((Error) -> Void)? = nil,
         pasteboard: @escaping (String) -> Void = { prompt in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -135,7 +192,14 @@ enum ReviewDraftWorkspaceActions {
                 sender.availableTargets()
             },
             sendToAgent: { bundle, target in
-                ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
+                ReviewFeedbackPromptActions.sendToAgent(
+                    bundle,
+                    target: target,
+                    sender: sender,
+                    sessionID: sessionID,
+                    recordHandoff: recordHandoff,
+                    recordSendFailure: recordSendFailure
+                )
             }
         )
     }

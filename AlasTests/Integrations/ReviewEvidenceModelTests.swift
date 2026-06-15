@@ -23,6 +23,32 @@ struct ReviewEvidenceModelTests {
         #expect(sessionID.sourceKind == .reviewRequest)
     }
 
+    @Test func reviewEvidenceLauncherBuildsReviewRequestTarget() {
+        let snapshot = Self.snapshot()
+        let tabState = ReviewEvidenceTabState(
+            worktreeId: "wt",
+            snapshot: snapshot,
+            initialSection: .files
+        )
+
+        let target = ReviewEvidenceTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: tabState
+        )
+
+        #expect(target.kind == .reviewRequest)
+        #expect(target.draftSessionID == .reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 428
+        ))
+        #expect(target.title == "Review loop")
+        #expect(target.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/428")!)
+    }
+
     @Test func defaultLoadSelectsFilesAndLoadsEvidenceWithoutDetailCalls() async {
         let recorder = EvidenceProviderRecorder()
         let model = ReviewEvidenceModel(

@@ -214,6 +214,24 @@ struct ReviewEvidenceTabView: View {
         )
     }
 
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        tabState: ReviewEvidenceTabState
+    ) -> ReviewSessionTarget {
+        ReviewSessionTarget.reviewRequest(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            provider: tabState.provider,
+            host: tabState.url.host ?? "",
+            repositorySlug: tabState.repositorySlug,
+            number: tabState.number,
+            url: tabState.url,
+            title: tabState.title.isEmpty ? "\(tabState.provider.displayName) \(tabState.provider.reviewRequestLabel)" : tabState.title,
+            headSHA: nil
+        )
+    }
+
     private var reviewDraftSessionID: ReviewDraftSessionID {
         Self.reviewDraftSessionID(
             worktreeID: tabState.worktreeId,

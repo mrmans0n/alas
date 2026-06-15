@@ -59,6 +59,8 @@ struct ReviewChangesLoadKey {
 }
 
 struct ReviewChangesTabView: View {
+    static let reviewSessionLauncherLabel = "Open review session"
+
     let worktree: Worktree
     let tabState: ReviewChangesTabState
     let appState: AppState
@@ -78,6 +80,7 @@ struct ReviewChangesTabView: View {
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
+    @State private var reviewSessionLaunchError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -100,6 +103,18 @@ struct ReviewChangesTabView: View {
             worktreeID: worktree.id,
             worktreePath: worktree.path,
             scope: .all
+        )
+    }
+
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        scope: ReviewDraftLocalChangesScope
+    ) -> ReviewSessionTarget {
+        ReviewSessionTarget.localChanges(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            scope: scope
         )
     }
 
@@ -147,6 +162,26 @@ struct ReviewChangesTabView: View {
                     .foregroundColor(theme.color("del"))
             }
             Spacer()
+            if let reviewSessionLaunchError {
+                Text(reviewSessionLaunchError)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            toolbarButton(
+                systemName: "doc.text.magnifyingglass",
+                tooltip: Self.reviewSessionLauncherLabel,
+                isActive: false
+            ) {
+                openReviewSession(
+                    target: Self.reviewSessionTarget(
+                        worktreeID: worktree.id,
+                        repositoryPath: worktree.path,
+                        scope: .all
+                    )
+                )
+            }
             layoutSwitcher
             toolbarButton(
                 systemName: diffPreferences.wrapLines.wrappedValue ? "text.justify.left" : "text.alignleft",
@@ -368,6 +403,21 @@ struct ReviewChangesTabView: View {
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktree.id)
+    }
+
+    @MainActor
+    private func openReviewSession(target: ReviewSessionTarget) {
+        let store = ReviewSessionStore()
+        ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { try store.findActive(targetID: $0) },
+            save: { try store.save($0) },
+            open: {
+                reviewSessionLaunchError = nil
+                appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: $0)
+            },
+            onFailure: { reviewSessionLaunchError = $0.localizedDescription }
+        )
     }
 
     private func loadDraftCommentController() {
