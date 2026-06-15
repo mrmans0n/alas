@@ -141,7 +141,9 @@ struct EditorTabView: View {
         findController.textView = textView
         findHighlightRenderer.attach(textView: textView)
         installEscapeHandler(on: textView)
-        refreshFindMatches(selecting: findText.isEmpty ? .none : .nearestFromSelection)
+        let selection: EditorFindController.RefreshSelection =
+            findPresentation == .hidden || findText.isEmpty ? .none : .nearestFromSelection
+        refreshFindMatches(selecting: selection)
     }
 
     private func detachFindController(from textView: CodeTextView?) {
