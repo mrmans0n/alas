@@ -10,19 +10,19 @@ struct DiffReviewFileContextSnapshot: Equatable, Sendable {
     let new: DiffReviewFileContextLines
 }
 
-struct DiffContextExpansionState: Equatable {
-    enum Mode: Equatable {
-        case chunk(size: Int)
-        case all
-    }
+enum DiffContextExpansionMode: Equatable {
+    case chunk(size: Int)
+    case all
+}
 
+struct DiffContextExpansionState: Equatable {
     private var expandedLineCounts: [DiffContextExpansionKey: Int] = [:]
 
     func expandedLineCount(for key: DiffContextExpansionKey) -> Int {
         expandedLineCounts[key, default: 0]
     }
 
-    mutating func expand(_ key: DiffContextExpansionKey, available: Int, mode: Mode) {
+    mutating func expand(_ key: DiffContextExpansionKey, available: Int, mode: DiffContextExpansionMode) {
         let available = max(0, available)
         let current = expandedLineCounts[key, default: 0]
         let next: Int
