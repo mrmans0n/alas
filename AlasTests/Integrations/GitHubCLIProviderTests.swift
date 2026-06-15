@@ -309,8 +309,111 @@ struct GitHubCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable == true)
+        #expect(threads[0].providerThreadID == "thread-1")
+        #expect(threads[0].providerCommentID == "comment-1")
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable == false)
+    }
+
+    @Test func githubPublishReviewUsesGraphQLPayloadAndRefreshesPR() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-1",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: 14,
+                    body: "Please simplify this."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 4)
+        #expect(commands[0].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[1].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[0].stdin?.contains("pullRequest(number: $number)") == true)
+        let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let publishInput = try #require(publishVariables["input"] as? [String: Any])
+        let publishComments = try #require(publishInput["comments"] as? [[String: Any]])
+        #expect(publishInput["pullRequestId"] as? String == "PR_node_42")
+        #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
+        #expect(publishComments.first?["path"] as? String == "Sources/App.swift")
+        #expect(result.published == [
+            ProviderReviewPublishedComment(
+                localDraftID: "draft-1",
+                providerThreadID: "PRRT_thread_1",
+                providerCommentID: "PRRC_comment_1",
+                providerURL: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1")
+            ),
+        ])
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest.number == 42)
+        #expect(result.refreshedRequest.threads.count == 2)
+    }
+
+    @Test func githubThreadMutationsUseGraphQLAndRefreshPR() async throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please tighten this branch lookup.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+            isResolved: false,
+            isActionable: true,
+            providerThreadID: "PRRT_thread_1",
+            providerCommentID: "PRRC_comment_1"
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.resolveThreadMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let replyResult = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(threads: [thread]),
+            thread: thread,
+            kind: .reply,
+            bodyMarkdown: "Thanks, fixed.",
+            cwd: Self.cwd
+        ))
+        let resolveResult = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(threads: [thread]),
+            thread: thread,
+            kind: .resolve,
+            bodyMarkdown: nil,
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands[0].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[3].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
+        #expect(commands[0].stdin?.contains("\"pullRequestReviewThreadId\":\"PRRT_thread_1\"") == true)
+        #expect(commands[3].stdin?.contains("resolveReviewThread") == true)
+        #expect(commands[3].stdin?.contains("\"threadId\":\"PRRT_thread_1\"") == true)
+        #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
+        #expect(replyResult.refreshedRequest.number == 42)
+        #expect(resolveResult.refreshedRequest.number == 42)
     }
 
     @Test func reviewThreadsJSONPreservesLocationMetadata() throws {
@@ -848,6 +951,46 @@ struct GitHubCLIProviderTests {
         )
     }
 
+    private static func makeProviderDraftComment(
+        id: String,
+        path: String,
+        side: DiffReviewInlineFeedbackSide,
+        startLine: Int,
+        endLine: Int?,
+        body: String
+    ) throws -> ProviderReviewDraftComment {
+        let draft = ReviewDraftComment(
+            id: id,
+            sessionID: .reviewRequest(
+                worktreeID: "wt",
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                number: 42
+            ),
+            fileID: DiffReviewFileID(namespace: "github", path: path),
+            path: path,
+            originalPath: nil,
+            side: side,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: nil,
+            bodyMarkdown: body,
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 11)
+        )
+        return try #require(ProviderReviewDraftComment(localDraft: draft))
+    }
+
+    private static func graphQLVariables(from stdin: String?) throws -> [String: Any] {
+        let stdin = try #require(stdin)
+        let data = Data(stdin.utf8)
+        let object = try JSONSerialization.jsonObject(with: data)
+        let payload = try #require(object as? [String: Any])
+        return try #require(payload["variables"] as? [String: Any])
+    }
+
     private static let prListOutput = """
     [
       {
@@ -970,6 +1113,7 @@ struct GitHubCLIProviderTests {
                   "comments": {
                     "nodes": [
                       {
+                        "id": "comment-1",
                         "body": "Please tighten this branch lookup.",
                         "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
                         "author": { "login": "reviewer" }
@@ -984,6 +1128,7 @@ struct GitHubCLIProviderTests {
                   "comments": {
                     "nodes": [
                       {
+                        "id": "comment-2",
                         "body": "Old feedback.",
                         "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r2",
                         "author": { "login": "reviewer" }
@@ -998,6 +1143,7 @@ struct GitHubCLIProviderTests {
                   "comments": {
                     "nodes": [
                       {
+                        "id": "comment-3",
                         "body": "",
                         "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r3",
                         "author": { "login": "reviewer" }
@@ -1015,6 +1161,22 @@ struct GitHubCLIProviderTests {
         }
       }
     }
+    """
+
+    private static let pullRequestNodeOutput = """
+    {"data":{"repository":{"pullRequest":{"id":"PR_node_42"}}}}
+    """
+
+    private static let publishReviewMutationOutput = """
+    {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[{"id":"PRRC_comment_1","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r1","pullRequestReviewThread":{"id":"PRRT_thread_1"}}]}}}}}
+    """
+
+    private static let replyMutationOutput = """
+    {"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"PRRC_reply_1","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r2"}}}}
+    """
+
+    private static let resolveThreadMutationOutput = """
+    {"data":{"resolveReviewThread":{"thread":{"id":"PRRT_thread_1","isResolved":true}}}}
     """
 
     private static let reviewThreadsFirstPageOutput = """
