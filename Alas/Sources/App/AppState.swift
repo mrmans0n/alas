@@ -3367,7 +3367,9 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func sessionSummaries() async -> [RemoteSessionSummary] {
-        var out: [RemoteSessionSummary] = []
+        var summariesByIdentity: [String: RemoteSessionSummaryCandidate] = [:]
+        var identities: [String] = []
+
         for mgr in acpManagers.values {
             let worktreeSummary: RemoteWorktreeSummary?
             if let resolved = projectAndWorktree(withWorktreeId: mgr.worktreeId) {
@@ -3377,18 +3379,121 @@ extension AppState: RemoteSessionsProvider {
             }
 
             for row in mgr.sessionRows where !row.archived {
+                let liveSession = mgr.liveSession(for: row.id)
+                var effectiveRow = row
+                if let liveRemoteId = liveSession?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !liveRemoteId.isEmpty {
+                    effectiveRow.remoteSessionId = liveRemoteId
+                }
                 let state = mgr.runners[row.id]?.session.transcript.streamingState
-                out.append(RemoteSessionSummary(
-                    id: row.id,
-                    title: row.title,
-                    agentId: row.agentId,
+                let candidate = RemoteSessionSummaryCandidate(
+                    row: effectiveRow,
                     status: state.map(RemoteSessionGateway.stateString) ?? "idle",
+                    hasRunner: state != nil,
+                    isLive: liveSession != nil,
                     canDrive: mgr.isWriter(for: row.id),
                     worktree: worktreeSummary
-                ))
+                )
+                let identity = remoteSessionListIdentity(worktreeId: mgr.worktreeId, row: effectiveRow)
+                if let existing = summariesByIdentity[identity] {
+                    summariesByIdentity[identity] = existing.merging(candidate)
+                } else {
+                    identities.append(identity)
+                    summariesByIdentity[identity] = candidate
+                }
             }
         }
-        return out
+        return identities.compactMap { summariesByIdentity[$0]?.summary }
+    }
+
+    private func remoteSessionListIdentity(worktreeId: String, row: ACPSessionRow) -> String {
+        if let remoteSessionId = row.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !remoteSessionId.isEmpty {
+            return "\(worktreeId)\u{0}\(row.agentId)\u{0}\(remoteSessionId)"
+        }
+        return "\(worktreeId)\u{0}local:\(row.id)"
+    }
+
+    private struct RemoteSessionSummaryCandidate {
+        var operationalRow: ACPSessionRow
+        var displayRow: ACPSessionRow
+        var status: String
+        var hasRunner: Bool
+        var isLive: Bool
+        var canDrive: Bool
+        let worktree: RemoteWorktreeSummary?
+
+        init(
+            row: ACPSessionRow,
+            status: String,
+            hasRunner: Bool,
+            isLive: Bool,
+            canDrive: Bool,
+            worktree: RemoteWorktreeSummary?
+        ) {
+            self.operationalRow = row
+            self.displayRow = row
+            self.status = status
+            self.hasRunner = hasRunner
+            self.isLive = isLive
+            self.canDrive = canDrive
+            self.worktree = worktree
+        }
+
+        var summary: RemoteSessionSummary {
+            RemoteSessionSummary(
+                id: operationalRow.id,
+                title: displayRow.title,
+                agentId: operationalRow.agentId,
+                status: status,
+                canDrive: canDrive,
+                worktree: worktree
+            )
+        }
+
+        func merging(_ other: RemoteSessionSummaryCandidate) -> RemoteSessionSummaryCandidate {
+            var merged = self
+            if other.isBetterOperationalRow(than: merged) {
+                merged.operationalRow = other.operationalRow
+                merged.status = other.status
+                merged.hasRunner = other.hasRunner
+                merged.isLive = other.isLive
+                merged.canDrive = other.canDrive
+            }
+            if Self.isBetterDisplayRow(other.displayRow, than: merged.displayRow) {
+                merged.displayRow = other.displayRow
+            }
+            return merged
+        }
+
+        private func isBetterOperationalRow(than other: RemoteSessionSummaryCandidate) -> Bool {
+            if canDrive != other.canDrive { return canDrive }
+            if hasRunner != other.hasRunner { return hasRunner }
+            if isLive != other.isLive { return isLive }
+            if operationalRow.lastOpenedAt != other.operationalRow.lastOpenedAt {
+                return operationalRow.lastOpenedAt > other.operationalRow.lastOpenedAt
+            }
+            return operationalRow.updatedAt > other.operationalRow.updatedAt
+        }
+
+        private static func isBetterDisplayRow(_ candidate: ACPSessionRow, than current: ACPSessionRow) -> Bool {
+            let candidateScore = displayTitleScore(candidate)
+            let currentScore = displayTitleScore(current)
+            if candidateScore != currentScore { return candidateScore > currentScore }
+            return candidate.updatedAt > current.updatedAt
+        }
+
+        private static func displayTitleScore(_ row: ACPSessionRow) -> Int {
+            let title = row.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let meaningfulTitle = !title.isEmpty && title != "New session"
+            let sourceScore: Int
+            switch row.titleSource {
+            case .manual: sourceScore = 3
+            case .generated: sourceScore = 2
+            case .placeholder: sourceScore = 1
+            }
+            return (meaningfulTitle ? 100 : 0) + sourceScore
+        }
     }
 
     func session(for id: String) -> ACPSession? {

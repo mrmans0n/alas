@@ -95,6 +95,133 @@ struct RemoteAppStateAccessTests {
         }
     }
 
+    @Test func remoteSessionSummariesCollapseRowsForSameRemoteSession() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let session = try #require(manager.placeholderSession(id: tab.sessionId))
+        session.remoteSessionId = "remote-shared"
+        try seedStoredSession(
+            id: tab.sessionId,
+            title: "New session",
+            titleSource: .placeholder,
+            in: manager
+        )
+        try seedStoredSession(
+            id: "historical-copy",
+            title: "Actual Remote Title",
+            titleSource: .manual,
+            remoteSessionId: "remote-shared",
+            in: manager
+        )
+
+        let summaries = await state.sessionSummaries()
+
+        #expect(summaries.count == 1)
+        #expect(summaries.first?.id == tab.sessionId)
+        #expect(summaries.first?.title == "Actual Remote Title")
+    }
+
+    @Test func remoteSessionSummariesPreferLivePlaceholderOverStoredDuplicate() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let tab = try #require(acpTabs(in: state).first)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let session = try #require(manager.placeholderSession(id: tab.sessionId))
+        session.remoteSessionId = "remote-shared"
+        let mirrorOwner = try ACPSessionManager(
+            worktreeId: worktreeId,
+            worktreePath: "/tmp/mirror-owner",
+            store: ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeId).path),
+            instanceId: "mirror-owner",
+            pid: Int64(getpid())
+        )
+        _ = try #require(mirrorOwner.placeholderSession(id: tab.sessionId))
+        #expect(mirrorOwner.acquireWriterLease(sessionId: tab.sessionId))
+        #expect(manager.isMirror(sessionId: tab.sessionId))
+        defer {
+            mirrorOwner.releaseWriterLease(sessionId: tab.sessionId)
+        }
+        try seedStoredSession(
+            id: tab.sessionId,
+            title: "New session",
+            titleSource: .placeholder,
+            updatedAt: 1,
+            lastOpenedAt: 1,
+            in: manager
+        )
+        try seedStoredSession(
+            id: "historical-copy",
+            title: "Actual Remote Title",
+            titleSource: .manual,
+            remoteSessionId: "remote-shared",
+            updatedAt: 2,
+            lastOpenedAt: 2,
+            in: manager
+        )
+
+        let summaries = await state.sessionSummaries()
+
+        #expect(summaries.count == 1)
+        #expect(summaries.first?.id == tab.sessionId)
+        #expect(summaries.first?.title == "Actual Remote Title")
+    }
+
+    @Test func remoteSessionSummariesKeepDifferentAgentsWithSameRemoteSessionId() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        try seedStoredSession(
+            id: "codex-session",
+            agentId: "codex",
+            title: "Codex Session",
+            titleSource: .manual,
+            remoteSessionId: "remote-shared",
+            in: manager
+        )
+        try seedStoredSession(
+            id: "claude-session",
+            agentId: "claude",
+            title: "Claude Session",
+            titleSource: .manual,
+            remoteSessionId: "remote-shared",
+            in: manager
+        )
+
+        let summaries = await state.sessionSummaries()
+
+        #expect(summaries.map(\.id).contains("codex-session"))
+        #expect(summaries.map(\.id).contains("claude-session"))
+    }
+
     @Test func remoteRenameSessionRejectsEmptyAndUnknownSession() throws {
         var cleanupWorktreeId: String?
         defer {
@@ -328,22 +455,28 @@ struct RemoteAppStateAccessTests {
 
     private func seedStoredSession(
         id: String,
+        agentId: String = "test-agent",
         title: String,
+        titleSource: ACPSessionTitleSource = .placeholder,
+        remoteSessionId: String? = nil,
         archived: Bool = false,
+        updatedAt: Int64? = nil,
+        lastOpenedAt: Int64? = nil,
         in manager: ACPSessionManager
     ) throws {
         let now = Int64(Date().timeIntervalSince1970)
         try manager.store.upsertSession(ACPSessionRow(
             id: id,
-            agentId: "test-agent",
+            agentId: agentId,
             title: title,
-            titleSource: .placeholder,
+            titleSource: titleSource,
+            remoteSessionId: remoteSessionId,
             currentModel: nil,
             currentMode: nil,
             autoRun: false,
             createdAt: now,
-            updatedAt: now,
-            lastOpenedAt: now,
+            updatedAt: updatedAt ?? now,
+            lastOpenedAt: lastOpenedAt ?? now,
             archived: archived
         ))
         manager.refreshRecent()
