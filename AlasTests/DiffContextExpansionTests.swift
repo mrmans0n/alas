@@ -86,6 +86,7 @@ struct DiffContextExpansionTests {
         let second = DiffDisplayModelBuilder.build(diff: ParsedDiff(hunks: [secondHunk]), filePath: "a.swift").groups[0]
         var state = DiffContextExpansionState()
         state.expand(.init(groupID: first.id, boundary: .below), available: 10, mode: .all)
+        state.expand(.init(groupID: second.id, boundary: .above), available: 10, mode: .all)
 
         let expanded = DiffContextExpandedDisplayBuilder.derive(
             groups: [first, second],
@@ -99,6 +100,9 @@ struct DiffContextExpansionTests {
         let firstTrailingContext = expanded[0].rows.filter { $0.kind == .expandedContext }
         #expect(firstTrailingContext.map { $0.old?.lineNumber } == [7])
         #expect(firstTrailingContext.map { $0.new?.lineNumber } == [7])
+        #expect(expanded[1].rows.allSatisfy { $0.contextExpansion?.boundary != .above })
+        let allExpandedLineNumbers = expanded.flatMap(\.rows).compactMap { $0.old?.lineNumber }
+        #expect(allExpandedLineNumbers.filter { $0 == 7 }.count == 1)
     }
 
     @Test func addOnlyExpansionPairsBelowContextBeforeAdjacentHunk() {

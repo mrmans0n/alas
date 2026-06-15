@@ -120,6 +120,9 @@ enum DiffContextExpandedDisplayBuilder {
         else {
             return 0
         }
+        guard ownsBoundary(groupIndex: groupIndex, boundary: key.boundary) else {
+            return 0
+        }
         return boundaryRange(
             for: groups[groupIndex],
             groupIndex: groupIndex,
@@ -139,6 +142,9 @@ enum DiffContextExpandedDisplayBuilder {
         filePath: String,
         chunkSize: Int
     ) -> [DiffDisplayRow] {
+        guard ownsBoundary(groupIndex: groupIndex, boundary: boundary) else {
+            return []
+        }
         guard let snapshot else {
             guard optimisticBoundaryAvailable(
                 for: group,
@@ -201,6 +207,15 @@ enum DiffContextExpandedDisplayBuilder {
             rows.insert(expandable, at: rows.endIndex)
         }
         return rows
+    }
+
+    private static func ownsBoundary(groupIndex: Int, boundary: DiffContextBoundary) -> Bool {
+        switch boundary {
+        case .above:
+            groupIndex == 0
+        case .below:
+            true
+        }
     }
 
     private static func optimisticBoundaryAvailable(
