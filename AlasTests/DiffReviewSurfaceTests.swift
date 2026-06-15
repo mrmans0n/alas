@@ -362,9 +362,14 @@ struct DiffReviewSurfaceTests {
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-unresolve-thread-2", in: controller.view))
         #expect(unresolvedID == "thread-2")
 
-        DiffReviewInlineFeedbackCardInteraction.reply(feedback, body: "Done") { item, body in
+        var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
+        replyEditor.start()
+        #expect(replyEditor.isReplying)
+        replyEditor.body = "  Done  "
+        #expect(replyEditor.save(feedback) { item, body in
             actions.replyProvider(item, file.summary, body)
-        }
+        })
+        #expect(!replyEditor.isReplying)
         #expect(replied?.id == "thread-1")
         #expect(replied?.body == "Done")
     }

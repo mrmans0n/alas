@@ -21,9 +21,13 @@ struct ProviderReviewMutationController {
         reviewRequest: ReviewRequest,
         decision: ProviderReviewDecision,
         summaryBody: String,
-        cwd: URL
+        cwd: URL,
+        localDraftIDs: Set<String>? = nil
     ) async throws -> ProviderReviewPublishResult {
-        let comments = draftController.activeUnpublishedComments.compactMap(ProviderReviewDraftComment.init(localDraft:))
+        let sourceComments = draftController.activeUnpublishedComments.filter { comment in
+            localDraftIDs?.contains(comment.id) ?? true
+        }
+        let comments = sourceComments.compactMap(ProviderReviewDraftComment.init(localDraft:))
         let request = ProviderReviewPublishRequest(
             remote: remote,
             reviewRequest: reviewRequest,

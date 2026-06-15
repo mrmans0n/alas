@@ -1308,8 +1308,7 @@ private struct DiffReviewInlineFeedbackCard: View {
     let onSelect: (DiffReviewInlineFeedback) -> Void
 
     @Environment(\.theme) private var theme
-    @State private var isReplying = false
-    @State private var replyBody = ""
+    @State private var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1387,9 +1386,9 @@ private struct DiffReviewInlineFeedbackCard: View {
     @ViewBuilder
     private var actionRow: some View {
         let availability = actions.availability(item, file)
-        if isReplying {
+        if replyEditor.isReplying {
             VStack(alignment: .leading, spacing: 6) {
-                TextField("Reply", text: $replyBody, axis: .vertical)
+                TextField("Reply", text: $replyEditor.body, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11.5))
                     .foregroundColor(theme.color("fg"))
@@ -1401,17 +1400,12 @@ private struct DiffReviewInlineFeedbackCard: View {
                 HStack(spacing: 6) {
                     Spacer(minLength: 0)
                     inlineActionButton(id: "reply-save", title: "Save") {
-                        let body = replyBody.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !body.isEmpty else { return }
-                        DiffReviewInlineFeedbackCardInteraction.reply(item, body: body) { feedback, body in
+                        _ = replyEditor.save(item) { feedback, body in
                             actions.replyProvider(feedback, file, body)
                         }
-                        isReplying = false
-                        replyBody = ""
                     }
                     inlineActionButton(id: "reply-cancel", title: "Cancel") {
-                        isReplying = false
-                        replyBody = ""
+                        replyEditor.cancel()
                     }
                 }
             }
@@ -1446,8 +1440,7 @@ private struct DiffReviewInlineFeedbackCard: View {
                 }
                 if availability.canReplyProvider {
                     inlineActionButton(id: "reply", title: "Reply") {
-                        replyBody = ""
-                        isReplying = true
+                        replyEditor.start()
                     }
                 }
                 if availability.canResolveProvider {
@@ -1556,6 +1549,34 @@ enum DiffReviewInlineFeedbackCardInteraction {
         action: (DiffReviewInlineFeedback, String) -> Void
     ) {
         action(item, body)
+    }
+}
+
+struct DiffReviewInlineFeedbackReplyEditorState: Equatable {
+    var isReplying = false
+    var body = ""
+
+    mutating func start() {
+        body = ""
+        isReplying = true
+    }
+
+    mutating func cancel() {
+        body = ""
+        isReplying = false
+    }
+
+    @discardableResult
+    mutating func save(
+        _ item: DiffReviewInlineFeedback,
+        action: (DiffReviewInlineFeedback, String) -> Void
+    ) -> Bool {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        DiffReviewInlineFeedbackCardInteraction.reply(item, body: trimmed, action: action)
+        body = ""
+        isReplying = false
+        return true
     }
 }
 

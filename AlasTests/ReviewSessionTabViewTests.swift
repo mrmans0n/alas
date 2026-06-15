@@ -298,6 +298,81 @@ struct ReviewSessionTabViewTests {
         #expect(updated.providerError == nil)
     }
 
+    @Test func providerMutationControllerPublishesOnlySelectedDraftIDs() async throws {
+        let sessionID = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-provider-selected-publish-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("drafts.json")
+        )
+        let draftController = ReviewDraftCommentController(
+            sessionID: sessionID,
+            store: store,
+            now: { Date(timeIntervalSince1970: 200) }
+        )
+        try draftController.load()
+        try draftController.add(
+            anchor: DiffReviewLineAnchor(
+                path: "Sources/App.swift",
+                side: .new,
+                line: 12,
+                rowIndex: 0,
+                selectedText: "let value = 1"
+            ),
+            fileID: DiffReviewFileID(namespace: "github", path: "Sources/App.swift"),
+            bodyMarkdown: "Publish this."
+        )
+        let selected = try #require(draftController.comments.first)
+        try draftController.add(
+            anchor: DiffReviewLineAnchor(
+                path: "Sources/Other.swift",
+                side: .new,
+                line: 8,
+                rowIndex: 0,
+                selectedText: "let other = 1"
+            ),
+            fileID: DiffReviewFileID(namespace: "github", path: "Sources/Other.swift"),
+            bodyMarkdown: "Keep local."
+        )
+        let request = Self.reviewRequest(provider: .github)
+        let provider = RecordingProviderReviewMutator(
+            kind: .github,
+            publishResult: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let controller = ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftController,
+            now: { Date(timeIntervalSince1970: 300) }
+        )
+
+        _ = try await controller.publishReview(
+            remote: request.remote,
+            reviewRequest: request,
+            decision: .comment,
+            summaryBody: "Review from Alas",
+            cwd: URL(fileURLWithPath: "/repo"),
+            localDraftIDs: [selected.id]
+        )
+
+        let publishedRequest = try #require(provider.publishRequests().first)
+        #expect(publishedRequest.comments.map(\.localDraftID) == [selected.id])
+    }
+
     @Test func providerMutationControllerKeepsFailedDraftsActiveWithError() async throws {
         let sessionID = ReviewDraftSessionID.reviewRequest(
             worktreeID: "wt",

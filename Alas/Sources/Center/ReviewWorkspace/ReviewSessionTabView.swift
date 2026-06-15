@@ -541,7 +541,7 @@ struct ReviewSessionTabView: View {
     }
 
     private func confirmProviderPublish() async {
-        guard providerPublishConfirmation != nil,
+        guard let confirmation = providerPublishConfirmation,
               let loaded,
               let providerContext = loaded.providerContext,
               let controller = makeProviderMutationController(for: loaded)
@@ -552,12 +552,14 @@ struct ReviewSessionTabView: View {
         defer { isProviderPublishing = false }
 
         do {
+            let selectedDraftIDs = confirmation.commentID.map { Set([$0]) }
             let result = try await controller.publishReview(
                 remote: providerContext.remote,
                 reviewRequest: providerContext.reviewRequest,
                 decision: selectedProviderDecision,
                 summaryBody: "",
-                cwd: record?.target.repositoryPath ?? URL(fileURLWithPath: loaded.feedbackTarget.repositoryPath ?? "/")
+                cwd: record?.target.repositoryPath ?? URL(fileURLWithPath: loaded.feedbackTarget.repositoryPath ?? "/"),
+                localDraftIDs: selectedDraftIDs
             )
             replaceProviderReviewRequest(result.refreshedRequest)
             providerPublishConfirmation = nil
