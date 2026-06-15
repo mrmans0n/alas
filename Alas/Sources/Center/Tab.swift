@@ -12,6 +12,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case draftReviewRequest(DraftReviewRequestTabState)
     case reviewEvidence(ReviewEvidenceTabState)
     case reviewChanges(ReviewChangesTabState)
+    case reviewSession(ReviewSessionTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
@@ -27,6 +28,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftReviewRequest(let s): return s.id
         case .reviewEvidence(let s): return s.id
         case .reviewChanges(let s): return s.id
+        case .reviewSession(let s): return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
@@ -44,6 +46,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftReviewRequest(let s): return s.displayTitle
         case .reviewEvidence(let s): return s.displayTitle
         case .reviewChanges:       return "Review Changes"
+        case .reviewSession(let s): return s.title
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
@@ -61,6 +64,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .draftReviewRequest: return "pull-request"
         case .reviewEvidence: return "doc.text.magnifyingglass"
         case .reviewChanges: return "diff"
+        case .reviewSession: return "text.badge.checkmark"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
@@ -84,6 +88,24 @@ struct ReviewChangesTabState: Codable, Equatable, Identifiable {
     init(worktreeId: String) {
         self.id = "review-changes:\(worktreeId)"
         self.worktreeId = worktreeId
+    }
+}
+
+struct ReviewSessionTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let sessionID: ReviewSessionID
+    var title: String
+    var selectedFileID: DiffReviewFileID?
+    var focusedCommentID: String?
+
+    init(worktreeId: String, record: ReviewSessionRecord) {
+        self.id = "review-session:\(record.id.rawValue)"
+        self.worktreeId = worktreeId
+        self.sessionID = record.id
+        self.title = record.target.title
+        self.selectedFileID = record.selectedFileID
+        self.focusedCommentID = record.focusedCommentID
     }
 }
 
