@@ -20,6 +20,12 @@ struct DraftReviewRequestTabView: View {
     @State private var draftReviewSession: DiffReviewLoadedSession?
     @State private var selectedFileID: DiffReviewFileID?
     @State private var railCollapsed = false
+    @State private var reviewSummaryCollapsed = false
+    @State private var draftCommentController: ReviewDraftCommentController?
+    @State private var loadedDraftSessionID: ReviewDraftSessionID?
+    @State private var focusedDraftCommentID: String?
+    @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
+    @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var generation: Task<Void, Never>? = nil
 
     @Environment(\.theme) private var theme
@@ -87,9 +93,35 @@ struct DraftReviewRequestTabView: View {
             selectedPath = path
         }
         .task(id: contextKey) { await loadContext() }
+        .task(id: reviewDraftSessionID.rawValue) {
+            loadDraftCommentController()
+        }
         .onDisappear {
             generation?.cancel()
         }
+    }
+
+    static func reviewDraftSessionID(
+        worktreeID: String,
+        repositoryPath: URL,
+        base: String,
+        head: String
+    ) -> ReviewDraftSessionID {
+        ReviewDraftSessionID.draftReviewRequest(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            base: base,
+            head: head
+        )
+    }
+
+    private var reviewDraftSessionID: ReviewDraftSessionID {
+        Self.reviewDraftSessionID(
+            worktreeID: worktreeId,
+            repositoryPath: worktreePath,
+            base: tabState.baseBranch,
+            head: tabState.branchName
+        )
     }
 
     private var reviewRequestEditor: some View {
@@ -389,6 +421,7 @@ struct DraftReviewRequestTabView: View {
                 session: draftReviewSession,
                 selectedFileID: $selectedFileID,
                 railCollapsed: $railCollapsed,
+                reviewSummaryCollapsed: $reviewSummaryCollapsed,
                 layoutMode: diffPreferences.layoutMode,
                 wrapLines: diffPreferences.wrapLines,
                 showWhitespace: diffPreferences.showWhitespace,
@@ -396,8 +429,18 @@ struct DraftReviewRequestTabView: View {
                 codeFontSize: CGFloat(appState.config.code.fontSize),
                 showsSourceBadges: false,
                 showsRailDisplayControls: true,
+                showsDraftSummaryRail: true,
                 lspContextForFile: { file in
                     makeLSPContext(relativePath: file.summary.path)
+                },
+                reviewFeedbackTarget: reviewFeedbackTarget,
+                draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
+                focusedDraftCommentID: focusedDraftCommentID,
+                draftCommentScrollCommand: draftCommentScrollCommand,
+                draftCommentActions: draftCommentActions(),
+                onSelectDraftComment: selectDraftComment,
+                onSaveDraftComment: { fileID, anchor, body in
+                    saveDraftComment(fileID: fileID, anchor: anchor, body: body)
                 }
             )
         } else {
@@ -496,6 +539,7 @@ struct DraftReviewRequestTabView: View {
                 session: session
             )
             selectedPath = DraftReviewRequestDiffSessionBuilder.selectedPath(for: selectedFileID)
+            loadDraftCommentController()
             warning = loaded.hasUncommittedChanges
                 ? "Uncommitted changes are present but excluded from this \(tabState.provider.reviewRequestLabel)."
                 : nil
@@ -663,6 +707,61 @@ struct DraftReviewRequestTabView: View {
                 originatingWorktreeRoot: worktreePath,
                 language: language
             )
+        }
+    }
+
+    private var reviewFeedbackTarget: ReviewFeedbackTarget {
+        ReviewFeedbackTarget(
+            title: "Draft \(tabState.provider.reviewRequestLabel)",
+            repositoryPath: worktreePath.path,
+            providerDescription: [
+                tabState.provider.displayName,
+                tabState.repositorySlug,
+            ].filter { !$0.isEmpty }.joined(separator: " "),
+            sourceDescription: "\(tabState.baseBranch) -> \(tabState.branchName)"
+        )
+    }
+
+    private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
+        ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId)
+    }
+
+    private func loadDraftCommentController() {
+        let sessionID = reviewDraftSessionID
+        if loadedDraftSessionID != sessionID {
+            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            loadedDraftSessionID = sessionID
+            focusedDraftCommentID = nil
+            draftCommentScrollCommand = nil
+        }
+        do {
+            try draftCommentController?.load()
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
+        }
+    }
+
+    private func draftCommentActions() -> ReviewDraftCommentActions {
+        ReviewDraftWorkspaceActions.make(
+            controller: draftCommentController,
+            sender: reviewFeedbackAgentSender
+        )
+    }
+
+    private func selectDraftComment(_ comment: ReviewDraftComment) {
+        focusedDraftCommentID = comment.id
+        selectedFileID = comment.fileID
+        draftCommentScrollCommand = draftCommentScrollController.command(
+            commentID: comment.id,
+            fileID: comment.fileID
+        )
+    }
+
+    private func saveDraftComment(fileID: DiffReviewFileID, anchor: DiffReviewLineAnchor, body: String) {
+        do {
+            try draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+        } catch {
+            // The controller keeps the non-blocking error state for the review rail.
         }
     }
 }

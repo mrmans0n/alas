@@ -5,6 +5,8 @@ struct DiffReviewFileSection: View {
     var inlineFeedback: [DiffReviewInlineFeedback] = []
     var focusedFeedbackID: String? = nil
     var inlineFeedbackScrollTargetID: String? = nil
+    var draftComments: [ReviewDraftComment] = []
+    var focusedDraftCommentID: String? = nil
     @Binding var layoutMode: DiffLayoutMode
     @Binding var wrapLines: Bool
     @Binding var showWhitespace: Bool
@@ -14,12 +16,20 @@ struct DiffReviewFileSection: View {
     var lspContext: DiffPaneLSPContext? = nil
     var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
     var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
+    var draftCommentActions = ReviewDraftCommentActions()
+    var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
+    var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var reviewFeedbackTarget: ReviewFeedbackTarget?
 
     @Environment(\.theme) private var theme
+    @State private var pendingDraftAnchor: DiffReviewLineAnchor?
+    @State private var pendingDraftBody = ""
+    @State private var expandedCollapsedRowIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            fileLevelDraftCommentStack
             fileLevelInlineFeedbackStack
             content
         }
@@ -35,6 +45,9 @@ struct DiffReviewFileSection: View {
                 label: file.summary.path
             )
         )
+        .onChange(of: draftCommentDisplaySignature) { _, _ in
+            clearPendingDraft()
+        }
     }
 
     private var header: some View {
@@ -91,6 +104,49 @@ struct DiffReviewFileSection: View {
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 
+    private var effectiveReviewFeedbackTarget: ReviewFeedbackTarget {
+        if let reviewFeedbackTarget {
+            return reviewFeedbackTarget
+        }
+        return ReviewFeedbackTarget(
+            title: file.summary.path,
+            repositoryPath: nil,
+            providerDescription: nil,
+            sourceDescription: "Local draft comment"
+        )
+    }
+
+    @ViewBuilder
+    private var fileLevelDraftCommentStack: some View {
+        let fileLevel = draftCommentPlacement.fileLevel
+        if !fileLevel.isEmpty {
+            draftCommentStack(fileLevel)
+        }
+    }
+
+    @ViewBuilder
+    private func draftCommentStack(_ comments: [ReviewDraftComment]) -> some View {
+        if !comments.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(comments) { comment in
+                    ReviewDraftCommentCard(
+                        comment: comment,
+                        file: file.summary,
+                        isFocused: comment.id == focusedDraftCommentID,
+                        actions: draftCommentActions,
+                        reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+                        onSelect: onSelectDraftComment
+                    )
+                    .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(theme.color("bg-1"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        }
+    }
+
     @ViewBuilder
     private var fileLevelInlineFeedbackStack: some View {
         let fileLevel = inlineFeedbackPlacement.fileLevel
@@ -139,28 +195,24 @@ struct DiffReviewFileSection: View {
         return DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: displayModel.groups)
     }
 
+    private var draftCommentPlacement: ReviewDraftCommentPlacement.Result {
+        guard let displayModel = file.displayModel else {
+            return ReviewDraftCommentPlacement.position(draftComments, in: [])
+        }
+        return ReviewDraftCommentPlacement.position(draftComments, in: displayModel.groups)
+    }
+
     @ViewBuilder
     private var content: some View {
         if let displayModel = file.displayModel {
-            let placement = inlineFeedbackPlacement
+            let inlinePlacement = inlineFeedbackPlacement
+            let draftPlacement = draftCommentPlacement
             VStack(spacing: 0) {
                 ForEach(displayModel.groups) { group in
-                    if let groupFeedback = placement.byGroupID[group.id], !groupFeedback.isEmpty {
+                    if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
                         inlineFeedbackStack(groupFeedback, file: file.summary)
                     }
-                    DiffPaneView(
-                        model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
-                        fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                        layoutMode: $layoutMode,
-                        wrapLines: $wrapLines,
-                        showWhitespace: $showWhitespace,
-                        codeFontFamily: codeFontFamily,
-                        codeFontSize: codeFontSize,
-                        showsToolbar: false,
-                        verticalScrollMode: .staticHeight,
-                        lspContext: lspContext,
-                        hunkActions: { _ in DiffPaneHunkActions() }
-                    )
+                    reviewGroup(group, displayModel: displayModel, placement: draftPlacement)
                 }
             }
         } else {
@@ -179,6 +231,206 @@ struct DiffReviewFileSection: View {
                     )
                 )
         }
+    }
+
+    @ViewBuilder
+    private func reviewGroup(
+        _ group: DiffDisplayGroup,
+        displayModel: DiffDisplayModel,
+        placement: ReviewDraftCommentPlacement.Result
+    ) -> some View {
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: pendingDraftAnchor
+        )
+        if segments.containsLocalAccessories {
+            VStack(alignment: .leading, spacing: 0) {
+                segmentedHunkHeader(group)
+                ForEach(segments.items) { segment in
+                    if !segment.rows.isEmpty {
+                        DiffPaneTextDocumentView(
+                            group: DiffDisplayGroup(
+                                id: segment.id,
+                                header: group.header,
+                                sourceHunk: group.sourceHunk,
+                                rows: segment.rows
+                            ),
+                            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                            layoutMode: layoutMode,
+                            wrapLines: wrapLines,
+                            showWhitespace: showWhitespace,
+                            fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize,
+                            theme: theme,
+                            lspContext: lspContext,
+                            onReviewLineSelected: { anchor in
+                                pendingDraftAnchor = anchor
+                                pendingDraftBody = ""
+                            }
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !segment.draftComments.isEmpty {
+                        draftCommentStack(segment.draftComments)
+                    }
+                    if segment.showsComposer {
+                        draftComposer
+                    }
+                }
+            }
+            .background(theme.color("bg-1"))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(theme.color("line"), lineWidth: 0.75)
+            )
+            .padding(.bottom, 10)
+        } else {
+            DiffPaneView(
+                model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
+                fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                layoutMode: $layoutMode,
+                wrapLines: $wrapLines,
+                showWhitespace: $showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsToolbar: false,
+                verticalScrollMode: .staticHeight,
+                lspContext: lspContext,
+                onReviewLineSelected: { anchor in
+                    pendingDraftAnchor = anchor
+                    pendingDraftBody = ""
+                },
+                hunkActions: { _ in DiffPaneHunkActions() }
+            )
+        }
+    }
+
+    private func segmentedHunkHeader(_ group: DiffDisplayGroup) -> some View {
+        HStack(spacing: 8) {
+            Text(group.header)
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
+                .foregroundColor(theme.color("fg-muted"))
+                .lineLimit(1)
+            Spacer(minLength: 12)
+            if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
+                let expanded = DiffCollapsedContextController.isExpanded(group, expandedIDs: expandedCollapsedRowIDs)
+                Button {
+                    expandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
+                        group,
+                        expandedIDs: expandedCollapsedRowIDs
+                    )
+                } label: {
+                    Image(systemName: expanded ? "minus.square" : "plus.square")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .frame(width: 22, height: 20)
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "Collapse context" : "Expand context")
+            }
+        }
+        .padding(.horizontal, 13)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+    }
+
+    @ViewBuilder
+    private var draftComposer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextEditor(text: $pendingDraftBody)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .frame(minHeight: 64, maxHeight: 90)
+                .background(theme.color("bg-2"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(theme.color("line"), lineWidth: 0.5)
+                )
+                .accessibilityIdentifier("diff-review-draft-composer")
+
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                Button("Cancel") {
+                    clearPendingDraft()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .accessibilityIdentifier("diff-review-draft-composer-cancel")
+
+                Button("Save") {
+                    savePendingDraft()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(theme.color("bg-1"))
+                .padding(.horizontal, 9)
+                .frame(height: 24)
+                .background(theme.color("accent"))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+                .accessibilityIdentifier("diff-review-draft-composer-save")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(theme.color("bg-1"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-draft-composer-marker",
+                label: "Draft comment composer"
+            )
+        )
+    }
+
+    private func savePendingDraft() {
+        guard let pendingDraftAnchor else { return }
+        let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        guard currentDraftRowKeys.contains(ReviewDraftCommentPlacement.RowKey(
+            side: pendingDraftAnchor.side,
+            line: pendingDraftAnchor.line
+        )) else {
+            clearPendingDraft()
+            return
+        }
+
+        onSaveDraftComment(pendingDraftAnchor, body)
+        clearPendingDraft()
+    }
+
+    private func clearPendingDraft() {
+        pendingDraftAnchor = nil
+        pendingDraftBody = ""
+    }
+
+    private var currentDraftRowKeys: Set<ReviewDraftCommentPlacement.RowKey> {
+        guard let displayModel = file.displayModel else { return [] }
+        return Set(displayModel.groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
+    }
+
+    private var draftCommentDisplaySignature: String {
+        let groupSignature = file.displayModel?.groups.map { group in
+            let rowSignature = group.rows.map { row in
+                [
+                    row.id,
+                    row.old?.lineNumber.map { "o\($0)" } ?? "o-",
+                    row.new?.lineNumber.map { "n\($0)" } ?? "n-",
+                    "\(row.collapsedRows.count)",
+                ].joined(separator: ":")
+            }.joined(separator: ",")
+            return "\(group.id)[\(rowSignature)]"
+        }.joined(separator: "|") ?? "placeholder"
+        return "\(file.id.rawValue)|\(groupSignature)"
     }
 
     @ViewBuilder
@@ -224,6 +476,187 @@ struct DiffReviewFileSection: View {
         case .modified, .unknown:
             theme.color("fg-dim")
         }
+    }
+}
+
+enum ReviewDraftCommentPlacement {
+    struct RowKey: Hashable, Equatable {
+        let side: DiffReviewInlineFeedbackSide
+        let line: Int
+    }
+
+    struct Result: Equatable {
+        let fileLevel: [ReviewDraftComment]
+        let byRowAnchor: [RowKey: [ReviewDraftComment]]
+        let groupIDByCommentID: [String: String]
+    }
+
+    static func position(
+        _ comments: [ReviewDraftComment],
+        in groups: [DiffDisplayGroup]
+    ) -> Result {
+        let visibleKeys = Set(groups.flatMap(allRowKeys))
+        let groupIDByKey = firstGroupIDByRowKey(in: groups)
+        var fileLevel: [ReviewDraftComment] = []
+        var byRowAnchor: [RowKey: [ReviewDraftComment]] = [:]
+        var groupIDByCommentID: [String: String] = [:]
+
+        for comment in comments where comment.state != .dismissed {
+            let key = RowKey(side: comment.side, line: comment.normalizedLineRange.upperBound)
+            if visibleKeys.contains(key) {
+                byRowAnchor[key, default: []].append(comment)
+                if let groupID = groupIDByKey[key] {
+                    groupIDByCommentID[comment.id] = groupID
+                }
+            } else {
+                fileLevel.append(comment)
+            }
+        }
+
+        return Result(
+            fileLevel: sorted(fileLevel),
+            byRowAnchor: byRowAnchor.mapValues(sorted),
+            groupIDByCommentID: groupIDByCommentID
+        )
+    }
+
+    private static func firstGroupIDByRowKey(in groups: [DiffDisplayGroup]) -> [RowKey: String] {
+        var output: [RowKey: String] = [:]
+        for group in groups {
+            for key in allRowKeys(in: group) where output[key] == nil {
+                output[key] = group.id
+            }
+        }
+        return output
+    }
+
+    static func visibleRowKeys(in group: DiffDisplayGroup) -> [RowKey] {
+        group.rows.flatMap { row -> [RowKey] in
+            visibleRowKeys(in: row)
+        }
+    }
+
+    static func allRowKeys(in group: DiffDisplayGroup) -> [RowKey] {
+        group.rows.flatMap(allRowKeys)
+    }
+
+    static func visibleRowKeys(in row: DiffDisplayRow) -> [RowKey] {
+        var keys: [RowKey] = []
+        if let oldLine = row.old?.lineNumber {
+            keys.append(RowKey(side: .old, line: oldLine))
+        }
+        if let newLine = row.new?.lineNumber {
+            keys.append(RowKey(side: .new, line: newLine))
+        }
+        for line in Set([row.old?.lineNumber, row.new?.lineNumber].compactMap(\.self)).sorted() {
+            keys.append(RowKey(side: .unknown, line: line))
+        }
+        return keys
+    }
+
+    static func allRowKeys(in row: DiffDisplayRow) -> [RowKey] {
+        visibleRowKeys(in: row) + row.collapsedRows.flatMap(allRowKeys)
+    }
+
+    static func sorted(_ comments: [ReviewDraftComment]) -> [ReviewDraftComment] {
+        comments.sorted { lhs, rhs in
+            if lhs.path != rhs.path {
+                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+            }
+            if lhs.normalizedLineRange.lowerBound != rhs.normalizedLineRange.lowerBound {
+                return lhs.normalizedLineRange.lowerBound < rhs.normalizedLineRange.lowerBound
+            }
+            if lhs.normalizedLineRange.upperBound != rhs.normalizedLineRange.upperBound {
+                return lhs.normalizedLineRange.upperBound < rhs.normalizedLineRange.upperBound
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt < rhs.createdAt
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
+    static func comments(
+        matching keys: [RowKey],
+        in placement: Result,
+        groupID: String? = nil,
+        excludingIDs excludedIDs: Set<String> = []
+    ) -> [ReviewDraftComment] {
+        var seenIDs = excludedIDs
+        var comments: [ReviewDraftComment] = []
+        for key in keys {
+            for comment in placement.byRowAnchor[key] ?? [] {
+                if let groupID, placement.groupIDByCommentID[comment.id] != groupID {
+                    continue
+                }
+                guard seenIDs.insert(comment.id).inserted else { continue }
+                comments.append(comment)
+            }
+        }
+        return sorted(comments)
+    }
+}
+
+enum ReviewDraftCommentRowSegmentation {
+    struct Segment: Equatable, Identifiable {
+        let id: String
+        let rows: [DiffDisplayRow]
+        let draftComments: [ReviewDraftComment]
+        let showsComposer: Bool
+    }
+
+    struct Result: Equatable {
+        let items: [Segment]
+
+        var containsLocalAccessories: Bool {
+            items.contains { !$0.draftComments.isEmpty || $0.showsComposer }
+        }
+    }
+
+    static func segments(
+        for group: DiffDisplayGroup,
+        placement: ReviewDraftCommentPlacement.Result,
+        pendingAnchor: DiffReviewLineAnchor?
+    ) -> Result {
+        let pendingKey = pendingAnchor.map {
+            ReviewDraftCommentPlacement.RowKey(side: $0.side, line: $0.line)
+        }
+        var segments: [Segment] = []
+        var bufferedRows: [DiffDisplayRow] = []
+        var emittedCommentIDs: Set<String> = []
+
+        for row in group.rows {
+            bufferedRows.append(row)
+            let keys = ReviewDraftCommentPlacement.allRowKeys(in: row)
+            let comments = ReviewDraftCommentPlacement.comments(
+                matching: keys,
+                in: placement,
+                groupID: group.id,
+                excludingIDs: emittedCommentIDs
+            )
+            emittedCommentIDs.formUnion(comments.map(\.id))
+            let showsComposer = pendingKey.map { keys.contains($0) } ?? false
+            guard !comments.isEmpty || showsComposer else { continue }
+
+            segments.append(Segment(
+                id: "\(group.id)-segment-\(segments.count)",
+                rows: bufferedRows,
+                draftComments: comments,
+                showsComposer: showsComposer
+            ))
+            bufferedRows = []
+        }
+
+        if !bufferedRows.isEmpty {
+            segments.append(Segment(
+                id: "\(group.id)-segment-\(segments.count)",
+                rows: bufferedRows,
+                draftComments: [],
+                showsComposer: false
+            ))
+        }
+
+        return Result(items: segments)
     }
 }
 
@@ -288,6 +721,39 @@ enum DiffReviewInlineFeedbackPlacement {
             return row.old?.lineNumber == line
         case .unknown:
             return row.new?.lineNumber == line || row.old?.lineNumber == line
+        }
+    }
+}
+
+enum ReviewDraftCommentDisplayPolicy {
+    static let cardMinimumHeight: CGFloat = 86
+    private static let estimatedBodyCharactersPerLine = 86
+    private static let estimatedBodyLineHeight: CGFloat = 15.5
+    private static let cardNonBodyHeight: CGFloat = 52
+    private static let stackVerticalPadding: CGFloat = 20
+    private static let rowSpacing: CGFloat = 6
+
+    static func estimatedHeight(for comments: [ReviewDraftComment]) -> CGFloat {
+        guard !comments.isEmpty else { return 0 }
+
+        let visibleHeights = comments.reduce(CGFloat(0)) { total, comment in
+            total + estimatedCardHeight(for: comment)
+        }
+        let spacingHeight = CGFloat(max(0, comments.count - 1)) * rowSpacing
+        return stackVerticalPadding + visibleHeights + spacingHeight
+    }
+
+    static func estimatedCardHeight(for comment: ReviewDraftComment) -> CGFloat {
+        let bodyLineCount = estimatedLineCount(for: comment.bodyMarkdown)
+        let bodyHeight = CGFloat(bodyLineCount) * estimatedBodyLineHeight
+
+        return max(cardMinimumHeight, cardNonBodyHeight + bodyHeight)
+    }
+
+    private static func estimatedLineCount(for source: String) -> Int {
+        let logicalLines = source.split(separator: "\n", omittingEmptySubsequences: false)
+        return logicalLines.reduce(0) { total, line in
+            total + max(1, Int(ceil(Double(line.count) / Double(estimatedBodyCharactersPerLine))))
         }
     }
 }
@@ -376,6 +842,301 @@ enum DiffReviewInlineFeedbackMarkdown {
     @MainActor
     static func plainText(_ source: String) -> String {
         NSAttributedString(render(source)).string
+    }
+}
+
+private struct ReviewDraftCommentCard: View {
+    let comment: ReviewDraftComment
+    let file: DiffReviewFileSummary
+    let isFocused: Bool
+    let actions: ReviewDraftCommentActions
+    let reviewFeedbackTarget: ReviewFeedbackTarget
+    let onSelect: (ReviewDraftComment) -> Void
+
+    @Environment(\.theme) private var theme
+    @State private var isEditing = false
+    @State private var editingBody = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if isEditing {
+                cardContent
+            } else {
+                Button {
+                    onSelect(comment)
+                } label: {
+                    cardContent
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("diff-review-draft-comment-select-\(comment.id)")
+            }
+
+            actionRow
+        }
+        .padding(8)
+        .frame(minHeight: ReviewDraftCommentDisplayPolicy.cardMinimumHeight, alignment: .top)
+        .background(isFocused ? theme.color("accent-soft") : theme.color("bg-2"))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isFocused ? theme.color("accent") : statusColor.opacity(0.65), lineWidth: isFocused ? 1 : 0.75)
+        )
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-draft-comment-\(comment.id)",
+                label: accessibilityLabel
+            )
+        )
+        .background(focusedMarker)
+    }
+
+    private var cardContent: some View {
+        HStack(alignment: .top, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(statusColor)
+                .frame(width: 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("Local draft")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(statusColor)
+
+                    Text(lineDescription)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-faint"))
+
+                    if comment.state == .resolved {
+                        Text("resolved")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-faint"))
+                    }
+                }
+                .lineLimit(1)
+
+                if isEditing {
+                    TextEditor(text: $editingBody)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.color("fg"))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 72)
+                        .background(theme.color("bg-1"))
+                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                        .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
+                } else {
+                    Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.color("fg"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var focusedMarker: some View {
+        if isFocused {
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-draft-comment-focused-\(comment.id)",
+                label: accessibilityLabel
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var actionRow: some View {
+        let availability = actions.availability(comment)
+        if availability.canEdit
+            || availability.canDelete
+            || availability.canResolve
+            || availability.canDismiss
+            || availability.canCopyPrompt
+            || availability.canShowSendToAgent
+        {
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                if isEditing {
+                    actionButton(id: "save", title: "Save") {
+                        actions.edit(comment, editingBody)
+                        isEditing = false
+                        editingBody = ""
+                    }
+                    actionButton(id: "cancel", title: "Cancel") {
+                        isEditing = false
+                        editingBody = ""
+                    }
+                } else if availability.canEdit {
+                    actionButton(id: "edit", title: "Edit") {
+                        editingBody = comment.bodyMarkdown
+                        isEditing = true
+                    }
+                }
+                if availability.canDelete {
+                    actionButton(id: "delete", title: "Delete") {
+                        actions.delete(comment)
+                    }
+                }
+                if availability.canResolve {
+                    actionButton(id: "resolve", title: "Resolve") {
+                        actions.resolve(comment)
+                    }
+                }
+                if availability.canDismiss {
+                    actionButton(id: "dismiss", title: "Dismiss") {
+                        actions.dismiss(comment)
+                    }
+                }
+                if availability.canCopyPrompt {
+                    actionButton(id: "copy", title: "Copy") {
+                        actions.copyPrompt(feedbackBundle)
+                    }
+                }
+                if availability.canShowSendToAgent {
+                    sendToAgentControl(isEnabled: availability.canSendToAgent)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func sendToAgentControl(isEnabled: Bool) -> some View {
+        let targets = actions.agentTargets()
+        if targets.count > 1 {
+            Menu("Send") {
+                ForEach(targets) { target in
+                    Button(target.title) {
+                        actions.sendToAgent(feedbackBundle, target)
+                    }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .disabled(!isEnabled)
+            .help("Send")
+            .accessibilityIdentifier("diff-review-draft-comment-action-send-\(comment.id)")
+        } else {
+            actionButton(id: "send", title: "Send", enabled: isEnabled) {
+                guard let target = targets.first else { return }
+                actions.sendToAgent(feedbackBundle, target)
+            }
+        }
+    }
+
+    private func actionButton(
+        id: String,
+        title: String,
+        enabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(enabled ? theme.color("fg-muted") : theme.color("fg-faint"))
+                .padding(.horizontal, 7)
+                .frame(height: 22)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .help(title)
+        .accessibilityIdentifier("diff-review-draft-comment-\(id)-\(comment.id)")
+        .accessibilityLabel(title)
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                label: title
+            )
+        )
+        .background(
+            ReviewDraftCommentActionPressMarker(
+                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                label: title,
+                isEnabled: enabled,
+                action: action
+            )
+        )
+    }
+
+    private var feedbackBundle: ReviewFeedbackBundle {
+        ReviewFeedbackBundle(
+            target: reviewFeedbackTarget,
+            comments: [comment]
+        )
+    }
+
+    private var lineDescription: String {
+        let range = comment.normalizedLineRange
+        if range.lowerBound == range.upperBound {
+            return "line \(range.lowerBound)"
+        }
+        return "lines \(range.lowerBound)-\(range.upperBound)"
+    }
+
+    private var accessibilityLabel: String {
+        [
+            "Local draft",
+            lineDescription,
+            comment.state == .resolved ? "resolved" : nil,
+            DiffReviewInlineFeedbackMarkdown.plainText(comment.bodyMarkdown),
+        ]
+        .compactMap { part in
+            guard let part, !part.isEmpty else { return nil }
+            return part
+        }
+        .joined(separator: ", ")
+    }
+
+    private var statusColor: Color {
+        switch comment.state {
+        case .active:
+            theme.color("warn")
+        case .resolved:
+            theme.color("add")
+        case .dismissed:
+            theme.color("fg-muted")
+        }
+    }
+}
+
+private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
+    let identifier: String
+    let label: String
+    var isEnabled = true
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> ReviewDraftCommentActionPressView {
+        let view = ReviewDraftCommentActionPressView(frame: .zero)
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: ReviewDraftCommentActionPressView, context: Context) {
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
+        view.action = action
+    }
+}
+
+private final class ReviewDraftCommentActionPressView: NSView {
+    var isEnabled = true
+    var action: () -> Void = {}
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        action()
+        return true
     }
 }
 

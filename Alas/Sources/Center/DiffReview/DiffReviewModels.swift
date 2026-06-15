@@ -1,6 +1,6 @@
 import Foundation
 
-struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable {
+struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable, Sendable {
     let namespace: String
     let path: String
 
@@ -8,7 +8,7 @@ struct DiffReviewFileID: Codable, Equatable, Hashable, Identifiable {
     var rawValue: String { "\(namespace):\(path)" }
 }
 
-enum DiffReviewInlineFeedbackSide: String, Codable, Equatable, Sendable {
+enum DiffReviewInlineFeedbackSide: String, Codable, Equatable, Hashable, Sendable {
     case old
     case new
     case unknown

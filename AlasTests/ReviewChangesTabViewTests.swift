@@ -8,6 +8,143 @@ import Testing
 struct ReviewChangesTabViewTests {
     private func theme() -> Theme { try! ThemeStore().current }
 
+    @Test func reviewChangesDraftSessionIDUsesWorktreeAndLocalChangesScope() {
+        let worktree = Worktree(
+            id: "wt-1",
+            projectId: "project-1",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/repo"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+
+        let sessionID = ReviewChangesTabView.reviewDraftSessionID(worktree: worktree)
+
+        #expect(sessionID == ReviewDraftSessionID.localChanges(
+            worktreeID: "wt-1",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        ))
+        #expect(sessionID.sourceKind == .localChanges)
+    }
+
+    @Test func copyReviewPromptUsesPromptMarkdown() {
+        var copiedPrompt: String?
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Working tree",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Review Changes"
+            ),
+            comments: [
+                draftComment(id: "draft-1", body: "Extract this helper."),
+            ]
+        )
+
+        ReviewFeedbackPromptActions.copyPrompt(bundle, pasteboard: { copiedPrompt = $0 })
+
+        #expect(copiedPrompt == bundle.promptMarkdown())
+    }
+
+    @Test func sendReviewPromptUsesSamePromptMarkdownAndTarget() {
+        let target = ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "New chat")
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [target] },
+            send: { prompt, selectedTarget in
+                #expect(prompt.contains("Please address each review comment below."))
+                #expect(prompt.contains("Extract this helper."))
+                #expect(selectedTarget == target)
+            }
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Working tree",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Review Changes"
+            ),
+            comments: [
+                draftComment(id: "draft-1", body: "Extract this helper."),
+            ]
+        )
+
+        ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
+    }
+
+    @Test func draftWorkspaceActionsEditCommentThroughController() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt-1",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: session,
+            store: store,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _ in Issue.record("send should not be called") }
+        )
+        let anchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .new,
+            line: 4,
+            rowIndex: 0,
+            selectedText: ""
+        )
+        let fileID = DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift")
+
+        try controller.load()
+        try controller.add(anchor: anchor, fileID: fileID, bodyMarkdown: "Original")
+        let comment = try #require(controller.comments.first)
+        let actions = ReviewDraftWorkspaceActions.make(controller: controller, sender: sender)
+
+        #expect(actions.availability(comment).canEdit)
+        actions.edit(comment, "Updated body")
+
+        #expect(controller.comments.count == 1)
+        #expect(controller.comments.first?.bodyMarkdown == "Updated body")
+        let savedComments = try store.load(sessionID: session)
+        #expect(savedComments.count == 1)
+        #expect(savedComments.first?.bodyMarkdown == "Updated body")
+    }
+
+    @Test func draftWorkspaceActionsSendToExplicitTargetOnly() {
+        let codex = ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "Codex")
+        let claude = ReviewFeedbackAgentTarget.newChat(agentID: "claude", title: "Claude")
+        var selectedTarget: ReviewFeedbackAgentTarget?
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [codex, claude] },
+            send: { _, target in selectedTarget = target }
+        )
+        let comment = draftComment(id: "draft-1", body: "Extract this helper.")
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Working tree",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Review Changes"
+            ),
+            comments: [comment]
+        )
+        let actions = ReviewDraftWorkspaceActions.make(controller: nil, sender: sender)
+
+        #expect(actions.agentTargets() == [codex, claude])
+        #expect(actions.availability(comment).canShowSendToAgent)
+        actions.sendToAgent(bundle, claude)
+
+        #expect(selectedTarget == claude)
+    }
+
     @Test func loadTokenOnlyAcceptsCurrentLoad() {
         let key = "/repo\u{0}review"
         let first = ReviewChangesLoadToken.next(key: key)
@@ -254,6 +391,28 @@ struct ReviewChangesTabViewTests {
             deletions: deletions,
             isRenderable: isRenderable,
             originalPath: originalPath
+        )
+    }
+
+    private func draftComment(id: String, body: String) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: .localChanges(
+                worktreeID: "wt-1",
+                worktreePath: URL(fileURLWithPath: "/repo"),
+                scope: .all
+            ),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            path: "Sources/App.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: 4,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: body,
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
         )
     }
 }

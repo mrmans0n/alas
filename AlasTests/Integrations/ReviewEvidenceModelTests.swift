@@ -4,6 +4,25 @@ import Testing
 
 @MainActor
 struct ReviewEvidenceModelTests {
+    @Test func reviewEvidenceDraftSessionIDUsesProviderRepositoryAndNumber() {
+        let sessionID = ReviewEvidenceTabView.reviewDraftSessionID(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 520
+        )
+
+        #expect(sessionID == ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 520
+        ))
+        #expect(sessionID.sourceKind == .reviewRequest)
+    }
+
     @Test func defaultLoadSelectsFilesAndLoadsEvidenceWithoutDetailCalls() async {
         let recorder = EvidenceProviderRecorder()
         let model = ReviewEvidenceModel(

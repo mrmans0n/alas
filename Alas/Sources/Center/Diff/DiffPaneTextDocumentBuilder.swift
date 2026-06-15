@@ -75,7 +75,7 @@ struct DiffPaneTextDocumentBuilder {
                 ),
                 kind: row.kind,
                 tone: tone(for: row.old, rowKind: row.kind),
-                sourceLine: row.old
+                sourceLine: reviewSourceLine(row.old, side: .old)
             )
             newColumn.append(
                 code(
@@ -88,7 +88,7 @@ struct DiffPaneTextDocumentBuilder {
                 ),
                 kind: row.kind,
                 tone: tone(for: row.new, rowKind: row.kind),
-                sourceLine: row.new
+                sourceLine: reviewSourceLine(row.new, side: .new)
             )
         }
 
@@ -425,6 +425,29 @@ struct DiffPaneTextDocumentBuilder {
             return ""
         }
         return line.lineNumber.map(String.init) ?? ""
+    }
+
+    private static func reviewSourceLine(_ line: DiffDisplayLine?, side: DiffLineSide) -> DiffDisplayLine? {
+        guard let line else { return nil }
+        guard line.anchor.side != side else { return line }
+
+        let anchor = DiffLineAnchor(
+            filePath: line.anchor.filePath,
+            hunkIndex: line.anchor.hunkIndex,
+            rowIndex: line.anchor.rowIndex,
+            side: side,
+            oldLine: side == .old ? line.anchor.oldLine : nil,
+            newLine: side == .new ? line.anchor.newLine : nil
+        )
+        return DiffDisplayLine(
+            id: "\(anchor.filePath):\(anchor.side.rawValue):\(anchor.oldLine ?? 0):\(anchor.newLine ?? 0)",
+            anchor: anchor,
+            text: line.text,
+            lineNumber: line.lineNumber,
+            kind: line.kind,
+            inlineSpans: line.inlineSpans,
+            noTrailingNewline: line.noTrailingNewline
+        )
     }
 
     private static func tone(for line: DiffDisplayLine?, rowKind: DiffDisplayRow.Kind) -> DiffPaneLineTone {

@@ -484,6 +484,468 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
+    @Test func localDraftCommentsPositionAtExactMatchingRows() throws {
+        let model = displayModel()
+        let comment = draftComment(id: "draft-line", path: "A.swift", side: .new, startLine: 2)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+
+        #expect(
+            placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .new, line: 2)]?.map(\.id) == ["draft-line"]
+        )
+        #expect(placement.fileLevel.isEmpty)
+    }
+
+    @Test func unmatchedLocalDraftCommentsFallBackToFileLevel() {
+        let model = displayModel()
+        let comment = draftComment(id: "draft-unmatched", path: "A.swift", side: .new, startLine: 99)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+
+        #expect(placement.byRowAnchor.isEmpty)
+        #expect(placement.fileLevel.map(\.id) == ["draft-unmatched"])
+    }
+
+    @Test func localDraftCommentsSegmentSameHunkByExactRow() throws {
+        let model = displayModel()
+        let group = try #require(model.groups.first)
+        let firstLine = draftComment(id: "draft-first", path: "A.swift", side: .new, startLine: 1)
+        let secondLine = draftComment(id: "draft-second", path: "A.swift", side: .new, startLine: 2)
+        let placement = ReviewDraftCommentPlacement.position([secondLine, firstLine], in: model.groups)
+
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(segments.items.count == 2)
+        #expect(segments.items[0].rows.map(\.id) == [group.rows[0].id])
+        #expect(segments.items[0].draftComments.map(\.id) == ["draft-first"])
+        #expect(segments.items[1].rows.map(\.id) == [group.rows[1].id])
+        #expect(segments.items[1].draftComments.map(\.id) == ["draft-second"])
+    }
+
+    @Test func localDraftCommentsOnCollapsedRowsAttachToCollapsedParent() throws {
+        let hiddenLine = diffLine(
+            id: "hidden-new",
+            side: .new,
+            newLine: 12,
+            text: "let hidden = true"
+        )
+        let collapsedParent = DiffDisplayRow(
+            id: "collapsed-parent",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: 1,
+            collapsedRows: [
+                DiffDisplayRow(
+                    id: "hidden-row",
+                    kind: .context,
+                    old: nil,
+                    new: hiddenLine,
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -10,3 +10,3 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [collapsedParent]
+        )
+        let comment = draftComment(id: "draft-collapsed", path: "A.swift", side: .new, startLine: 12)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(placement.fileLevel.isEmpty)
+        #expect(placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .new, line: 12)]?.map(\.id) == ["draft-collapsed"])
+        #expect(segments.items.count == 1)
+        #expect(segments.items[0].rows.map(\.id) == ["collapsed-parent"])
+        #expect(segments.items[0].draftComments.map(\.id) == ["draft-collapsed"])
+    }
+
+    @Test func draftPlacementIndexesCollapsedChildRows() {
+        let line = diffLine(id: "old-hidden", side: .old, oldLine: 7, text: "let old = true")
+        let row = DiffDisplayRow(
+            id: "collapsed-parent",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: 1,
+            collapsedRows: [
+                DiffDisplayRow(
+                    id: "old-hidden-row",
+                    kind: .context,
+                    old: line,
+                    new: nil,
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+
+        #expect(ReviewDraftCommentPlacement.visibleRowKeys(in: row).isEmpty)
+        #expect(ReviewDraftCommentPlacement.allRowKeys(in: row) == [
+            ReviewDraftCommentPlacement.RowKey(side: .old, line: 7),
+            ReviewDraftCommentPlacement.RowKey(side: .unknown, line: 7),
+        ])
+    }
+
+    @Test func localDraftCommentsWithUnknownSideMatchContextRows() throws {
+        let model = displayModel()
+        let comment = draftComment(id: "draft-unknown", path: "A.swift", side: .unknown, startLine: 1)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: try #require(model.groups.first),
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(placement.fileLevel.isEmpty)
+        #expect(
+            placement.byRowAnchor[ReviewDraftCommentPlacement.RowKey(side: .unknown, line: 1)]?.map(\.id)
+                == ["draft-unknown"]
+        )
+        #expect(segments.items.first?.draftComments.map(\.id) == ["draft-unknown"])
+    }
+
+    @Test func localDraftCommentsWithUnknownSideDoNotDuplicateAcrossShiftedContextRows() {
+        let firstRow = DiffDisplayRow(
+            id: "row-1",
+            kind: .context,
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "one"),
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "two"),
+            collapsedLineCount: 0
+        )
+        let secondRow = DiffDisplayRow(
+            id: "row-2",
+            kind: .context,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two"),
+            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three"),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,2 +2,2 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [firstRow, secondRow]
+        )
+        let comment = draftComment(id: "draft-shifted", path: "A.swift", side: .unknown, startLine: 2)
+
+        let placement = ReviewDraftCommentPlacement.position([comment], in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(segments.items.flatMap(\.draftComments).map(\.id) == ["draft-shifted"])
+    }
+
+    @Test func localDraftCommentsWithUnknownSideDoNotDuplicateAcrossMatchingHunks() {
+        let firstGroup = DiffDisplayGroup(
+            id: "first-group",
+            header: "@@ -1,1 +2,1 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [
+                DiffDisplayRow(
+                    id: "first-row",
+                    kind: .context,
+                    old: diffLine(id: "first-old", side: .old, oldLine: 1, text: "one"),
+                    new: diffLine(id: "first-new", side: .new, newLine: 2, text: "two"),
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let secondGroup = DiffDisplayGroup(
+            id: "second-group",
+            header: "@@ -2,1 +3,1 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [
+                DiffDisplayRow(
+                    id: "second-row",
+                    kind: .context,
+                    old: diffLine(id: "second-old", side: .old, oldLine: 2, text: "two"),
+                    new: diffLine(id: "second-new", side: .new, newLine: 3, text: "three"),
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let comment = draftComment(id: "draft-cross-hunk", path: "A.swift", side: .unknown, startLine: 2)
+        let placement = ReviewDraftCommentPlacement.position([comment], in: [firstGroup, secondGroup])
+
+        let firstSegments = ReviewDraftCommentRowSegmentation.segments(
+            for: firstGroup,
+            placement: placement,
+            pendingAnchor: nil
+        )
+        let secondSegments = ReviewDraftCommentRowSegmentation.segments(
+            for: secondGroup,
+            placement: placement,
+            pendingAnchor: nil
+        )
+
+        #expect(placement.groupIDByCommentID["draft-cross-hunk"] == "first-group")
+        #expect(firstSegments.items.flatMap(\.draftComments).map(\.id) == ["draft-cross-hunk"])
+        #expect(secondSegments.items.flatMap(\.draftComments).isEmpty)
+    }
+
+    @Test func fileSectionRendersVisibleLocalDraftCommentCard() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-visible", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Local draft") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
+    }
+
+    @Test func fileSectionDraftCommentCardCanDismissComment() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-dismiss-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var dismissedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: true,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            },
+            dismiss: { dismissedID = $0.id }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-dismiss-draft-dismiss-inline",
+            in: controller.view
+        ))
+        #expect(dismissedID == "draft-dismiss-inline")
+    }
+
+    @Test func fileSectionDraftCommentCardUsesProvidedReviewTargetForPromptActions() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let target = ReviewFeedbackTarget(
+            title: "Review working tree",
+            repositoryPath: "/repo",
+            providerDescription: "GitHub #123",
+            sourceDescription: "Review Changes"
+        )
+        let comment = draftComment(id: "draft-target-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let recorder = ReviewBundleActionRecorder()
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: true,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            },
+            copyPrompt: { recorder.copied = $0 }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions,
+            reviewFeedbackTarget: target
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-copy-draft-target-inline",
+            in: controller.view
+        ))
+        #expect(recorder.copied?.target == target)
+        #expect(recorder.copied?.comments == [comment])
+    }
+
+    @Test func fileSectionDraftCommentCardDoesNotFireDisabledSendAction() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(
+            id: "draft-disabled-send-inline",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 2,
+            state: .resolved
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: true,
+                    canSendToAgent: false
+                )
+            },
+            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
+            sendToAgent: { _, _ in Issue.record("disabled send action fired") }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(!pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-send-draft-disabled-send-inline",
+            in: controller.view
+        ))
+    }
+
+    @Test func fileSectionDraftCommentEditorDoesNotKeepCardSelectionButtonActive() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-edit-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var selectedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions,
+            onSelectDraftComment: { selectedID = $0.id }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-action-edit-draft-edit-inline",
+            in: controller.view
+        ))
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-action-save-draft-edit-inline", in: controller.view) != nil)
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-draft-comment-select-draft-edit-inline", in: controller.view))
+        #expect(selectedID == nil)
+    }
+
     @Test func inlineFeedbackContextFormatterIncludesReviewMetadata() {
         let file = summary(path: "Sources/App.swift")
         let item = DiffReviewInlineFeedback(
@@ -726,6 +1188,377 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "App feedback.") != nil)
     }
 
+    @Test func surfaceShowsDraftSummaryRailAndSelectsDraftComment() throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        let comment = draftComment(id: "draft-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var selectedDraftID: String?
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            draftCommentsByFileID: [file.id: [comment]],
+            onSelectDraftComment: { selectedDraftID = $0.id }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1200, height: 700)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
+        let pressed = pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-comment-draft-summary",
+            in: controller.view
+        )
+
+        #expect(pressed)
+        #expect(selectedDraftID == "draft-summary")
+    }
+
+    @Test func surfaceCanShowDraftSummaryRailBeforeCommentsExist() throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsDraftSummaryRail: true
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1200, height: 700)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
+    }
+
+    @Test func surfaceKeepsDraftSummaryRailWhenOnlyDismissedCommentsRemain() throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        let comment = draftComment(id: "draft-dismissed-only", fileID: file.id, path: file.path, side: .new, startLine: 2, state: .dismissed)
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            draftCommentsByFileID: [file.id: [comment]]
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1200, height: 700)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "dismissed") != nil)
+    }
+
+    @Test func summaryRailUsesProvidedBundleForCopyAndSendActions() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-bundle", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        let recorder = ReviewBundleActionRecorder()
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: true,
+                    canShowSendToAgent: true,
+                    canSendToAgent: true
+                )
+            },
+            copyPrompt: { recorder.copied = $0 },
+            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
+            sendToAgent: { bundle, target in
+                recorder.sent = bundle
+                recorder.sentTarget = target
+            }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
+
+        #expect(recorder.copied == bundle)
+        #expect(recorder.sent == bundle)
+        #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
+    }
+
+    @Test func summaryRailHidesSendActionWhenNoAgentTargetExists() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-disabled-actions", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in .none },
+            copyPrompt: { _ in Issue.record("disabled copy action fired") },
+            agentTargets: { [] },
+            sendToAgent: { _, _ in Issue.record("hidden send action fired") }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view) == nil)
+    }
+
+    @Test func summaryRailCanDismissDraftComment() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-dismiss-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        var dismissedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: true,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            },
+            dismiss: { dismissedID = $0.id }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-dismiss-draft-dismiss-summary",
+            in: controller.view
+        ))
+        #expect(dismissedID == "draft-dismiss-summary")
+    }
+
+    @Test func summaryRailEditorDoesNotKeepCardSelectionPressActive() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-edit-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        var selectedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: true,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { selectedID = $0.id }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "review-draft-summary-edit-draft-edit-summary",
+            in: controller.view
+        ))
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-save-draft-edit-summary", in: controller.view) != nil)
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-comment-draft-edit-summary", in: controller.view))
+        #expect(selectedID == nil)
+    }
+
+    @Test func summaryRailShowsDismissedCommentsWithSideAndStatus() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(
+            id: "draft-dismissed-visible",
+            fileID: file.id,
+            path: file.path,
+            side: .old,
+            startLine: 7,
+            state: .dismissed
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: ReviewDraftCommentActions(),
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-comment-draft-dismissed-visible", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "old line 7") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "dismissed") != nil)
+    }
+
+    @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-collapsed", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [comment]
+        )
+        var collapsed = true
+        let recorder = ReviewBundleActionRecorder()
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: true,
+                    canShowSendToAgent: true,
+                    canSendToAgent: true
+                )
+            },
+            copyPrompt: { recorder.copied = $0 },
+            agentTargets: { [.newChat(agentID: "codex", title: "Codex")] },
+            sendToAgent: { bundle, target in
+                recorder.sent = bundle
+                recorder.sentTarget = target
+            }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 80, height: 500)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-copy-prompt", in: controller.view))
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-send-agent", in: controller.view))
+
+        #expect(recorder.copied == bundle)
+        #expect(recorder.sent == bundle)
+        #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
+    }
+
     @Test func selectionSynchronizationClearsEmptySessions() {
         let selected = DiffReviewFileID(namespace: "commit", path: "Stale.swift")
 
@@ -942,6 +1775,72 @@ struct DiffReviewSurfaceTests {
         )
     }
 
+    @Test func estimatedSectionHeightGrowsWithDraftComments() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(id: "draft-height", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+
+        #expect(
+            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [comment])
+                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [])
+        )
+    }
+
+    @Test func estimatedSectionHeightGrowsWithDraftCommentsOnCollapsedRows() {
+        let hiddenLine = diffLine(id: "hidden-new", side: .new, newLine: 12, text: "let hidden = true")
+        let collapsedParent = DiffDisplayRow(
+            id: "collapsed-parent",
+            kind: .collapsed,
+            old: nil,
+            new: nil,
+            collapsedLineCount: 1,
+            collapsedRows: [
+                DiffDisplayRow(
+                    id: "hidden-row",
+                    kind: .context,
+                    old: nil,
+                    new: hiddenLine,
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let displayModel = DiffDisplayModel(
+            filePath: "Sources/App.swift",
+            groups: [
+                DiffDisplayGroup(
+                    id: "group",
+                    header: "@@ -10,3 +10,3 @@",
+                    sourceHunk: parsedDiff().hunks[0],
+                    rows: [collapsedParent]
+                ),
+            ]
+        )
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel,
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let comment = draftComment(
+            id: "draft-collapsed-height",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 12
+        )
+
+        #expect(
+            DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [comment])
+                > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedback: [], draftComments: [])
+        )
+    }
+
     @Test func inlineFeedbackCardEstimateUsesDynamicBodyHeight() {
         let short = DiffReviewInlineFeedback(
             id: "short",
@@ -1025,6 +1924,61 @@ struct DiffReviewSurfaceTests {
         }
     }
 
+    private func draftComment(
+        id: String,
+        fileID: DiffReviewFileID = DiffReviewFileID(namespace: "commit", path: "A.swift"),
+        path: String = "A.swift",
+        side: DiffReviewInlineFeedbackSide = .new,
+        startLine: Int,
+        endLine: Int? = nil,
+        state: ReviewDraftCommentState = .active
+    ) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: .commit(
+                worktreeID: "wt",
+                repositoryPath: URL(fileURLWithPath: "/repo"),
+                sha: "abc123"
+            ),
+            fileID: fileID,
+            path: path,
+            originalPath: nil,
+            side: side,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: "let b = 3",
+            bodyMarkdown: "Please revisit this line.",
+            state: state,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+    }
+
+    private func diffLine(
+        id: String,
+        side: DiffLineSide,
+        oldLine: Int? = nil,
+        newLine: Int? = nil,
+        text: String
+    ) -> DiffDisplayLine {
+        DiffDisplayLine(
+            id: id,
+            anchor: DiffLineAnchor(
+                filePath: "A.swift",
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: side,
+                oldLine: oldLine,
+                newLine: newLine
+            ),
+            text: text,
+            lineNumber: oldLine ?? newLine,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+    }
+
     private func summary(
         path: String,
         namespace: String = "commit",
@@ -1080,10 +2034,25 @@ struct DiffReviewSurfaceTests {
         return matches
     }
 
+    private func pressAccessibilityElement(withAccessibilityIdentifier identifier: String, in view: NSView) -> Bool {
+        for match in subviews(withAccessibilityIdentifier: identifier, in: view) {
+            if match.accessibilityPerformPress() {
+                return true
+            }
+        }
+        return false
+    }
+
     private func accessibilityLabel(in view: NSView, containing text: String) -> String? {
         if let label = view.accessibilityLabel(), label.contains(text) {
             return label
         }
         return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
     }
+}
+
+private final class ReviewBundleActionRecorder: @unchecked Sendable {
+    var copied: ReviewFeedbackBundle?
+    var sent: ReviewFeedbackBundle?
+    var sentTarget: ReviewFeedbackAgentTarget?
 }
