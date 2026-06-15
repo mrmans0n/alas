@@ -128,7 +128,6 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains("- `Sources/App.swift:4 (new, unstaged)` — Fix the working tree edit."))
     }
 
-
     @Test func promptPreservesMultilineMarkdownBodies() {
         let session = ReviewDraftSessionID.localChanges(
             worktreeID: "wt",
