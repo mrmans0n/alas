@@ -5,6 +5,7 @@ import Testing
 @testable import Alas
 
 @MainActor
+@Suite(.serialized)
 struct ReviewSessionTabViewTests {
     @Test func initialLoadPublicationDoesNotRequestPersistenceForRestoredSelection() {
         let selected = DiffReviewFileID(namespace: "unstaged", path: "A.swift")
@@ -491,6 +492,69 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
     }
 
+    @Test func reviewSessionShowsPublishReviewForProviderContextWithDraftsAndOpensPublishConfirmation() async throws {
+        let request = Self.reviewRequest(provider: .github)
+        let target = Self.reviewRequestTarget(provider: .github, request: request)
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-publish-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("drafts.json")
+        )
+        let draftController = ReviewDraftCommentController(
+            sessionID: target.draftSessionID,
+            store: draftStore,
+            now: { Date(timeIntervalSince1970: 10) }
+        )
+        try draftController.load()
+        try draftController.add(
+            anchor: DiffReviewLineAnchor(
+                path: "Sources/App.swift",
+                side: .new,
+                line: 2,
+                rowIndex: 0,
+                selectedText: "let b = 3"
+            ),
+            fileID: loaded.session.files[0].id,
+            bodyMarkdown: "Please fix this."
+        )
+        let provider = RecordingProviderReviewMutator(
+            kind: .github,
+            publishResult: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let view = ReviewSessionTabView.testView(
+            record: record,
+            loaded: loaded,
+            draftCommentStore: draftStore,
+            provider: provider
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host) != nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.layoutSubtreeIfNeeded()
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) != nil)
+    }
+
     private func recursiveDescription(_ view: NSView) -> String {
         ([view.accessibilityLabel(), view.accessibilityIdentifier()] + view.subviews.map(recursiveDescription))
             .compactMap { $0 }
@@ -502,6 +566,24 @@ struct ReviewSessionTabViewTests {
             return view
         }
         return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
+    }
+
+    private func subviews(withAccessibilityIdentifier identifier: String, in view: NSView) -> [NSView] {
+        var matches: [NSView] = []
+        if view.accessibilityIdentifier() == identifier {
+            matches.append(view)
+        }
+        matches.append(contentsOf: view.subviews.flatMap { subviews(withAccessibilityIdentifier: identifier, in: $0) })
+        return matches
+    }
+
+    private func pressAccessibilityElement(withAccessibilityIdentifier identifier: String, in view: NSView) -> Bool {
+        for match in subviews(withAccessibilityIdentifier: identifier, in: view) {
+            if match.accessibilityPerformPress() {
+                return true
+            }
+        }
+        return false
     }
 
     private static func summary(path: String, namespace: String) -> DiffReviewFileSummary {
@@ -557,6 +639,70 @@ struct ReviewSessionTabViewTests {
             checks: [],
             threads: []
         )
+    }
+
+    private static func reviewRequestTarget(provider: CodeHostKind, request: ReviewRequest) -> ReviewSessionTarget {
+        ReviewSessionTarget.reviewRequest(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            provider: provider,
+            host: request.remote.host,
+            repositorySlug: request.remote.repositorySlug,
+            number: request.number,
+            url: request.url,
+            title: request.title,
+            headSHA: "abc123"
+        )
+    }
+
+    private static func loadedReviewRequestContext(provider: CodeHostKind, request: ReviewRequest) -> ReviewSessionLoadedContext {
+        let summary = DiffReviewFileSummary(
+            path: "Sources/App.swift",
+            namespace: provider == .github ? "github-pr" : "gitlab-mr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .modified,
+            additions: 1,
+            deletions: 1,
+            isRenderable: true
+        )
+        return ReviewSessionLoadedContext(
+            session: DiffReviewLoadedSession(
+                files: [
+                    DiffReviewFileSectionModel(
+                        summary: summary,
+                        parsedDiff: parsedDiff(),
+                        displayModel: displayModel(),
+                        placeholderMessage: nil,
+                        openFile: nil
+                    ),
+                ],
+                summary: DiffReviewSessionModel(files: [summary], groupsEnabled: false)
+            ),
+            feedbackTarget: ReviewFeedbackTarget(
+                title: request.title,
+                repositoryPath: "/repo",
+                providerDescription: request.displayIdentity,
+                sourceDescription: request.displayIdentity
+            ),
+            providerContext: ReviewSessionProviderContext(remote: request.remote, reviewRequest: request)
+        )
+    }
+
+    private static func parsedDiff() -> ParsedDiff {
+        DiffParser.parse("""
+        diff --git a/Sources/App.swift b/Sources/App.swift
+        --- a/Sources/App.swift
+        +++ b/Sources/App.swift
+        @@ -1,2 +1,2 @@
+         let a = 1
+        -let b = 2
+        +let b = 3
+        """)
+    }
+
+    private static func displayModel() -> DiffDisplayModel {
+        DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
     }
 
     private struct FakeProviderReviewMutator: CodeHostProvider {
@@ -620,6 +766,93 @@ struct ReviewSessionTabViewTests {
             ProviderThreadMutationResult(
                 refreshedRequest: result.refreshedRequest,
                 providerURL: result.refreshedRequest.url
+            )
+        }
+    }
+
+    private final class RecordingProviderReviewMutator: CodeHostProvider, @unchecked Sendable {
+        let kind: CodeHostKind
+        let capabilities: CodeHostProviderCapabilities
+        private let publishResult: ProviderReviewPublishResult
+        private let lock = NSLock()
+        private var recordedPublishRequests: [ProviderReviewPublishRequest] = []
+
+        init(
+            kind: CodeHostKind,
+            capabilities: CodeHostProviderCapabilities = .githubCLI,
+            publishResult: ProviderReviewPublishResult
+        ) {
+            self.kind = kind
+            self.capabilities = capabilities
+            self.publishResult = publishResult
+        }
+
+        func publishRequests() -> [ProviderReviewPublishRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return recordedPublishRequests
+        }
+
+        func isAvailable() async -> Bool { true }
+        func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+        func currentReviewRequest(
+            remote: CodeHostRemote,
+            branch: String,
+            headOwner: String?,
+            baseBranch: String,
+            cwd: URL
+        ) async throws -> ReviewRequest? {
+            publishResult.refreshedRequest
+        }
+        func createReviewRequest(
+            remote: CodeHostRemote,
+            branch: String,
+            headOwner: String?,
+            baseBranch: String,
+            title: String,
+            body: String,
+            isDraft: Bool,
+            cwd: URL
+        ) async throws -> URL {
+            publishResult.refreshedRequest.url
+        }
+        func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+        func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { "" }
+        func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] { [] }
+        func checkEvidenceDetail(
+            remote: CodeHostRemote,
+            request: ReviewRequest,
+            item: ReviewEvidenceItem,
+            cwd: URL
+        ) async throws -> ReviewEvidenceDetail {
+            throw CodeHostProviderError.malformedOutput("RecordingProviderReviewMutator does not provide check evidence details.")
+        }
+        func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] { [] }
+        func feedbackEvidenceDetail(
+            remote: CodeHostRemote,
+            request: ReviewRequest,
+            item: ReviewEvidenceItem,
+            cwd: URL
+        ) async throws -> ReviewEvidenceDetail {
+            throw CodeHostProviderError.malformedOutput("RecordingProviderReviewMutator does not provide feedback evidence details.")
+        }
+        func rerunFailedChecks(
+            remote: CodeHostRemote,
+            branch: String,
+            headSHA: String,
+            request: ReviewRequest?,
+            cwd: URL
+        ) async throws {}
+        func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+            lock.lock()
+            recordedPublishRequests.append(request)
+            lock.unlock()
+            return publishResult
+        }
+        func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+            ProviderThreadMutationResult(
+                refreshedRequest: publishResult.refreshedRequest,
+                providerURL: publishResult.refreshedRequest.url
             )
         }
     }

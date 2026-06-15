@@ -81,7 +81,14 @@ struct ProviderReviewPublishConfirmationView: View {
                 Button(isPublishing ? "Publishing..." : "Publish", action: onConfirm)
                     .disabled(isPublishing)
                     .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("provider-review-publish-confirm")
+                    .background(
+                        ProviderReviewPublishPressMarker(
+                            identifier: "provider-review-publish-confirm",
+                            label: "Publish",
+                            isEnabled: !isPublishing,
+                            action: onConfirm
+                        )
+                    )
             }
         }
         .padding(14)
@@ -103,6 +110,44 @@ struct ProviderReviewPublishConfirmationView: View {
 
     private var commentCountText: String {
         "\(commentCount) \(commentCount == 1 ? "comment" : "comments")"
+    }
+}
+
+private struct ProviderReviewPublishPressMarker: NSViewRepresentable {
+    let identifier: String
+    let label: String
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> ProviderReviewPublishPressView {
+        let view = ProviderReviewPublishPressView(frame: .zero)
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: ProviderReviewPublishPressView, context: Context) {
+        view.setAccessibilityIdentifier(identifier)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityRole(.button)
+        view.setAccessibilityEnabled(isEnabled)
+        view.isEnabled = isEnabled
+        view.action = action
+    }
+}
+
+private final class ProviderReviewPublishPressView: NSView {
+    var isEnabled = true
+    var action: () -> Void = {}
+
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        action()
+        return true
     }
 }
 

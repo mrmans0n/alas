@@ -1308,6 +1308,8 @@ private struct DiffReviewInlineFeedbackCard: View {
     let onSelect: (DiffReviewInlineFeedback) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var isReplying = false
+    @State private var replyBody = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1385,7 +1387,40 @@ private struct DiffReviewInlineFeedbackCard: View {
     @ViewBuilder
     private var actionRow: some View {
         let availability = actions.availability(item, file)
-        if availability.canOpenProvider || availability.canCopyContext || availability.canSendToAgent {
+        if isReplying {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Reply", text: $replyBody, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("fg"))
+                    .padding(7)
+                    .background(theme.color("bg-1"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .accessibilityIdentifier("diff-review-inline-feedback-reply-\(item.id)")
+
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    inlineActionButton(id: "reply-save", title: "Save") {
+                        let body = replyBody.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !body.isEmpty else { return }
+                        DiffReviewInlineFeedbackCardInteraction.reply(item, body: body) { feedback, body in
+                            actions.replyProvider(feedback, file, body)
+                        }
+                        isReplying = false
+                        replyBody = ""
+                    }
+                    inlineActionButton(id: "reply-cancel", title: "Cancel") {
+                        isReplying = false
+                        replyBody = ""
+                    }
+                }
+            }
+        } else if availability.canOpenProvider
+            || availability.canCopyContext
+            || availability.canSendToAgent
+            || availability.canReplyProvider
+            || availability.canResolveProvider
+            || availability.canUnresolveProvider {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
                 if availability.canOpenProvider {
@@ -1407,6 +1442,22 @@ private struct DiffReviewInlineFeedbackCard: View {
                         DiffReviewInlineFeedbackCardInteraction.send(item) { feedback in
                             actions.sendToAgent(feedback, file)
                         }
+                    }
+                }
+                if availability.canReplyProvider {
+                    inlineActionButton(id: "reply", title: "Reply") {
+                        replyBody = ""
+                        isReplying = true
+                    }
+                }
+                if availability.canResolveProvider {
+                    inlineActionButton(id: "resolve", title: "Resolve") {
+                        actions.resolveProvider(item, file)
+                    }
+                }
+                if availability.canUnresolveProvider {
+                    inlineActionButton(id: "unresolve", title: "Unresolve") {
+                        actions.unresolveProvider(item, file)
                     }
                 }
             }
@@ -1431,6 +1482,13 @@ private struct DiffReviewInlineFeedbackCard: View {
             DiffReviewAccessibilityMarker(
                 identifier: "diff-review-inline-feedback-action-\(id)-\(item.id)",
                 label: title
+            )
+        )
+        .background(
+            ReviewDraftCommentActionPressMarker(
+                identifier: "diff-review-inline-feedback-action-\(id)-\(item.id)",
+                label: title,
+                action: action
             )
         )
     }
@@ -1490,6 +1548,14 @@ enum DiffReviewInlineFeedbackCardInteraction {
         action: (DiffReviewInlineFeedback) -> Void
     ) {
         action(item)
+    }
+
+    static func reply(
+        _ item: DiffReviewInlineFeedback,
+        body: String,
+        action: (DiffReviewInlineFeedback, String) -> Void
+    ) {
+        action(item, body)
     }
 }
 

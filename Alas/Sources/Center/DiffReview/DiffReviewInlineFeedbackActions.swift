@@ -36,11 +36,17 @@ struct DiffReviewInlineFeedbackActionAvailability: Equatable {
     var canOpenProvider: Bool
     var canCopyContext: Bool
     var canSendToAgent: Bool
+    var canReplyProvider: Bool = false
+    var canResolveProvider: Bool = false
+    var canUnresolveProvider: Bool = false
 
     static let none = DiffReviewInlineFeedbackActionAvailability(
         canOpenProvider: false,
         canCopyContext: false,
-        canSendToAgent: false
+        canSendToAgent: false,
+        canReplyProvider: false,
+        canResolveProvider: false,
+        canUnresolveProvider: false
     )
 }
 
@@ -49,6 +55,9 @@ struct DiffReviewInlineFeedbackActions {
     var openProvider: (DiffReviewInlineFeedback, DiffReviewFileSummary) -> Void = { _, _ in }
     var copyContext: (DiffReviewInlineFeedback, DiffReviewFileSummary) -> Void = { _, _ in }
     var sendToAgent: (DiffReviewInlineFeedback, DiffReviewFileSummary) -> Void = { _, _ in }
+    var replyProvider: (DiffReviewInlineFeedback, DiffReviewFileSummary, String) -> Void = { _, _, _ in }
+    var resolveProvider: (DiffReviewInlineFeedback, DiffReviewFileSummary) -> Void = { _, _ in }
+    var unresolveProvider: (DiffReviewInlineFeedback, DiffReviewFileSummary) -> Void = { _, _ in }
 }
 
 enum DiffReviewInlineFeedbackContextFormatter {

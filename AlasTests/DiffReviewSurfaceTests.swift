@@ -281,6 +281,94 @@ struct DiffReviewSurfaceTests {
         #expect(subviews(withAccessibilityIdentifier: "diff-review-inline-feedback-copy-thread-1", in: controller.view).count <= 1)
     }
 
+    @Test func providerFeedbackCardShowsReplyResolveAndUnresolveActions() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please fix this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: 2, side: .new),
+            evidenceItemID: "thread-1"
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var resolvedID: String?
+        var unresolvedID: String?
+        var replied: (id: String, body: String)?
+        let actions = DiffReviewInlineFeedbackActions(
+            availability: { item, _ in
+                DiffReviewInlineFeedbackActionAvailability(
+                    canOpenProvider: false,
+                    canCopyContext: false,
+                    canSendToAgent: false,
+                    canReplyProvider: true,
+                    canResolveProvider: item.status != .resolved,
+                    canUnresolveProvider: item.status == .resolved
+                )
+            },
+            replyProvider: { item, _, body in
+                replied = (item.id, body)
+            },
+            resolveProvider: { item, _ in
+                resolvedID = item.id
+            },
+            unresolveProvider: { item, _ in
+                unresolvedID = item.id
+            }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: [
+                feedback,
+                DiffReviewInlineFeedback(
+                    id: "thread-2",
+                    providerName: "GitHub",
+                    author: "reviewer",
+                    bodyPreview: "Resolved thread.",
+                    status: .resolved,
+                    providerURL: nil,
+                    anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
+                    evidenceItemID: "thread-2"
+                ),
+            ],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            inlineFeedbackActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 520)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-reply-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-unresolve-thread-2", in: controller.view) != nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: controller.view))
+        #expect(resolvedID == "thread-1")
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-unresolve-thread-2", in: controller.view))
+        #expect(unresolvedID == "thread-2")
+
+        DiffReviewInlineFeedbackCardInteraction.reply(feedback, body: "Done") { item, body in
+            actions.replyProvider(item, file.summary, body)
+        }
+        #expect(replied?.id == "thread-1")
+        #expect(replied?.body == "Done")
+    }
+
     @Test func focusedInlineFeedbackPastDisplayCapRemainsVisibleWithMoreRow() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),

@@ -48,6 +48,14 @@ struct ReviewSessionTabLoadPublication {
     }
 }
 
+struct ProviderReviewPublishConfirmationState: Equatable {
+    let commentID: String?
+    let providerName: String
+    let reviewIdentity: String
+    let commentCount: Int
+    let unpublishableMessages: [String]
+}
+
 struct ReviewSessionTabView: View {
     let worktree: Worktree?
     let tabState: ReviewSessionTabState
@@ -79,6 +87,10 @@ struct ReviewSessionTabView: View {
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var loadCoordinator = ReviewSessionTabLoadCoordinator()
     @State private var loadGeneration = 0
+    @State private var providerPublishConfirmation: ProviderReviewPublishConfirmationState?
+    @State private var selectedProviderDecision = ProviderReviewDecision.comment
+    @State private var isProviderPublishing = false
+    @State private var providerPublishError: String?
 
     init(worktree: Worktree, tabState: ReviewSessionTabState, appState: AppState) {
         self.worktree = worktree
@@ -124,6 +136,15 @@ struct ReviewSessionTabView: View {
         self._loaded = State(initialValue: loaded)
         self._selectedFileID = State(initialValue: record?.selectedFileID ?? tabState.selectedFileID)
         self._focusedDraftCommentID = State(initialValue: record?.focusedCommentID ?? tabState.focusedCommentID)
+        if let record {
+            let controller = ReviewDraftCommentController(
+                sessionID: record.target.draftSessionID,
+                store: draftCommentStore
+            )
+            try? controller.load()
+            self._draftCommentController = State(initialValue: controller)
+            self._loadedDraftSessionID = State(initialValue: record.target.draftSessionID)
+        }
     }
 
     static func preview(record: ReviewSessionRecord, loaded: ReviewSessionLoadedContext) -> some View {
@@ -137,6 +158,24 @@ struct ReviewSessionTabView: View {
         )
     }
 
+    static func testView(
+        record: ReviewSessionRecord,
+        loaded: ReviewSessionLoadedContext,
+        draftCommentStore: ReviewDraftCommentStore = ReviewDraftCommentStore(),
+        provider: any CodeHostProvider
+    ) -> some View {
+        ReviewSessionTabView(
+            tabState: ReviewSessionTabState(worktreeId: record.target.worktreeID, record: record),
+            record: record,
+            loaded: loaded,
+            draftCommentStore: draftCommentStore,
+            feedbackSender: ReviewFeedbackAgentSender(availableTargets: { [] }, send: { _, _, _ in }),
+            providerRegistry: CodeHostProviderRegistry(providers: [provider.kind: provider]),
+            loadsOnAppear: false,
+            persistsState: false
+        )
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -145,6 +184,7 @@ struct ReviewSessionTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
+        .overlay(providerPublishConfirmationOverlay)
         .task(id: loadTaskID) {
             guard loadsOnAppear else { return }
             let token = beginLoadReviewSession()
@@ -249,11 +289,13 @@ struct ReviewSessionTabView: View {
             showsRailDisplayControls: true,
             showsDraftSummaryRail: true,
             lspContextForFile: makeLSPContext,
+            inlineFeedbackByFileID: inlineFeedbackByFileID(for: loaded),
+            inlineFeedbackActions: inlineFeedbackActions(for: loaded),
             reviewFeedbackTarget: loaded.feedbackTarget,
             draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
             focusedDraftCommentID: focusedDraftCommentID,
             draftCommentScrollCommand: draftCommentScrollCommand,
-            draftCommentActions: draftCommentActions(),
+            draftCommentActions: draftCommentActions(for: loaded),
             onSelectDraftComment: selectDraftComment,
             onSaveDraftComment: saveDraftComment
         )
@@ -394,14 +436,30 @@ struct ReviewSessionTabView: View {
         }
     }
 
-    private func draftCommentActions() -> ReviewDraftCommentActions {
-        ReviewDraftWorkspaceActions.make(
+    private func draftCommentActions(for loaded: ReviewSessionLoadedContext) -> ReviewDraftCommentActions {
+        var actions = ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
             sender: feedbackSender,
             sessionID: tabState.sessionID,
             recordHandoff: recordSessionHandoff,
             recordSendFailure: recordSessionSendFailure
         )
+        let baseAvailability = actions.availability
+        actions.availability = { comment in
+            var availability = baseAvailability(comment)
+            availability.canPublishProvider = canPublishProvider(comment, in: loaded)
+            return availability
+        }
+        actions.canPublishReview = {
+            canPublishProviderReview(in: loaded)
+        }
+        actions.publishProvider = { comment in
+            openProviderPublishConfirmation(commentID: comment.id, loaded: loaded)
+        }
+        actions.publishReview = {
+            openProviderPublishConfirmation(commentID: nil, loaded: loaded)
+        }
+        return actions
     }
 
     private func makeProviderMutationController(for loaded: ReviewSessionLoadedContext) -> ProviderReviewMutationController? {
@@ -410,6 +468,264 @@ struct ReviewSessionTabView: View {
             draftCommentController: draftCommentController,
             providerRegistry: providerRegistry,
             now: now
+        )
+    }
+
+    private func canPublishProvider(_ comment: ReviewDraftComment, in loaded: ReviewSessionLoadedContext) -> Bool {
+        guard loaded.providerContext != nil else { return false }
+        return ProviderReviewDraftComment(localDraft: comment) != nil
+    }
+
+    private func canPublishProviderReview(in loaded: ReviewSessionLoadedContext) -> Bool {
+        guard loaded.providerContext != nil else { return false }
+        return draftCommentController?.activeUnpublishedComments.contains { comment in
+            ProviderReviewDraftComment(localDraft: comment) != nil
+        } ?? false
+    }
+
+    private func openProviderPublishConfirmation(commentID: String?, loaded: ReviewSessionLoadedContext) {
+        guard let providerContext = loaded.providerContext else { return }
+        let comments = providerPublishableComments(commentID: commentID)
+        guard !comments.isEmpty else { return }
+        selectedProviderDecision = .comment
+        providerPublishError = nil
+        providerPublishConfirmation = ProviderReviewPublishConfirmationState(
+            commentID: commentID,
+            providerName: providerContext.remote.kind.displayName,
+            reviewIdentity: providerContext.reviewRequest.displayIdentity,
+            commentCount: comments.count,
+            unpublishableMessages: providerUnpublishableMessages(commentID: commentID)
+        )
+    }
+
+    private func providerPublishableComments(commentID: String?) -> [ReviewDraftComment] {
+        let comments = draftCommentController?.activeUnpublishedComments ?? []
+        let filtered = commentID.map { id in comments.filter { $0.id == id } } ?? comments
+        return filtered.filter { ProviderReviewDraftComment(localDraft: $0) != nil }
+    }
+
+    private func providerUnpublishableMessages(commentID: String?) -> [String] {
+        let comments = draftCommentController?.activeUnpublishedComments ?? []
+        let filtered = commentID.map { id in comments.filter { $0.id == id } } ?? comments
+        return filtered.compactMap { comment in
+            ProviderReviewDraftComment(localDraft: comment) == nil ? "\(comment.path): cannot publish this draft" : nil
+        }
+    }
+
+    @ViewBuilder
+    private var providerPublishConfirmationOverlay: some View {
+        if let providerPublishConfirmation {
+            ZStack {
+                theme.color("bg-0").opacity(0.45)
+                    .ignoresSafeArea()
+                ProviderReviewPublishConfirmationView(
+                    providerName: providerPublishConfirmation.providerName,
+                    reviewIdentity: providerPublishConfirmation.reviewIdentity,
+                    commentCount: providerPublishConfirmation.commentCount,
+                    unpublishableMessages: providerPublishConfirmation.unpublishableMessages,
+                    selectedDecision: $selectedProviderDecision,
+                    isPublishing: isProviderPublishing,
+                    errorMessage: providerPublishError,
+                    onCancel: {
+                        self.providerPublishConfirmation = nil
+                        providerPublishError = nil
+                    },
+                    onConfirm: {
+                        Task { @MainActor in
+                            await confirmProviderPublish()
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private func confirmProviderPublish() async {
+        guard providerPublishConfirmation != nil,
+              let loaded,
+              let providerContext = loaded.providerContext,
+              let controller = makeProviderMutationController(for: loaded)
+        else { return }
+
+        isProviderPublishing = true
+        providerPublishError = nil
+        defer { isProviderPublishing = false }
+
+        do {
+            let result = try await controller.publishReview(
+                remote: providerContext.remote,
+                reviewRequest: providerContext.reviewRequest,
+                decision: selectedProviderDecision,
+                summaryBody: "",
+                cwd: record?.target.repositoryPath ?? URL(fileURLWithPath: loaded.feedbackTarget.repositoryPath ?? "/")
+            )
+            replaceProviderReviewRequest(result.refreshedRequest)
+            providerPublishConfirmation = nil
+        } catch {
+            providerPublishError = error.localizedDescription
+        }
+    }
+
+    private func inlineFeedbackByFileID(for loaded: ReviewSessionLoadedContext) -> [DiffReviewFileID: [DiffReviewInlineFeedback]] {
+        guard let providerContext = loaded.providerContext else { return [:] }
+        return Self.inlineFeedbackByFileID(
+            threads: providerContext.reviewRequest.threads,
+            files: loaded.session.summary.files,
+            providerName: providerContext.remote.kind.displayName
+        )
+    }
+
+    static func inlineFeedbackByFileID(
+        threads: [ReviewThreadSummary],
+        files: [DiffReviewFileSummary],
+        providerName: String
+    ) -> [DiffReviewFileID: [DiffReviewInlineFeedback]] {
+        var grouped: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
+        let matcher = ReviewSessionInlineFeedbackFileMatcher(files: files)
+        for thread in threads {
+            guard let location = thread.location,
+                  let file = matcher.file(for: location)
+            else { continue }
+
+            let feedback = DiffReviewInlineFeedback(
+                id: thread.id,
+                providerName: providerName,
+                author: thread.author,
+                bodyPreview: String(thread.body.prefix(240)),
+                status: thread.isResolved ? .resolved : .actionable,
+                providerURL: thread.url,
+                anchor: DiffReviewInlineFeedbackAnchor(
+                    path: Self.inlineFeedbackAnchorPath(for: location, matchedFile: file),
+                    line: location.line,
+                    side: DiffReviewInlineFeedbackSide(location.side)
+                ),
+                evidenceItemID: thread.id
+            )
+            grouped[file.id, default: []].append(feedback)
+        }
+
+        return grouped.mapValues { feedback in
+            feedback.sorted { lhs, rhs in
+                switch (lhs.anchor.line, rhs.anchor.line) {
+                case (nil, nil):
+                    return lhs.id < rhs.id
+                case (nil, _?):
+                    return true
+                case (_?, nil):
+                    return false
+                case (let lhsLine?, let rhsLine?):
+                    if lhsLine != rhsLine {
+                        return lhsLine < rhsLine
+                    }
+                    return lhs.id < rhs.id
+                }
+            }
+        }
+    }
+
+    private static func inlineFeedbackAnchorPath(
+        for location: ReviewThreadLocation,
+        matchedFile file: DiffReviewFileSummary
+    ) -> String {
+        switch location.side {
+        case .old:
+            location.originalPath ?? file.originalPath ?? location.path
+        case .new, .unknown:
+            location.path
+        }
+    }
+
+    private func inlineFeedbackActions(for loaded: ReviewSessionLoadedContext) -> DiffReviewInlineFeedbackActions {
+        var actions = DiffReviewInlineFeedbackActions()
+        actions.availability = { item, _ in
+            guard let providerContext = loaded.providerContext,
+                  let provider = providerRegistry.provider(for: providerContext.remote.kind)
+            else { return .none }
+
+            let capabilities = provider.capabilities
+            return DiffReviewInlineFeedbackActionAvailability(
+                canOpenProvider: item.providerURL != nil,
+                canCopyContext: true,
+                canSendToAgent: false,
+                canReplyProvider: capabilities.canReplyToReviewThreads,
+                canResolveProvider: item.status != .resolved && capabilities.canResolveReviewThreads,
+                canUnresolveProvider: item.status == .resolved && capabilities.canUnresolveReviewThreads
+            )
+        }
+        actions.replyProvider = { item, file, body in
+            Task { await mutateProviderThread(item, file: file, loaded: loaded, kind: .reply, body: body) }
+        }
+        actions.resolveProvider = { item, file in
+            Task { await mutateProviderThread(item, file: file, loaded: loaded, kind: .resolve, body: nil) }
+        }
+        actions.unresolveProvider = { item, file in
+            Task { await mutateProviderThread(item, file: file, loaded: loaded, kind: .unresolve, body: nil) }
+        }
+        return actions
+    }
+
+    private func mutateProviderThread(
+        _ item: DiffReviewInlineFeedback,
+        file: DiffReviewFileSummary,
+        loaded: ReviewSessionLoadedContext,
+        kind: ProviderThreadMutationKind,
+        body: String?
+    ) async {
+        guard let providerContext = loaded.providerContext,
+              let controller = makeProviderMutationController(for: loaded)
+        else { return }
+
+        do {
+            let result = try await controller.mutateThread(
+                ProviderThreadMutation(
+                    remote: providerContext.remote,
+                    reviewRequest: providerContext.reviewRequest,
+                    thread: reviewThreadSummary(item, file: file),
+                    kind: kind,
+                    bodyMarkdown: body,
+                    cwd: record?.target.repositoryPath ?? URL(fileURLWithPath: loaded.feedbackTarget.repositoryPath ?? "/")
+                )
+            )
+            replaceProviderReviewRequest(result.refreshedRequest)
+        } catch {
+            providerPublishError = error.localizedDescription
+        }
+    }
+
+    private func reviewThreadSummary(
+        _ item: DiffReviewInlineFeedback,
+        file: DiffReviewFileSummary
+    ) -> ReviewThreadSummary {
+        ReviewThreadSummary(
+            id: item.id,
+            author: item.author,
+            body: item.bodyPreview,
+            url: item.providerURL,
+            isResolved: item.status == .resolved,
+            isActionable: item.status != .resolved,
+            location: ReviewThreadLocation(
+                path: item.anchor.path,
+                originalPath: file.originalPath,
+                line: item.anchor.line,
+                side: ReviewThreadSide(item.anchor.side),
+                providerPosition: nil
+            ),
+            providerThreadID: item.id,
+            providerCommentID: nil
+        )
+    }
+
+    private func replaceProviderReviewRequest(_ reviewRequest: ReviewRequest) {
+        guard let current = loaded,
+              let providerContext = current.providerContext
+        else { return }
+        loaded = ReviewSessionLoadedContext(
+            session: current.session,
+            feedbackTarget: current.feedbackTarget,
+            providerContext: ReviewSessionProviderContext(
+                remote: providerContext.remote,
+                reviewRequest: reviewRequest
+            )
         )
     }
 
@@ -560,6 +876,76 @@ enum ReviewSessionHandoffPersistence {
             visibleRecord.lastSendError = "Sent to agent, but failed to save handoff record: \(error.localizedDescription)"
             visibleRecord.updatedAt = now()
             return visibleRecord
+        }
+    }
+}
+
+private struct ReviewSessionInlineFeedbackFileMatcher {
+    private let filesByPath: [String: DiffReviewFileSummary]
+    private let filesByOriginalPath: [String: DiffReviewFileSummary]
+
+    init(files: [DiffReviewFileSummary]) {
+        self.filesByPath = Self.uniqueFiles(files) { $0.path }
+        self.filesByOriginalPath = Self.uniqueFiles(
+            files.compactMap { file in file.originalPath == nil ? nil : file },
+            keyedBy: { $0.originalPath }
+        )
+    }
+
+    func file(for location: ReviewThreadLocation) -> DiffReviewFileSummary? {
+        switch location.side {
+        case .new:
+            filesByPath[location.path]
+                ?? location.originalPath.flatMap { filesByOriginalPath[$0] }
+                ?? filesByOriginalPath[location.path]
+        case .old:
+            location.originalPath.flatMap { filesByOriginalPath[$0] }
+                ?? filesByOriginalPath[location.path]
+                ?? filesByPath[location.path]
+        case .unknown:
+            filesByPath[location.path]
+                ?? location.originalPath.flatMap { filesByOriginalPath[$0] }
+                ?? filesByOriginalPath[location.path]
+        }
+    }
+
+    private static func uniqueFiles(
+        _ files: [DiffReviewFileSummary],
+        keyedBy key: (DiffReviewFileSummary) -> String?
+    ) -> [String: DiffReviewFileSummary] {
+        var counts: [String: Int] = [:]
+        var matches: [String: DiffReviewFileSummary] = [:]
+        for file in files {
+            guard let value = key(file), !value.isEmpty else { continue }
+            counts[value, default: 0] += 1
+            matches[value] = file
+        }
+        return matches.filter { counts[$0.key] == 1 }
+    }
+}
+
+private extension DiffReviewInlineFeedbackSide {
+    init(_ side: ReviewThreadSide) {
+        switch side {
+        case .old:
+            self = .old
+        case .new:
+            self = .new
+        case .unknown:
+            self = .unknown
+        }
+    }
+}
+
+private extension ReviewThreadSide {
+    init(_ side: DiffReviewInlineFeedbackSide) {
+        switch side {
+        case .old:
+            self = .old
+        case .new:
+            self = .new
+        case .unknown:
+            self = .unknown
         }
     }
 }
