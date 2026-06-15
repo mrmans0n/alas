@@ -64,4 +64,77 @@ struct ReviewDraftModelsTests {
         #expect(comment.normalizedLineRange == 3...8)
         #expect(comment.isActive)
     }
+
+    @Test func draftCommentDecodesLegacyJSONWithoutProviderFields() throws {
+        let json = """
+        {
+          "id": "legacy",
+          "sessionID": "local-changes\\u001fwt\\u001f/repo\\u001fall",
+          "fileID": {
+            "namespace": "unstaged",
+            "path": "Sources/App.swift"
+          },
+          "path": "Sources/App.swift",
+          "originalPath": null,
+          "side": "new",
+          "startLine": 8,
+          "endLine": null,
+          "selectedText": "let value = 1",
+          "bodyMarkdown": "Please extract this.",
+          "state": "active",
+          "createdAt": 1,
+          "updatedAt": 2
+        }
+        """.data(using: .utf8)!
+
+        let comment = try JSONDecoder().decode(ReviewDraftComment.self, from: json)
+
+        #expect(comment.id == "legacy")
+        #expect(comment.providerPublish == nil)
+        #expect(comment.providerError == nil)
+    }
+
+    @Test func draftCommentRoundTripsProviderPublishAndErrorMetadata() throws {
+        let comment = ReviewDraftComment(
+            id: "published",
+            sessionID: .reviewRequest(
+                worktreeID: "wt",
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                number: 527
+            ),
+            fileID: DiffReviewFileID(namespace: "github", path: "Sources/App.swift"),
+            path: "Sources/App.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: 8,
+            endLine: nil,
+            selectedText: "let value = 1",
+            bodyMarkdown: "Please extract this.",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            providerPublish: ReviewDraftProviderPublish(
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                reviewNumber: 527,
+                threadID: "thread-1",
+                commentID: "comment-1",
+                url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
+                publishedAt: Date(timeIntervalSince1970: 3)
+            ),
+            providerError: ReviewDraftProviderError(
+                provider: .github,
+                message: "line is outdated",
+                occurredAt: Date(timeIntervalSince1970: 4)
+            )
+        )
+
+        let data = try JSONEncoder().encode(comment)
+        let decoded = try JSONDecoder().decode(ReviewDraftComment.self, from: data)
+
+        #expect(decoded == comment)
+    }
 }
