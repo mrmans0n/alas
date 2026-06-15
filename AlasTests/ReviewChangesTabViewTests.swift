@@ -559,6 +559,44 @@ struct ReviewChangesTabViewTests {
         #expect(await probe.loadCount == 1)
     }
 
+    @Test func diffReviewFileSectionIgnoresStaleContextLoadAfterResetForSameFile() async throws {
+        let staleProbe = SuspendedContextProviderProbe()
+        let freshProbe = SuspendedContextProviderProbe()
+        let controller = renderAnyFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
+            try await staleProbe.snapshot()
+        }))
+        let staleRuler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+        staleRuler.invokeExpansionForTesting(row: 0, optionKey: false)
+        try await waitForLoadCount(1, probe: staleProbe)
+
+        controller.rootView = fileSectionView(file: providerBackedFile(path: "Sources/App/BetaView.swift"))
+        controller.view.layoutSubtreeIfNeeded()
+        controller.rootView = fileSectionView(file: providerBackedFile(provider: DiffReviewContextProvider {
+            try await freshProbe.snapshot()
+        }))
+        controller.view.layoutSubtreeIfNeeded()
+
+        let freshRuler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+        freshRuler.invokeExpansionForTesting(row: 2, optionKey: false)
+        try await waitForLoadCount(1, probe: freshProbe)
+
+        await staleProbe.resolve(DiffReviewFileContextSnapshot(
+            old: .available((1...8).map { "stale \($0)" }),
+            new: .available((1...8).map { "stale \($0)" })
+        ))
+        try await Task.sleep(nanoseconds: 25_000_000)
+        await freshProbe.resolve(DiffReviewFileContextSnapshot(
+            old: .available((1...8).map { "fresh \($0)" }),
+            new: .available((1...8).map { "fresh \($0)" })
+        ))
+
+        let text = try await waitForRenderedText(in: controller.view, containing: "fresh 5")
+        #expect(text.contains("fresh 8"))
+        #expect(!text.contains("stale"))
+        #expect(await staleProbe.loadCount == 1)
+        #expect(await freshProbe.loadCount == 1)
+    }
+
     @Test func diffReviewFileSectionShowsContextProviderFailure() async throws {
         let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
             throw ContextProviderTestError.failed
@@ -594,6 +632,7 @@ struct ReviewChangesTabViewTests {
     }
 
     private func providerBackedFile(
+        path: String = "Sources/App/AlphaView.swift",
         provider: DiffReviewContextProvider = DiffReviewContextProvider {
             DiffReviewFileContextSnapshot(
                 old: .available((1...8).map { "old \($0)" }),
@@ -612,7 +651,7 @@ struct ReviewChangesTabViewTests {
         let diff = ParsedDiff(hunks: [hunk])
         return ReviewChangesFileSectionModel(
             summary: reviewSummary(
-                path: "Sources/App/AlphaView.swift",
+                path: path,
                 source: .unstaged,
                 status: .modified,
                 additions: 0,
@@ -620,7 +659,7 @@ struct ReviewChangesTabViewTests {
                 isRenderable: true
             ),
             parsedDiff: diff,
-            displayModel: DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App/AlphaView.swift"),
+            displayModel: DiffDisplayModelBuilder.build(diff: diff, filePath: path),
             placeholderMessage: nil,
             openFile: nil,
             contextProvider: provider
@@ -628,6 +667,20 @@ struct ReviewChangesTabViewTests {
     }
 
     private func renderFileSection(file: ReviewChangesFileSectionModel) -> NSHostingController<some View> {
+        let controller = NSHostingController(rootView: fileSectionView(file: file))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 760, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+        return controller
+    }
+
+    private func renderAnyFileSection(file: ReviewChangesFileSectionModel) -> NSHostingController<AnyView> {
+        let controller = NSHostingController(rootView: fileSectionView(file: file))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 760, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+        return controller
+    }
+
+    private func fileSectionView(file: ReviewChangesFileSectionModel) -> AnyView {
         var layout = DiffLayoutMode.split
         var wrap = false
         var whitespace = false
@@ -641,11 +694,7 @@ struct ReviewChangesTabViewTests {
             showsSourceBadge: false
         )
         .environment(\.theme, theme())
-
-        let controller = NSHostingController(rootView: view)
-        controller.view.frame = NSRect(x: 0, y: 0, width: 760, height: 400)
-        controller.view.layoutSubtreeIfNeeded()
-        return controller
+        return AnyView(view)
     }
 
     private func renderedText(in view: NSView) -> String {

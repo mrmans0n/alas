@@ -34,6 +34,7 @@ struct DiffReviewFileSection: View {
     @State private var contextExpansion = DiffContextExpansionState()
     @State private var contextLoadTask: Task<Void, Never>?
     @State private var contextLoadFileID: DiffReviewFileID?
+    @State private var contextLoadGeneration = 0
     @State private var contextLoadError: String?
     @State private var pendingContextExpansions: [PendingContextExpansion] = []
 
@@ -494,13 +495,16 @@ struct DiffReviewFileSection: View {
         pendingContextExpansions.append(PendingContextExpansion(key: key, mode: mode))
         guard contextLoadTask == nil else { return }
         let fileID = file.id
+        contextLoadGeneration += 1
+        let loadGeneration = contextLoadGeneration
         contextLoadError = nil
         contextLoadFileID = fileID
         contextLoadTask = Task {
             do {
                 let snapshot = try await provider.snapshot()
+                try Task.checkCancellation()
                 await MainActor.run {
-                    guard contextLoadFileID == fileID else { return }
+                    guard contextLoadGeneration == loadGeneration, contextLoadFileID == fileID else { return }
                     contextSnapshot = snapshot
                     contextLoadTask = nil
                     contextLoadFileID = nil
@@ -512,7 +516,7 @@ struct DiffReviewFileSection: View {
                 }
             } catch {
                 await MainActor.run {
-                    guard contextLoadFileID == fileID else { return }
+                    guard contextLoadGeneration == loadGeneration, contextLoadFileID == fileID else { return }
                     contextLoadError = error.localizedDescription
                     contextLoadTask = nil
                     contextLoadFileID = nil
@@ -534,6 +538,7 @@ struct DiffReviewFileSection: View {
 
     private func resetContextState() {
         contextLoadTask?.cancel()
+        contextLoadGeneration += 1
         contextSnapshot = nil
         contextExpansion = DiffContextExpansionState()
         contextLoadTask = nil
