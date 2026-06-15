@@ -59,6 +59,8 @@ struct ReviewChangesLoadKey {
 }
 
 struct ReviewChangesTabView: View {
+    static let reviewSessionLauncherLabel = "Open review session"
+
     let worktree: Worktree
     let tabState: ReviewChangesTabState
     let appState: AppState
@@ -78,6 +80,7 @@ struct ReviewChangesTabView: View {
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
+    @State private var reviewSessionLaunchError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -159,9 +162,16 @@ struct ReviewChangesTabView: View {
                     .foregroundColor(theme.color("del"))
             }
             Spacer()
+            if let reviewSessionLaunchError {
+                Text(reviewSessionLaunchError)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             toolbarButton(
                 systemName: "doc.text.magnifyingglass",
-                tooltip: "Review Changes",
+                tooltip: Self.reviewSessionLauncherLabel,
                 isActive: false
             ) {
                 openReviewSession(
@@ -398,11 +408,16 @@ struct ReviewChangesTabView: View {
     @MainActor
     private func openReviewSession(target: ReviewSessionTarget) {
         let store = ReviewSessionStore()
-        let now = Date()
-        let record = (try? store.findActive(targetID: target.id))
-            ?? ReviewSessionRecord(id: target.id, target: target, createdAt: now, updatedAt: now)
-        try? store.save(record)
-        appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+        ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { try store.findActive(targetID: $0) },
+            save: { try store.save($0) },
+            open: {
+                reviewSessionLaunchError = nil
+                appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: $0)
+            },
+            onFailure: { reviewSessionLaunchError = $0.localizedDescription }
+        )
     }
 
     private func loadDraftCommentController() {

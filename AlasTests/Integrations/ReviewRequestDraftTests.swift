@@ -45,6 +45,31 @@ struct ReviewRequestDraftTests {
         #expect(target.revisionDescription == "abc123")
     }
 
+    @Test func draftReviewRequestLauncherIncludesHeadSHAInTargetIdentity() {
+        var firstState = DraftReviewRequestTabState(
+            worktreeId: "wt",
+            snapshot: Self.snapshot(needsPush: false, aheadCommitCount: 2)
+        )
+        var secondState = firstState
+        firstState.headSHA = "abc123"
+        secondState.headSHA = "def456"
+
+        let first = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: firstState
+        )
+        let second = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: secondState
+        )
+
+        #expect(first.id != second.id)
+        #expect(first.id.rawValue.contains("abc123"))
+        #expect(second.id.rawValue.contains("def456"))
+    }
+
     @Test @MainActor func selectingDraftSummaryCommentFocusesAndSelectsFile() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(

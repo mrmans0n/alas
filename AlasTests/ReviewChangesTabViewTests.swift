@@ -45,6 +45,61 @@ struct ReviewChangesTabViewTests {
         #expect(target.title == "Review all changes")
     }
 
+    @Test func reviewChangesLauncherUsesDistinctActionLabel() {
+        #expect(ReviewChangesTabView.reviewSessionLauncherLabel == "Open review session")
+    }
+
+    @Test func reviewSessionLauncherOpensExistingRecordWithoutSaving() {
+        let target = ReviewChangesTabView.reviewSessionTarget(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let existing = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        var savedRecords: [ReviewSessionRecord] = []
+        var openedRecords: [ReviewSessionRecord] = []
+
+        let opened = ReviewSessionLauncher.openOrFocus(
+            target: target,
+            now: { Date(timeIntervalSince1970: 10) },
+            findActive: { _ in existing },
+            save: { savedRecords.append($0) },
+            open: { openedRecords.append($0) }
+        )
+
+        #expect(opened)
+        #expect(savedRecords.isEmpty)
+        #expect(openedRecords == [existing])
+    }
+
+    @Test func reviewSessionLauncherDoesNotOpenNewRecordWhenSaveFails() {
+        let target = ReviewChangesTabView.reviewSessionTarget(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        var openedRecords: [ReviewSessionRecord] = []
+        var reportedError: Error?
+
+        let opened = ReviewSessionLauncher.openOrFocus(
+            target: target,
+            now: { Date(timeIntervalSince1970: 10) },
+            findActive: { _ in nil },
+            save: { _ in throw LauncherTestError.saveFailed },
+            open: { openedRecords.append($0) },
+            onFailure: { reportedError = $0 }
+        )
+
+        #expect(!opened)
+        #expect(openedRecords.isEmpty)
+        #expect((reportedError as? LauncherTestError) == .saveFailed)
+    }
+
     @Test func copyReviewPromptUsesPromptMarkdown() {
         var copiedPrompt: String?
         let bundle = ReviewFeedbackBundle(
@@ -531,5 +586,9 @@ struct ReviewChangesTabViewTests {
             createdAt: Date(timeIntervalSince1970: 1),
             updatedAt: Date(timeIntervalSince1970: 1)
         )
+    }
+
+    private enum LauncherTestError: Error, Equatable {
+        case saveFailed
     }
 }

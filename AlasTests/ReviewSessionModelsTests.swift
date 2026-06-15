@@ -86,7 +86,7 @@ struct ReviewSessionModelsTests {
         )
 
         #expect(target.kind == .draftReviewRequest)
-        #expect(target.id.rawValue == "draft-review-request\u{1f}wt-1\u{1f}/repo\u{1f}gitlab\u{1f}mrmans0n/alas\u{1f}main\u{1f}feature")
+        #expect(target.id.rawValue == "draft-review-request\u{1f}wt-1\u{1f}/repo\u{1f}gitlab\u{1f}mrmans0n/alas\u{1f}main\u{1f}feature\u{1f}abc123")
         #expect(target.draftSessionID == .draftReviewRequest(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
         #expect(target.providerDescription == "GitLab mrmans0n/alas")
         #expect(target.revisionDescription == "abc123")

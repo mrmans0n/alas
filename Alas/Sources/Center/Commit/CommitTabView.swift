@@ -21,6 +21,7 @@ struct CommitTabView: View {
     @State private var activeReviewID = UUID()
 
     @State private var headerExpanded: Bool = false
+    @State private var reviewSessionLaunchError: String?
 
     @Environment(\.theme) private var theme
     private let git = GitService()
@@ -152,6 +153,13 @@ struct CommitTabView: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(theme.color("fg-dim"))
             Spacer()
+            if let reviewSessionLaunchError {
+                Text(reviewSessionLaunchError)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("del"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             AlasButton(title: "Review This Commit", icon: "doc.text.magnifyingglass") {
                 openReviewSession(
                     target: Self.reviewSessionTarget(
@@ -266,11 +274,16 @@ struct CommitTabView: View {
     @MainActor
     private func openReviewSession(target: ReviewSessionTarget) {
         let store = ReviewSessionStore()
-        let now = Date()
-        let record = (try? store.findActive(targetID: target.id))
-            ?? ReviewSessionRecord(id: target.id, target: target, createdAt: now, updatedAt: now)
-        try? store.save(record)
-        appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: record)
+        ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { try store.findActive(targetID: $0) },
+            save: { try store.save($0) },
+            open: {
+                reviewSessionLaunchError = nil
+                appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: $0)
+            },
+            onFailure: { reviewSessionLaunchError = $0.localizedDescription }
+        )
     }
 }
 

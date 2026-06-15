@@ -5,6 +5,40 @@ struct ReviewSessionLoadedContext {
     let feedbackTarget: ReviewFeedbackTarget
 }
 
+enum ReviewSessionLauncher {
+    @MainActor
+    @discardableResult
+    static func openOrFocus(
+        target: ReviewSessionTarget,
+        now: () -> Date = Date.init,
+        findActive: (ReviewSessionID) throws -> ReviewSessionRecord?,
+        save: (ReviewSessionRecord) throws -> Void,
+        open: (ReviewSessionRecord) -> Void,
+        onFailure: ((any Error) -> Void)? = nil
+    ) -> Bool {
+        do {
+            if let record = try findActive(target.id) {
+                open(record)
+                return true
+            }
+
+            let createdAt = now()
+            let record = ReviewSessionRecord(
+                id: target.id,
+                target: target,
+                createdAt: createdAt,
+                updatedAt: createdAt
+            )
+            try save(record)
+            open(record)
+            return true
+        } catch {
+            onFailure?(error)
+            return false
+        }
+    }
+}
+
 struct ReviewSessionLoader {
     var localChanges: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var draftCommit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
