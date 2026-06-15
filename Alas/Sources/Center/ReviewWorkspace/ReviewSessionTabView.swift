@@ -127,7 +127,7 @@ struct ReviewSessionTabView: View {
             tabState: ReviewSessionTabState(worktreeId: record.target.worktreeID, record: record),
             record: record,
             loaded: loaded,
-            feedbackSender: ReviewFeedbackAgentSender(availableTargets: { [] }, send: { _, _ in }),
+            feedbackSender: ReviewFeedbackAgentSender(availableTargets: { [] }, send: { _, _, _ in }),
             loadsOnAppear: false,
             persistsState: false
         )
@@ -395,29 +395,31 @@ struct ReviewSessionTabView: View {
             controller: draftCommentController,
             sender: feedbackSender,
             sessionID: tabState.sessionID,
-            recordHandoff: recordSessionHandoff
+            recordHandoff: recordSessionHandoff,
+            recordSendFailure: recordSessionSendFailure
         )
     }
 
     private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff) {
-        guard persistsState else {
-            if let current = record {
-                record = current.recording(handoff: handoff)
-            }
-            return
-        }
+        record = ReviewSessionHandoffPersistence.record(
+            handoff,
+            currentRecord: record,
+            sessionStore: sessionStore,
+            persistsState: persistsState,
+            now: now
+        )
+    }
 
+    private func recordSessionSendFailure(_ error: Error) {
+        guard var current = record else { return }
+        current.lastSendError = "Failed to send to agent: \(error.localizedDescription)"
+        current.updatedAt = now()
+        record = current
+        guard persistsState else { return }
         do {
-            let current = try sessionStore.load(id: handoff.sessionID) ?? record
-            guard let current else { return }
-            let updated = current.recording(handoff: handoff)
-            try sessionStore.save(updated)
-            record = updated
+            try sessionStore.save(current)
         } catch {
-            guard var visibleRecord = record else { return }
-            visibleRecord.lastSendError = error.localizedDescription
-            visibleRecord.updatedAt = now()
-            record = visibleRecord
+            // Visible send failure state is already set; failure to persist that state is non-blocking.
         }
     }
 
@@ -499,6 +501,34 @@ private enum ReviewSessionTabError: LocalizedError {
         switch self {
         case .missingSession(let id):
             return "Review session \(id.rawValue) was not found."
+        }
+    }
+}
+
+enum ReviewSessionHandoffPersistence {
+    @MainActor
+    static func record(
+        _ handoff: ReviewFeedbackHandoff,
+        currentRecord: ReviewSessionRecord?,
+        sessionStore: ReviewSessionStore,
+        persistsState: Bool,
+        now: () -> Date
+    ) -> ReviewSessionRecord? {
+        guard persistsState else {
+            return currentRecord?.recording(handoff: handoff)
+        }
+
+        do {
+            let current = try sessionStore.load(id: handoff.sessionID) ?? currentRecord
+            guard let current else { return nil }
+            let updated = current.recording(handoff: handoff)
+            try sessionStore.save(updated)
+            return updated
+        } catch {
+            guard var visibleRecord = currentRecord else { return nil }
+            visibleRecord.lastSendError = "Sent to agent, but failed to save handoff record: \(error.localizedDescription)"
+            visibleRecord.updatedAt = now()
+            return visibleRecord
         }
     }
 }

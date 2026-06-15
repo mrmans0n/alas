@@ -31,7 +31,7 @@ enum ReviewFeedbackAgentTarget: Codable, Equatable, Hashable, Identifiable, Send
 @MainActor
 struct ReviewFeedbackAgentSender {
     var availableTargets: () -> [ReviewFeedbackAgentTarget]
-    var send: (String, ReviewFeedbackAgentTarget) -> Void
+    var send: (String, ReviewFeedbackAgentTarget, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
 
     static func production(appState: AppState, worktreeID: String) -> ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender(
@@ -56,15 +56,29 @@ struct ReviewFeedbackAgentSender {
                 targets.append(contentsOf: sessionTargets)
                 return targets
             },
-            send: { prompt, target in
+            send: { prompt, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
                     appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
+                    completion(.success(()))
                 case .existingSession(_, let sessionID, _):
-                    appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { _ in }
+                    appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { accepted in
+                        completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+                    }
                 }
             }
         )
+    }
+}
+
+enum ReviewFeedbackAgentSendError: LocalizedError, Equatable {
+    case rejected
+
+    var errorDescription: String? {
+        switch self {
+        case .rejected:
+            "Agent rejected the prompt."
+        }
     }
 }
 
@@ -98,25 +112,31 @@ enum ReviewFeedbackPromptActions {
         sender: ReviewFeedbackAgentSender,
         sessionID: ReviewSessionID?,
         recordHandoff: ((ReviewFeedbackHandoff) -> Void)?,
-        now: () -> Date = Date.init,
-        makeID: () -> String = { UUID().uuidString }
+        recordSendFailure: ((Error) -> Void)? = nil,
+        now: @escaping () -> Date = Date.init,
+        makeID: @escaping () -> String = { UUID().uuidString }
     ) {
         let prompt = bundle.promptMarkdown()
-        sender.send(prompt, target)
-
-        guard let sessionID, let recordHandoff else { return }
-        let commentIDs = bundle.activeComments.map(\.id).sorted()
-        recordHandoff(
-            ReviewFeedbackHandoff(
-                id: makeID(),
-                sessionID: sessionID,
-                commentIDs: commentIDs,
-                target: target,
-                createdAt: now(),
-                promptRevision: ReviewFeedbackHandoff.revisionKey(commentIDs: commentIDs, prompt: prompt),
-                status: .sent
-            )
-        )
+        sender.send(prompt, target) { result in
+            switch result {
+            case .success:
+                guard let sessionID, let recordHandoff else { return }
+                let commentIDs = bundle.activeComments.map(\.id).sorted()
+                recordHandoff(
+                    ReviewFeedbackHandoff(
+                        id: makeID(),
+                        sessionID: sessionID,
+                        commentIDs: commentIDs,
+                        target: target,
+                        createdAt: now(),
+                        promptRevision: ReviewFeedbackHandoff.revisionKey(commentIDs: commentIDs, prompt: prompt),
+                        status: .sent
+                    )
+                )
+            case .failure(let error):
+                recordSendFailure?(error)
+            }
+        }
     }
 
     private static func copyReviewPrompt(_ prompt: String) {
@@ -133,6 +153,7 @@ enum ReviewDraftWorkspaceActions {
         sender: ReviewFeedbackAgentSender,
         sessionID: ReviewSessionID? = nil,
         recordHandoff: ((ReviewFeedbackHandoff) -> Void)? = nil,
+        recordSendFailure: ((Error) -> Void)? = nil,
         pasteboard: @escaping (String) -> Void = { prompt in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -176,7 +197,8 @@ enum ReviewDraftWorkspaceActions {
                     target: target,
                     sender: sender,
                     sessionID: sessionID,
-                    recordHandoff: recordHandoff
+                    recordHandoff: recordHandoff,
+                    recordSendFailure: recordSendFailure
                 )
             }
         )

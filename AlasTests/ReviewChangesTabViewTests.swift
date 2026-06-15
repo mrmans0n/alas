@@ -52,10 +52,11 @@ struct ReviewChangesTabViewTests {
         let target = ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "New chat")
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [target] },
-            send: { prompt, selectedTarget in
+            send: { prompt, selectedTarget, completion in
                 #expect(prompt.contains("Please address each review comment below."))
                 #expect(prompt.contains("Extract this helper."))
                 #expect(selectedTarget == target)
+                completion(.success(()))
             }
         )
         let bundle = ReviewFeedbackBundle(
@@ -79,7 +80,10 @@ struct ReviewChangesTabViewTests {
         let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [target] },
-            send: { prompt, _ in sentPrompt = prompt }
+            send: { prompt, _, completion in
+                sentPrompt = prompt
+                completion(.success(()))
+            }
         )
         let sessionID = ReviewSessionID(rawValue: "session-1")
         let activeComment = draftComment(id: "c1", body: "Fix it")
@@ -128,6 +132,45 @@ struct ReviewChangesTabViewTests {
         #expect(recorded?.status == .sent)
     }
 
+    @Test func failedSendDoesNotRecordSessionHandoffAndReportsError() {
+        var sentPrompt: String?
+        var recorded: ReviewFeedbackHandoff?
+        var sendError: Error?
+        let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [target] },
+            send: { prompt, _, completion in
+                sentPrompt = prompt
+                completion(.failure(ReviewFeedbackAgentSendError.rejected))
+            }
+        )
+        let sessionID = ReviewSessionID(rawValue: "session-1")
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local changes"
+            ),
+            comments: [draftComment(id: "c1", body: "Fix it")]
+        )
+
+        ReviewFeedbackPromptActions.sendToAgent(
+            bundle,
+            target: target,
+            sender: sender,
+            sessionID: sessionID,
+            recordHandoff: { recorded = $0 },
+            recordSendFailure: { sendError = $0 },
+            now: { Date(timeIntervalSince1970: 30) },
+            makeID: { "handoff-1" }
+        )
+
+        #expect(sentPrompt?.contains("Fix it") == true)
+        #expect(recorded == nil)
+        #expect((sendError as? ReviewFeedbackAgentSendError) == .rejected)
+    }
+
     @Test func draftWorkspaceActionsEditCommentThroughController() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -147,7 +190,7 @@ struct ReviewChangesTabViewTests {
         )
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [] },
-            send: { _, _ in Issue.record("send should not be called") }
+            send: { _, _, _ in Issue.record("send should not be called") }
         )
         let anchor = DiffReviewLineAnchor(
             path: "Sources/App.swift",
@@ -179,7 +222,10 @@ struct ReviewChangesTabViewTests {
         var selectedTarget: ReviewFeedbackAgentTarget?
         let sender = ReviewFeedbackAgentSender(
             availableTargets: { [codex, claude] },
-            send: { _, target in selectedTarget = target }
+            send: { _, target, completion in
+                selectedTarget = target
+                completion(.success(()))
+            }
         )
         let comment = draftComment(id: "draft-1", body: "Extract this helper.")
         let bundle = ReviewFeedbackBundle(
