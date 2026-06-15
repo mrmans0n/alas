@@ -1690,6 +1690,33 @@ struct DiffReviewSurfaceTests {
         #expect(!rendered.contains(far))
     }
 
+    @Test func renderWindowRetainsRecentlyRenderedFilesNearViewport() {
+        let visible = DiffReviewFileID(namespace: "commit", path: "Visible.swift")
+        let justAbove = DiffReviewFileID(namespace: "commit", path: "JustAbove.swift")
+        let justBelow = DiffReviewFileID(namespace: "commit", path: "JustBelow.swift")
+        let far = DiffReviewFileID(namespace: "commit", path: "Far.swift")
+        let frames = [
+            DiffReviewSectionFrame(id: visible, minY: 120, maxY: 420),
+            DiffReviewSectionFrame(id: justAbove, minY: -1_200, maxY: -900),
+            DiffReviewSectionFrame(id: justBelow, minY: 1_600, maxY: 1_900),
+            DiffReviewSectionFrame(id: far, minY: 9_000, maxY: 9_300),
+        ]
+
+        let rendered = DiffReviewRenderWindow.renderedFileIDs(
+            current: [justAbove, justBelow, far],
+            frames: frames,
+            viewportHeight: 500,
+            selectedFileID: nil,
+            programmaticTarget: nil,
+            firstFileID: nil
+        )
+
+        #expect(rendered.contains(visible))
+        #expect(rendered.contains(justAbove))
+        #expect(rendered.contains(justBelow))
+        #expect(!rendered.contains(far))
+    }
+
     @Test func estimatedSectionHeightScalesWithDiffRows() {
         let small = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/Small.swift"),
