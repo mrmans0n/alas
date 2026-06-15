@@ -29,6 +29,22 @@ struct ReviewChangesTabViewTests {
         #expect(sessionID.sourceKind == .localChanges)
     }
 
+    @Test func reviewChangesLauncherBuildsLocalChangesTarget() {
+        let target = ReviewChangesTabView.reviewSessionTarget(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+
+        #expect(target.kind == .localChanges)
+        #expect(target.draftSessionID == .localChanges(
+            worktreeID: "wt-1",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        ))
+        #expect(target.title == "Review all changes")
+    }
+
     @Test func copyReviewPromptUsesPromptMarkdown() {
         var copiedPrompt: String?
         let bundle = ReviewFeedbackBundle(

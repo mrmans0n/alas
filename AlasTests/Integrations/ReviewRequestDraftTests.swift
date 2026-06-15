@@ -22,6 +22,29 @@ struct ReviewRequestDraftTests {
         #expect(sessionID.sourceKind == .draftReviewRequest)
     }
 
+    @Test func draftReviewRequestLauncherBuildsBranchDiffTarget() {
+        let tabState = DraftReviewRequestTabState(
+            worktreeId: "wt",
+            snapshot: Self.snapshot(needsPush: false, aheadCommitCount: 2)
+        )
+
+        let target = DraftReviewRequestTabView.reviewSessionTarget(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            tabState: tabState
+        )
+
+        #expect(target.kind == .draftReviewRequest)
+        #expect(target.draftSessionID == .draftReviewRequest(
+            worktreeID: "wt",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            base: "origin/main",
+            head: "feature/pr-drafts"
+        ))
+        #expect(target.title == "Review draft PR")
+        #expect(target.revisionDescription == "abc123")
+    }
+
     @Test @MainActor func selectingDraftSummaryCommentFocusesAndSelectsFile() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(

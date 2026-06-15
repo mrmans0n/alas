@@ -115,6 +115,22 @@ struct DraftReviewRequestTabView: View {
         )
     }
 
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        tabState: DraftReviewRequestTabState
+    ) -> ReviewSessionTarget {
+        ReviewSessionTarget.draftReviewRequest(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            provider: tabState.provider,
+            repositorySlug: tabState.repositorySlug,
+            base: tabState.baseBranch,
+            head: tabState.branchName,
+            headSHA: tabState.headSHA
+        )
+    }
+
     private var reviewDraftSessionID: ReviewDraftSessionID {
         Self.reviewDraftSessionID(
             worktreeID: worktreeId,
@@ -361,6 +377,15 @@ struct DraftReviewRequestTabView: View {
                 }
             }
             Spacer()
+            AlasButton(title: "Review Branch Diff", icon: "doc.text.magnifyingglass") {
+                openReviewSession(
+                    target: Self.reviewSessionTarget(
+                        worktreeID: worktreeId,
+                        repositoryPath: worktreePath,
+                        tabState: tabState
+                    )
+                )
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -724,6 +749,16 @@ struct DraftReviewRequestTabView: View {
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId)
+    }
+
+    @MainActor
+    private func openReviewSession(target: ReviewSessionTarget) {
+        let store = ReviewSessionStore()
+        let now = Date()
+        let record = (try? store.findActive(targetID: target.id))
+            ?? ReviewSessionRecord(id: target.id, target: target, createdAt: now, updatedAt: now)
+        try? store.save(record)
+        appState.tabs.openOrFocusReviewSession(worktreeId: worktreeId, record: record)
     }
 
     private func loadDraftCommentController() {

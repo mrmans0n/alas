@@ -214,6 +214,24 @@ struct ReviewEvidenceTabView: View {
         )
     }
 
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        tabState: ReviewEvidenceTabState
+    ) -> ReviewSessionTarget {
+        ReviewSessionTarget.reviewRequest(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            provider: tabState.provider,
+            host: tabState.url.host ?? "",
+            repositorySlug: tabState.repositorySlug,
+            number: tabState.number,
+            url: tabState.url,
+            title: tabState.title.isEmpty ? "\(tabState.provider.displayName) \(tabState.provider.reviewRequestLabel)" : tabState.title,
+            headSHA: nil
+        )
+    }
+
     private var reviewDraftSessionID: ReviewDraftSessionID {
         Self.reviewDraftSessionID(
             worktreeID: tabState.worktreeId,
@@ -253,6 +271,15 @@ struct ReviewEvidenceTabView: View {
             AlasButton(title: "Refresh", icon: "arrow.clockwise") {
                 refreshEvidence()
             }
+            AlasButton(title: reviewRequestReviewTitle, icon: "doc.text.magnifyingglass") {
+                openReviewSession(
+                    target: Self.reviewSessionTarget(
+                        worktreeID: tabState.worktreeId,
+                        repositoryPath: worktreePath,
+                        tabState: tabState
+                    )
+                )
+            }
             if let url = reviewRequestURL {
                 AlasButton(title: snapshotProvider.openReviewRequestTitle, icon: "arrow.up.right.square") {
                     NSWorkspace.shared.open(url)
@@ -262,6 +289,15 @@ struct ReviewEvidenceTabView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(theme.color("bg-1"))
+    }
+
+    private var reviewRequestReviewTitle: String {
+        switch snapshotProvider {
+        case .github:
+            return "Review Pull Request"
+        case .gitlab:
+            return "Review Merge Request"
+        }
     }
 
     @ViewBuilder
@@ -998,6 +1034,16 @@ struct ReviewEvidenceTabView: View {
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender.production(appState: appState, worktreeID: tabState.worktreeId)
+    }
+
+    @MainActor
+    private func openReviewSession(target: ReviewSessionTarget) {
+        let store = ReviewSessionStore()
+        let now = Date()
+        let record = (try? store.findActive(targetID: target.id))
+            ?? ReviewSessionRecord(id: target.id, target: target, createdAt: now, updatedAt: now)
+        try? store.save(record)
+        appState.tabs.openOrFocusReviewSession(worktreeId: tabState.worktreeId, record: record)
     }
 
     private func loadDraftCommentController() {

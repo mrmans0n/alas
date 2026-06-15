@@ -103,6 +103,18 @@ struct ReviewChangesTabView: View {
         )
     }
 
+    static func reviewSessionTarget(
+        worktreeID: String,
+        repositoryPath: URL,
+        scope: ReviewDraftLocalChangesScope
+    ) -> ReviewSessionTarget {
+        ReviewSessionTarget.localChanges(
+            worktreeID: worktreeID,
+            repositoryPath: repositoryPath,
+            scope: scope
+        )
+    }
+
     private var reviewDraftSessionID: ReviewDraftSessionID {
         Self.reviewDraftSessionID(worktree: worktree)
     }
@@ -147,6 +159,19 @@ struct ReviewChangesTabView: View {
                     .foregroundColor(theme.color("del"))
             }
             Spacer()
+            toolbarButton(
+                systemName: "doc.text.magnifyingglass",
+                tooltip: "Review Changes",
+                isActive: false
+            ) {
+                openReviewSession(
+                    target: Self.reviewSessionTarget(
+                        worktreeID: worktree.id,
+                        repositoryPath: worktree.path,
+                        scope: .all
+                    )
+                )
+            }
             layoutSwitcher
             toolbarButton(
                 systemName: diffPreferences.wrapLines.wrappedValue ? "text.justify.left" : "text.alignleft",
@@ -368,6 +393,16 @@ struct ReviewChangesTabView: View {
 
     private var reviewFeedbackAgentSender: ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktree.id)
+    }
+
+    @MainActor
+    private func openReviewSession(target: ReviewSessionTarget) {
+        let store = ReviewSessionStore()
+        let now = Date()
+        let record = (try? store.findActive(targetID: target.id))
+            ?? ReviewSessionRecord(id: target.id, target: target, createdAt: now, updatedAt: now)
+        try? store.save(record)
+        appState.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
     }
 
     private func loadDraftCommentController() {

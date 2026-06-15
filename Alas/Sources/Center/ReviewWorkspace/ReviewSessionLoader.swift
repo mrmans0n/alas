@@ -34,8 +34,9 @@ struct ReviewSessionLoader {
 
     @MainActor
     static func production(appState: AppState, worktree: Worktree) -> ReviewSessionLoader {
-        _ = appState
         let changesLoader = ReviewChangesLoader()
+        let git = GitService()
+        let commitLoader = CommitReviewLoader(git: git)
 
         return ReviewSessionLoader(
             localChanges: { target in
@@ -48,6 +49,54 @@ struct ReviewSessionLoader {
             draftCommit: { _ in
                 let session = try await changesLoader.load(worktreePath: worktree.path)
                 return filterLocalChanges(session, scope: .staged)
+            },
+            commit: { target in
+                guard case .commit(let sha) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let details = try await git.commitDetails(at: target.repositoryPath, sha: sha)
+                return try await commitLoader.load(
+                    worktreePath: target.repositoryPath,
+                    sha: sha,
+                    files: details.files,
+                    openFileForPath: { path in
+                        openFileAction(
+                            appState: appState,
+                            worktreeID: target.worktreeID,
+                            worktreePath: target.repositoryPath,
+                            relativePath: path
+                        )
+                    }
+                )
+            },
+            reviewRequest: { _ in
+                throw ReviewSessionLoaderError.unsupportedTarget
+            },
+            draftReviewRequest: { target in
+                guard case .draftReviewRequest(_, _, let base, let head, let headSHA) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                try await validateCurrentHead(
+                    worktreePath: target.repositoryPath,
+                    expectedBranch: head,
+                    expectedSHA: headSHA
+                )
+                let context = try await git.reviewRequestDraftContext(
+                    worktreePath: target.repositoryPath,
+                    baseRef: base
+                )
+                return try await DraftReviewRequestDiffSessionBuilder.build(
+                    context: context,
+                    worktreePath: target.repositoryPath,
+                    openFileForPath: { path in
+                        openFileAction(
+                            appState: appState,
+                            worktreeID: target.worktreeID,
+                            worktreePath: target.repositoryPath,
+                            relativePath: path
+                        )
+                    }
+                )
             }
         )
     }
@@ -87,6 +136,43 @@ struct ReviewSessionLoader {
                 priorHandoffDescription: nil
             )
         )
+    }
+
+    private static func openFileAction(
+        appState: AppState,
+        worktreeID: String,
+        worktreePath: URL,
+        relativePath: String
+    ) -> (() -> Void)? {
+        guard DiffOpenFileAvailability.isAvailable(worktreePath: worktreePath, relativePath: relativePath) else {
+            return nil
+        }
+        return {
+            Task { @MainActor in
+                appState.openFile(relativePath: relativePath, worktreeId: worktreeID)
+            }
+        }
+    }
+
+    private static func validateCurrentHead(
+        worktreePath: URL,
+        expectedBranch: String,
+        expectedSHA: String?
+    ) async throws {
+        let branch = try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: worktreePath)
+        guard branch.exitCode == 0 else { throw ReviewSessionLoaderError.unsupportedTarget }
+        let currentBranch = branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard currentBranch == expectedBranch || expectedBranch == "HEAD" else {
+            throw ReviewSessionLoaderError.unsupportedTarget
+        }
+
+        guard let expectedSHA, !expectedSHA.isEmpty else { return }
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: worktreePath)
+        guard head.exitCode == 0 else { throw ReviewSessionLoaderError.unsupportedTarget }
+        let currentSHA = head.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard currentSHA == expectedSHA || currentSHA.hasPrefix(expectedSHA) else {
+            throw ReviewSessionLoaderError.unsupportedTarget
+        }
     }
 
     private static func filterLocalChanges(
