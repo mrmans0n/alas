@@ -367,7 +367,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             pullRequestId: pullRequestID,
             event: Self.githubReviewEvent(for: request.decision),
             body: request.summaryBody,
-            comments: request.comments.map(Self.githubReviewCommentPayload(for:))
+            threads: request.comments.map(Self.githubReviewThreadPayload(for:))
         )
         let stdin = try Self.graphQLInput(
             query: Self.publishReviewMutation,
@@ -522,6 +522,42 @@ struct GitHubCLIProvider: CodeHostProvider {
         guard let item else {
             return nil
         }
+        guard let url = URL(string: item.url), url.isHTTPOrHTTPS else {
+            throw CodeHostProviderError.malformedOutput("gh pr list returned an invalid URL")
+        }
+
+        return ReviewRequest(
+            remote: remote,
+            number: item.number,
+            title: item.title,
+            url: url,
+            state: mapState(item.state),
+            isDraft: item.isDraft,
+            headRefName: item.headRefName,
+            baseRefName: item.baseRefName,
+            reviewDecision: mapReviewDecision(item.reviewDecision),
+            mergeState: mapMergeState(item.mergeStateStatus),
+            checks: [],
+            threads: []
+        )
+    }
+
+    static func parsePRView(_ json: String, remote: CodeHostRemote) throws -> ReviewRequest {
+        let data = Data(json.utf8)
+        let item: PRListItem
+        do {
+            item = try JSONDecoder().decode(PRListItem.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh pr view output")
+        }
+
+        guard let request = try reviewRequest(from: item, remote: remote) else {
+            throw CodeHostProviderError.malformedOutput("gh pr view returned an invalid PR")
+        }
+        return request
+    }
+
+    private static func reviewRequest(from item: PRListItem, remote: CodeHostRemote) throws -> ReviewRequest? {
         guard let url = URL(string: item.url), url.isHTTPOrHTTPS else {
             throw CodeHostProviderError.malformedOutput("gh pr list returned an invalid URL")
         }
@@ -892,16 +928,22 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
 
     private func refreshedReviewRequest(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> ReviewRequest {
-        guard let refreshed = try await currentReviewRequest(
-            remote: remote,
-            branch: request.headRefName,
-            headOwner: nil,
-            baseBranch: request.baseRefName,
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "view", "\(request.number)",
+                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "-R", remote.repositorySlug,
+            ],
             cwd: cwd
-        ) else {
-            throw CodeHostProviderError.malformedOutput("Unable to refresh GitHub PR after review mutation")
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
         }
-        return refreshed
+
+        let request = try Self.parsePRView(result.stdout, remote: remote)
+        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
+        return Self.withThreads(threads, on: request)
     }
 
     static func githubReviewEvent(for decision: ProviderReviewDecision) -> String {
@@ -912,8 +954,8 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
-    static func githubReviewCommentPayload(for draft: ProviderReviewDraftComment) -> GitHubReviewDraftCommentPayload {
-        GitHubReviewDraftCommentPayload(
+    static func githubReviewThreadPayload(for draft: ProviderReviewDraftComment) -> GitHubReviewDraftThreadPayload {
+        GitHubReviewDraftThreadPayload(
             path: draft.path,
             body: draft.bodyMarkdown,
             line: draft.lineRange.upperBound,
@@ -1014,7 +1056,7 @@ private struct PullRequestNodePullRequest: Decodable {
     let id: String
 }
 
-struct GitHubReviewDraftCommentPayload: Encodable, Equatable {
+struct GitHubReviewDraftThreadPayload: Encodable, Equatable {
     let path: String
     let body: String
     let line: Int
@@ -1030,7 +1072,7 @@ private struct PublishReviewInput: Encodable {
     let pullRequestId: String
     let event: String
     let body: String
-    let comments: [GitHubReviewDraftCommentPayload]
+    let threads: [GitHubReviewDraftThreadPayload]
 }
 
 private struct PublishReviewResponse: Decodable {

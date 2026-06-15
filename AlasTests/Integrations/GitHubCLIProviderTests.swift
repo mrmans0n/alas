@@ -319,7 +319,7 @@ struct GitHubCLIProviderTests {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -349,10 +349,19 @@ struct GitHubCLIProviderTests {
         #expect(commands[0].stdin?.contains("pullRequest(number: $number)") == true)
         let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
         let publishInput = try #require(publishVariables["input"] as? [String: Any])
-        let publishComments = try #require(publishInput["comments"] as? [[String: Any]])
+        let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
+        #expect(publishInput["comments"] == nil)
         #expect(publishInput["pullRequestId"] as? String == "PR_node_42")
         #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
-        #expect(publishComments.first?["path"] as? String == "Sources/App.swift")
+        #expect(publishThreads.first?["path"] as? String == "Sources/App.swift")
+        #expect(publishThreads.first?["line"] as? Int == 14)
+        #expect(publishThreads.first?["side"] as? String == "RIGHT")
+        #expect(publishThreads.first?["startLine"] as? Int == 12)
+        #expect(commands[2].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
         #expect(result.published == [
             ProviderReviewPublishedComment(
                 localDraftID: "draft-1",
@@ -379,10 +388,10 @@ struct GitHubCLIProviderTests {
         )
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.resolveThreadMutationOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -406,7 +415,17 @@ struct GitHubCLIProviderTests {
 
         let commands = await runner.commands
         #expect(commands[0].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[1].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
         #expect(commands[3].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[4].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
         #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
         #expect(commands[0].stdin?.contains("\"pullRequestReviewThreadId\":\"PRRT_thread_1\"") == true)
         #expect(commands[3].stdin?.contains("resolveReviewThread") == true)
@@ -1005,6 +1024,20 @@ struct GitHubCLIProviderTests {
         "mergeStateStatus": "CLEAN"
       }
     ]
+    """
+
+    private static let prViewOutput = """
+    {
+      "number": 42,
+      "title": "Add GitHub provider",
+      "url": "https://github.com/mrmans0n/alas/pull/42",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feature/github-provider",
+      "baseRefName": "main",
+      "reviewDecision": "APPROVED",
+      "mergeStateStatus": "CLEAN"
+    }
     """
 
     private static let checksOutput = """
