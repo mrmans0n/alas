@@ -73,6 +73,61 @@ struct ReviewChangesTabViewTests {
         ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
     }
 
+    @Test func sendToAgentRecordsSessionHandoff() {
+        var sentPrompt: String?
+        var recorded: ReviewFeedbackHandoff?
+        let target = ReviewFeedbackAgentTarget.existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex")
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [target] },
+            send: { prompt, _ in sentPrompt = prompt }
+        )
+        let sessionID = ReviewSessionID(rawValue: "session-1")
+        let activeComment = draftComment(id: "c1", body: "Fix it")
+        let dismissedComment = ReviewDraftComment(
+            id: "c2",
+            sessionID: activeComment.sessionID,
+            fileID: activeComment.fileID,
+            path: activeComment.path,
+            originalPath: activeComment.originalPath,
+            side: activeComment.side,
+            startLine: activeComment.startLine,
+            endLine: activeComment.endLine,
+            selectedText: activeComment.selectedText,
+            bodyMarkdown: "Ignore it",
+            state: .dismissed,
+            createdAt: activeComment.createdAt,
+            updatedAt: activeComment.updatedAt
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local changes"
+            ),
+            comments: [dismissedComment, activeComment]
+        )
+
+        ReviewFeedbackPromptActions.sendToAgent(
+            bundle,
+            target: target,
+            sender: sender,
+            sessionID: sessionID,
+            recordHandoff: { recorded = $0 },
+            now: { Date(timeIntervalSince1970: 30) },
+            makeID: { "handoff-1" }
+        )
+
+        #expect(sentPrompt?.contains("Fix it") == true)
+        #expect(recorded?.id == "handoff-1")
+        #expect(recorded?.sessionID == sessionID)
+        #expect(recorded?.commentIDs == ["c1"])
+        #expect(recorded?.target == target)
+        #expect(recorded?.createdAt == Date(timeIntervalSince1970: 30))
+        #expect(recorded?.promptRevision == ReviewFeedbackHandoff.revisionKey(commentIDs: ["c1"], prompt: sentPrompt ?? ""))
+        #expect(recorded?.status == .sent)
+    }
+
     @Test func draftWorkspaceActionsEditCommentThroughController() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

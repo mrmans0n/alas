@@ -1,6 +1,43 @@
 import AppKit
 import SwiftUI
 
+struct ReviewDraftSummaryRailStatus: Equatable {
+    var handoffs: [ReviewFeedbackHandoff] = []
+    var lastSendError: String?
+
+    init(handoffs: [ReviewFeedbackHandoff] = [], lastSendError: String? = nil) {
+        self.handoffs = handoffs
+        self.lastSendError = lastSendError
+    }
+
+    init(record: ReviewSessionRecord?) {
+        self.handoffs = record?.handoffs ?? []
+        self.lastSendError = record?.lastSendError
+    }
+
+    var latestHandoff: ReviewFeedbackHandoff? {
+        handoffs.max { lhs, rhs in lhs.createdAt < rhs.createdAt }
+    }
+
+    var visibleSendError: String? {
+        guard let lastSendError,
+              !lastSendError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return lastSendError
+    }
+}
+
+private struct ReviewDraftSummaryRailStatusKey: EnvironmentKey {
+    static let defaultValue = ReviewDraftSummaryRailStatus()
+}
+
+extension EnvironmentValues {
+    var reviewDraftSummaryRailStatus: ReviewDraftSummaryRailStatus {
+        get { self[ReviewDraftSummaryRailStatusKey.self] }
+        set { self[ReviewDraftSummaryRailStatusKey.self] = newValue }
+    }
+}
+
 struct ReviewDraftSummaryRail: View {
     let comments: [ReviewDraftComment]
     let bundle: ReviewFeedbackBundle
@@ -10,6 +47,7 @@ struct ReviewDraftSummaryRail: View {
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
+    @Environment(\.reviewDraftSummaryRailStatus) private var sendStatus
     @State private var editingCommentID: String?
     @State private var editingBody = ""
 
@@ -146,6 +184,8 @@ struct ReviewDraftSummaryRail: View {
 
                 Spacer(minLength: 0)
             }
+
+            sendStateView
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -178,6 +218,45 @@ struct ReviewDraftSummaryRail: View {
             .background((activeCount > 0 ? theme.color("warn") : theme.color("fg-muted")).opacity(0.15))
             .clipShape(RoundedRectangle(cornerRadius: compact ? 6 : 5))
             .accessibilityLabel("\(activeCount) active draft comments")
+    }
+
+    @ViewBuilder
+    private var sendStateView: some View {
+        if let error = sendStatus.visibleSendError {
+            Text(error)
+                .font(.system(size: 10.5))
+                .foregroundColor(theme.color("del").opacity(0.75))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("review-draft-summary-send-error")
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "review-draft-summary-send-error",
+                        label: error
+                    )
+                )
+        } else if let latestHandoff = sendStatus.latestHandoff {
+            HStack(spacing: 5) {
+                Image(systemName: "checkmark.circle")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(theme.color("add"))
+                Text("Sent to agent")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundColor(theme.color("fg-muted"))
+                Text(latestHandoff.createdAt, style: .time)
+                    .font(.system(size: 10.5))
+                    .foregroundColor(theme.color("fg-faint"))
+            }
+            .lineLimit(1)
+            .accessibilityIdentifier("review-draft-summary-send-state")
+            .accessibilityLabel("Sent to agent")
+            .background(
+                DiffReviewAccessibilityMarker(
+                    identifier: "review-draft-summary-send-state",
+                    label: "Sent to agent"
+                )
+            )
+        }
     }
 
     private func collapsedActionButton(

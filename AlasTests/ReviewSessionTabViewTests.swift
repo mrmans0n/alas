@@ -115,6 +115,50 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: host) != nil)
     }
 
+    @Test func rendersSentStateForRecordWithHandoff() throws {
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let handoff = ReviewFeedbackHandoff(
+            id: "handoff-1",
+            sessionID: target.id,
+            commentIDs: ["draft-1"],
+            target: .existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex"),
+            createdAt: Date(timeIntervalSince1970: 30),
+            promptRevision: "revision-1",
+            status: .sent
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            handoffs: [handoff],
+            createdAt: .init(timeIntervalSince1970: 1),
+            updatedAt: .init(timeIntervalSince1970: 30)
+        )
+        let summary = Self.summary(path: "A.swift", namespace: "unstaged")
+        let loaded = ReviewSessionLoadedContext(
+            session: DiffReviewLoadedSession(
+                files: [Self.file(path: "A.swift", namespace: "unstaged")],
+                summary: DiffReviewSessionModel(files: [summary], groupsEnabled: true)
+            ),
+            feedbackTarget: ReviewFeedbackTarget(
+                title: target.title,
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: target.sourceDescription
+            )
+        )
+        let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
+            .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 900, height: 700))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(recursiveDescription(host).contains("Sent to agent"))
+    }
+
     private func recursiveDescription(_ view: NSView) -> String {
         ([view.accessibilityLabel(), view.accessibilityIdentifier()] + view.subviews.map(recursiveDescription))
             .compactMap { $0 }

@@ -253,6 +253,7 @@ struct ReviewSessionTabView: View {
             onSelectDraftComment: selectDraftComment,
             onSaveDraftComment: saveDraftComment
         )
+        .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
     }
 
     private var layoutModeBinding: Binding<DiffLayoutMode> {
@@ -392,8 +393,32 @@ struct ReviewSessionTabView: View {
     private func draftCommentActions() -> ReviewDraftCommentActions {
         ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
-            sender: feedbackSender
+            sender: feedbackSender,
+            sessionID: tabState.sessionID,
+            recordHandoff: recordSessionHandoff
         )
+    }
+
+    private func recordSessionHandoff(_ handoff: ReviewFeedbackHandoff) {
+        guard persistsState else {
+            if let current = record {
+                record = current.recording(handoff: handoff)
+            }
+            return
+        }
+
+        do {
+            let current = try sessionStore.load(id: handoff.sessionID) ?? record
+            guard let current else { return }
+            let updated = current.recording(handoff: handoff)
+            try sessionStore.save(updated)
+            record = updated
+        } catch {
+            guard var visibleRecord = record else { return }
+            visibleRecord.lastSendError = error.localizedDescription
+            visibleRecord.updatedAt = now()
+            record = visibleRecord
+        }
     }
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {

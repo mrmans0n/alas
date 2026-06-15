@@ -121,6 +121,15 @@ struct ReviewSessionModelsTests {
         #expect(withHandoff.markedAddressed(now: Date(timeIntervalSince1970: 40)).status == .addressed)
     }
 
+    @Test func promptRevisionChangesWhenIncludedCommentsChange() {
+        let first = ReviewFeedbackHandoff.revisionKey(commentIDs: ["b", "a"], prompt: "hello")
+        let second = ReviewFeedbackHandoff.revisionKey(commentIDs: ["a", "b"], prompt: "hello")
+        let third = ReviewFeedbackHandoff.revisionKey(commentIDs: ["a", "b"], prompt: "different")
+
+        #expect(first == second)
+        #expect(first != third)
+    }
+
     @Test func recordSelectionHelpersUpdateStateAndTimestamp() {
         let target = ReviewSessionTarget.localChanges(
             worktreeID: "wt-1",

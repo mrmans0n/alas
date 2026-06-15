@@ -82,7 +82,41 @@ enum ReviewFeedbackPromptActions {
         target: ReviewFeedbackAgentTarget,
         sender: ReviewFeedbackAgentSender
     ) {
-        sender.send(bundle.promptMarkdown(), target)
+        sendToAgent(
+            bundle,
+            target: target,
+            sender: sender,
+            sessionID: nil,
+            recordHandoff: nil
+        )
+    }
+
+    @MainActor
+    static func sendToAgent(
+        _ bundle: ReviewFeedbackBundle,
+        target: ReviewFeedbackAgentTarget,
+        sender: ReviewFeedbackAgentSender,
+        sessionID: ReviewSessionID?,
+        recordHandoff: ((ReviewFeedbackHandoff) -> Void)?,
+        now: () -> Date = Date.init,
+        makeID: () -> String = { UUID().uuidString }
+    ) {
+        let prompt = bundle.promptMarkdown()
+        sender.send(prompt, target)
+
+        guard let sessionID, let recordHandoff else { return }
+        let commentIDs = bundle.activeComments.map(\.id).sorted()
+        recordHandoff(
+            ReviewFeedbackHandoff(
+                id: makeID(),
+                sessionID: sessionID,
+                commentIDs: commentIDs,
+                target: target,
+                createdAt: now(),
+                promptRevision: ReviewFeedbackHandoff.revisionKey(commentIDs: commentIDs, prompt: prompt),
+                status: .sent
+            )
+        )
     }
 
     private static func copyReviewPrompt(_ prompt: String) {
@@ -97,6 +131,8 @@ enum ReviewDraftWorkspaceActions {
     static func make(
         controller: ReviewDraftCommentController?,
         sender: ReviewFeedbackAgentSender,
+        sessionID: ReviewSessionID? = nil,
+        recordHandoff: ((ReviewFeedbackHandoff) -> Void)? = nil,
         pasteboard: @escaping (String) -> Void = { prompt in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -135,7 +171,13 @@ enum ReviewDraftWorkspaceActions {
                 sender.availableTargets()
             },
             sendToAgent: { bundle, target in
-                ReviewFeedbackPromptActions.sendToAgent(bundle, target: target, sender: sender)
+                ReviewFeedbackPromptActions.sendToAgent(
+                    bundle,
+                    target: target,
+                    sender: sender,
+                    sessionID: sessionID,
+                    recordHandoff: recordHandoff
+                )
             }
         )
     }

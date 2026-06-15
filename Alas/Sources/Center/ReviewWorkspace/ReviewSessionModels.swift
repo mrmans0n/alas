@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct ReviewSessionID: Codable, Equatable, Hashable, RawRepresentable, Sendable {
@@ -302,6 +303,24 @@ struct ReviewFeedbackHandoff: Codable, Equatable, Identifiable, Sendable {
     let createdAt: Date
     let promptRevision: String
     var status: ReviewFeedbackHandoffStatus
+
+    static func revisionKey(commentIDs: [String], prompt: String) -> String {
+        var data = Data()
+        for commentID in commentIDs.sorted() {
+            append(commentID, to: &data)
+        }
+        append(prompt, to: &data)
+        return SHA256.hash(data: data)
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func append(_ value: String, to data: inout Data) {
+        let bytes = Array(value.utf8)
+        data.append(contentsOf: "\(bytes.count):".utf8)
+        data.append(contentsOf: bytes)
+        data.append(0)
+    }
 }
 
 struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
