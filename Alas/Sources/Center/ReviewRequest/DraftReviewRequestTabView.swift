@@ -132,6 +132,10 @@ struct DraftReviewRequestTabView: View {
         )
     }
 
+    static func canLaunchReviewSession(targetMismatchMessage: String?) -> Bool {
+        targetMismatchMessage == nil
+    }
+
     private var reviewDraftSessionID: ReviewDraftSessionID {
         Self.reviewDraftSessionID(
             worktreeID: worktreeId,
@@ -386,6 +390,10 @@ struct DraftReviewRequestTabView: View {
                     .truncationMode(.middle)
             }
             AlasButton(title: "Review Branch Diff", icon: "doc.text.magnifyingglass") {
+                if let targetMismatchMessage {
+                    reviewSessionLaunchError = targetMismatchMessage
+                    return
+                }
                 openReviewSession(
                     target: Self.reviewSessionTarget(
                         worktreeID: worktreeId,
@@ -394,6 +402,7 @@ struct DraftReviewRequestTabView: View {
                     )
                 )
             }
+            .disabled(!Self.canLaunchReviewSession(targetMismatchMessage: targetMismatchMessage))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

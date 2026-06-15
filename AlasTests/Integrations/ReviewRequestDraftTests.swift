@@ -70,6 +70,13 @@ struct ReviewRequestDraftTests {
         #expect(second.id.rawValue.contains("def456"))
     }
 
+    @Test func draftReviewRequestLauncherIsDisabledForStaleTargets() {
+        #expect(DraftReviewRequestTabView.canLaunchReviewSession(targetMismatchMessage: nil))
+        #expect(!DraftReviewRequestTabView.canLaunchReviewSession(
+            targetMismatchMessage: "Switch back to the original branch state."
+        ))
+    }
+
     @Test @MainActor func selectingDraftSummaryCommentFocusesAndSelectsFile() async throws {
         let path = "Sources/A.swift"
         let context = ReviewRequestDraftContext(
