@@ -106,7 +106,9 @@ struct EditorTabView: View {
                 originatingRelativePath: originatingRelativePath,
                 fontFamily: appState.config.code.fontFamily,
                 fontSize: appState.config.code.fontSize,
-                showLineNumbers: appState.config.code.showLineNumbers
+                showLineNumbers: appState.config.code.showLineNumbers,
+                onTextViewAttached: { attachFindController(to: $0) },
+                onTextViewDetached: { detachFindController(from: $0) }
             )
         }
         .background(theme.color("bg-1"))
@@ -119,32 +121,6 @@ struct EditorTabView: View {
             findController.textView = nil
             activeTextView = nil
         }
-        .onReceive(NotificationCenter.default.publisher(for: .codeEditorDidAttach)) { notification in
-            guard let info = notification.userInfo,
-                  let notifTabId = info["tabId"] as? TabID,
-                  notifTabId == tabId,
-                  let textView = info["textView"] as? CodeTextView else { return }
-            clearFindHighlights()
-            if activeTextView !== textView {
-                activeTextView?.escapeHandler = fallbackEscapeHandler
-                fallbackEscapeHandler = textView.escapeHandler
-            }
-            activeTextView = textView
-            findController.textView = textView
-            findHighlightRenderer.attach(textView: textView)
-            installEscapeHandler(on: textView)
-            renderFindHighlights()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .codeEditorDidDetach)) { notification in
-            guard let info = notification.userInfo,
-                  let notifTabId = info["tabId"] as? TabID,
-                  notifTabId == tabId else { return }
-            clearFindHighlights()
-            activeTextView?.escapeHandler = nil
-            fallbackEscapeHandler = nil
-            activeTextView = nil
-            findController.textView = nil
-        }
         .onReceive(NotificationCenter.default.publisher(for: .alasShowFindReplace)) { notification in
             handleFindRequest(notification)
         }
@@ -153,6 +129,30 @@ struct EditorTabView: View {
                   textView === activeTextView else { return }
             handleEditorTextChanged()
         }
+    }
+
+    private func attachFindController(to textView: CodeTextView) {
+        clearFindHighlights()
+        if activeTextView !== textView {
+            activeTextView?.escapeHandler = fallbackEscapeHandler
+            fallbackEscapeHandler = textView.escapeHandler
+        }
+        activeTextView = textView
+        findController.textView = textView
+        findHighlightRenderer.attach(textView: textView)
+        installEscapeHandler(on: textView)
+        let selection: EditorFindController.RefreshSelection =
+            findPresentation == .hidden || findText.isEmpty ? .none : .nearestFromSelection
+        refreshFindMatches(selecting: selection)
+    }
+
+    private func detachFindController(from textView: CodeTextView?) {
+        if let textView, activeTextView !== textView { return }
+        clearFindHighlights()
+        activeTextView?.escapeHandler = nil
+        fallbackEscapeHandler = nil
+        activeTextView = nil
+        findController.textView = nil
     }
 
     private func handleFindRequest(_ notification: Notification) {
