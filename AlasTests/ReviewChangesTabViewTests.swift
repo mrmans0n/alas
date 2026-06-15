@@ -535,6 +535,30 @@ struct ReviewChangesTabViewTests {
         #expect(await probe.loadCount == 1)
     }
 
+    @Test func diffReviewFileSectionQueuesExpansionClicksWhileProviderLoads() async throws {
+        let probe = SuspendedContextProviderProbe()
+        let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
+            try await probe.snapshot()
+        }))
+        let ruler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+        try await waitForLoadCount(1, probe: probe)
+        ruler.invokeExpansionForTesting(row: 2, optionKey: false)
+        await probe.resolve(DiffReviewFileContextSnapshot(
+            old: .available((1...8).map { "old \($0)" }),
+            new: .available((1...8).map { "new \($0)" })
+        ))
+
+        let text = try await waitForRenderedText(in: controller.view, containing: "old 5")
+        #expect(text.contains("old 1"))
+        #expect(text.contains("old 2"))
+        #expect(text.contains("old 3"))
+        #expect(text.contains("old 5"))
+        #expect(text.contains("old 8"))
+        #expect(await probe.loadCount == 1)
+    }
+
     @Test func diffReviewFileSectionShowsContextProviderFailure() async throws {
         let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
             throw ContextProviderTestError.failed
@@ -656,6 +680,16 @@ struct ReviewChangesTabViewTests {
         return latest
     }
 
+    private func waitForLoadCount(_ expected: Int, probe: SuspendedContextProviderProbe) async throws {
+        for _ in 0..<20 {
+            if await probe.loadCount == expected {
+                return
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        #expect(await probe.loadCount == expected)
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
@@ -733,6 +767,23 @@ struct ReviewChangesTabViewTests {
         func snapshot() async throws -> DiffReviewFileContextSnapshot {
             loadCount += 1
             return snapshotValue
+        }
+    }
+
+    private actor SuspendedContextProviderProbe {
+        private var continuation: CheckedContinuation<DiffReviewFileContextSnapshot, Error>?
+        private(set) var loadCount = 0
+
+        func snapshot() async throws -> DiffReviewFileContextSnapshot {
+            loadCount += 1
+            return try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+            }
+        }
+
+        func resolve(_ snapshot: DiffReviewFileContextSnapshot) {
+            continuation?.resume(returning: snapshot)
+            continuation = nil
         }
     }
 

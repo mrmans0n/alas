@@ -1,5 +1,10 @@
 import SwiftUI
 
+private struct PendingContextExpansion {
+    let key: DiffContextExpansionKey
+    let mode: DiffContextExpansionMode
+}
+
 struct DiffReviewFileSection: View {
     let file: DiffReviewFileSectionModel
     var inlineFeedback: [DiffReviewInlineFeedback] = []
@@ -30,6 +35,7 @@ struct DiffReviewFileSection: View {
     @State private var contextLoadTask: Task<Void, Never>?
     @State private var contextLoadFileID: DiffReviewFileID?
     @State private var contextLoadError: String?
+    @State private var pendingContextExpansions: [PendingContextExpansion] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,9 +64,7 @@ struct DiffReviewFileSection: View {
             resetContextState()
         }
         .onDisappear {
-            contextLoadTask?.cancel()
-            contextLoadTask = nil
-            contextLoadFileID = nil
+            resetContextState()
         }
     }
 
@@ -487,6 +491,7 @@ struct DiffReviewFileSection: View {
             applyContextExpansion(key, mode: mode)
             return
         }
+        pendingContextExpansions.append(PendingContextExpansion(key: key, mode: mode))
         guard contextLoadTask == nil else { return }
         let fileID = file.id
         contextLoadError = nil
@@ -499,7 +504,11 @@ struct DiffReviewFileSection: View {
                     contextSnapshot = snapshot
                     contextLoadTask = nil
                     contextLoadFileID = nil
-                    applyContextExpansion(key, mode: mode)
+                    let pendingExpansions = pendingContextExpansions
+                    pendingContextExpansions = []
+                    for expansion in pendingExpansions {
+                        applyContextExpansion(expansion.key, mode: expansion.mode)
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -507,6 +516,7 @@ struct DiffReviewFileSection: View {
                     contextLoadError = error.localizedDescription
                     contextLoadTask = nil
                     contextLoadFileID = nil
+                    pendingContextExpansions = []
                 }
             }
         }
@@ -529,6 +539,7 @@ struct DiffReviewFileSection: View {
         contextLoadTask = nil
         contextLoadFileID = nil
         contextLoadError = nil
+        pendingContextExpansions = []
     }
 
     @ViewBuilder
