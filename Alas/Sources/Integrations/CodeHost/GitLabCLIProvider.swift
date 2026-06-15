@@ -150,6 +150,127 @@ struct GitLabCLIProvider: CodeHostProvider {
         return result.stdout
     }
 
+    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+        let publishableComments = request.comments.filter { $0.side != .unknown }
+        let preflightFailures = request.comments
+            .filter { $0.side == .unknown }
+            .map {
+                ProviderReviewFailedComment(
+                    localDraftID: $0.localDraftID,
+                    message: "GitLab review comments require an old or new side."
+                )
+            }
+        guard !publishableComments.isEmpty || request.comments.isEmpty else {
+            return ProviderReviewPublishResult(
+                published: [],
+                failed: preflightFailures,
+                refreshedRequest: request.reviewRequest,
+                warnings: []
+            )
+        }
+
+        let diffRefs = publishableComments.isEmpty
+            ? nil
+            : try await mergeRequestDiffRefs(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
+        var published: [ProviderReviewPublishedComment] = []
+        var failed: [ProviderReviewFailedComment] = preflightFailures
+
+        for comment in publishableComments {
+            guard let diffRefs else { break }
+            do {
+                let mapping = try await createDiscussion(
+                    remote: request.remote,
+                    request: request.reviewRequest,
+                    comment: comment,
+                    diffRefs: diffRefs,
+                    cwd: request.cwd
+                )
+                published.append(mapping)
+            } catch {
+                failed.append(ProviderReviewFailedComment(localDraftID: comment.localDraftID, message: error.localizedDescription))
+            }
+        }
+
+        switch request.decision {
+        case .comment:
+            break
+        case .approve:
+            try await approveMergeRequest(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
+        case .requestChanges:
+            try await createRequestChangesNote(
+                remote: request.remote,
+                request: request.reviewRequest,
+                body: request.summaryBody,
+                cwd: request.cwd
+            )
+        }
+
+        var warnings: [String] = []
+        let refreshedRequest: ReviewRequest
+        do {
+            refreshedRequest = try await refreshedReviewRequest(
+                remote: request.remote,
+                request: request.reviewRequest,
+                cwd: request.cwd
+            )
+        } catch {
+            refreshedRequest = request.reviewRequest
+            warnings.append("GitLab review was published, but Alas could not refresh the MR: \(error.localizedDescription)")
+        }
+        return ProviderReviewPublishResult(
+            published: published,
+            failed: failed,
+            refreshedRequest: refreshedRequest,
+            warnings: warnings
+        )
+    }
+
+    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+        guard let discussionID = Self.normalizedOptionalString(mutation.thread.providerThreadID) else {
+            throw CodeHostProviderError.malformedOutput("GitLab thread mutation requires a discussion id.")
+        }
+
+        let providerURL: URL?
+        switch mutation.kind {
+        case .reply:
+            guard let body = Self.normalizedOptionalString(mutation.bodyMarkdown) else {
+                throw CodeHostProviderError.malformedOutput("GitLab reply requires a non-empty body.")
+            }
+            providerURL = try await createDiscussionNote(
+                remote: mutation.remote,
+                request: mutation.reviewRequest,
+                discussionID: discussionID,
+                body: body,
+                cwd: mutation.cwd
+            )
+        case .resolve:
+            try await setDiscussionResolved(
+                remote: mutation.remote,
+                request: mutation.reviewRequest,
+                discussionID: discussionID,
+                resolved: true,
+                cwd: mutation.cwd
+            )
+            providerURL = nil
+        case .unresolve:
+            try await setDiscussionResolved(
+                remote: mutation.remote,
+                request: mutation.reviewRequest,
+                discussionID: discussionID,
+                resolved: false,
+                cwd: mutation.cwd
+            )
+            providerURL = nil
+        }
+
+        let refreshedRequest = (try? await refreshedReviewRequest(
+            remote: mutation.remote,
+            request: mutation.reviewRequest,
+            cwd: mutation.cwd
+        )) ?? mutation.reviewRequest
+        return ProviderThreadMutationResult(refreshedRequest: refreshedRequest, providerURL: providerURL)
+    }
+
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {
         ReviewEvidenceCIActivityMapper.items(for: request.checks)
     }
@@ -274,6 +395,155 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
 
         return try Self.parseMRView(result.stdout, remote: remote)
+    }
+
+    private func refreshedReviewRequest(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> ReviewRequest {
+        let refreshed = try await reviewRequestDetails(remote: remote, request: request, cwd: cwd)
+        let threads = (try? await unresolvedDiscussions(remote: remote, request: refreshed, cwd: cwd)) ?? []
+        let checks = (try? await checks(remote: remote, request: refreshed, cwd: cwd)) ?? []
+        return Self.withEnrichment(threads: threads, checks: checks, on: refreshed)
+    }
+
+    private func mergeRequestDiffRefs(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> GitLabDiffRefs {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/\(request.number)/versions",
+                "--hostname", remote.host,
+                "--output", "json",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request versions", stderr: result.stderr)
+        }
+        return try Self.parseDiffRefs(result.stdout)
+    }
+
+    private func createDiscussion(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ProviderReviewDraftComment,
+        diffRefs: GitLabDiffRefs,
+        cwd: URL
+    ) async throws -> ProviderReviewPublishedComment {
+        let payload = GitLabCreateDiscussionPayload(comment: comment, diffRefs: diffRefs)
+        let stdin = try Self.encodedJSON(payload)
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/\(request.number)/discussions",
+                "--method", "POST",
+                "--hostname", remote.host,
+                "--input", "-",
+            ],
+            cwd: cwd,
+            stdin: stdin
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request discussions", stderr: result.stderr)
+        }
+        return try Self.parsePublishedDiscussion(result.stdout, localDraftID: comment.localDraftID)
+    }
+
+    private func approveMergeRequest(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/\(request.number)/approve",
+                "--method", "POST",
+                "--hostname", remote.host,
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request approve", stderr: result.stderr)
+        }
+    }
+
+    private func createRequestChangesNote(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        body: String,
+        cwd: URL
+    ) async throws {
+        let payload = GitLabBodyPayload(body: Self.normalizedOptionalString(body) ?? "Changes requested.")
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/\(request.number)/notes",
+                "--method", "POST",
+                "--hostname", remote.host,
+                "--input", "-",
+            ],
+            cwd: cwd,
+            stdin: try Self.encodedJSON(payload)
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request notes", stderr: result.stderr)
+        }
+    }
+
+    @discardableResult
+    private func createDiscussionNote(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        discussionID: String,
+        body: String,
+        cwd: URL
+    ) async throws -> URL? {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/\(request.number)/discussions/\(discussionID)/notes",
+                "--method", "POST",
+                "--hostname", remote.host,
+                "--input", "-",
+            ],
+            cwd: cwd,
+            stdin: try Self.encodedJSON(GitLabBodyPayload(body: body))
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request discussion note", stderr: result.stderr)
+        }
+        return try Self.parseCreatedNoteURL(result.stdout)
+    }
+
+    private func setDiscussionResolved(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        discussionID: String,
+        resolved: Bool,
+        cwd: URL
+    ) async throws {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/\(request.number)/discussions/\(discussionID)",
+                "--method", "PUT",
+                "--hostname", remote.host,
+                "--input", "-",
+            ],
+            cwd: cwd,
+            stdin: try Self.encodedJSON(GitLabResolveDiscussionPayload(resolved: resolved))
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request discussion", stderr: result.stderr)
+        }
     }
 
     private func sourceProjectPathsByID(
@@ -447,9 +717,71 @@ struct GitLabCLIProvider: CodeHostProvider {
                 url: try discussionURL(note: note, requestURL: requestURL),
                 isResolved: discussion.isResolved,
                 isActionable: !discussion.isResolved,
-                location: reviewThreadLocation(from: note)
+                location: reviewThreadLocation(from: note),
+                providerThreadID: discussion.id,
+                providerCommentID: note.id.map(String.init)
             )
         }
+    }
+
+    static func parseDiffRefs(_ json: String) throws -> GitLabDiffRefs {
+        let data = Data(json.utf8)
+        let decoder = JSONDecoder()
+        do {
+            if let versions = try? decoder.decode([GitLabMRVersion].self, from: data),
+               let refs = versions.first?.diffRefs {
+                return try refs.validated()
+            }
+            let version = try decoder.decode(GitLabMRVersion.self, from: data)
+            return try version.diffRefs.validated()
+        } catch let error as CodeHostProviderError {
+            throw error
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api merge request versions output")
+        }
+    }
+
+    static func parsePublishedDiscussion(
+        _ json: String,
+        localDraftID: String
+    ) throws -> ProviderReviewPublishedComment {
+        let data = Data(json.utf8)
+        let discussion: GitLabDiscussion
+        do {
+            discussion = try JSONDecoder().decode(GitLabDiscussion.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api merge request discussion output")
+        }
+        let note = discussion.notes.first { !($0.system ?? false) }
+        return ProviderReviewPublishedComment(
+            localDraftID: localDraftID,
+            providerThreadID: discussion.id,
+            providerCommentID: note?.id.map(String.init),
+            providerURL: try note.flatMap {
+                try parseOptionalHTTPURL($0.webURL, context: "glab api merge request discussion returned an invalid URL")
+            }
+        )
+    }
+
+    static func parseCreatedNoteURL(_ json: String) throws -> URL? {
+        let data = Data(json.utf8)
+        let note: GitLabCreatedNote
+        do {
+            note = try JSONDecoder().decode(GitLabCreatedNote.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api merge request discussion note output")
+        }
+        return try parseOptionalHTTPURL(note.webURL, context: "glab api merge request discussion note returned an invalid URL")
+    }
+
+    static func encodedJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(value)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw CodeHostProviderError.malformedOutput("Unable to encode GitLab API payload")
+        }
+        return string
     }
 
     static func parsePipeline(_ json: String) throws -> [ReviewCheck] {
@@ -883,6 +1215,92 @@ private struct GitLabRetryTarget {
     let pipelineID: Int
 }
 
+struct GitLabDiffRefs: Codable, Equatable {
+    let baseSHA: String
+    let startSHA: String
+    let headSHA: String
+
+    func validated() throws -> GitLabDiffRefs {
+        guard !baseSHA.isEmpty, !startSHA.isEmpty, !headSHA.isEmpty else {
+            throw CodeHostProviderError.malformedOutput("glab api merge request versions output is missing diff refs")
+        }
+        return self
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case baseSHA = "base_sha"
+        case startSHA = "start_sha"
+        case headSHA = "head_sha"
+    }
+}
+
+private struct GitLabMRVersion: Decodable {
+    let diffRefs: GitLabDiffRefs
+
+    private enum CodingKeys: String, CodingKey {
+        case diffRefs = "diff_refs"
+    }
+}
+
+private struct GitLabCreateDiscussionPayload: Encodable {
+    let body: String
+    let position: GitLabCreateDiscussionPosition
+
+    init(comment: ProviderReviewDraftComment, diffRefs: GitLabDiffRefs) {
+        self.body = comment.bodyMarkdown
+        self.position = GitLabCreateDiscussionPosition(comment: comment, diffRefs: diffRefs)
+    }
+}
+
+private struct GitLabCreateDiscussionPosition: Encodable {
+    let positionType = "text"
+    let baseSHA: String
+    let startSHA: String
+    let headSHA: String
+    let oldPath: String
+    let newPath: String
+    let oldLine: Int?
+    let newLine: Int?
+
+    init(comment: ProviderReviewDraftComment, diffRefs: GitLabDiffRefs) {
+        self.baseSHA = diffRefs.baseSHA
+        self.startSHA = diffRefs.startSHA
+        self.headSHA = diffRefs.headSHA
+        self.oldPath = comment.originalPath ?? comment.path
+        self.newPath = comment.path
+        switch comment.side {
+        case .old:
+            self.oldLine = comment.lineRange.upperBound
+            self.newLine = nil
+        case .new:
+            self.oldLine = nil
+            self.newLine = comment.lineRange.upperBound
+        case .unknown:
+            self.oldLine = nil
+            self.newLine = nil
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case positionType = "position_type"
+        case baseSHA = "base_sha"
+        case startSHA = "start_sha"
+        case headSHA = "head_sha"
+        case oldPath = "old_path"
+        case newPath = "new_path"
+        case oldLine = "old_line"
+        case newLine = "new_line"
+    }
+}
+
+private struct GitLabBodyPayload: Encodable {
+    let body: String
+}
+
+private struct GitLabResolveDiscussionPayload: Encodable {
+    let resolved: Bool
+}
+
 private struct GitLabDiscussion: Decodable {
     let id: String
     let resolved: Bool?
@@ -940,6 +1358,16 @@ private struct GitLabDiscussionNote: Decodable {
 
 private struct GitLabDiscussionAuthor: Decodable {
     let username: String?
+}
+
+private struct GitLabCreatedNote: Decodable {
+    let id: Int?
+    let webURL: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case webURL = "web_url"
+    }
 }
 
 private struct GitLabNotePosition: Decodable {

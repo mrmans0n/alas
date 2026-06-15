@@ -134,11 +134,15 @@ struct GitLabCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable)
+        #expect(threads[0].providerThreadID == "discussion-1")
+        #expect(threads[0].providerCommentID == "501")
         #expect(threads[1].id == "discussion-2")
         #expect(threads[1].author == "maintainer")
         #expect(threads[1].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_503"))
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable)
+        #expect(threads[1].providerThreadID == "discussion-2")
+        #expect(threads[1].providerCommentID == "503")
     }
 
     @Test func discussionsJSONPreservesLocationMetadata() throws {
@@ -725,6 +729,249 @@ struct GitLabCLIProviderTests {
         }
     }
 
+    @Test func publishReviewCreatesDiscussionsApprovesAndRefreshesMR() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.approveOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+        let provider = GitLabCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                try Self.makeProviderDraftComment(
+                    localDraftID: "draft-1",
+                    path: "Sources/App.swift",
+                    originalPath: "Sources/OldApp.swift",
+                    side: .new,
+                    lineRange: 24...24,
+                    bodyMarkdown: "Please fix this."
+                ),
+            ],
+            decision: .approve,
+            summaryBody: "Looks good after this note.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published == [
+            ProviderReviewPublishedComment(
+                localDraftID: "draft-1",
+                providerThreadID: "discussion-1",
+                providerCommentID: "501",
+                providerURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501")
+            ),
+        ])
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/:id/merge_requests/42/versions"],
+            ["api", "projects/:id/merge_requests/42/discussions"],
+            ["api", "projects/:id/merge_requests/42/approve"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
+        let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
+        #expect(discussionPayload["body"] as? String == "Please fix this.")
+        let position = try #require(discussionPayload["position"] as? [String: Any])
+        #expect(position["position_type"] as? String == "text")
+        #expect(position["base_sha"] as? String == "base123")
+        #expect(position["start_sha"] as? String == "start123")
+        #expect(position["head_sha"] as? String == "head123")
+        #expect(position["old_path"] as? String == "Sources/OldApp.swift")
+        #expect(position["new_path"] as? String == "Sources/App.swift")
+        #expect(position["new_line"] as? Int == 24)
+        #expect(position["old_line"] == nil)
+    }
+
+    @Test func publishReviewCreatesRequestChangesNoteForGitLabDecision() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.requestChangesNoteOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [],
+            decision: .requestChanges,
+            summaryBody: "Please address the inline notes before merging.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.isEmpty)
+        #expect(result.failed.isEmpty)
+        let commands = await runner.commands
+        #expect(commands.first == FakeRunner.Command(
+            executable: "glab",
+            args: [
+                "api",
+                "projects/:id/merge_requests/42/notes",
+                "--method", "POST",
+                "--hostname", "gitlab.example.com",
+                "--input", "-",
+            ],
+            cwd: Self.cwd,
+            stdin: #"{"body":"Please address the inline notes before merging."}"#
+        ))
+    }
+
+    @Test func publishReviewReturnsFailuresWithoutRemoteWriteForUnknownOnlyDrafts() async throws {
+        let runner = FakeRunner(results: [])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                try Self.makeProviderDraftComment(
+                    localDraftID: "draft-1",
+                    side: .unknown,
+                    lineRange: 24...24
+                ),
+            ],
+            decision: .approve,
+            summaryBody: "Looks good.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.isEmpty)
+        #expect(result.failed.map(\.localDraftID) == ["draft-1"])
+        #expect(await runner.commands.isEmpty)
+    }
+
+    @Test func publishReviewPreservesPublishedMappingsWhenRefreshFails() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "refresh failed"),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new)],
+            decision: .comment,
+            summaryBody: "",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.map(\.localDraftID) == ["draft-1"])
+        #expect(result.refreshedRequest == Self.makeRequest())
+        #expect(result.warnings.first?.contains("could not refresh") == true)
+    }
+
+    @Test func threadMutationsUseDiscussionEndpointsAndRefreshMR() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.resolveDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.unresolveDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+        let thread = ReviewThreadSummary(
+            id: "discussion-1",
+            author: "reviewer",
+            body: "Please fix this.",
+            url: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501"),
+            isResolved: false,
+            isActionable: true,
+            location: nil,
+            providerThreadID: "discussion-1",
+            providerCommentID: "501"
+        )
+        let provider = GitLabCLIProvider(runner: runner)
+
+        let reply = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            thread: thread,
+            kind: .reply,
+            bodyMarkdown: "Fixed locally.",
+            cwd: Self.cwd
+        ))
+        _ = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            thread: thread,
+            kind: .resolve,
+            bodyMarkdown: nil,
+            cwd: Self.cwd
+        ))
+        _ = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            thread: thread,
+            kind: .unresolve,
+            bodyMarkdown: nil,
+            cwd: Self.cwd
+        ))
+
+        #expect(reply.providerURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_502"))
+        let commands = await runner.commands
+        #expect(commands[0].args == [
+            "api",
+            "projects/:id/merge_requests/42/discussions/discussion-1/notes",
+            "--method", "POST",
+            "--hostname", "gitlab.example.com",
+            "--input", "-",
+        ])
+        #expect(commands[4].args == [
+            "api",
+            "projects/:id/merge_requests/42/discussions/discussion-1",
+            "--method", "PUT",
+            "--hostname", "gitlab.example.com",
+            "--input", "-",
+        ])
+        #expect(try Self.jsonObject(from: commands[4].stdin)["resolved"] as? Bool == true)
+        #expect(try Self.jsonObject(from: commands[8].stdin)["resolved"] as? Bool == false)
+    }
+
+    @Test func threadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "refresh failed"),
+        ])
+        let thread = ReviewThreadSummary(
+            id: "discussion-1",
+            author: nil,
+            body: "Body",
+            url: nil,
+            isResolved: false,
+            isActionable: true,
+            location: nil,
+            providerThreadID: "discussion-1",
+            providerCommentID: "501"
+        )
+
+        let result = try await GitLabCLIProvider(runner: runner).mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            thread: thread,
+            kind: .reply,
+            bodyMarkdown: "Fixed.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.providerURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_502"))
+        #expect(result.refreshedRequest == Self.makeRequest())
+    }
+
     @Test func currentReviewRequestResolvesSourceProjectIDsBeforeFilteringForkMRs() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.duplicateForkMRListOutput, stderr: ""),
@@ -1230,6 +1477,45 @@ struct GitLabCLIProviderTests {
         )
     }
 
+    private static func makeProviderDraftComment(
+        localDraftID: String = "draft-1",
+        path: String = "Sources/App.swift",
+        originalPath: String? = nil,
+        side: DiffReviewInlineFeedbackSide = .new,
+        lineRange: ClosedRange<Int> = 24...24,
+        selectedText: String? = nil,
+        bodyMarkdown: String = "Please fix this."
+    ) throws -> ProviderReviewDraftComment {
+        let draft = ReviewDraftComment(
+            id: localDraftID,
+            sessionID: .reviewRequest(
+                worktreeID: "wt",
+                provider: .gitlab,
+                host: "gitlab.example.com",
+                repositorySlug: "platform/mobile/alas",
+                number: 42
+            ),
+            fileID: DiffReviewFileID(namespace: "gitlab", path: path),
+            path: path,
+            originalPath: originalPath,
+            side: side,
+            startLine: lineRange.lowerBound,
+            endLine: lineRange.upperBound == lineRange.lowerBound ? nil : lineRange.upperBound,
+            selectedText: selectedText,
+            bodyMarkdown: bodyMarkdown,
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 11)
+        )
+        return try #require(ProviderReviewDraftComment(localDraft: draft))
+    }
+
+    private static func jsonObject(from stdin: String?) throws -> [String: Any] {
+        let stdin = try #require(stdin)
+        let data = Data(stdin.utf8)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
     private static let mrListOutput = """
     [
       {
@@ -1364,6 +1650,70 @@ struct GitLabCLIProviderTests {
         ]
       }
     ]
+    """
+
+    private static let versionsOutput = """
+    [
+      {
+        "diff_refs": {
+          "base_sha": "base123",
+          "start_sha": "start123",
+          "head_sha": "head123"
+        }
+      }
+    ]
+    """
+
+    private static let createDiscussionOutput = """
+    {
+      "id": "discussion-1",
+      "notes": [
+        {
+          "id": 501,
+          "body": "Please fix this.",
+          "system": false,
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501",
+          "author": { "username": "nacho" }
+        }
+      ]
+    }
+    """
+
+    private static let createNoteOutput = """
+    {
+      "id": 502,
+      "body": "Fixed locally.",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_502"
+    }
+    """
+
+    private static let requestChangesNoteOutput = """
+    {
+      "id": 601,
+      "body": "Please address the inline notes before merging.",
+      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_601"
+    }
+    """
+
+    private static let resolveDiscussionOutput = """
+    {
+      "id": "discussion-1",
+      "resolved": true
+    }
+    """
+
+    private static let unresolveDiscussionOutput = """
+    {
+      "id": "discussion-1",
+      "resolved": false
+    }
+    """
+
+    private static let approveOutput = """
+    {
+      "id": 42,
+      "approved": true
+    }
     """
 
     private static let systemOnlyDiscussionsOutput = """
