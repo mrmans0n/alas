@@ -1088,6 +1088,14 @@ struct GitHubCLIProviderTests {
             let executable: String
             let args: [String]
             let cwd: URL?
+            let stdin: String?
+
+            init(executable: String, args: [String], cwd: URL?, stdin: String? = nil) {
+                self.executable = executable
+                self.args = args
+                self.cwd = cwd
+                self.stdin = stdin
+            }
         }
 
         private var results: [ProcessResult]
@@ -1097,8 +1105,8 @@ struct GitHubCLIProviderTests {
             self.results = results
         }
 
-        func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
-            commands.append(Command(executable: executable, args: args, cwd: cwd))
+        func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+            commands.append(Command(executable: executable, args: args, cwd: cwd, stdin: stdin))
             guard !results.isEmpty else {
                 return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
             }

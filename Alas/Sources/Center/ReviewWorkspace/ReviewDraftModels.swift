@@ -83,6 +83,23 @@ enum ReviewDraftCommentState: String, Codable, Equatable, Hashable, Sendable {
     case dismissed
 }
 
+struct ReviewDraftProviderPublish: Codable, Equatable, Sendable {
+    let provider: CodeHostKind
+    let host: String
+    let repositorySlug: String
+    let reviewNumber: Int
+    let threadID: String?
+    let commentID: String?
+    let url: URL?
+    let publishedAt: Date
+}
+
+struct ReviewDraftProviderError: Codable, Equatable, Sendable {
+    let provider: CodeHostKind
+    let message: String
+    let occurredAt: Date
+}
+
 struct ReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
     var id: String
     var sessionID: ReviewDraftSessionID
@@ -97,6 +114,8 @@ struct ReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
     var state: ReviewDraftCommentState
     var createdAt: Date
     var updatedAt: Date
+    var providerPublish: ReviewDraftProviderPublish? = nil
+    var providerError: ReviewDraftProviderError? = nil
 
     var normalizedLineRange: ClosedRange<Int> {
         let end = endLine ?? startLine
