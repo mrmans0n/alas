@@ -196,7 +196,7 @@ enum DiffContextExpandedDisplayBuilder {
         )
         switch boundary {
         case .above:
-            rows.append(expandable)
+            rows.insert(expandable, at: rows.startIndex)
         case .below:
             rows.insert(expandable, at: rows.endIndex)
         }

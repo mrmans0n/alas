@@ -49,11 +49,13 @@ struct DiffContextExpansionTests {
             filePath: "a.swift",
             chunkSize: 2
         )
-        #expect(expanded[0].rows.prefix(3).map(\.kind) == [.expandedContext, .expandedContext, .expandableContext])
-        #expect(expanded[0].rows[0].old?.lineNumber == 2)
-        #expect(expanded[0].rows[1].old?.lineNumber == 3)
-        #expect(expanded[0].rows[0].new?.lineNumber == 2)
-        #expect(expanded[0].rows[1].new?.lineNumber == 3)
+        #expect(expanded[0].rows.prefix(3).map(\.kind) == [.expandableContext, .expandedContext, .expandedContext])
+        #expect(expanded[0].rows[0].contextExpansion?.boundary == .above)
+        #expect(expanded[0].rows[0].collapsedLineCount == 1)
+        #expect(expanded[0].rows[1].old?.lineNumber == 2)
+        #expect(expanded[0].rows[2].old?.lineNumber == 3)
+        #expect(expanded[0].rows[1].new?.lineNumber == 2)
+        #expect(expanded[0].rows[2].new?.lineNumber == 3)
     }
 
     @Test func optionExpansionRevealsAllBelowBoundary() {
