@@ -34,7 +34,8 @@ struct ReviewSessionTabViewTests {
                 repositoryPath: "/repo",
                 providerDescription: nil,
                 sourceDescription: target.sourceDescription
-            )
+            ),
+            providerContext: nil
         )
 
         let publication = ReviewSessionTabLoadPublication.initial(record: record, loaded: loaded)
@@ -104,7 +105,8 @@ struct ReviewSessionTabViewTests {
                 repositoryPath: "/repo",
                 providerDescription: nil,
                 sourceDescription: target.sourceDescription
-            )
+            ),
+            providerContext: nil
         )
         let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
             .environment(\.theme, try ThemeStore().current)
@@ -149,7 +151,8 @@ struct ReviewSessionTabViewTests {
                 repositoryPath: "/repo",
                 providerDescription: nil,
                 sourceDescription: target.sourceDescription
-            )
+            ),
+            providerContext: nil
         )
         let view = ReviewSessionTabView.preview(record: record, loaded: loaded)
             .environment(\.theme, try ThemeStore().current)
@@ -207,7 +210,8 @@ struct ReviewSessionTabViewTests {
                 repositoryPath: "/repo",
                 providerDescription: nil,
                 sourceDescription: target.sourceDescription
-            )
+            ),
+            providerContext: nil
         )
         let view = ReviewSessionTabView.preview(record: try #require(updated), loaded: loaded)
             .environment(\.theme, try ThemeStore().current)
@@ -216,6 +220,249 @@ struct ReviewSessionTabViewTests {
         host.layoutSubtreeIfNeeded()
 
         #expect(recursiveDescription(host).contains("Sent to agent, but failed to save handoff record: save failed"))
+    }
+
+    @Test func providerMutationControllerPublishesDraftsAndMarksResults() async throws {
+        let sessionID = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-provider-mutation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("drafts.json")
+        )
+        let draftController = ReviewDraftCommentController(
+            sessionID: sessionID,
+            store: store,
+            now: { Date(timeIntervalSince1970: 200) }
+        )
+        try draftController.load()
+        try draftController.add(
+            anchor: DiffReviewLineAnchor(
+                path: "Sources/App.swift",
+                side: .new,
+                line: 12,
+                rowIndex: 0,
+                selectedText: "let value = 1"
+            ),
+            fileID: DiffReviewFileID(namespace: "github", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let added = try #require(draftController.comments.first)
+        let request = Self.reviewRequest(provider: .github)
+        let provider = FakeProviderReviewMutator(
+            kind: .github,
+            result: ProviderReviewPublishResult(
+                published: [
+                    ProviderReviewPublishedComment(
+                        localDraftID: added.id,
+                        providerThreadID: "thread-1",
+                        providerCommentID: "comment-1",
+                        providerURL: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1")
+                    ),
+                ],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let controller = ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftController,
+            now: { Date(timeIntervalSince1970: 300) }
+        )
+
+        let outcome = try await controller.publishReview(
+            remote: request.remote,
+            reviewRequest: request,
+            decision: .comment,
+            summaryBody: "Review from Alas",
+            cwd: URL(fileURLWithPath: "/repo")
+        )
+
+        #expect(outcome.refreshedRequest.number == 527)
+        let updated = try #require(draftController.comments.first)
+        #expect(updated.providerPublish?.threadID == "thread-1")
+        #expect(updated.providerPublish?.commentID == "comment-1")
+        #expect(updated.providerPublish?.publishedAt == Date(timeIntervalSince1970: 300))
+        #expect(updated.providerPublish?.provider == .github)
+        #expect(updated.providerError == nil)
+    }
+
+    @Test func providerMutationControllerKeepsFailedDraftsActiveWithError() async throws {
+        let sessionID = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            repositorySlug: "platform/alas",
+            number: 42
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-provider-mutation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("drafts.json")
+        )
+        let draftController = ReviewDraftCommentController(
+            sessionID: sessionID,
+            store: store,
+            now: { Date(timeIntervalSince1970: 200) }
+        )
+        try draftController.load()
+        try draftController.add(
+            anchor: DiffReviewLineAnchor(
+                path: "Sources/App.swift",
+                side: .new,
+                line: 12,
+                rowIndex: 0,
+                selectedText: ""
+            ),
+            fileID: DiffReviewFileID(namespace: "gitlab", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let added = try #require(draftController.comments.first)
+        let request = Self.reviewRequest(provider: .gitlab)
+        let provider = FakeProviderReviewMutator(
+            kind: .gitlab,
+            result: ProviderReviewPublishResult(
+                published: [],
+                failed: [
+                    ProviderReviewFailedComment(
+                        localDraftID: added.id,
+                        message: "line is not commentable"
+                    ),
+                ],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let controller = ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftController,
+            now: { Date(timeIntervalSince1970: 300) }
+        )
+
+        _ = try await controller.publishReview(
+            remote: request.remote,
+            reviewRequest: request,
+            decision: .comment,
+            summaryBody: "Review from Alas",
+            cwd: URL(fileURLWithPath: "/repo")
+        )
+
+        let updated = try #require(draftController.comments.first)
+        #expect(updated.providerPublish == nil)
+        #expect(updated.providerError?.message == "line is not commentable")
+        #expect(updated.providerError?.provider == .gitlab)
+        #expect(updated.providerError?.occurredAt == Date(timeIntervalSince1970: 300))
+        #expect(updated.state == .active)
+    }
+
+    @Test func reviewSessionLoadedContextCarriesProviderContextForProviderSessions() async throws {
+        let request = Self.reviewRequest(provider: .github)
+        let target = ReviewSessionTarget.reviewRequest(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: request.number,
+            url: request.url,
+            title: request.title,
+            headSHA: "abc123"
+        )
+        let providerLoaded = ReviewSessionProviderLoadedSession(
+            loadedSession: DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false)),
+            providerContext: ReviewSessionProviderContext(remote: request.remote, reviewRequest: request)
+        )
+        let loader = ReviewSessionLoader(reviewRequest: { target in
+            #expect(target.kind == .reviewRequest)
+            return providerLoaded
+        })
+
+        let loaded = try await loader.load(target: target)
+
+        #expect(loaded.providerContext?.remote == request.remote)
+        #expect(loaded.providerContext?.reviewRequest == request)
+    }
+
+    @Test func providerMutationControllerFactoryRequiresLoadedProviderContext() throws {
+        let request = Self.reviewRequest(provider: .github)
+        let session = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
+        let providerLoaded = ReviewSessionLoadedContext(
+            session: session,
+            feedbackTarget: ReviewFeedbackTarget(
+                title: "Review provider writes",
+                repositoryPath: "/repo",
+                providerDescription: "GitHub mrmans0n/alas #527",
+                sourceDescription: "PR #527"
+            ),
+            providerContext: ReviewSessionProviderContext(remote: request.remote, reviewRequest: request)
+        )
+        let localLoaded = ReviewSessionLoadedContext(
+            session: session,
+            feedbackTarget: ReviewFeedbackTarget(
+                title: "Review all changes",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local changes: all"
+            ),
+            providerContext: nil
+        )
+        let draftController = ReviewDraftCommentController(
+            sessionID: .reviewRequest(
+                worktreeID: "wt",
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                number: 527
+            ),
+            store: ReviewDraftCommentStore(
+                store: PersistenceStore(),
+                url: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("alas-provider-mutation-\(UUID().uuidString).json")
+            )
+        )
+        let provider = FakeProviderReviewMutator(
+            kind: .github,
+            result: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let registry = CodeHostProviderRegistry(providers: [.github: provider])
+
+        #expect(ReviewSessionTabView.makeProviderMutationController(
+            loaded: providerLoaded,
+            draftCommentController: draftController,
+            providerRegistry: registry,
+            now: Date.init
+        ) != nil)
+        #expect(ReviewSessionTabView.makeProviderMutationController(
+            loaded: localLoaded,
+            draftCommentController: draftController,
+            providerRegistry: registry,
+            now: Date.init
+        ) == nil)
+        #expect(ReviewSessionTabView.makeProviderMutationController(
+            loaded: providerLoaded,
+            draftCommentController: nil,
+            providerRegistry: registry,
+            now: Date.init
+        ) == nil)
     }
 
     private func recursiveDescription(_ view: NSView) -> String {
@@ -253,6 +500,102 @@ struct ReviewSessionTabViewTests {
             openFile: nil,
             contextProvider: nil
         )
+    }
+
+    private static func remote(kind: CodeHostKind = .github) -> CodeHostRemote {
+        let host = kind == .github ? "github.com" : "gitlab.example.com"
+        let owner = kind == .github ? "mrmans0n" : "platform"
+        return CodeHostRemote(
+            kind: kind,
+            host: host,
+            owner: owner,
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://\(host)/\(owner)/alas")!
+        )
+    }
+
+    private static func reviewRequest(provider: CodeHostKind) -> ReviewRequest {
+        let remote = Self.remote(kind: provider)
+        return ReviewRequest(
+            remote: remote,
+            number: provider == .github ? 527 : 42,
+            title: "Review provider writes",
+            url: remote.webURL.appendingPathComponent(provider == .github ? "pull/527" : "merge_requests/42"),
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/provider-writes",
+            baseRefName: "main",
+            reviewDecision: .unknown,
+            mergeState: .unknown,
+            checks: [],
+            threads: []
+        )
+    }
+
+    private struct FakeProviderReviewMutator: CodeHostProvider {
+        let kind: CodeHostKind
+        let result: ProviderReviewPublishResult
+
+        func isAvailable() async -> Bool { true }
+        func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+        func currentReviewRequest(
+            remote: CodeHostRemote,
+            branch: String,
+            headOwner: String?,
+            baseBranch: String,
+            cwd: URL
+        ) async throws -> ReviewRequest? {
+            result.refreshedRequest
+        }
+        func createReviewRequest(
+            remote: CodeHostRemote,
+            branch: String,
+            headOwner: String?,
+            baseBranch: String,
+            title: String,
+            body: String,
+            isDraft: Bool,
+            cwd: URL
+        ) async throws -> URL {
+            result.refreshedRequest.url
+        }
+        func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+        func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { "" }
+        func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] { [] }
+        func checkEvidenceDetail(
+            remote: CodeHostRemote,
+            request: ReviewRequest,
+            item: ReviewEvidenceItem,
+            cwd: URL
+        ) async throws -> ReviewEvidenceDetail {
+            throw CodeHostProviderError.malformedOutput("FakeProviderReviewMutator does not provide check evidence details.")
+        }
+        func feedbackEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] { [] }
+        func feedbackEvidenceDetail(
+            remote: CodeHostRemote,
+            request: ReviewRequest,
+            item: ReviewEvidenceItem,
+            cwd: URL
+        ) async throws -> ReviewEvidenceDetail {
+            throw CodeHostProviderError.malformedOutput("FakeProviderReviewMutator does not provide feedback evidence details.")
+        }
+        func rerunFailedChecks(
+            remote: CodeHostRemote,
+            branch: String,
+            headSHA: String,
+            request: ReviewRequest?,
+            cwd: URL
+        ) async throws {}
+        func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+            result
+        }
+        func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+            ProviderThreadMutationResult(
+                refreshedRequest: result.refreshedRequest,
+                providerURL: result.refreshedRequest.url
+            )
+        }
     }
 
     private struct TestPersistenceError: LocalizedError {

@@ -56,6 +56,7 @@ struct ReviewSessionTabView: View {
     var draftCommentStore: ReviewDraftCommentStore
     var loader: ReviewSessionLoader
     var feedbackSender: ReviewFeedbackAgentSender
+    var providerRegistry: CodeHostProviderRegistry
     var loadsOnAppear: Bool
     var persistsState: Bool
     var now: () -> Date
@@ -87,6 +88,7 @@ struct ReviewSessionTabView: View {
         self.draftCommentStore = ReviewDraftCommentStore()
         self.loader = ReviewSessionLoader.production(appState: appState, worktree: worktree)
         self.feedbackSender = ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktree.id)
+        self.providerRegistry = .live()
         self.loadsOnAppear = true
         self.persistsState = true
         self.now = Date.init
@@ -102,6 +104,7 @@ struct ReviewSessionTabView: View {
         draftCommentStore: ReviewDraftCommentStore = ReviewDraftCommentStore(),
         loader: ReviewSessionLoader = ReviewSessionLoader(),
         feedbackSender: ReviewFeedbackAgentSender,
+        providerRegistry: CodeHostProviderRegistry = .live(),
         loadsOnAppear: Bool,
         persistsState: Bool,
         now: @escaping () -> Date = Date.init
@@ -113,6 +116,7 @@ struct ReviewSessionTabView: View {
         self.draftCommentStore = draftCommentStore
         self.loader = loader
         self.feedbackSender = feedbackSender
+        self.providerRegistry = providerRegistry
         self.loadsOnAppear = loadsOnAppear
         self.persistsState = persistsState
         self.now = now
@@ -397,6 +401,33 @@ struct ReviewSessionTabView: View {
             sessionID: tabState.sessionID,
             recordHandoff: recordSessionHandoff,
             recordSendFailure: recordSessionSendFailure
+        )
+    }
+
+    private func makeProviderMutationController(for loaded: ReviewSessionLoadedContext) -> ProviderReviewMutationController? {
+        Self.makeProviderMutationController(
+            loaded: loaded,
+            draftCommentController: draftCommentController,
+            providerRegistry: providerRegistry,
+            now: now
+        )
+    }
+
+    static func makeProviderMutationController(
+        loaded: ReviewSessionLoadedContext,
+        draftCommentController: ReviewDraftCommentController?,
+        providerRegistry: CodeHostProviderRegistry,
+        now: @escaping () -> Date
+    ) -> ProviderReviewMutationController? {
+        guard let providerContext = loaded.providerContext,
+              let draftCommentController,
+              let provider = providerRegistry.provider(for: providerContext.remote.kind)
+        else { return nil }
+
+        return ProviderReviewMutationController(
+            provider: provider,
+            draftController: draftCommentController,
+            now: now
         )
     }
 
