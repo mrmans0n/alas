@@ -106,6 +106,134 @@ struct ReviewDraftCommentStoreTests {
         #expect(try store.load(sessionID: session).isEmpty)
     }
 
+    @Test @MainActor func controllerMarksDraftPublishedAndRecordsProviderErrors() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("review-draft-comments.json")
+        let store = ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        let session = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        var now = Date(timeIntervalSince1970: 100)
+        let controller = ReviewDraftCommentController(
+            sessionID: session,
+            store: store,
+            now: { now }
+        )
+        var comment = makeComment(
+            id: "draft-1",
+            session: session,
+            startLine: 4,
+            endLine: nil,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        comment.providerError = ReviewDraftProviderError(
+            provider: .github,
+            message: "old error",
+            occurredAt: Date(timeIntervalSince1970: 20)
+        )
+        let resolved = makeComment(
+            id: "resolved",
+            session: session,
+            startLine: 8,
+            endLine: nil,
+            createdAt: Date(timeIntervalSince1970: 11),
+            state: .resolved
+        )
+        try store.save(comment)
+        try store.save(resolved)
+        try controller.load()
+        controller.errorMessage = "previous"
+        #expect(controller.activeUnpublishedComments.map(\.id) == ["draft-1"])
+
+        let publish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
+            publishedAt: Date(timeIntervalSince1970: 30)
+        )
+        now = Date(timeIntervalSince1970: 101)
+        try controller.markPublished(commentID: "draft-1", publish: publish)
+
+        let published = try #require(controller.comments.first { $0.id == "draft-1" })
+        #expect(published.providerPublish == publish)
+        #expect(published.providerError == nil)
+        #expect(published.updatedAt == Date(timeIntervalSince1970: 101))
+        #expect(controller.activeUnpublishedComments.isEmpty)
+        #expect(controller.errorMessage == nil)
+        #expect(try store.load(sessionID: session).first { $0.id == "draft-1" }?.providerPublish == publish)
+
+        let error = ReviewDraftProviderError(
+            provider: .github,
+            message: "line is outdated",
+            occurredAt: Date(timeIntervalSince1970: 40)
+        )
+        now = Date(timeIntervalSince1970: 102)
+        try controller.recordProviderError(commentID: "draft-1", error: error)
+
+        let failed = try #require(controller.comments.first { $0.id == "draft-1" })
+        #expect(failed.providerPublish == publish)
+        #expect(failed.providerError == error)
+        #expect(failed.updatedAt == Date(timeIntervalSince1970: 102))
+        #expect(controller.errorMessage == nil)
+        #expect(try store.load(sessionID: session).first { $0.id == "draft-1" }?.providerError == error)
+
+        try controller.markPublished(commentID: "missing", publish: publish)
+        try controller.recordProviderError(commentID: "missing", error: error)
+        #expect(controller.comments.count == 2)
+    }
+
+    @Test func publishedMetadataSurvivesStoreRoundTrip() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("review-draft-comments.json")
+        let store = ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        let session = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 527
+        )
+        var published = makeComment(
+            id: "published",
+            session: session,
+            startLine: 12,
+            endLine: nil,
+            createdAt: Date(timeIntervalSince1970: 10)
+        )
+        published.providerPublish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
+            publishedAt: Date(timeIntervalSince1970: 30)
+        )
+        published.providerError = ReviewDraftProviderError(
+            provider: .github,
+            message: "line is outdated",
+            occurredAt: Date(timeIntervalSince1970: 40)
+        )
+
+        try store.save(published)
+
+        let reloaded = try #require(store.load(sessionID: session).single)
+        #expect(reloaded == published)
+        #expect(reloaded.providerPublish == published.providerPublish)
+        #expect(reloaded.providerError == published.providerError)
+    }
+
     @Test func brokenStoreFileReturnsEmptySessions() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -150,7 +278,8 @@ struct ReviewDraftCommentStoreTests {
         session: ReviewDraftSessionID,
         startLine: Int,
         endLine: Int?,
-        createdAt: Date
+        createdAt: Date,
+        state: ReviewDraftCommentState = .active
     ) -> ReviewDraftComment {
         ReviewDraftComment(
             id: id,
@@ -163,7 +292,7 @@ struct ReviewDraftCommentStoreTests {
             endLine: endLine,
             selectedText: nil,
             bodyMarkdown: "Comment \(id)",
-            state: .active,
+            state: state,
             createdAt: createdAt,
             updatedAt: createdAt
         )

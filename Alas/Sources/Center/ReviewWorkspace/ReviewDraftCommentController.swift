@@ -11,6 +11,10 @@ final class ReviewDraftCommentController {
     private(set) var comments: [ReviewDraftComment] = []
     var errorMessage: String?
 
+    var activeUnpublishedComments: [ReviewDraftComment] {
+        comments.filter { $0.state == .active && $0.providerPublish == nil }
+    }
+
     init(
         sessionID: ReviewDraftSessionID,
         store: ReviewDraftCommentStore = .init(),
@@ -76,6 +80,21 @@ final class ReviewDraftCommentController {
     func dismiss(commentID: String) throws {
         guard var comment = comments.first(where: { $0.id == commentID }) else { return }
         comment.state = .dismissed
+        comment.updatedAt = now()
+        try saveAndReload(comment)
+    }
+
+    func markPublished(commentID: String, publish: ReviewDraftProviderPublish) throws {
+        guard var comment = comments.first(where: { $0.id == commentID }) else { return }
+        comment.providerPublish = publish
+        comment.providerError = nil
+        comment.updatedAt = now()
+        try saveAndReload(comment)
+    }
+
+    func recordProviderError(commentID: String, error: ReviewDraftProviderError) throws {
+        guard var comment = comments.first(where: { $0.id == commentID }) else { return }
+        comment.providerError = error
         comment.updatedAt = now()
         try saveAndReload(comment)
     }
