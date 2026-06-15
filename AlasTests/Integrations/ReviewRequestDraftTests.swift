@@ -215,6 +215,43 @@ struct ReviewRequestDraftTests {
         #expect(DraftReviewRequestDiffSessionBuilder.synchronizedSelection(selectedPath: "Sources/Missing.swift", session: session) == section.summary.id)
     }
 
+    @Test func draftReviewRequestSessionAttachesContextProvider() async throws {
+        let path = "Sources/App.swift"
+        let originalPath = "Sources/OldApp.swift"
+        let snapshot = DiffReviewFileContextSnapshot(
+            old: .available(["old"]),
+            new: .available(["new"])
+        )
+        let context = ReviewRequestDraftContext(
+            commitSubjects: [],
+            commits: [],
+            changedFiles: [
+                CommitChangedFile(path: path, originalPath: originalPath, status: "R", add: 1, del: 1),
+            ],
+            diff: Self.modifiedSwiftDiff(path: path),
+            fileDiffsByPath: [path: Self.modifiedSwiftDiff(path: path)],
+            hasUncommittedChanges: false
+        )
+        let provider = DiffReviewContextProvider {
+            snapshot
+        }
+        var providerRequests: [(path: String, originalPath: String?)] = []
+
+        let session = try await DraftReviewRequestDiffSessionBuilder.build(
+            context: context,
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-tests"),
+            openFileForPath: { _ -> (() -> Void)? in nil },
+            contextProviderForPath: { path, originalPath in
+                providerRequests.append((path: path, originalPath: originalPath))
+                return provider
+            }
+        )
+
+        #expect(try await session.files.first?.contextProvider?.snapshot() == snapshot)
+        #expect(providerRequests.map(\.path) == [path])
+        #expect(providerRequests.map(\.originalPath) == [originalPath])
+    }
+
     @Test @MainActor func draftReviewRequestDiffParsingRunsOffMainThread() async throws {
         let box = ThreadObservationBox()
 

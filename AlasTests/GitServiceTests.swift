@@ -220,6 +220,47 @@ struct GitServiceTests {
         ))
     }
 
+    @Test func commitAndRefContextSnapshotsUseOriginalPathForRename() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try writeText("old\n", "old.swift", in: repo)
+        try await gitOK(["add", "old.swift"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "seed old file"], cwd: repo)
+        try await gitOK(["checkout", "-q", "-b", "feature/rename"], cwd: repo)
+        try await gitOK(["mv", "old.swift", "new.swift"], cwd: repo)
+        try writeText("new\n", "new.swift", in: repo)
+        try await gitOK(["add", "new.swift"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "rename file"], cwd: repo)
+        let sha = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let service = GitService()
+        let commitSnapshot = try await service.commitContextSnapshot(
+            worktreePath: repo,
+            sha: sha,
+            file: "new.swift",
+            originalPath: "old.swift"
+        )
+        #expect(commitSnapshot == DiffReviewFileContextSnapshot(
+            old: .available(["old"]),
+            new: .available(["new"])
+        ))
+
+        let refSnapshot = try await service.refContextSnapshot(
+            worktreePath: repo,
+            baseRef: "main",
+            headRef: "HEAD",
+            file: "new.swift",
+            originalPath: "old.swift"
+        )
+        #expect(refSnapshot == DiffReviewFileContextSnapshot(
+            old: .available(["old"]),
+            new: .available(["new"])
+        ))
+    }
+
     @Test func contextSnapshotReturnsUnavailableForBinaryAndInvalidUTF8() async throws {
         let repo = try await makeContextSnapshotRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

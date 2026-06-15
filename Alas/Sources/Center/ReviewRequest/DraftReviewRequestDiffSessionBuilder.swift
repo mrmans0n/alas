@@ -6,7 +6,8 @@ enum DraftReviewRequestDiffSessionBuilder {
     static func build(
         context: ReviewRequestDraftContext,
         worktreePath: URL,
-        openFileForPath: @escaping (String) -> (() -> Void)?
+        openFileForPath: @escaping (String) -> (() -> Void)?,
+        contextProviderForPath: @escaping (String, String?) -> DiffReviewContextProvider? = { _, _ in nil }
     ) async throws -> DiffReviewLoadedSession {
         _ = worktreePath
         var sections: [DiffReviewFileSectionModel] = []
@@ -20,7 +21,8 @@ enum DraftReviewRequestDiffSessionBuilder {
             sections.append(try await fileSection(
                 for: file,
                 diff: parsed,
-                openFile: openFileForPath(file.path)
+                openFile: openFileForPath(file.path),
+                contextProvider: contextProviderForPath(file.path, file.originalPath)
             ))
         }
 
@@ -62,7 +64,8 @@ enum DraftReviewRequestDiffSessionBuilder {
     private static func fileSection(
         for file: CommitChangedFile,
         diff: ParsedDiff,
-        openFile: (() -> Void)?
+        openFile: (() -> Void)?,
+        contextProvider: DiffReviewContextProvider?
     ) async throws -> DiffReviewFileSectionModel {
         let isImage = ImageFileType.isSupported(relativePath: file.path)
         let canRender = !diff.hunks.isEmpty && !isImage
@@ -87,7 +90,7 @@ enum DraftReviewRequestDiffSessionBuilder {
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
             openFile: openFile,
-            contextProvider: nil
+            contextProvider: contextProvider
         )
     }
 

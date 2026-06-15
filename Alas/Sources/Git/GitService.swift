@@ -196,6 +196,41 @@ extension GitService {
         return DiffReviewFileContextSnapshot(old: old, new: new)
     }
 
+    func commitContextSnapshot(worktreePath: URL, sha: String, file: String, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
+        let oldPath = originalPath?.isEmpty == false ? originalPath! : file
+        let parentSha = try await firstParentOrEmptyTree(worktreePath: worktreePath, sha: sha)
+        let old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: parentSha, path: oldPath)
+        let new = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: sha, path: file)
+        return DiffReviewFileContextSnapshot(old: old, new: new)
+    }
+
+    func refContextSnapshot(worktreePath: URL, baseRef: String, headRef: String, file: String, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
+        let oldPath = originalPath?.isEmpty == false ? originalPath! : file
+        let old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: baseRef, path: oldPath)
+        let new = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: headRef, path: file)
+        return DiffReviewFileContextSnapshot(old: old, new: new)
+    }
+
+    private func firstParentOrEmptyTree(worktreePath: URL, sha: String) async throws -> String {
+        let parentsResult = try await Process.git(
+            ["rev-list", "--parents", "-n", "1", sha],
+            cwd: worktreePath
+        )
+        guard parentsResult.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.commitContextSnapshot(sha:file:)",
+                code: Int(parentsResult.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: parentsResult.stderr]
+            )
+        }
+        let parts = parentsResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: " ", omittingEmptySubsequences: true)
+        if parts.count > 1 {
+            return String(parts[1])
+        }
+        return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    }
+
     private func blobLinesOrUnavailable(worktreePath: URL, ref: String, path: String) async throws -> DiffReviewFileContextLines {
         let blobSpec = ref == ":" ? ":\(path)" : "\(ref):\(path)"
         let result = try await Process.gitData(["show", blobSpec], cwd: worktreePath)
