@@ -207,6 +207,9 @@ extension GitService {
 
     private func worktreeLinesOrUnavailable(worktreePath: URL, path: String) async throws -> DiffReviewFileContextLines {
         let url = worktreePath.appendingPathComponent(path)
+        if let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) {
+            return .available([destination])
+        }
         do {
             let data = try Data(contentsOf: url)
             return Self.contextLinesOrUnavailable(from: data)

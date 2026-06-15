@@ -98,6 +98,7 @@ struct ReviewChangesLoaderTests {
     }
 
     @Test func attachesContextProviderForUnstagedAndStagedFiles() async throws {
+        let calls = ContextSnapshotCallRecorder()
         let git = FakeReviewChangesGitClient(
             status: [
                 ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 1, renameFrom: nil),
@@ -120,11 +121,13 @@ struct ReviewChangesLoaderTests {
                     old: .available(["old b"]),
                     new: .available(["new b"])
                 ),
-            ]
+            ],
+            contextSnapshotCalls: calls
         )
         let loader = ReviewChangesLoader(git: git)
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
 
-        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+        let session = try await loader.load(worktreePath: worktreePath)
 
         #expect(try await session.files[0].contextProvider?.snapshot() == DiffReviewFileContextSnapshot(
             old: .available(["old a"]),
@@ -134,6 +137,10 @@ struct ReviewChangesLoaderTests {
             old: .available(["old b"]),
             new: .available(["new b"])
         ))
+        #expect(await calls.all() == [
+            ContextSnapshotCall(worktreePath: worktreePath, file: "a.swift", staged: false, originalPath: nil),
+            ContextSnapshotCall(worktreePath: worktreePath, file: "b.swift", staged: true, originalPath: nil),
+        ])
     }
 
     @Test func propagatesRenameMetadataToSummary() async throws {
@@ -153,6 +160,37 @@ struct ReviewChangesLoaderTests {
 
         let file = try #require(session.files.first)
         #expect(file.summary.originalPath == "old.swift")
+    }
+
+    @Test func contextProviderPropagatesOriginalPath() async throws {
+        let calls = ContextSnapshotCallRecorder()
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "new.swift", status: "R", stage: .staged, add: 1, del: 1, renameFrom: "old.swift"),
+            ],
+            diffs: [
+                .init(path: "new.swift", staged: true, originalPath: "old.swift"): diff(lines: [
+                    .init(kind: .delete, text: "let oldName = true", oldNumber: 1, newNumber: nil),
+                    .init(kind: .add, text: "let newName = true", oldNumber: nil, newNumber: 1),
+                ]),
+            ],
+            snapshots: [
+                .init(path: "new.swift", staged: true, originalPath: "old.swift"): DiffReviewFileContextSnapshot(
+                    old: .available(["old"]),
+                    new: .available(["new"])
+                ),
+            ],
+            contextSnapshotCalls: calls
+        )
+        let loader = ReviewChangesLoader(git: git)
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+
+        let session = try await loader.load(worktreePath: worktreePath)
+        _ = try await session.files[0].contextProvider?.snapshot()
+
+        #expect(await calls.all() == [
+            ContextSnapshotCall(worktreePath: worktreePath, file: "new.swift", staged: true, originalPath: "old.swift"),
+        ])
     }
 
     @Test func includesOriginalPathWhenLoadingStagedRenameDiff() async throws {
@@ -194,6 +232,7 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
     var status: [ChangedFile]
     var diffs: [DiffKey: ParsedDiff]
     var snapshots: [DiffKey: DiffReviewFileContextSnapshot] = [:]
+    var contextSnapshotCalls = ContextSnapshotCallRecorder()
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
         status
@@ -204,11 +243,36 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
     }
 
     func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> DiffReviewFileContextSnapshot {
-        snapshots[DiffKey(path: file, staged: staged, originalPath: originalPath), default: DiffReviewFileContextSnapshot(
+        await contextSnapshotCalls.record(ContextSnapshotCall(
+            worktreePath: worktreePath,
+            file: file,
+            staged: staged,
+            originalPath: originalPath
+        ))
+        return snapshots[DiffKey(path: file, staged: staged, originalPath: originalPath), default: DiffReviewFileContextSnapshot(
             old: .unavailable,
             new: .unavailable
         )]
     }
+}
+
+private actor ContextSnapshotCallRecorder {
+    private var calls: [ContextSnapshotCall] = []
+
+    func record(_ call: ContextSnapshotCall) {
+        calls.append(call)
+    }
+
+    func all() -> [ContextSnapshotCall] {
+        calls
+    }
+}
+
+private struct ContextSnapshotCall: Equatable, Sendable {
+    let worktreePath: URL
+    let file: String
+    let staged: Bool
+    let originalPath: String?
 }
 
 private struct DiffKey: Hashable {
