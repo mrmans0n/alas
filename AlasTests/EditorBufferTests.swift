@@ -534,6 +534,47 @@ struct EditorBufferTests {
         #expect(!buffer.storage.layoutManagers.contains { $0 === layoutManager })
     }
 
+    @Test func coordinatorCallsDirectAttachAndDetachCallbacks() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: AppState())
+        let theme = try ThemeStore().current
+        var attachedTextView: CodeTextView?
+        var attachedTabId: TabID?
+        var detachedTabId: TabID?
+
+        coordinator.onTextViewAttached = { textView, tabId in
+            attachedTextView = textView
+            attachedTabId = tabId
+        }
+        coordinator.onTextViewDetached = { _, tabId in
+            detachedTabId = tabId
+        }
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: "t",
+            revealLine: nil,
+            revealCharacter: nil,
+            theme: theme
+        )
+        #expect(attachedTextView === textView)
+        #expect(attachedTabId == "t")
+
+        coordinator.detach()
+
+        #expect(detachedTabId == "t")
+    }
+
     @Test func coordinatorAppliesMonospacedFontToLoadedContent() throws {
         // Regression: after rebinding, applyBaseStyle was reading
         // `textView.font` whose getter falls back to the system default font

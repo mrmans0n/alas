@@ -11,6 +11,9 @@ import Observation
 @MainActor
 final class CodeEditorCoordinator {
     let appState: AppState
+    var onTextViewAttached: ((CodeTextView, TabID) -> Void)?
+    var onTextViewDetached: ((CodeTextView?, TabID?) -> Void)?
+
     private weak var textView: CodeTextView?
     private weak var buffer: EditorBuffer?
     private var layoutManager: NSLayoutManager?
@@ -270,6 +273,7 @@ final class CodeEditorCoordinator {
             object: self,
             userInfo: ["textView": textView, "tabId": tabId]
         )
+        onTextViewAttached?(textView, tabId)
     }
 
     func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
@@ -472,6 +476,7 @@ final class CodeEditorCoordinator {
     }
 
     func detach() {
+        let detachedTextView = textView
         // LSP open/close for external buffers is managed by TabsManager
         // (tied to the buffer's cached lifetime), not by the coordinator
         // (which is torn down on every tab switch by SwiftUI's dismantleNSView).
@@ -528,6 +533,7 @@ final class CodeEditorCoordinator {
             object: self,
             userInfo: ["tabId": tabId as Any]
         )
+        onTextViewDetached?(detachedTextView, tabId)
     }
 
     // MARK: - Hover observers

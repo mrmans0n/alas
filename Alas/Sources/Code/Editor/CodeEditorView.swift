@@ -28,6 +28,8 @@ struct CodeEditorView: NSViewRepresentable {
     let fontFamily: String
     let fontSize: Int
     let showLineNumbers: Bool
+    var onTextViewAttached: (CodeTextView) -> Void = { _ in }
+    var onTextViewDetached: (CodeTextView?) -> Void = { _ in }
     @Environment(\.theme) var theme
 
     func makeCoordinator() -> CodeEditorCoordinator {
@@ -97,6 +99,7 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.documentView = textView
         configureLineNumberRuler(for: scroll, textView: textView)
 
+        configureLifecycleCallbacks(on: context.coordinator)
         context.coordinator.attach(
             textView: textView,
             buffer: buffer,
@@ -114,6 +117,7 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        configureLifecycleCallbacks(on: context.coordinator)
         context.coordinator.updateIfNeeded(
             worktreeId: worktreeId,
             worktreeRoot: worktreeRoot,
@@ -135,6 +139,22 @@ struct CodeEditorView: NSViewRepresentable {
         // Detach the coordinator from the text view, but DO NOT close the
         // buffer's LSP document or watcher — the buffer outlives this view.
         coordinator.detach()
+    }
+
+    private func configureLifecycleCallbacks(on coordinator: CodeEditorCoordinator) {
+        let expectedTabId = tabId
+        coordinator.onTextViewAttached = { textView, attachedTabId in
+            guard attachedTabId == expectedTabId else { return }
+            DispatchQueue.main.async {
+                onTextViewAttached(textView)
+            }
+        }
+        coordinator.onTextViewDetached = { textView, detachedTabId in
+            guard detachedTabId == nil || detachedTabId == expectedTabId else { return }
+            DispatchQueue.main.async {
+                onTextViewDetached(textView)
+            }
+        }
     }
 
     private func configureLineNumberRuler(for scrollView: NSScrollView, textView: CodeTextView) {
