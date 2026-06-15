@@ -25,10 +25,16 @@ struct DiffReviewFileSection: View {
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
     @State private var expandedCollapsedRowIDs: Set<String> = []
+    @State private var contextSnapshot: DiffReviewFileContextSnapshot?
+    @State private var contextExpansion = DiffContextExpansionState()
+    @State private var contextLoadTask: Task<Void, Never>?
+    @State private var contextLoadFileID: DiffReviewFileID?
+    @State private var contextLoadError: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            contextLoadErrorRow
             fileLevelDraftCommentStack
             fileLevelInlineFeedbackStack
             content
@@ -47,6 +53,14 @@ struct DiffReviewFileSection: View {
         )
         .onChange(of: draftCommentDisplaySignature) { _, _ in
             clearPendingDraft()
+        }
+        .onChange(of: file.id) { _, _ in
+            resetContextState()
+        }
+        .onDisappear {
+            contextLoadTask?.cancel()
+            contextLoadTask = nil
+            contextLoadFileID = nil
         }
     }
 
@@ -114,6 +128,26 @@ struct DiffReviewFileSection: View {
             providerDescription: nil,
             sourceDescription: "Local draft comment"
         )
+    }
+
+    @ViewBuilder
+    private var contextLoadErrorRow: some View {
+        if let contextLoadError {
+            Text("Could not load surrounding context: \(contextLoadError)")
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("warn"))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(theme.color("bg-2"))
+                .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "diff-review-context-error-\(file.id.rawValue)",
+                        label: "Could not load surrounding context: \(contextLoadError)"
+                    )
+                )
+        }
     }
 
     @ViewBuilder
@@ -189,26 +223,38 @@ struct DiffReviewFileSection: View {
     }
 
     private var inlineFeedbackPlacement: DiffReviewInlineFeedbackPlacement.Result {
-        guard let displayModel = file.displayModel else {
+        guard let groups = derivedDisplayGroups else {
             return DiffReviewInlineFeedbackPlacement.Result(fileLevel: inlineFeedback, byGroupID: [:])
         }
-        return DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: displayModel.groups)
+        return DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: groups)
     }
 
     private var draftCommentPlacement: ReviewDraftCommentPlacement.Result {
-        guard let displayModel = file.displayModel else {
+        guard let groups = derivedDisplayGroups else {
             return ReviewDraftCommentPlacement.position(draftComments, in: [])
         }
-        return ReviewDraftCommentPlacement.position(draftComments, in: displayModel.groups)
+        return ReviewDraftCommentPlacement.position(draftComments, in: groups)
+    }
+
+    private var derivedDisplayGroups: [DiffDisplayGroup]? {
+        guard let displayModel = file.displayModel else { return nil }
+        return DiffContextExpandedDisplayBuilder.derive(
+            groups: displayModel.groups,
+            snapshot: contextSnapshot,
+            providerAvailable: file.contextProvider != nil,
+            expansion: contextExpansion,
+            filePath: displayModel.filePath,
+            chunkSize: 10
+        )
     }
 
     @ViewBuilder
     private var content: some View {
-        if let displayModel = file.displayModel {
+        if let displayModel = file.displayModel, let groups = derivedDisplayGroups {
             let inlinePlacement = inlineFeedbackPlacement
             let draftPlacement = draftCommentPlacement
             VStack(spacing: 0) {
-                ForEach(displayModel.groups) { group in
+                ForEach(groups) { group in
                     if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
                         inlineFeedbackStack(groupFeedback, file: file.summary)
                     }
@@ -268,7 +314,8 @@ struct DiffReviewFileSection: View {
                             onReviewLineSelected: { anchor in
                                 pendingDraftAnchor = anchor
                                 pendingDraftBody = ""
-                            }
+                            },
+                            onContextExpansion: loadContextAndExpand
                         )
                         .fixedSize(horizontal: false, vertical: true)
                     }
@@ -303,6 +350,7 @@ struct DiffReviewFileSection: View {
                     pendingDraftAnchor = anchor
                     pendingDraftBody = ""
                 },
+                onContextExpansion: loadContextAndExpand,
                 hunkActions: { _ in DiffPaneHunkActions() }
             )
         }
@@ -414,8 +462,8 @@ struct DiffReviewFileSection: View {
     }
 
     private var currentDraftRowKeys: Set<ReviewDraftCommentPlacement.RowKey> {
-        guard let displayModel = file.displayModel else { return [] }
-        return Set(displayModel.groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
+        guard let groups = derivedDisplayGroups else { return [] }
+        return Set(groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
     }
 
     private var draftCommentDisplaySignature: String {
@@ -431,6 +479,56 @@ struct DiffReviewFileSection: View {
             return "\(group.id)[\(rowSignature)]"
         }.joined(separator: "|") ?? "placeholder"
         return "\(file.id.rawValue)|\(groupSignature)"
+    }
+
+    private func loadContextAndExpand(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {
+        guard let provider = file.contextProvider else { return }
+        if contextSnapshot != nil {
+            applyContextExpansion(key, mode: mode)
+            return
+        }
+        guard contextLoadTask == nil else { return }
+        let fileID = file.id
+        contextLoadError = nil
+        contextLoadFileID = fileID
+        contextLoadTask = Task {
+            do {
+                let snapshot = try await provider.snapshot()
+                await MainActor.run {
+                    guard contextLoadFileID == fileID else { return }
+                    contextSnapshot = snapshot
+                    contextLoadTask = nil
+                    contextLoadFileID = nil
+                    applyContextExpansion(key, mode: mode)
+                }
+            } catch {
+                await MainActor.run {
+                    guard contextLoadFileID == fileID else { return }
+                    contextLoadError = error.localizedDescription
+                    contextLoadTask = nil
+                    contextLoadFileID = nil
+                }
+            }
+        }
+    }
+
+    private func applyContextExpansion(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {
+        guard let displayModel = file.displayModel else { return }
+        let available = DiffContextExpandedDisplayBuilder.availableLineCount(
+            key: key,
+            groups: displayModel.groups,
+            snapshot: contextSnapshot
+        )
+        contextExpansion.expand(key, available: available, mode: mode)
+    }
+
+    private func resetContextState() {
+        contextLoadTask?.cancel()
+        contextSnapshot = nil
+        contextExpansion = DiffContextExpansionState()
+        contextLoadTask = nil
+        contextLoadFileID = nil
+        contextLoadError = nil
     }
 
     @ViewBuilder

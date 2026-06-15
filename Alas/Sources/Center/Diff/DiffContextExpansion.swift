@@ -63,7 +63,7 @@ enum DiffContextExpandedDisplayBuilder {
 
     static func derive(
         groups: [DiffDisplayGroup],
-        snapshot: DiffReviewFileContextSnapshot,
+        snapshot: DiffReviewFileContextSnapshot?,
         providerAvailable: Bool,
         expansion: DiffContextExpansionState,
         filePath: String,
@@ -109,16 +109,49 @@ enum DiffContextExpandedDisplayBuilder {
         }
     }
 
+    static func availableLineCount(
+        key: DiffContextExpansionKey,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?
+    ) -> Int {
+        guard
+            let snapshot,
+            let groupIndex = groups.firstIndex(where: { $0.id == key.groupID })
+        else {
+            return 0
+        }
+        return boundaryRange(
+            for: groups[groupIndex],
+            groupIndex: groupIndex,
+            boundary: key.boundary,
+            groups: groups,
+            snapshot: snapshot
+        ).lineCount
+    }
+
     private static func expansionRows(
         for group: DiffDisplayGroup,
         groupIndex: Int,
         boundary: DiffContextBoundary,
         groups: [DiffDisplayGroup],
-        snapshot: DiffReviewFileContextSnapshot,
+        snapshot: DiffReviewFileContextSnapshot?,
         expansion: DiffContextExpansionState,
         filePath: String,
         chunkSize: Int
     ) -> [DiffDisplayRow] {
+        guard let snapshot else {
+            guard optimisticBoundaryAvailable(
+                for: group,
+                groupIndex: groupIndex,
+                boundary: boundary,
+                groups: groups
+            ) else {
+                return []
+            }
+            let key = DiffContextExpansionKey(groupID: group.id, boundary: boundary)
+            return [expandableRow(group: group, boundary: boundary, remaining: 0, key: key)]
+        }
+
         let range = boundaryRange(
             for: group,
             groupIndex: groupIndex,
@@ -168,6 +201,42 @@ enum DiffContextExpandedDisplayBuilder {
             rows.insert(expandable, at: rows.endIndex)
         }
         return rows
+    }
+
+    private static func optimisticBoundaryAvailable(
+        for group: DiffDisplayGroup,
+        groupIndex: Int,
+        boundary: DiffContextBoundary,
+        groups: [DiffDisplayGroup]
+    ) -> Bool {
+        let currentOld = hunkSideExtent(in: group, side: .old)
+        let currentNew = hunkSideExtent(in: group, side: .new)
+
+        switch boundary {
+        case .above:
+            let previous = groupIndex > 0 ? groups[groupIndex - 1] : nil
+            guard let previous else {
+                return currentOld.lineBefore > 0 || currentNew.lineBefore > 0
+            }
+            let previousOld = hunkSideExtent(in: previous, side: .old)
+            let previousNew = hunkSideExtent(in: previous, side: .new)
+            return optimisticLineCount(start: previousOld.lineAfter, end: currentOld.lineBefore) > 0
+                || optimisticLineCount(start: previousNew.lineAfter, end: currentNew.lineBefore) > 0
+        case .below:
+            guard groupIndex + 1 < groups.count else {
+                return true
+            }
+            let next = groups[groupIndex + 1]
+            let nextOld = hunkSideExtent(in: next, side: .old)
+            let nextNew = hunkSideExtent(in: next, side: .new)
+            return optimisticLineCount(start: currentOld.lineAfter, end: nextOld.lineBefore) > 0
+                || optimisticLineCount(start: currentNew.lineAfter, end: nextNew.lineBefore) > 0
+        }
+    }
+
+    private static func optimisticLineCount(start: Int, end: Int) -> Int {
+        guard start <= end else { return 0 }
+        return end - start + 1
     }
 
     private static func boundaryRange(

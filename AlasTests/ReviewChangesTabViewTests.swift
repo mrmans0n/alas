@@ -508,6 +508,48 @@ struct ReviewChangesTabViewTests {
         #expect(accessibilityLabel(in: controller.view, containing: "UNSTAGED") != nil)
     }
 
+    @Test func diffReviewFileSectionShowsLazyExpandableContextControlsForProvider() throws {
+        let controller = renderFileSection(file: providerBackedFile())
+
+        let text = renderedText(in: controller.view)
+
+        #expect(text.contains("Expand context above"))
+        #expect(text.contains("Expand context below"))
+    }
+
+    @Test func diffReviewFileSectionLoadsProviderAndRevealsExpandedContextRows() async throws {
+        let probe = ContextProviderProbe(snapshot: DiffReviewFileContextSnapshot(
+            old: .available((1...8).map { "old \($0)" }),
+            new: .available((1...8).map { "new \($0)" })
+        ))
+        let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
+            try await probe.snapshot()
+        }))
+        let ruler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+
+        let text = try await waitForRenderedText(in: controller.view, containing: "old 1")
+        #expect(text.contains("old 2"))
+        #expect(text.contains("old 3"))
+        #expect(await probe.loadCount == 1)
+    }
+
+    @Test func diffReviewFileSectionShowsContextProviderFailure() async throws {
+        let controller = renderFileSection(file: providerBackedFile(provider: DiffReviewContextProvider {
+            throw ContextProviderTestError.failed
+        }))
+        let ruler = try #require(allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }.first)
+
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+
+        let label = try await waitForAccessibilityLabel(
+            in: controller.view,
+            containing: "Could not load surrounding context: provider failed"
+        )
+        #expect(label?.contains("Could not load surrounding context: provider failed") == true)
+    }
+
     private func parsedDiff() -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
@@ -525,6 +567,93 @@ struct ReviewChangesTabViewTests {
 
     private func displayModel() -> DiffDisplayModel {
         DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App/AlphaView.swift")
+    }
+
+    private func providerBackedFile(
+        provider: DiffReviewContextProvider = DiffReviewContextProvider {
+            DiffReviewFileContextSnapshot(
+                old: .available((1...8).map { "old \($0)" }),
+                new: .available((1...8).map { "new \($0)" })
+            )
+        }
+    ) -> ReviewChangesFileSectionModel {
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -4,1 +4,1 @@",
+            oldStart: 4,
+            newStart: 4,
+            lines: [
+                .init(kind: .context, text: "line 4", oldNumber: 4, newNumber: 4),
+            ]
+        )
+        let diff = ParsedDiff(hunks: [hunk])
+        return ReviewChangesFileSectionModel(
+            summary: reviewSummary(
+                path: "Sources/App/AlphaView.swift",
+                source: .unstaged,
+                status: .modified,
+                additions: 0,
+                deletions: 0,
+                isRenderable: true
+            ),
+            parsedDiff: diff,
+            displayModel: DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App/AlphaView.swift"),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: provider
+        )
+    }
+
+    private func renderFileSection(file: ReviewChangesFileSectionModel) -> NSHostingController<some View> {
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 760, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+        return controller
+    }
+
+    private func renderedText(in view: NSView) -> String {
+        allSubviews(of: view)
+            .compactMap { ($0 as? NSTextView)?.string }
+            .joined(separator: "\n")
+    }
+
+    private func waitForRenderedText(in view: NSView, containing needle: String) async throws -> String {
+        var latest = renderedText(in: view)
+        for _ in 0..<20 {
+            if latest.contains(needle) {
+                return latest
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+            view.layoutSubtreeIfNeeded()
+            latest = renderedText(in: view)
+        }
+        return latest
+    }
+
+    private func waitForAccessibilityLabel(in view: NSView, containing needle: String) async throws -> String? {
+        var latest = accessibilityLabel(in: view, containing: needle)
+        for _ in 0..<20 {
+            if latest != nil {
+                return latest
+            }
+            try await Task.sleep(nanoseconds: 25_000_000)
+            view.layoutSubtreeIfNeeded()
+            latest = accessibilityLabel(in: view, containing: needle)
+        }
+        return latest
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {
@@ -591,5 +720,27 @@ struct ReviewChangesTabViewTests {
 
     private enum LauncherTestError: Error, Equatable {
         case saveFailed
+    }
+
+    private actor ContextProviderProbe {
+        private let snapshotValue: DiffReviewFileContextSnapshot
+        private(set) var loadCount = 0
+
+        init(snapshot: DiffReviewFileContextSnapshot) {
+            self.snapshotValue = snapshot
+        }
+
+        func snapshot() async throws -> DiffReviewFileContextSnapshot {
+            loadCount += 1
+            return snapshotValue
+        }
+    }
+
+    private enum ContextProviderTestError: LocalizedError {
+        case failed
+
+        var errorDescription: String? {
+            "provider failed"
+        }
     }
 }
