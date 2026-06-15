@@ -358,6 +358,15 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
 
     func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+        let publishableComments = request.comments.filter { $0.side != .unknown }
+        let preflightFailures = request.comments
+            .filter { $0.side == .unknown }
+            .map {
+                ProviderReviewFailedComment(
+                    localDraftID: $0.localDraftID,
+                    message: "GitHub review comments require an old or new side."
+                )
+            }
         let pullRequestID = try await pullRequestNodeID(
             remote: request.remote,
             request: request.reviewRequest,
@@ -367,7 +376,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             pullRequestId: pullRequestID,
             event: Self.githubReviewEvent(for: request.decision),
             body: request.summaryBody,
-            threads: request.comments.map(Self.githubReviewThreadPayload(for:))
+            threads: publishableComments.map(Self.githubReviewThreadPayload(for:))
         )
         let stdin = try Self.graphQLInput(
             query: Self.publishReviewMutation,
@@ -383,7 +392,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }
 
-        let published = try Self.parsePublishReviewResult(result.stdout, drafts: request.comments)
+        let published = try Self.parsePublishReviewResult(result.stdout, drafts: publishableComments)
         let refreshedRequest = try await refreshedReviewRequest(
             remote: request.remote,
             request: request.reviewRequest,
@@ -391,7 +400,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         )
         return ProviderReviewPublishResult(
             published: published.published,
-            failed: published.failed,
+            failed: preflightFailures + published.failed,
             refreshedRequest: refreshedRequest,
             warnings: []
         )

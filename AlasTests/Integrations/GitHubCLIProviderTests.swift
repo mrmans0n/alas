@@ -336,6 +336,14 @@ struct GitHubCLIProviderTests {
                     endLine: 14,
                     body: "Please simplify this."
                 ),
+                Self.makeProviderDraftComment(
+                    id: "draft-unknown",
+                    path: "Sources/App.swift",
+                    side: .unknown,
+                    startLine: 20,
+                    endLine: nil,
+                    body: "This should not be posted to the wrong side."
+                ),
             ],
             decision: .requestChanges,
             summaryBody: "Please update this before merge.",
@@ -351,6 +359,7 @@ struct GitHubCLIProviderTests {
         let publishInput = try #require(publishVariables["input"] as? [String: Any])
         let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
         #expect(publishInput["comments"] == nil)
+        #expect(publishThreads.count == 1)
         #expect(publishInput["pullRequestId"] as? String == "PR_node_42")
         #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
         #expect(publishThreads.first?["path"] as? String == "Sources/App.swift")
@@ -370,7 +379,12 @@ struct GitHubCLIProviderTests {
                 providerURL: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1")
             ),
         ])
-        #expect(result.failed.isEmpty)
+        #expect(result.failed == [
+            ProviderReviewFailedComment(
+                localDraftID: "draft-unknown",
+                message: "GitHub review comments require an old or new side."
+            ),
+        ])
         #expect(result.refreshedRequest.number == 42)
         #expect(result.refreshedRequest.threads.count == 2)
     }
