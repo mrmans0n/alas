@@ -60,6 +60,37 @@ struct DiffPaneViewTests {
         )
     }
 
+    private func expandableContextGroup(
+        boundary: DiffContextBoundary,
+        collapsedLineCount: Int
+    ) -> DiffDisplayGroup {
+        let groupID = "hunk-0"
+        return DiffDisplayGroup(
+            id: groupID,
+            header: "@@ -2,1 +2,1 @@",
+            sourceHunk: ParsedDiff.Hunk(
+                header: "@@ -2,1 +2,1 @@",
+                oldStart: 2,
+                newStart: 2,
+                lines: []
+            ),
+            rows: [
+                DiffDisplayRow(
+                    id: "expand-\(boundary.rawValue)",
+                    kind: .expandableContext,
+                    old: nil,
+                    new: nil,
+                    collapsedLineCount: collapsedLineCount,
+                    contextExpansion: DiffContextExpansionRow(
+                        key: DiffContextExpansionKey(groupID: groupID, boundary: boundary),
+                        boundary: boundary,
+                        remainingLineCount: collapsedLineCount
+                    )
+                ),
+            ]
+        )
+    }
+
     @Test func splitModeHostsRendererWithoutCrashing() {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -859,6 +890,62 @@ struct DiffPaneViewTests {
         #expect(!result.newCode.attributedString.string.contains("|"))
         #expect(result.oldCode.lines.contains { $0.kind == .replacement })
         #expect(result.newCode.lines.contains { $0.kind == .replacement })
+    }
+
+    @Test func splitDocumentRendersExpandableContextBoundaryRows() throws {
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            group: expandableContextGroup(boundary: .above, collapsedLineCount: 9),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+
+        #expect(result.oldGutter.string.components(separatedBy: "\n") == ["+"])
+        #expect(result.newGutter.string.components(separatedBy: "\n") == [""])
+        #expect(result.oldCode.attributedString.string.components(separatedBy: "\n") == ["9 unchanged lines above"])
+        #expect(result.newCode.attributedString.string.components(separatedBy: "\n") == [" "])
+        #expect(result.oldCode.lines.count == result.oldGutter.string.components(separatedBy: "\n").count)
+        #expect(result.newCode.lines.count == result.newGutter.string.components(separatedBy: "\n").count)
+        #expect(result.oldCode.lines.first?.expansionKey == key)
+        #expect(result.oldCode.lines.first?.expansionBoundary == .above)
+        #expect(result.newCode.lines.first?.expansionKey == key)
+        #expect(result.newCode.lines.first?.expansionBoundary == .above)
+    }
+
+    @Test func stackedDocumentRendersExpandableContextBoundaryRows() throws {
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: expandableContextGroup(boundary: .below, collapsedLineCount: 7),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.gutter.string.components(separatedBy: "\n") == ["+"])
+        #expect(result.code.attributedString.string.components(separatedBy: "\n") == ["7 unchanged lines below"])
+        #expect(result.code.lines.count == result.gutter.string.components(separatedBy: "\n").count)
+        #expect(result.code.lines.first?.expansionKey == DiffContextExpansionKey(groupID: "hunk-0", boundary: .below))
+        #expect(result.code.lines.first?.expansionBoundary == .below)
+    }
+
+    @Test func singleDocumentPreservesExpandableContextMetadata() throws {
+        let result = DiffPaneTextDocumentBuilder.build(
+            group: expandableContextGroup(boundary: .above, collapsedLineCount: 0),
+            expandedCollapsedRowIDs: [],
+            layoutMode: .split,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.attributedString.string.contains("Expand context above"))
+        #expect(result.lines.first?.expansionKey == DiffContextExpansionKey(groupID: "hunk-0", boundary: .above))
+        #expect(result.lines.first?.expansionBoundary == .above)
     }
 
     @Test func stackedDocumentBuildsCodeOnlyTextAndSeparateGutter() throws {
