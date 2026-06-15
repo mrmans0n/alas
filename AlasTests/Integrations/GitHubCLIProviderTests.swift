@@ -390,6 +390,98 @@ struct GitHubCLIProviderTests {
         #expect(result.refreshedRequest.threads.count == 2)
     }
 
+    @Test func githubPublishReviewRetriesIndividuallyAfterBatchRejection() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-good",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: nil,
+                    body: "Please simplify this."
+                ),
+                Self.makeProviderDraftComment(
+                    id: "draft-bad",
+                    path: "Sources/Other.swift",
+                    side: .new,
+                    startLine: 99,
+                    endLine: nil,
+                    body: "This anchor is stale."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 6)
+        let batchVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let batchInput = try #require(batchVariables["input"] as? [String: Any])
+        let batchThreads = try #require(batchInput["threads"] as? [[String: Any]])
+        #expect(batchInput["event"] as? String == "REQUEST_CHANGES")
+        #expect(batchThreads.count == 2)
+
+        let retryVariables = try Self.graphQLVariables(from: commands[2].stdin)
+        let retryInput = try #require(retryVariables["input"] as? [String: Any])
+        let retryThreads = try #require(retryInput["threads"] as? [[String: Any]])
+        #expect(retryInput["event"] as? String == "COMMENT")
+        #expect(retryThreads.count == 1)
+        #expect(result.published.map(\.localDraftID) == ["draft-good"])
+        #expect(result.failed.map(\.localDraftID) == ["draft-bad"])
+        #expect(result.failed.first?.message.contains("line is not commentable") == true)
+        #expect(result.warnings.contains {
+            $0.contains("retried publishable comments individually")
+        })
+    }
+
+    @Test func githubPublishReviewPreservesMappingsWhenRefreshFails() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "temporary API failure"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-1",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: nil,
+                    body: "Please simplify this."
+                ),
+            ],
+            decision: .comment,
+            summaryBody: "Review notes.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.map(\.localDraftID) == ["draft-1"])
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest == Self.makeRequest())
+        #expect(result.warnings.contains {
+            $0.contains("could not refresh the PR")
+        })
+    }
+
     @Test func githubThreadMutationsUseGraphQLAndRefreshPR() async throws {
         let thread = ReviewThreadSummary(
             id: "thread-1",

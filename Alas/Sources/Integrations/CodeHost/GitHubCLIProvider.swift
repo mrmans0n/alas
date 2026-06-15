@@ -372,11 +372,94 @@ struct GitHubCLIProvider: CodeHostProvider {
             request: request.reviewRequest,
             cwd: request.cwd
         )
+
+        let published = await publishReviewWithFallback(
+            pullRequestID: pullRequestID,
+            request: request,
+            publishableComments: publishableComments
+        )
+        var warnings = published.warnings
+        let refreshedRequest: ReviewRequest
+        do {
+            refreshedRequest = try await refreshedReviewRequest(
+                remote: request.remote,
+                request: request.reviewRequest,
+                cwd: request.cwd
+            )
+        } catch {
+            refreshedRequest = request.reviewRequest
+            warnings.append("GitHub review was published, but Alas could not refresh the PR: \(error.localizedDescription)")
+        }
+        return ProviderReviewPublishResult(
+            published: published.published,
+            failed: preflightFailures + published.failed,
+            refreshedRequest: refreshedRequest,
+            warnings: warnings
+        )
+    }
+
+    private func publishReviewWithFallback(
+        pullRequestID: String,
+        request: ProviderReviewPublishRequest,
+        publishableComments: [ProviderReviewDraftComment]
+    ) async -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment], warnings: [String]) {
+        do {
+            let published = try await submitReview(
+                pullRequestID: pullRequestID,
+                comments: publishableComments,
+                decision: request.decision,
+                summaryBody: request.summaryBody,
+                cwd: request.cwd
+            )
+            return (published.published, published.failed, [])
+        } catch {
+            guard publishableComments.count > 1 else {
+                return (
+                    [],
+                    publishableComments.map {
+                        ProviderReviewFailedComment(localDraftID: $0.localDraftID, message: error.localizedDescription)
+                    },
+                    []
+                )
+            }
+
+            var published: [ProviderReviewPublishedComment] = []
+            var failed: [ProviderReviewFailedComment] = []
+            for comment in publishableComments {
+                do {
+                    let result = try await submitReview(
+                        pullRequestID: pullRequestID,
+                        comments: [comment],
+                        decision: .comment,
+                        summaryBody: request.summaryBody,
+                        cwd: request.cwd
+                    )
+                    published.append(contentsOf: result.published)
+                    failed.append(contentsOf: result.failed)
+                } catch {
+                    failed.append(ProviderReviewFailedComment(localDraftID: comment.localDraftID, message: error.localizedDescription))
+                }
+            }
+            return (
+                published,
+                failed,
+                ["GitHub rejected the batch review; Alas retried publishable comments individually without submitting the review decision."]
+            )
+        }
+    }
+
+    private func submitReview(
+        pullRequestID: String,
+        comments: [ProviderReviewDraftComment],
+        decision: ProviderReviewDecision,
+        summaryBody: String,
+        cwd: URL
+    ) async throws -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment]) {
         let input = PublishReviewInput(
             pullRequestId: pullRequestID,
-            event: Self.githubReviewEvent(for: request.decision),
-            body: request.summaryBody,
-            threads: publishableComments.map(Self.githubReviewThreadPayload(for:))
+            event: Self.githubReviewEvent(for: decision),
+            body: summaryBody,
+            threads: comments.map(Self.githubReviewThreadPayload(for:))
         )
         let stdin = try Self.graphQLInput(
             query: Self.publishReviewMutation,
@@ -385,25 +468,33 @@ struct GitHubCLIProvider: CodeHostProvider {
         let result = try await runner.run(
             "gh",
             args: ["api", "graphql", "--input", "-"],
-            cwd: request.cwd,
+            cwd: cwd,
             stdin: stdin
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }
 
-        let published = try Self.parsePublishReviewResult(result.stdout, drafts: publishableComments)
-        let refreshedRequest = try await refreshedReviewRequest(
-            remote: request.remote,
-            request: request.reviewRequest,
-            cwd: request.cwd
+        return try Self.parsePublishReviewResult(result.stdout, drafts: comments)
+    }
+
+    private func refreshedReviewRequest(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> ReviewRequest {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "view", "\(request.number)",
+                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "-R", remote.repositorySlug,
+            ],
+            cwd: cwd
         )
-        return ProviderReviewPublishResult(
-            published: published.published,
-            failed: preflightFailures + published.failed,
-            refreshedRequest: refreshedRequest,
-            warnings: []
-        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
+        }
+
+        let request = try Self.parsePRView(result.stdout, remote: remote)
+        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
+        return Self.withThreads(threads, on: request)
     }
 
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
@@ -934,25 +1025,6 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }
         return try Self.parsePullRequestNodeID(result.stdout)
-    }
-
-    private func refreshedReviewRequest(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> ReviewRequest {
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "pr", "view", "\(request.number)",
-                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
-                "-R", remote.repositorySlug,
-            ],
-            cwd: cwd
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
-        }
-
-        let request = try Self.parsePRView(result.stdout, remote: remote)
-        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return Self.withThreads(threads, on: request)
     }
 
     static func githubReviewEvent(for decision: ProviderReviewDecision) -> String {
