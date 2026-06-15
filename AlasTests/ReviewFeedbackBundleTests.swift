@@ -202,6 +202,39 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains(">         run()"))
     }
 
+    @Test func promptIncludesReviewSessionRevisionAndPreviousHandoff() {
+        let target = ReviewFeedbackTarget(
+            title: "Review deadbeef",
+            repositoryPath: "/repo",
+            providerDescription: nil,
+            sourceDescription: "Commit deadbeef",
+            sessionDescription: "Review session: commit deadbeef",
+            revisionDescription: "deadbeef",
+            priorHandoffDescription: "Previously sent to Codex at 1970-01-01 00:00:30 +0000"
+        )
+        let comment = ReviewDraftComment(
+            id: "c1",
+            sessionID: .commit(worktreeID: "wt-1", repositoryPath: URL(fileURLWithPath: "/repo"), sha: "deadbeef"),
+            fileID: DiffReviewFileID(namespace: "commit", path: "Sources/A.swift"),
+            path: "Sources/A.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: 10,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: "Fix this",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        let prompt = ReviewFeedbackBundle(target: target, comments: [comment]).promptMarkdown()
+
+        #expect(prompt.contains("Review session: commit deadbeef"))
+        #expect(prompt.contains("Revision: deadbeef"))
+        #expect(prompt.contains("Previously sent to Codex"))
+    }
+
     private func comment(
         id: String,
         session: ReviewDraftSessionID,

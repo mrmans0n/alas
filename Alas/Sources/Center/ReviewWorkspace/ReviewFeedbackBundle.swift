@@ -5,6 +5,9 @@ struct ReviewFeedbackTarget: Equatable, Sendable {
     var repositoryPath: String?
     var providerDescription: String?
     var sourceDescription: String
+    var sessionDescription: String? = nil
+    var revisionDescription: String? = nil
+    var priorHandoffDescription: String? = nil
 }
 
 struct ReviewFeedbackBundle: Equatable, Sendable {
@@ -29,6 +32,18 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
         }
 
         lines.append("Source: \(target.sourceDescription)")
+
+        if let sessionDescription = target.sessionDescription, !sessionDescription.isEmpty {
+            lines.append(sessionDescription)
+        }
+
+        if let revisionDescription = target.revisionDescription, !revisionDescription.isEmpty {
+            lines.append("Revision: \(revisionDescription)")
+        }
+
+        if let priorHandoffDescription = target.priorHandoffDescription, !priorHandoffDescription.isEmpty {
+            lines.append(priorHandoffDescription)
+        }
 
         if let providerDescription = target.providerDescription, !providerDescription.isEmpty {
             lines.append("Provider: \(providerDescription)")
