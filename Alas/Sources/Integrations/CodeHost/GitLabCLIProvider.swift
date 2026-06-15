@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct GitLabCLIProvider: CodeHostProvider {
@@ -191,21 +192,28 @@ struct GitLabCLIProvider: CodeHostProvider {
             }
         }
 
-        switch request.decision {
-        case .comment:
-            break
-        case .approve:
-            try await approveMergeRequest(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
-        case .requestChanges:
-            try await createRequestChangesNote(
-                remote: request.remote,
-                request: request.reviewRequest,
-                body: request.summaryBody,
-                cwd: request.cwd
-            )
+        var warnings: [String] = []
+        do {
+            switch request.decision {
+            case .comment:
+                break
+            case .approve:
+                try await approveMergeRequest(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
+            case .requestChanges:
+                try await createRequestChangesNote(
+                    remote: request.remote,
+                    request: request.reviewRequest,
+                    body: request.summaryBody,
+                    cwd: request.cwd
+                )
+            }
+        } catch {
+            guard !published.isEmpty else {
+                throw error
+            }
+            warnings.append("GitLab review comments were published, but Alas could not submit the review decision: \(error.localizedDescription)")
         }
 
-        var warnings: [String] = []
         let refreshedRequest: ReviewRequest
         do {
             refreshedRequest = try await refreshedReviewRequest(
@@ -1261,6 +1269,7 @@ private struct GitLabCreateDiscussionPosition: Encodable {
     let newPath: String
     let oldLine: Int?
     let newLine: Int?
+    let lineRange: GitLabCreateDiscussionLineRange?
 
     init(comment: ProviderReviewDraftComment, diffRefs: GitLabDiffRefs) {
         self.baseSHA = diffRefs.baseSHA
@@ -1268,16 +1277,30 @@ private struct GitLabCreateDiscussionPosition: Encodable {
         self.headSHA = diffRefs.headSHA
         self.oldPath = comment.originalPath ?? comment.path
         self.newPath = comment.path
+        let sideType: GitLabCreateDiscussionLineRangePoint.LineType
         switch comment.side {
         case .old:
             self.oldLine = comment.lineRange.upperBound
             self.newLine = nil
+            sideType = .old
         case .new:
             self.oldLine = nil
             self.newLine = comment.lineRange.upperBound
+            sideType = .new
         case .unknown:
             self.oldLine = nil
             self.newLine = nil
+            sideType = .old
+        }
+        if comment.lineRange.lowerBound == comment.lineRange.upperBound {
+            self.lineRange = nil
+        } else {
+            self.lineRange = GitLabCreateDiscussionLineRange(
+                path: sideType == .old ? self.oldPath : self.newPath,
+                type: sideType,
+                startLine: comment.lineRange.lowerBound,
+                endLine: comment.lineRange.upperBound
+            )
         }
     }
 
@@ -1290,6 +1313,60 @@ private struct GitLabCreateDiscussionPosition: Encodable {
         case newPath = "new_path"
         case oldLine = "old_line"
         case newLine = "new_line"
+        case lineRange = "line_range"
+    }
+}
+
+private struct GitLabCreateDiscussionLineRange: Encodable {
+    let start: GitLabCreateDiscussionLineRangePoint
+    let end: GitLabCreateDiscussionLineRangePoint
+
+    init(
+        path: String,
+        type: GitLabCreateDiscussionLineRangePoint.LineType,
+        startLine: Int,
+        endLine: Int
+    ) {
+        self.start = GitLabCreateDiscussionLineRangePoint(path: path, type: type, line: startLine)
+        self.end = GitLabCreateDiscussionLineRangePoint(path: path, type: type, line: endLine)
+    }
+}
+
+private struct GitLabCreateDiscussionLineRangePoint: Encodable {
+    enum LineType: String, Encodable {
+        case old
+        case new
+    }
+
+    let lineCode: String
+    let type: LineType
+    let oldLine: Int?
+    let newLine: Int?
+
+    init(path: String, type: LineType, line: Int) {
+        self.lineCode = "\(Self.sha1Hex(path))_\(line)_\(line)"
+        self.type = type
+        switch type {
+        case .old:
+            self.oldLine = line
+            self.newLine = nil
+        case .new:
+            self.oldLine = nil
+            self.newLine = line
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case lineCode = "line_code"
+        case type
+        case oldLine = "old_line"
+        case newLine = "new_line"
+    }
+
+    private static func sha1Hex(_ value: String) -> String {
+        Insecure.SHA1.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 

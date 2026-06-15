@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import Alas
@@ -749,7 +750,7 @@ struct GitLabCLIProviderTests {
                     path: "Sources/App.swift",
                     originalPath: "Sources/OldApp.swift",
                     side: .new,
-                    lineRange: 24...24,
+                    lineRange: 24...26,
                     bodyMarkdown: "Please fix this."
                 ),
             ],
@@ -787,8 +788,19 @@ struct GitLabCLIProviderTests {
         #expect(position["head_sha"] as? String == "head123")
         #expect(position["old_path"] as? String == "Sources/OldApp.swift")
         #expect(position["new_path"] as? String == "Sources/App.swift")
-        #expect(position["new_line"] as? Int == 24)
+        #expect(position["new_line"] as? Int == 26)
         #expect(position["old_line"] == nil)
+        let lineRange = try #require(position["line_range"] as? [String: Any])
+        let lineRangeStart = try #require(lineRange["start"] as? [String: Any])
+        let lineRangeEnd = try #require(lineRange["end"] as? [String: Any])
+        #expect(lineRangeStart["type"] as? String == "new")
+        #expect(lineRangeStart["new_line"] as? Int == 24)
+        #expect(lineRangeStart["old_line"] == nil)
+        #expect(lineRangeStart["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/App.swift"))_24_24")
+        #expect(lineRangeEnd["type"] as? String == "new")
+        #expect(lineRangeEnd["new_line"] as? Int == 26)
+        #expect(lineRangeEnd["old_line"] == nil)
+        #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/App.swift"))_26_26")
     }
 
     @Test func publishReviewCreatesRequestChangesNoteForGitLabDecision() async throws {
@@ -867,6 +879,33 @@ struct GitLabCLIProviderTests {
         #expect(result.published.map(\.localDraftID) == ["draft-1"])
         #expect(result.refreshedRequest == Self.makeRequest())
         #expect(result.warnings.first?.contains("could not refresh") == true)
+    }
+
+    @Test func publishReviewPreservesPublishedMappingsWhenDecisionFailsAfterDiscussionCreation() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "approval failed"),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new)],
+            decision: .approve,
+            summaryBody: "",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.map(\.localDraftID) == ["draft-1"])
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
+        #expect(result.warnings.contains {
+            $0.contains("could not submit the review decision") && $0.contains("approval failed")
+        })
     }
 
     @Test func threadMutationsUseDiscussionEndpointsAndRefreshMR() async throws {
@@ -1514,6 +1553,12 @@ struct GitLabCLIProviderTests {
         let stdin = try #require(stdin)
         let data = Data(stdin.utf8)
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private static func gitLabLineCodePathHash(_ path: String) -> String {
+        Insecure.SHA1.hash(data: Data(path.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private static let mrListOutput = """
