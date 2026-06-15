@@ -7,7 +7,7 @@ enum ReviewDraftCommentGrouping {
     }
 }
 
-enum ReviewFeedbackAgentTarget: Equatable, Identifiable {
+enum ReviewFeedbackAgentTarget: Codable, Equatable, Hashable, Identifiable, Sendable {
     case newChat(agentID: String, title: String)
     case existingSession(worktreeID: String, sessionID: String, title: String)
 

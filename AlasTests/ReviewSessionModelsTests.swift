@@ -1,0 +1,144 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("Review session models")
+struct ReviewSessionModelsTests {
+    @Test func localChangesTargetDerivesStableIDs() {
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            scope: .unstaged
+        )
+
+        #expect(target.kind == .localChanges)
+        #expect(target.id.rawValue == "local-changes\u{1f}wt-1\u{1f}/repo\u{1f}unstaged")
+        #expect(target.draftSessionID == .localChanges(worktreeID: "wt-1", worktreePath: repositoryPath, scope: .unstaged))
+        #expect(target.title == "Review unstaged changes")
+        #expect(target.sourceDescription == "Local changes: unstaged")
+    }
+
+    @Test func providerTargetIncludesProviderIdentity() {
+        let target = ReviewSessionTarget.reviewRequest(
+            worktreeID: "wt-1",
+            provider: .github,
+            host: "GitHub.com",
+            repositorySlug: "mrmans0n/alas",
+            number: 520,
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/520")!,
+            title: "Use shared surface",
+            headSHA: "abc123"
+        )
+
+        #expect(target.kind == .reviewRequest)
+        #expect(target.id.rawValue.contains("github"))
+        #expect(target.id.rawValue.contains("github.com"))
+        #expect(target.draftSessionID == .reviewRequest(worktreeID: "wt-1", provider: .github, host: "github.com", repositorySlug: "mrmans0n/alas", number: 520))
+        #expect(target.providerDescription == "GitHub mrmans0n/alas #520")
+        #expect(target.revisionDescription == "abc123")
+    }
+
+    @Test func commitStyleTargetsDeriveDraftSessions() {
+        let repositoryPath = URL(fileURLWithPath: "/repo/../repo")
+        let draft = ReviewSessionTarget.draftCommit(worktreeID: "wt-1", repositoryPath: repositoryPath)
+        let commit = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            sha: "deadbeef",
+            title: "Review deadbeef"
+        )
+        let range = ReviewSessionTarget.commitRange(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            base: "main",
+            head: "feature"
+        )
+        let branch = ReviewSessionTarget.branch(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            base: "main",
+            head: "feature"
+        )
+
+        #expect(draft.draftSessionID == .draftCommit(worktreeID: "wt-1", repositoryPath: repositoryPath))
+        #expect(commit.draftSessionID == .commit(worktreeID: "wt-1", repositoryPath: repositoryPath, sha: "deadbeef"))
+        #expect(range.draftSessionID == .branch(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
+        #expect(branch.draftSessionID == .branch(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
+        #expect(draft.id.rawValue == "draft-commit\u{1f}wt-1\u{1f}/repo")
+        #expect(commit.sourceDescription == "Commit deadbeef")
+        #expect(range.sourceDescription == "Commit range main..feature")
+        #expect(branch.sourceDescription == "Branch feature against main")
+    }
+
+    @Test func draftReviewRequestTargetUsesRepositoryPathDraftID() {
+        let repositoryPath = URL(fileURLWithPath: "/repo")
+        let target = ReviewSessionTarget.draftReviewRequest(
+            worktreeID: "wt-1",
+            repositoryPath: repositoryPath,
+            provider: .gitlab,
+            repositorySlug: "mrmans0n/alas",
+            base: "main",
+            head: "feature",
+            headSHA: "abc123"
+        )
+
+        #expect(target.kind == .draftReviewRequest)
+        #expect(target.id.rawValue == "draft-review-request\u{1f}wt-1\u{1f}/repo\u{1f}gitlab\u{1f}mrmans0n/alas\u{1f}main\u{1f}feature")
+        #expect(target.draftSessionID == .draftReviewRequest(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
+        #expect(target.providerDescription == "GitLab mrmans0n/alas")
+        #expect(target.revisionDescription == "abc123")
+    }
+
+    @Test func handoffTransitionsToSentAndAddressed() {
+        let record = ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: "session-1"),
+            target: .commit(
+                worktreeID: "wt-1",
+                repositoryPath: URL(fileURLWithPath: "/repo"),
+                sha: "deadbeef",
+                title: "Review deadbeef"
+            ),
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 20)
+        )
+        let handoff = ReviewFeedbackHandoff(
+            id: "handoff-1",
+            sessionID: record.id,
+            commentIDs: ["c1", "c2"],
+            target: .existingSession(worktreeID: "wt-1", sessionID: "acp-1", title: "Codex"),
+            createdAt: Date(timeIntervalSince1970: 30),
+            promptRevision: "rev-1",
+            status: .sent
+        )
+
+        let withHandoff = record.recording(handoff: handoff)
+        #expect(withHandoff.status == .sent)
+        #expect(withHandoff.updatedAt == Date(timeIntervalSince1970: 30))
+        #expect(withHandoff.handoffs == [handoff])
+        #expect(withHandoff.markedAddressed(now: Date(timeIntervalSince1970: 40)).status == .addressed)
+    }
+
+    @Test func recordSelectionHelpersUpdateStateAndTimestamp() {
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        let fileID = DiffReviewFileID(namespace: "unstaged", path: "Sources/A.swift")
+
+        let selected = record.selectingFile(fileID, now: Date(timeIntervalSince1970: 20))
+        #expect(selected.selectedFileID == fileID)
+        #expect(selected.updatedAt == Date(timeIntervalSince1970: 20))
+
+        let focused = selected.focusingComment("comment-1", now: Date(timeIntervalSince1970: 30))
+        #expect(focused.focusedCommentID == "comment-1")
+        #expect(focused.updatedAt == Date(timeIntervalSince1970: 30))
+    }
+}

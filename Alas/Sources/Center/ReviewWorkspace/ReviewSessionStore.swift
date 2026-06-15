@@ -1,0 +1,52 @@
+import Foundation
+
+struct ReviewSessionStore {
+    private let store: any PersistenceStoreProtocol
+    private let url: URL
+
+    init(store: any PersistenceStoreProtocol = PersistenceStore(), url: URL = Paths.reviewSessionsFile) {
+        self.store = store
+        self.url = url
+    }
+
+    func load(id: ReviewSessionID) throws -> ReviewSessionRecord? {
+        let snapshot = try readSnapshot()
+        return snapshot.recordsByID[id.rawValue]
+    }
+
+    func list(worktreeID: String) throws -> [ReviewSessionRecord] {
+        let snapshot = try readSnapshot()
+        return snapshot.recordsByID.values
+            .filter { $0.target.worktreeID == worktreeID }
+            .sorted(by: sortSessions)
+    }
+
+    func findActive(targetID: ReviewSessionID) throws -> ReviewSessionRecord? {
+        let snapshot = try readSnapshot()
+        guard let record = snapshot.recordsByID[targetID.rawValue],
+              record.status != .archived
+        else { return nil }
+        return record
+    }
+
+    func save(_ record: ReviewSessionRecord) throws {
+        var snapshot = try readSnapshot()
+        snapshot.recordsByID[record.id.rawValue] = record
+        try store.write(snapshot, to: url)
+    }
+
+    private func readSnapshot() throws -> Snapshot {
+        try store.readIfExists(Snapshot.self, from: url) ?? Snapshot(recordsByID: [:])
+    }
+
+    private func sortSessions(_ lhs: ReviewSessionRecord, _ rhs: ReviewSessionRecord) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt > rhs.updatedAt
+        }
+        return lhs.id.rawValue < rhs.id.rawValue
+    }
+
+    private struct Snapshot: Codable, Equatable {
+        var recordsByID: [String: ReviewSessionRecord]
+    }
+}

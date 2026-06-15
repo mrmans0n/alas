@@ -1,0 +1,92 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@Suite("Review session store")
+struct ReviewSessionStoreTests {
+    @Test func roundTripsSessionRecords() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abc123",
+            title: "Review abc123"
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            selectedFileID: DiffReviewFileID(namespace: "commit", path: "Sources/A.swift"),
+            focusedCommentID: "comment-1",
+            status: .active,
+            handoffs: [],
+            lastSendError: nil,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+
+        try store.save(record)
+
+        #expect(try store.load(id: target.id) == record)
+        #expect(try store.findActive(targetID: target.id) == record)
+        #expect(try store.list(worktreeID: "wt-1") == [record])
+    }
+
+    @Test func listSortsByUpdatedAtDescendingWithinWorktree() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let older = makeRecord(id: "older", worktreeID: "wt-1", updatedAt: 10)
+        let newer = makeRecord(id: "newer", worktreeID: "wt-1", updatedAt: 20)
+        let otherWorktree = makeRecord(id: "other", worktreeID: "wt-2", updatedAt: 30)
+
+        try store.save(older)
+        try store.save(otherWorktree)
+        try store.save(newer)
+
+        #expect(try store.list(worktreeID: "wt-1").map(\.id.rawValue) == ["newer", "older"])
+    }
+
+    @Test func archiveRemovesSessionFromActiveReuse() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let store = ReviewSessionStore(url: url)
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        var record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try store.save(record)
+
+        record.status = .archived
+        try store.save(record)
+
+        #expect(try store.findActive(targetID: target.id) == nil)
+        #expect(try store.load(id: target.id)?.status == .archived)
+    }
+
+    private func makeRecord(id: String, worktreeID: String, updatedAt: TimeInterval) -> ReviewSessionRecord {
+        let target = ReviewSessionTarget.commit(
+            worktreeID: worktreeID,
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: id,
+            title: "Review \(id)"
+        )
+        return ReviewSessionRecord(
+            id: ReviewSessionID(rawValue: id),
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: updatedAt)
+        )
+    }
+}
