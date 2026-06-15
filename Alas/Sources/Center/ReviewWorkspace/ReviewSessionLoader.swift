@@ -32,6 +32,26 @@ struct ReviewSessionLoader {
         self.draftReviewRequest = draftReviewRequest
     }
 
+    @MainActor
+    static func production(appState: AppState, worktree: Worktree) -> ReviewSessionLoader {
+        _ = appState
+        let changesLoader = ReviewChangesLoader()
+
+        return ReviewSessionLoader(
+            localChanges: { target in
+                let session = try await changesLoader.load(worktreePath: worktree.path)
+                guard case .localChanges(let scope) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                return filterLocalChanges(session, scope: scope)
+            },
+            draftCommit: { _ in
+                let session = try await changesLoader.load(worktreePath: worktree.path)
+                return filterLocalChanges(session, scope: .staged)
+            }
+        )
+    }
+
     func load(target: ReviewSessionTarget) async throws -> ReviewSessionLoadedContext {
         try Task.checkCancellation()
 
@@ -66,6 +86,25 @@ struct ReviewSessionLoader {
                 revisionDescription: target.revisionDescription,
                 priorHandoffDescription: nil
             )
+        )
+    }
+
+    private static func filterLocalChanges(
+        _ session: DiffReviewLoadedSession,
+        scope: ReviewDraftLocalChangesScope
+    ) -> DiffReviewLoadedSession {
+        let files: [DiffReviewFileSectionModel]
+        switch scope {
+        case .all:
+            files = session.files
+        case .unstaged:
+            files = session.files.filter { $0.summary.namespace == ReviewChangesSource.unstaged.rawValue }
+        case .staged:
+            files = session.files.filter { $0.summary.namespace == ReviewChangesSource.staged.rawValue }
+        }
+        return DiffReviewLoadedSession(
+            files: files,
+            summary: DiffReviewSessionModel(files: files.map(\.summary), groupsEnabled: true)
         )
     }
 }

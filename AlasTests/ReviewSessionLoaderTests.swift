@@ -4,6 +4,46 @@ import Testing
 
 @Suite("Review session loader")
 struct ReviewSessionLoaderTests {
+    @MainActor
+    @Test func productionLoaderLoadsLocalChangesFromWorktree() async throws {
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repo),
+            projectId: "project-1",
+            name: "main",
+            branch: "main",
+            path: repo,
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 1)
+        )
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: worktree.id,
+            repositoryPath: repo,
+            scope: .all
+        )
+        let loader = ReviewSessionLoader.production(
+            appState: AppState(store: MemoryStore()),
+            worktree: worktree
+        )
+
+        let loaded = try await loader.load(target: target)
+        let draftCommitTarget = ReviewSessionTarget.draftCommit(
+            worktreeID: worktree.id,
+            repositoryPath: repo
+        )
+        let draftCommitLoaded = try await loader.load(target: draftCommitTarget)
+
+        #expect(loaded.session.files.isEmpty)
+        #expect(loaded.feedbackTarget.title == "Review all changes")
+        #expect(draftCommitLoaded.session.files.isEmpty)
+        #expect(draftCommitLoaded.feedbackTarget.title == "Review draft commit")
+    }
+
     @Test func localChangesLoaderBuildsGroupedSessionAndFeedbackTarget() async throws {
         let target = ReviewSessionTarget.localChanges(
             worktreeID: "wt-1",
@@ -55,5 +95,13 @@ struct ReviewSessionLoaderTests {
         let loaded = try await loader.load(target: target)
 
         #expect(loaded.feedbackTarget.sourceDescription == "Commit deadbeef")
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_ value: T, to url: URL) throws {}
+
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? {
+            nil
+        }
     }
 }

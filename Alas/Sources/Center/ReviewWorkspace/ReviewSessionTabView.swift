@@ -35,7 +35,7 @@ struct ReviewSessionTabView: View {
         self.appState = appState
         self.sessionStore = ReviewSessionStore()
         self.draftCommentStore = ReviewDraftCommentStore()
-        self.loader = ReviewSessionLoader()
+        self.loader = ReviewSessionLoader.production(appState: appState, worktree: worktree)
         self.feedbackSender = ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktree.id)
         self.loadsOnAppear = true
         self.persistsState = true
