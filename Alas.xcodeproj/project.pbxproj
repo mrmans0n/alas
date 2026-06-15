@@ -248,6 +248,7 @@
 		3D711A767050DB05E4C77548 /* SurfaceViewKeyboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF5143046167375A802ED378 /* SurfaceViewKeyboardTests.swift */; };
 		3D98C4F5EE2C0B1203C76752 /* ACPImageChipAttachment.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7FB37A9430467B477E40819 /* ACPImageChipAttachment.swift */; };
 		3DB85FF0D4965BF78AD2B010 /* MergeSidePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52C55C85672956E1340B03B1 /* MergeSidePane.swift */; };
+		3DC03A7B9F9959155AE2B60E /* DiffReviewContextProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD6385E6DE02E97B0041616F /* DiffReviewContextProvider.swift */; };
 		3E0A4613EB8F41DA8C182C36 /* FormatOnSaveTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5BEBDB5A6617C62D0F1C0D1 /* FormatOnSaveTests.swift */; };
 		3E0AA46F17D152BFDA52A79D /* NotificationServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AEA30B7C74A39A46448AF5 /* NotificationServiceTests.swift */; };
 		3E46667F7AA794E24B04BC7F /* TerminalCLIInjection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013AF8211B98BD98B65DF632 /* TerminalCLIInjection.swift */; };
@@ -1866,6 +1867,7 @@
 		CC83C13F9F6391F9CE8BF2CA /* MarkdownViewMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownViewMode.swift; sourceTree = "<group>"; };
 		CC958412AAB6B8788171F74A /* ReviewChangesLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesLoaderTests.swift; sourceTree = "<group>"; };
 		CD0A56D300AE7380A16F1D42 /* ReviewRequestDiffLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRequestDiffLoader.swift; sourceTree = "<group>"; };
+		CD6385E6DE02E97B0041616F /* DiffReviewContextProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewContextProvider.swift; sourceTree = "<group>"; };
 		CD9289893FA7DC9DB8565353 /* MarkdownParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownParser.swift; sourceTree = "<group>"; };
 		CDAE8FBBADF986E1E6585941 /* ReviewChangesModelsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesModelsTests.swift; sourceTree = "<group>"; };
 		CDE49D2437D7E6AC9D67F136 /* RemoteSessionGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSessionGateway.swift; sourceTree = "<group>"; };
@@ -3625,6 +3627,7 @@
 		C96401D17E1C5E3A5F55212E /* DiffReview */ = {
 			isa = PBXGroup;
 			children = (
+				CD6385E6DE02E97B0041616F /* DiffReviewContextProvider.swift */,
 				65B5815D9BE36D3F835B5456 /* DiffReviewFileSection.swift */,
 				E8B46B2287CA16E683490301 /* DiffReviewInlineFeedbackActions.swift */,
 				14D1ECA099BBDCB5BB2EEC67 /* DiffReviewModels.swift */,
@@ -4394,6 +4397,7 @@
 				A971C64CC3136E00C5FC158C /* DiffPaneView.swift in Sources */,
 				02425EBF61592A01B1FCC7D0 /* DiffParser.swift in Sources */,
 				B7067A1BBEB1B1B5B9867BEA /* DiffPreferenceBindings.swift in Sources */,
+				3DC03A7B9F9959155AE2B60E /* DiffReviewContextProvider.swift in Sources */,
 				D6022D340521FC907FD901DE /* DiffReviewFileSection.swift in Sources */,
 				AB4B19ECC0C3D7242ECD42C6 /* DiffReviewInlineFeedbackActions.swift in Sources */,
 				5806E3E41DA735380E33BF76 /* DiffReviewModels.swift in Sources */,

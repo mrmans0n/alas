@@ -176,6 +176,61 @@ extension GitService {
         return await Self.parseOffMain(stdout)
     }
 
+    func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
+        let oldPath = originalPath?.isEmpty == false ? originalPath! : file
+        let old: DiffReviewFileContextLines
+        let new: DiffReviewFileContextLines
+
+        if staged {
+            if try await hasHead(worktreePath: worktreePath) {
+                old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: "HEAD", path: oldPath)
+            } else {
+                old = .available([])
+            }
+            new = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: ":", path: file)
+        } else {
+            old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: ":", path: oldPath)
+            new = try await worktreeLinesOrUnavailable(worktreePath: worktreePath, path: file)
+        }
+
+        return DiffReviewFileContextSnapshot(old: old, new: new)
+    }
+
+    private func blobLinesOrUnavailable(worktreePath: URL, ref: String, path: String) async throws -> DiffReviewFileContextLines {
+        let blobSpec = ref == ":" ? ":\(path)" : "\(ref):\(path)"
+        let result = try await Process.gitData(["show", blobSpec], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            return .unavailable
+        }
+        return Self.contextLinesOrUnavailable(from: result.stdout)
+    }
+
+    private func worktreeLinesOrUnavailable(worktreePath: URL, path: String) async throws -> DiffReviewFileContextLines {
+        let url = worktreePath.appendingPathComponent(path)
+        do {
+            let data = try Data(contentsOf: url)
+            return Self.contextLinesOrUnavailable(from: data)
+        } catch {
+            return .unavailable
+        }
+    }
+
+    private static func contextLinesOrUnavailable(from data: Data) -> DiffReviewFileContextLines {
+        guard !data.contains(0),
+              let text = String(data: data, encoding: .utf8) else {
+            return .unavailable
+        }
+        return .available(splitContextLines(text))
+    }
+
+    private static func splitContextLines(_ text: String) -> [String] {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if lines.last == "" {
+            lines.removeLast()
+        }
+        return lines
+    }
+
     /// Parses diff stdout on a detached executor so callers awaited from the
     /// MainActor (SwiftUI `.task`) don't resume on main for tens of thousands
     /// of lines of synchronous string work — that's the freeze users see on

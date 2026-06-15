@@ -106,7 +106,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: {}
+            openFile: {},
+            contextProvider: nil
         )
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -138,7 +139,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -179,7 +181,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let feedback = [
             DiffReviewInlineFeedback(
@@ -223,7 +226,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let feedback = DiffReviewInlineFeedback(
             id: "thread-1",
@@ -283,7 +287,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
         var layout = DiffLayoutMode.split
@@ -320,7 +325,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
         var layout = DiffLayoutMode.split
@@ -412,7 +418,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let feedback = inlineFeedbackItems(count: 5, path: file.summary.path, lineAnchored: false)
         var layout = DiffLayoutMode.split
@@ -703,7 +710,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(id: "draft-visible", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
         var layout = DiffLayoutMode.split
@@ -735,7 +743,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(id: "draft-dismiss-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
         var layout = DiffLayoutMode.split
@@ -785,7 +794,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let target = ReviewFeedbackTarget(
             title: "Review working tree",
@@ -843,7 +853,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(
             id: "draft-disabled-send-inline",
@@ -899,7 +910,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(id: "draft-edit-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
         var layout = DiffLayoutMode.split
@@ -1089,7 +1101,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: nil,
             displayModel: nil,
             placeholderMessage: "Binary files are not shown.",
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -1723,7 +1736,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         var largeRows = Array(
             repeating: ParsedDiff.Hunk.Line(kind: .add, text: "let value = 1", oldNumber: nil, newNumber: 1),
@@ -1738,7 +1752,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: largeDiff,
             displayModel: DiffDisplayModelBuilder.build(diff: largeDiff, filePath: "Sources/Large.swift"),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
 
         #expect(DiffReviewFileSectionHeightEstimator.estimatedHeight(for: large) > DiffReviewFileSectionHeightEstimator.estimatedHeight(for: small))
@@ -1750,7 +1765,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
 
         let noFeedback = DiffReviewFileSectionHeightEstimator.estimatedHeight(for: file, inlineFeedbackCount: 0)
@@ -1769,7 +1785,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let shortFeedback = [
             DiffReviewInlineFeedback(
@@ -1808,7 +1825,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(id: "draft-height", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
 
@@ -1852,7 +1870,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel,
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(
             id: "draft-collapsed-height",
@@ -1921,7 +1940,8 @@ struct DiffReviewSurfaceTests {
                     parsedDiff: nil,
                     displayModel: nil,
                     placeholderMessage: "No diff.",
-                    openFile: nil
+                    openFile: nil,
+                    contextProvider: nil
                 )
             },
             summary: DiffReviewSessionModel(files: summaries, groupsEnabled: false)

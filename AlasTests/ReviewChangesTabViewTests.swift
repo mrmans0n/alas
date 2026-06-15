@@ -479,7 +479,8 @@ struct ReviewChangesTabViewTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         var layout = DiffLayoutMode.split
         var wrap = false

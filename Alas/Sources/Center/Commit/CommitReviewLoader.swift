@@ -73,7 +73,8 @@ struct CommitReviewLoader {
                 ? try await buildDisplayModel(diff: diff, filePath: file.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
-            openFile: openFile
+            openFile: openFile,
+            contextProvider: nil
         )
     }
 

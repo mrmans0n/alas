@@ -64,7 +64,16 @@ struct ReviewSessionLoaderTests {
                     isRenderable: true
                 )
                 return DiffReviewLoadedSession(
-                    files: [DiffReviewFileSectionModel(summary: summary, parsedDiff: nil, displayModel: nil, placeholderMessage: nil, openFile: nil)],
+                    files: [
+                        DiffReviewFileSectionModel(
+                            summary: summary,
+                            parsedDiff: nil,
+                            displayModel: nil,
+                            placeholderMessage: nil,
+                            openFile: nil,
+                            contextProvider: nil
+                        ),
+                    ],
                     summary: DiffReviewSessionModel(files: [summary], groupsEnabled: true)
                 )
             }

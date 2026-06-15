@@ -97,6 +97,45 @@ struct ReviewChangesLoaderTests {
         #expect(session.summary.totalDeletions == 3)
     }
 
+    @Test func attachesContextProviderForUnstagedAndStagedFiles() async throws {
+        let git = FakeReviewChangesGitClient(
+            status: [
+                ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 1, renameFrom: nil),
+                ChangedFile(path: "b.swift", status: "M", stage: .staged, add: 1, del: 1, renameFrom: nil),
+            ],
+            diffs: [
+                .init(path: "a.swift", staged: false): diff(lines: [
+                    .init(kind: .context, text: "a", oldNumber: 1, newNumber: 1),
+                ]),
+                .init(path: "b.swift", staged: true): diff(lines: [
+                    .init(kind: .context, text: "b", oldNumber: 1, newNumber: 1),
+                ]),
+            ],
+            snapshots: [
+                .init(path: "a.swift", staged: false): DiffReviewFileContextSnapshot(
+                    old: .available(["old a"]),
+                    new: .available(["new a"])
+                ),
+                .init(path: "b.swift", staged: true): DiffReviewFileContextSnapshot(
+                    old: .available(["old b"]),
+                    new: .available(["new b"])
+                ),
+            ]
+        )
+        let loader = ReviewChangesLoader(git: git)
+
+        let session = try await loader.load(worktreePath: URL(fileURLWithPath: "/tmp/repo"))
+
+        #expect(try await session.files[0].contextProvider?.snapshot() == DiffReviewFileContextSnapshot(
+            old: .available(["old a"]),
+            new: .available(["new a"])
+        ))
+        #expect(try await session.files[1].contextProvider?.snapshot() == DiffReviewFileContextSnapshot(
+            old: .available(["old b"]),
+            new: .available(["new b"])
+        ))
+    }
+
     @Test func propagatesRenameMetadataToSummary() async throws {
         let git = FakeReviewChangesGitClient(
             status: [
@@ -154,6 +193,7 @@ struct ReviewChangesLoaderTests {
 private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
     var status: [ChangedFile]
     var diffs: [DiffKey: ParsedDiff]
+    var snapshots: [DiffKey: DiffReviewFileContextSnapshot] = [:]
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
         status
@@ -161,6 +201,13 @@ private struct FakeReviewChangesGitClient: ReviewChangesGitClient {
 
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff {
         diffs[DiffKey(path: file, staged: staged, originalPath: originalPath), default: ParsedDiff(hunks: [])]
+    }
+
+    func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> DiffReviewFileContextSnapshot {
+        snapshots[DiffKey(path: file, staged: staged, originalPath: originalPath), default: DiffReviewFileContextSnapshot(
+            old: .unavailable,
+            new: .unavailable
+        )]
     }
 }
 
