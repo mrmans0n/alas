@@ -116,6 +116,7 @@ struct DiffPaneView: View {
     var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
     var lspContext: DiffPaneLSPContext? = nil
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -133,6 +134,7 @@ struct DiffPaneView: View {
         verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll,
         lspContext: DiffPaneLSPContext? = nil,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
+        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
         hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
     ) {
         self.model = model
@@ -146,6 +148,7 @@ struct DiffPaneView: View {
         self.verticalScrollMode = verticalScrollMode
         self.lspContext = lspContext
         self.onReviewLineSelected = onReviewLineSelected
+        self.onContextExpansion = onContextExpansion
         self.hunkActions = hunkActions
     }
 
@@ -284,7 +287,8 @@ struct DiffPaneView: View {
                 codeFontSize: codeFontSize,
                 theme: theme,
                 lspContext: lspContext,
-                onReviewLineSelected: onReviewLineSelected
+                onReviewLineSelected: onReviewLineSelected,
+                onContextExpansion: onContextExpansion
             )
             .fixedSize(horizontal: false, vertical: true)
         }

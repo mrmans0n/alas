@@ -901,6 +901,148 @@ struct DiffPaneViewTests {
         #expect(color != NSColor(theme.color("add")))
     }
 
+    @Test @MainActor func lineNumberRulerInvokesExpansionActionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "9 unchanged lines above",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .above
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .old,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .chunk(size: 10))
+    }
+
+    @Test @MainActor func lineNumberRulerOptionClickInvokesFullExpansionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .below)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "7 unchanged lines below",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .below
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        ruler.invokeExpansionForTesting(row: 0, optionKey: true)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .all)
+    }
+
+    @Test @MainActor func lineNumberRulerKeepsReviewSelectionForNonExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = 1"
+        let anchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .new,
+            line: 12,
+            rowIndex: 0,
+            selectedText: text
+        )
+        let sourceLine = DiffDisplayLine(
+            id: "line-12",
+            anchor: DiffLineAnchor(
+                filePath: anchor.path,
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: .new,
+                oldLine: nil,
+                newLine: anchor.line
+            ),
+            text: text,
+            lineNumber: anchor.line,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .context,
+                    range: NSRange(location: 0, length: (text as NSString).length),
+                    sourceLine: sourceLine
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        var expansionInvocations = 0
+        var selectedAnchor: DiffReviewLineAnchor?
+        scrollView.onReviewLineSelected = { selectedAnchor = $0 }
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["12"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new,
+            onContextExpansion: { _, _ in expansionInvocations += 1 }
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+        ruler.invokeReviewLineSelectionForTesting(row: 0)
+
+        #expect(expansionInvocations == 0)
+        #expect(selectedAnchor == anchor)
+    }
+
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
         let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),
