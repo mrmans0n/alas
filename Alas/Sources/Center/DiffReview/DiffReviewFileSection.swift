@@ -68,9 +68,6 @@ struct DiffReviewFileSection: View {
         .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
         }
-        .onDisappear {
-            resetContextState()
-        }
     }
 
     private var header: some View {
