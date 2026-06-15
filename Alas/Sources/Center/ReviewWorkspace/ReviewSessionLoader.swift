@@ -129,6 +129,18 @@ struct ReviewSessionLoader {
                             worktreePath: target.repositoryPath,
                             relativePath: path
                         )
+                    },
+                    contextProviderForPath: { path, originalPath in
+                        let resolvedHeadRef = headSHA.flatMap { $0.isEmpty ? nil : $0 } ?? "HEAD"
+                        return DiffReviewContextProvider {
+                            try await GitService().refContextSnapshot(
+                                worktreePath: target.repositoryPath,
+                                baseRef: base,
+                                headRef: resolvedHeadRef,
+                                file: path,
+                                originalPath: originalPath
+                            )
+                        }
                     }
                 )
             }

@@ -179,6 +179,7 @@ struct DiffReviewFileSectionModel: Identifiable {
     let displayModel: DiffDisplayModel?
     let placeholderMessage: String?
     let openFile: (() -> Void)?
+    let contextProvider: DiffReviewContextProvider?
 }
 
 struct DiffReviewSourceGroup: Equatable, Identifiable {

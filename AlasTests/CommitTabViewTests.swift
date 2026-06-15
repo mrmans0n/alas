@@ -60,7 +60,8 @@ struct CommitTabViewTests {
                     parsedDiff: nil,
                     displayModel: nil,
                     placeholderMessage: "No diff.",
-                    openFile: nil
+                    openFile: nil,
+                    contextProvider: nil
                 ),
             ],
             summary: DiffReviewSessionModel(files: [file], groupsEnabled: false)

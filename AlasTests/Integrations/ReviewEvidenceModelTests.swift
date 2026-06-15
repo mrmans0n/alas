@@ -1250,7 +1250,8 @@ struct ReviewEvidenceModelTests {
                     parsedDiff: nil,
                     displayModel: nil,
                     placeholderMessage: "No diff.",
-                    openFile: nil
+                    openFile: nil,
+                    contextProvider: nil
                 )
             },
             summary: DiffReviewSessionModel(files: summaries, groupsEnabled: false)

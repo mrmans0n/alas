@@ -570,6 +570,17 @@ struct DraftReviewRequestTabView: View {
                     ) { path in
                         appState.openFile(relativePath: path, worktreeId: worktreeId)
                     }
+                },
+                contextProviderForPath: { path, originalPath in
+                    DiffReviewContextProvider {
+                        try await GitService().refContextSnapshot(
+                            worktreePath: worktreePath,
+                            baseRef: tabState.baseBranch,
+                            headRef: tabState.headSHA.isEmpty ? "HEAD" : tabState.headSHA,
+                            file: path,
+                            originalPath: originalPath
+                        )
+                    }
                 }
             )
             guard !Task.isCancelled, key == contextKey else { return }

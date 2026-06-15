@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private let diffContextExpansionChunkSize = 10
+
 struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
     let path: String
     let side: DiffReviewInlineFeedbackSide
@@ -21,6 +23,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let theme: Theme
     let lspContext: DiffPaneLSPContext?
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
 
     init(
         group: DiffDisplayGroup,
@@ -33,7 +36,8 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         codeFontSize: CGFloat,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
-        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in }
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
+        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     ) {
         self.group = group
         self.expandedCollapsedRowIDs = expandedCollapsedRowIDs
@@ -46,6 +50,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         self.theme = theme
         self.lspContext = lspContext
         self.onReviewLineSelected = onReviewLineSelected
+        self.onContextExpansion = onContextExpansion
     }
 
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
@@ -63,7 +68,8 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme,
             lspContext: lspContext,
-            onReviewLineSelected: onReviewLineSelected
+            onReviewLineSelected: onReviewLineSelected,
+            onContextExpansion: onContextExpansion
         )
     }
 }
@@ -109,11 +115,15 @@ final class DiffPaneTextDocumentContainerView: NSView {
         font: NSFont,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
-        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in }
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
+        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     ) {
         oldPane.onReviewLineSelected = onReviewLineSelected
         newPane.onReviewLineSelected = onReviewLineSelected
         stackedPane.onReviewLineSelected = onReviewLineSelected
+        oldPane.onContextExpansion = onContextExpansion
+        newPane.onContextExpansion = onContextExpansion
+        stackedPane.onContextExpansion = onContextExpansion
 
         let signature = UpdateSignature(
             group: group,
@@ -155,7 +165,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 font: font,
                 theme: theme,
                 lspContext: nil,
-                allowedLSPSide: .new
+                allowedLSPSide: .new,
+                onContextExpansion: onContextExpansion
             )
             newPane.update(
                 document: result.newCode,
@@ -164,7 +175,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 font: font,
                 theme: theme,
                 lspContext: lspContext,
-                allowedLSPSide: .new
+                allowedLSPSide: .new,
+                onContextExpansion: onContextExpansion
             )
             stackedPane.clearLSPContext()
             measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
@@ -184,7 +196,8 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 font: font,
                 theme: theme,
                 lspContext: lspContext,
-                allowedLSPSide: .new
+                allowedLSPSide: .new,
+                onContextExpansion: onContextExpansion
             )
             oldPane.clearLSPContext()
             newPane.clearLSPContext()
@@ -293,6 +306,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var lineLabels: [String] = []
     private var rowKinds: [DiffDisplayRow.Kind] = []
     private var lineTones: [DiffPaneLineTone] = []
+    private var expansionKeys: [DiffContextExpansionKey?] = []
     private var baseDocument: DiffPaneTextDocumentBuilder.CodeDocument?
     private var synchronizedRowHeights: [CGFloat] = []
     private var shouldResetHorizontalOrigin = false
@@ -300,6 +314,12 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in } {
+        didSet {
+            textView.contextExpansionHandler = onContextExpansion
+            (verticalRulerView as? DiffPaneLineNumberRulerView)?.onContextExpansion = onContextExpansion
+        }
+    }
 
     var documentHeight: CGFloat {
         if let lastRow = textView.diffRowRects().last {
@@ -370,7 +390,8 @@ final class DiffPaneTextScrollView: NSScrollView {
         font: NSFont,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
-        allowedLSPSide: DiffLineSide
+        allowedLSPSide: DiffLineSide,
+        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     ) {
         self.lineLabels = lineLabels
         self.rowKinds = document.lines.map(\.kind)
@@ -380,18 +401,21 @@ final class DiffPaneTextScrollView: NSScrollView {
                 rowKind: line.kind
             )
         }
+        self.expansionKeys = document.lines.map(\.expansionKey)
         self.baseDocument = document
         self.synchronizedRowHeights = []
         self.shouldResetHorizontalOrigin = true
         self.wraps = wraps
         self.font = font
         self.theme = theme
+        self.onContextExpansion = onContextExpansion
         hasHorizontalScroller = !wraps
 
         textView.textStorage?.setAttributedString(document.attributedString)
         textView.font = font
         textView.lineMetadata = document.lines
         textView.lineTones = lineTones
+        textView.contextExpansionHandler = onContextExpansion
         textView.theme = theme
         textView.lspContext = lspContext
         textView.allowedLSPSide = allowedLSPSide
@@ -404,7 +428,9 @@ final class DiffPaneTextScrollView: NSScrollView {
                 lineTones: lineTones,
                 rowHeight: lineHeight(),
                 contentTopInset: textView.textContainerInset.height,
-                theme: theme
+                theme: theme,
+                expansionKeys: expansionKeys,
+                onContextExpansion: onContextExpansion
             )
         }
 
@@ -582,9 +608,9 @@ enum DiffPaneLineTone: Equatable {
     case collapsed
 
     init(label: String, rowKind: DiffDisplayRow.Kind) {
-        if rowKind == .collapsed {
+        if rowKind == .collapsed || rowKind == .expandableContext {
             self = .collapsed
-        } else if label.isEmpty, rowKind != .context {
+        } else if label.isEmpty, rowKind != .context, rowKind != .expandedContext {
             self = .placeholder
         } else {
             switch rowKind {
@@ -592,9 +618,9 @@ enum DiffPaneLineTone: Equatable {
                 self = .add
             case .delete:
                 self = .delete
-            case .context, .replacement:
+            case .context, .expandedContext, .replacement:
                 self = .context
-            case .collapsed:
+            case .collapsed, .expandableContext:
                 self = .collapsed
             }
         }
@@ -638,6 +664,7 @@ final class DiffPaneCodeTextView: NSTextView {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
+    var contextExpansionHandler: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     var lspContext: DiffPaneLSPContext?
     var allowedLSPSide: DiffLineSide = .new
     var hasLSPContextForTesting: Bool { lspContext != nil }
@@ -694,8 +721,12 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if invokeExpansion(at: point, optionKey: event.modifierFlags.contains(.option)) {
+            return
+        }
         if event.modifierFlags.contains(.command), let commandClickHandler {
-            commandClickHandler(convert(event.locationInWindow, from: nil))
+            commandClickHandler(point)
             return
         }
         super.mouseDown(with: event)
@@ -875,6 +906,32 @@ final class DiffPaneCodeTextView: NSTextView {
         return reviewLineAnchor(atRow: row)
     }
 
+    func invokeExpansionForTesting(row: Int, optionKey: Bool) {
+        guard let key = expansionKey(atRow: row) else { return }
+        invokeExpansion(key: key, optionKey: optionKey)
+    }
+
+    private func invokeExpansion(at point: NSPoint, optionKey: Bool) -> Bool {
+        let rowRects = diffRowRects()
+        guard let row = rowRects.firstIndex(where: { $0.contains(point) }),
+              let key = expansionKey(atRow: row)
+        else {
+            return false
+        }
+        invokeExpansion(key: key, optionKey: optionKey)
+        return true
+    }
+
+    private func expansionKey(atRow row: Int) -> DiffContextExpansionKey? {
+        guard lineMetadata.indices.contains(row) else { return nil }
+        return lineMetadata[row].expansionKey
+    }
+
+    private func invokeExpansion(key: DiffContextExpansionKey, optionKey: Bool) {
+        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
+        contextExpansionHandler(key, mode)
+    }
+
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
         guard let theme else { return }
         let rowRects = diffRowRects()
@@ -998,9 +1055,11 @@ final class DiffPaneCodeTextView: NSTextView {
 final class DiffPaneLineNumberRulerView: NSRulerView {
     private var labels: [String] = []
     private var lineTones: [DiffPaneLineTone] = []
+    private var expansionKeys: [DiffContextExpansionKey?] = []
     private var theme: Theme?
     var rowHeight: CGFloat = 16
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     private var contentTopInset: CGFloat = 6
     private var boundsObserver: NSObjectProtocol?
 
@@ -1026,13 +1085,17 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         lineTones: [DiffPaneLineTone],
         rowHeight: CGFloat,
         contentTopInset: CGFloat,
-        theme: Theme
+        theme: Theme,
+        expansionKeys: [DiffContextExpansionKey?],
+        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
     ) {
         self.labels = labels
         self.lineTones = lineTones
         self.rowHeight = rowHeight
         self.contentTopInset = contentTopInset
         self.theme = theme
+        self.expansionKeys = expansionKeys
+        self.onContextExpansion = onContextExpansion
         updateThickness()
         needsDisplay = true
     }
@@ -1050,6 +1113,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             x: point.x,
             y: point.y + scrollView.contentView.bounds.origin.y
         )
+        if let row = rowIndex(at: sourcePoint), invokeExpansion(row: row, optionKey: event.modifierFlags.contains(.option)) {
+            return
+        }
         guard let anchor = textView.reviewLineAnchor(at: sourcePoint) else {
             super.mouseDown(with: event)
             return
@@ -1067,7 +1133,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let rowRects = diffRowRects()
         guard !rowRects.isEmpty else { return }
 
-        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
+        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
         let labelRects = labelDrawRects()
         for index in visibleRowIndices(in: visible) {
             let label = labels[index]
@@ -1085,7 +1151,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
                 width: ruleThickness - horizontalPadding,
                 height: textHeight
             )
-            NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label))
+            NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label, row: index))
         }
     }
 
@@ -1098,7 +1164,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     func labelDrawRects() -> [NSRect] {
-        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "")).height
+        let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
         let textLineRects: [NSRect]
         if let textView = scrollView?.documentView as? DiffPaneCodeTextView {
             textLineRects = textView.diffFirstLineFragmentRects()
@@ -1137,6 +1203,39 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         }
     }
 
+    func labelAttributesForTesting(row: Int) -> [NSAttributedString.Key: Any] {
+        labelAttributes(for: labels.indices.contains(row) ? labels[row] : "", row: row)
+    }
+
+    func invokeExpansionForTesting(row: Int, optionKey: Bool) {
+        _ = invokeExpansion(row: row, optionKey: optionKey)
+    }
+
+    func invokeReviewLineSelectionForTesting(row: Int) {
+        guard let textView = scrollView?.documentView as? DiffPaneCodeTextView,
+              let anchor = textView.reviewLineAnchor(atRow: row)
+        else {
+            return
+        }
+        onReviewLineSelected(anchor)
+    }
+
+    private func rowIndex(at point: NSPoint) -> Int? {
+        diffRowRects().firstIndex { $0.contains(point) }
+    }
+
+    private func invokeExpansion(row: Int, optionKey: Bool) -> Bool {
+        guard expansionKeys.indices.contains(row),
+              let key = expansionKeys[row]
+        else {
+            return false
+        }
+
+        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
+        onContextExpansion(key, mode)
+        return true
+    }
+
     private func observe(scrollView: NSScrollView) {
         scrollView.contentView.postsBoundsChangedNotifications = true
         boundsObserver = NotificationCenter.default.addObserver(
@@ -1154,18 +1253,19 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             .map(\.count)
             .max() ?? 1
         let sample = String(repeating: "8", count: max(maxDigits, 1)) as NSString
-        let width = ceil(sample.size(withAttributes: labelAttributes(for: "")).width)
+        let width = ceil(sample.size(withAttributes: labelAttributes(for: "", row: nil)).width)
         ruleThickness = max(minimumThickness, width + horizontalPadding * 2)
     }
 
-    private func labelAttributes(for label: String) -> [NSAttributedString.Key: Any] {
+    private func labelAttributes(for label: String, row: Int?) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = .right
         let color: NSColor
         if let theme {
-            if label.hasPrefix("+") {
+            let tone = row.flatMap(labelTone(at:))
+            if tone == .add || (tone == nil && label.hasPrefix("+")) {
                 color = NSColor(theme.color("add"))
-            } else if label.hasPrefix("-") {
+            } else if tone == .delete || (tone == nil && label.hasPrefix("-")) {
                 color = NSColor(theme.color("del"))
             } else {
                 color = NSColor(theme.color("fg-faint"))
@@ -1178,6 +1278,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ]
+    }
+
+    private func labelTone(at row: Int) -> DiffPaneLineTone? {
+        lineTones.indices.contains(row) ? lineTones[row] : nil
     }
 
     private func drawRowBackground(index: Int, rowRect: NSRect, theme: Theme) {

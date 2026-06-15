@@ -2,6 +2,7 @@ import Foundation
 
 protocol CommitReviewGitClient {
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> ParsedDiff
+    func commitContextSnapshot(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
 }
 
 extension GitService: CommitReviewGitClient {}
@@ -37,6 +38,8 @@ struct CommitReviewLoader {
             sections.append(try await fileSection(
                 for: file,
                 diff: diff,
+                worktreePath: worktreePath,
+                sha: sha,
                 openFile: openFileForPath(file.path)
             ))
         }
@@ -50,6 +53,8 @@ struct CommitReviewLoader {
     private func fileSection(
         for file: CommitChangedFile,
         diff: ParsedDiff,
+        worktreePath: URL,
+        sha: String,
         openFile: (() -> Void)?
     ) async throws -> DiffReviewFileSectionModel {
         let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: file.path)
@@ -73,7 +78,15 @@ struct CommitReviewLoader {
                 ? try await buildDisplayModel(diff: diff, filePath: file.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: file, diff: diff),
-            openFile: openFile
+            openFile: openFile,
+            contextProvider: DiffReviewContextProvider {
+                try await git.commitContextSnapshot(
+                    worktreePath: worktreePath,
+                    sha: sha,
+                    file: file.path,
+                    originalPath: file.originalPath
+                )
+            }
         )
     }
 

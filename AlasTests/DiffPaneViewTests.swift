@@ -60,6 +60,37 @@ struct DiffPaneViewTests {
         )
     }
 
+    private func expandableContextGroup(
+        boundary: DiffContextBoundary,
+        collapsedLineCount: Int
+    ) -> DiffDisplayGroup {
+        let groupID = "hunk-0"
+        return DiffDisplayGroup(
+            id: groupID,
+            header: "@@ -2,1 +2,1 @@",
+            sourceHunk: ParsedDiff.Hunk(
+                header: "@@ -2,1 +2,1 @@",
+                oldStart: 2,
+                newStart: 2,
+                lines: []
+            ),
+            rows: [
+                DiffDisplayRow(
+                    id: "expand-\(boundary.rawValue)",
+                    kind: .expandableContext,
+                    old: nil,
+                    new: nil,
+                    collapsedLineCount: collapsedLineCount,
+                    contextExpansion: DiffContextExpansionRow(
+                        key: DiffContextExpansionKey(groupID: groupID, boundary: boundary),
+                        boundary: boundary,
+                        remainingLineCount: collapsedLineCount
+                    )
+                ),
+            ]
+        )
+    }
+
     @Test func splitModeHostsRendererWithoutCrashing() {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -835,6 +866,295 @@ struct DiffPaneViewTests {
         #expect(DiffPaneCodeTextView.changeRailRect(in: rowRect, tone: .delete) == nil)
     }
 
+    @Test func lineNumberRulerColorsExpandableContextPlusAsBoundaryControl() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "9 unchanged lines above",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: DiffContextExpansionKey(groupID: "hunk-0", boundary: .above),
+                    expansionBoundary: .above
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .old
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        let color = try #require(ruler.labelAttributesForTesting(row: 0)[.foregroundColor] as? NSColor)
+
+        #expect(color == NSColor(theme.color("fg-faint")))
+        #expect(color != NSColor(theme.color("add")))
+    }
+
+    @Test @MainActor func lineNumberRulerInvokesExpansionActionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "9 unchanged lines above",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .above
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .old,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .chunk(size: 10))
+    }
+
+    @Test @MainActor func lineNumberRulerOptionClickInvokesFullExpansionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .below)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "7 unchanged lines below",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .below
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        ruler.invokeExpansionForTesting(row: 0, optionKey: true)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .all)
+    }
+
+    @Test @MainActor func codeTextViewInvokesExpansionActionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "9 unchanged lines above",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .above
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(scrollView)
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .old,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let textView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRect = try #require(textView.diffRowRects().first)
+        let windowPoint = textView.convert(NSPoint(x: rowRect.midX, y: rowRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .chunk(size: 10))
+    }
+
+    @Test @MainActor func codeTextViewOptionClickInvokesFullExpansionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .below)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "7 unchanged lines below",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .below
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(scrollView)
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let textView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRect = try #require(textView.diffRowRects().first)
+        let windowPoint = textView.convert(NSPoint(x: rowRect.midX, y: rowRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: .option,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .all)
+    }
+
+    @Test @MainActor func lineNumberRulerKeepsReviewSelectionForNonExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = 1"
+        let anchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .new,
+            line: 12,
+            rowIndex: 0,
+            selectedText: text
+        )
+        let sourceLine = DiffDisplayLine(
+            id: "line-12",
+            anchor: DiffLineAnchor(
+                filePath: anchor.path,
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: .new,
+                oldLine: nil,
+                newLine: anchor.line
+            ),
+            text: text,
+            lineNumber: anchor.line,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .context,
+                    range: NSRange(location: 0, length: (text as NSString).length),
+                    sourceLine: sourceLine
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        var expansionInvocations = 0
+        var selectedAnchor: DiffReviewLineAnchor?
+        scrollView.onReviewLineSelected = { selectedAnchor = $0 }
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["12"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new,
+            onContextExpansion: { _, _ in expansionInvocations += 1 }
+        )
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        ruler.invokeExpansionForTesting(row: 0, optionKey: false)
+        ruler.invokeReviewLineSelectionForTesting(row: 0)
+
+        #expect(expansionInvocations == 0)
+        #expect(selectedAnchor == anchor)
+    }
+
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
         let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),
@@ -859,6 +1179,62 @@ struct DiffPaneViewTests {
         #expect(!result.newCode.attributedString.string.contains("|"))
         #expect(result.oldCode.lines.contains { $0.kind == .replacement })
         #expect(result.newCode.lines.contains { $0.kind == .replacement })
+    }
+
+    @Test func splitDocumentRendersExpandableContextBoundaryRows() throws {
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            group: expandableContextGroup(boundary: .above, collapsedLineCount: 9),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+
+        #expect(result.oldGutter.string.components(separatedBy: "\n") == ["+"])
+        #expect(result.newGutter.string.components(separatedBy: "\n") == [""])
+        #expect(result.oldCode.attributedString.string.components(separatedBy: "\n") == ["9 unchanged lines above"])
+        #expect(result.newCode.attributedString.string.components(separatedBy: "\n") == [" "])
+        #expect(result.oldCode.lines.count == result.oldGutter.string.components(separatedBy: "\n").count)
+        #expect(result.newCode.lines.count == result.newGutter.string.components(separatedBy: "\n").count)
+        #expect(result.oldCode.lines.first?.expansionKey == key)
+        #expect(result.oldCode.lines.first?.expansionBoundary == .above)
+        #expect(result.newCode.lines.first?.expansionKey == key)
+        #expect(result.newCode.lines.first?.expansionBoundary == .above)
+    }
+
+    @Test func stackedDocumentRendersExpandableContextBoundaryRows() throws {
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: expandableContextGroup(boundary: .below, collapsedLineCount: 7),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.gutter.string.components(separatedBy: "\n") == ["+"])
+        #expect(result.code.attributedString.string.components(separatedBy: "\n") == ["7 unchanged lines below"])
+        #expect(result.code.lines.count == result.gutter.string.components(separatedBy: "\n").count)
+        #expect(result.code.lines.first?.expansionKey == DiffContextExpansionKey(groupID: "hunk-0", boundary: .below))
+        #expect(result.code.lines.first?.expansionBoundary == .below)
+    }
+
+    @Test func singleDocumentPreservesExpandableContextMetadata() throws {
+        let result = DiffPaneTextDocumentBuilder.build(
+            group: expandableContextGroup(boundary: .above, collapsedLineCount: 0),
+            expandedCollapsedRowIDs: [],
+            layoutMode: .split,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.attributedString.string.contains("Expand context above"))
+        #expect(result.lines.first?.expansionKey == DiffContextExpansionKey(groupID: "hunk-0", boundary: .above))
+        #expect(result.lines.first?.expansionBoundary == .above)
     }
 
     @Test func stackedDocumentBuildsCodeOnlyTextAndSeparateGutter() throws {

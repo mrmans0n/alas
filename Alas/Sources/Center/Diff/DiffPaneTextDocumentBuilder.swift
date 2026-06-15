@@ -8,6 +8,8 @@ struct DiffPaneTextDocumentBuilder {
         var tone: DiffPaneLineTone? = nil
         var sourceLine: DiffDisplayLine? = nil
         var sourceRange: NSRange? = nil
+        var expansionKey: DiffContextExpansionKey? = nil
+        var expansionBoundary: DiffContextBoundary? = nil
     }
 
     struct CodeDocument {
@@ -50,6 +52,26 @@ struct DiffPaneTextDocumentBuilder {
         )
 
         for row in rows {
+            if row.kind == .expandableContext {
+                oldGutter.append("+", side: .paired)
+                newGutter.append("", side: .paired)
+                oldColumn.append(
+                    expandableContextText(row, font: font, theme: theme),
+                    kind: row.kind,
+                    tone: .collapsed,
+                    sourceLine: nil,
+                    expansion: row.contextExpansion
+                )
+                newColumn.append(
+                    emptyLayoutGlyph(font: font, theme: theme),
+                    kind: row.kind,
+                    tone: .collapsed,
+                    sourceLine: nil,
+                    expansion: row.contextExpansion
+                )
+                continue
+            }
+
             oldGutter.append(marker(for: row.old, emptyKind: row.kind, side: .old), side: .old)
             newGutter.append(marker(for: row.new, emptyKind: row.kind, side: .new), side: .new)
 
@@ -58,9 +80,16 @@ struct DiffPaneTextDocumentBuilder {
                     collapsedCodeText(row, font: font, theme: theme),
                     kind: row.kind,
                     tone: .collapsed,
-                    sourceLine: nil
+                    sourceLine: nil,
+                    expansion: row.contextExpansion
                 )
-                newColumn.append(emptyLayoutGlyph(font: font, theme: theme), kind: row.kind, tone: .collapsed, sourceLine: nil)
+                newColumn.append(
+                    emptyLayoutGlyph(font: font, theme: theme),
+                    kind: row.kind,
+                    tone: .collapsed,
+                    sourceLine: nil,
+                    expansion: row.contextExpansion
+                )
                 continue
             }
 
@@ -75,7 +104,8 @@ struct DiffPaneTextDocumentBuilder {
                 ),
                 kind: row.kind,
                 tone: tone(for: row.old, rowKind: row.kind),
-                sourceLine: reviewSourceLine(row.old, side: .old)
+                sourceLine: reviewSourceLine(row.old, side: .old),
+                expansion: row.contextExpansion
             )
             newColumn.append(
                 code(
@@ -88,7 +118,8 @@ struct DiffPaneTextDocumentBuilder {
                 ),
                 kind: row.kind,
                 tone: tone(for: row.new, rowKind: row.kind),
-                sourceLine: reviewSourceLine(row.new, side: .new)
+                sourceLine: reviewSourceLine(row.new, side: .new),
+                expansion: row.contextExpansion
             )
         }
 
@@ -118,20 +149,34 @@ struct DiffPaneTextDocumentBuilder {
         var index = 0
         while index < rows.count {
             let row = rows[index]
+            if row.kind == .expandableContext {
+                gutter.append("+", side: .paired)
+                codeColumn.append(
+                    expandableContextText(row, font: font, theme: theme),
+                    kind: row.kind,
+                    tone: .collapsed,
+                    sourceLine: nil,
+                    expansion: row.contextExpansion
+                )
+                index += 1
+                continue
+            }
+
             if row.kind == .collapsed {
                 gutter.append("", side: .paired)
                 codeColumn.append(
                     collapsedCodeText(row, font: font, theme: theme),
                     kind: row.kind,
                     tone: .collapsed,
-                    sourceLine: nil
+                    sourceLine: nil,
+                    expansion: row.contextExpansion
                 )
                 index += 1
                 continue
             }
 
             let rowStart = index
-            while index < rows.count, rows[index].kind != .collapsed {
+            while index < rows.count, rows[index].kind != .collapsed, rows[index].kind != .expandableContext {
                 index += 1
             }
             let lines = DiffPaneRowProjection.stackedLines(for: Array(rows[rowStart..<index]))
@@ -148,7 +193,8 @@ struct DiffPaneTextDocumentBuilder {
                     ),
                     kind: row.kind,
                     tone: tone(for: line, rowKind: row.kind),
-                    sourceLine: line
+                    sourceLine: line,
+                    expansion: row.contextExpansion
                 )
             }
         }
@@ -191,7 +237,9 @@ struct DiffPaneTextDocumentBuilder {
             switch row.kind {
             case .collapsed:
                 output.append(collapsedLine(row, font: font, theme: theme))
-            case .context, .add, .delete, .replacement:
+            case .expandableContext:
+                output.append(expandableContextLine(row, font: font, theme: theme))
+            case .context, .expandedContext, .add, .delete, .replacement:
                 output.append(splitLine(
                     row,
                     fileExtension: fileExtension,
@@ -202,7 +250,12 @@ struct DiffPaneTextDocumentBuilder {
                 ))
             }
 
-            lines.append(LineMetadata(kind: row.kind, range: NSRange(location: start, length: output.length - start)))
+            lines.append(LineMetadata(
+                kind: row.kind,
+                range: NSRange(location: start, length: output.length - start),
+                expansionKey: row.contextExpansion?.key,
+                expansionBoundary: row.contextExpansion?.boundary
+            ))
         }
 
         return Result(attributedString: output, lines: lines)
@@ -225,16 +278,25 @@ struct DiffPaneTextDocumentBuilder {
                 output.append(NSAttributedString(string: "\n", attributes: baseAttributes(font: font, theme: theme)))
             }
 
-            if row.kind == .collapsed {
+            if row.kind == .collapsed || row.kind == .expandableContext {
                 let start = output.length
-                output.append(collapsedLine(row, font: font, theme: theme))
-                lines.append(LineMetadata(kind: row.kind, range: NSRange(location: start, length: output.length - start)))
+                if row.kind == .expandableContext {
+                    output.append(expandableContextLine(row, font: font, theme: theme))
+                } else {
+                    output.append(collapsedLine(row, font: font, theme: theme))
+                }
+                lines.append(LineMetadata(
+                    kind: row.kind,
+                    range: NSRange(location: start, length: output.length - start),
+                    expansionKey: row.contextExpansion?.key,
+                    expansionBoundary: row.contextExpansion?.boundary
+                ))
                 index += 1
                 continue
             }
 
             let rowStart = index
-            while index < rows.count, rows[index].kind != .collapsed {
+            while index < rows.count, rows[index].kind != .collapsed, rows[index].kind != .expandableContext {
                 index += 1
             }
             appendStackedLines(
@@ -279,7 +341,9 @@ struct DiffPaneTextDocumentBuilder {
                 kind: row.kind,
                 range: NSRange(location: start, length: output.length - start),
                 sourceLine: line,
-                sourceRange: NSRange(location: start + prefixLength, length: (line.text as NSString).length)
+                sourceRange: NSRange(location: start + prefixLength, length: (line.text as NSString).length),
+                expansionKey: row.contextExpansion?.key,
+                expansionBoundary: row.contextExpansion?.boundary
             ))
         }
     }
@@ -358,6 +422,17 @@ struct DiffPaneTextDocumentBuilder {
         )
     }
 
+    private static func expandableContextLine(
+        _ row: DiffDisplayRow,
+        font: NSFont,
+        theme: Theme
+    ) -> NSAttributedString {
+        NSAttributedString(
+            string: "      \(expandableContextLabel(row))",
+            attributes: collapsedTextAttributes(font: font, theme: theme)
+        )
+    }
+
     private static func collapsedCodeText(
         _ row: DiffDisplayRow,
         font: NSFont,
@@ -365,13 +440,36 @@ struct DiffPaneTextDocumentBuilder {
     ) -> NSAttributedString {
         NSAttributedString(
             string: "... \(row.collapsedLineCount) unchanged lines",
-            attributes: [
-                .font: font,
-                .foregroundColor: NSColor(theme.color("fg-dim")),
-                .backgroundColor: NSColor(theme.color("bg-2")),
-                .paragraphStyle: CenterTypography.paragraphStyle(),
-            ]
+            attributes: collapsedTextAttributes(font: font, theme: theme)
         )
+    }
+
+    private static func expandableContextText(
+        _ row: DiffDisplayRow,
+        font: NSFont,
+        theme: Theme
+    ) -> NSAttributedString {
+        NSAttributedString(
+            string: expandableContextLabel(row),
+            attributes: collapsedTextAttributes(font: font, theme: theme)
+        )
+    }
+
+    private static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
+        let boundaryText = row.contextExpansion?.boundary == .below ? "below" : "above"
+        guard row.collapsedLineCount > 0 else {
+            return "Expand context \(boundaryText)"
+        }
+        return "\(row.collapsedLineCount) unchanged lines \(boundaryText)"
+    }
+
+    private static func collapsedTextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
+        [
+            .font: font,
+            .foregroundColor: NSColor(theme.color("fg-dim")),
+            .backgroundColor: NSColor(theme.color("bg-2")),
+            .paragraphStyle: CenterTypography.paragraphStyle(),
+        ]
     }
 
     private static func code(
@@ -452,7 +550,7 @@ struct DiffPaneTextDocumentBuilder {
 
     private static func tone(for line: DiffDisplayLine?, rowKind: DiffDisplayRow.Kind) -> DiffPaneLineTone {
         guard let line else {
-            return rowKind == .collapsed ? .collapsed : .placeholder
+            return (rowKind == .collapsed || rowKind == .expandableContext) ? .collapsed : .placeholder
         }
         switch line.kind {
         case .add:
@@ -543,9 +641,9 @@ struct DiffPaneTextDocumentBuilder {
             return theme.color("del").opacity(0.12)
         case .replacement:
             return theme.color("mod").opacity(0.10)
-        case .context:
+        case .context, .expandedContext:
             return theme.color("bg-1")
-        case .collapsed:
+        case .collapsed, .expandableContext:
             return theme.color("bg-2")
         }
     }
@@ -586,7 +684,8 @@ private struct ColumnAccumulator {
         _ line: NSAttributedString,
         kind: DiffDisplayRow.Kind,
         tone: DiffPaneLineTone? = nil,
-        sourceLine: DiffDisplayLine? = nil
+        sourceLine: DiffDisplayLine? = nil,
+        expansion: DiffContextExpansionRow? = nil
     ) {
         if output.length > 0 {
             output.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
@@ -598,7 +697,9 @@ private struct ColumnAccumulator {
             range: NSRange(location: start, length: line.length),
             tone: tone,
             sourceLine: sourceLine,
-            sourceRange: sourceLine.map { _ in NSRange(location: start, length: line.length) }
+            sourceRange: sourceLine.map { _ in NSRange(location: start, length: line.length) },
+            expansionKey: expansion?.key,
+            expansionBoundary: expansion?.boundary
         ))
     }
 }

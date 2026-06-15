@@ -93,7 +93,8 @@ struct ReviewSessionTabViewTests {
                         parsedDiff: nil,
                         displayModel: nil,
                         placeholderMessage: "No diff",
-                        openFile: nil
+                        openFile: nil,
+                        contextProvider: nil
                     ),
                 ],
                 summary: DiffReviewSessionModel(files: [summary], groupsEnabled: true)
@@ -249,7 +250,8 @@ struct ReviewSessionTabViewTests {
             parsedDiff: nil,
             displayModel: nil,
             placeholderMessage: "No diff",
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
     }
 

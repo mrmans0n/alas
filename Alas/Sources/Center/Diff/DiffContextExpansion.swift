@@ -1,0 +1,477 @@
+import Foundation
+
+enum DiffReviewFileContextLines: Equatable, Sendable {
+    case unavailable
+    case available([String])
+}
+
+struct DiffReviewFileContextSnapshot: Equatable, Sendable {
+    let old: DiffReviewFileContextLines
+    let new: DiffReviewFileContextLines
+}
+
+enum DiffContextExpansionMode: Equatable {
+    case chunk(size: Int)
+    case all
+}
+
+struct DiffContextExpansionState: Equatable {
+    private var expandedLineCounts: [DiffContextExpansionKey: Int] = [:]
+
+    func expandedLineCount(for key: DiffContextExpansionKey) -> Int {
+        expandedLineCounts[key, default: 0]
+    }
+
+    mutating func expand(_ key: DiffContextExpansionKey, available: Int, mode: DiffContextExpansionMode) {
+        let available = max(0, available)
+        let current = expandedLineCounts[key, default: 0]
+        let next: Int
+        switch mode {
+        case let .chunk(size):
+            next = current + max(0, size)
+        case .all:
+            next = available
+        }
+        expandedLineCounts[key] = min(next, available)
+    }
+}
+
+enum DiffContextExpandedDisplayBuilder {
+    private struct BoundaryRange {
+        let oldStart: Int?
+        let oldCount: Int
+        let newStart: Int?
+        let newCount: Int
+
+        var lineCount: Int {
+            max(oldCount, newCount)
+        }
+    }
+
+    private struct HunkSideExtent {
+        let start: Int
+        let count: Int
+
+        var lineBefore: Int {
+            count > 0 ? start - 1 : start
+        }
+
+        var lineAfter: Int {
+            start + max(count, 1)
+        }
+    }
+
+    static func derive(
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        providerAvailable: Bool,
+        expansion: DiffContextExpansionState,
+        filePath: String,
+        chunkSize: Int
+    ) -> [DiffDisplayGroup] {
+        groups.enumerated().map { index, group in
+            var rows: [DiffDisplayRow] = []
+
+            if providerAvailable {
+                rows.append(contentsOf: expansionRows(
+                    for: group,
+                    groupIndex: index,
+                    boundary: .above,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    filePath: filePath,
+                    chunkSize: chunkSize
+                ))
+            }
+
+            rows.append(contentsOf: group.rows)
+
+            if providerAvailable {
+                rows.append(contentsOf: expansionRows(
+                    for: group,
+                    groupIndex: index,
+                    boundary: .below,
+                    groups: groups,
+                    snapshot: snapshot,
+                    expansion: expansion,
+                    filePath: filePath,
+                    chunkSize: chunkSize
+                ))
+            }
+
+            return DiffDisplayGroup(
+                id: group.id,
+                header: group.header,
+                sourceHunk: group.sourceHunk,
+                rows: rows
+            )
+        }
+    }
+
+    static func availableLineCount(
+        key: DiffContextExpansionKey,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?
+    ) -> Int {
+        guard
+            let snapshot,
+            let groupIndex = groups.firstIndex(where: { $0.id == key.groupID })
+        else {
+            return 0
+        }
+        guard ownsBoundary(groupIndex: groupIndex, boundary: key.boundary) else {
+            return 0
+        }
+        return boundaryRange(
+            for: groups[groupIndex],
+            groupIndex: groupIndex,
+            boundary: key.boundary,
+            groups: groups,
+            snapshot: snapshot
+        ).lineCount
+    }
+
+    private static func expansionRows(
+        for group: DiffDisplayGroup,
+        groupIndex: Int,
+        boundary: DiffContextBoundary,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot?,
+        expansion: DiffContextExpansionState,
+        filePath: String,
+        chunkSize: Int
+    ) -> [DiffDisplayRow] {
+        guard ownsBoundary(groupIndex: groupIndex, boundary: boundary) else {
+            return []
+        }
+        guard let snapshot else {
+            guard optimisticBoundaryAvailable(
+                for: group,
+                groupIndex: groupIndex,
+                boundary: boundary,
+                groups: groups
+            ) else {
+                return []
+            }
+            let key = DiffContextExpansionKey(groupID: group.id, boundary: boundary)
+            return [expandableRow(group: group, boundary: boundary, remaining: 0, key: key)]
+        }
+
+        let range = boundaryRange(
+            for: group,
+            groupIndex: groupIndex,
+            boundary: boundary,
+            groups: groups,
+            snapshot: snapshot
+        )
+        let available = range.lineCount
+        guard available > 0 else { return [] }
+
+        let key = DiffContextExpansionKey(groupID: group.id, boundary: boundary)
+        let expandedCount = min(expansion.expandedLineCount(for: key), available)
+        let remaining = available - expandedCount
+        let offsets: Range<Int>
+        switch boundary {
+        case .above:
+            offsets = (available - expandedCount)..<available
+        case .below:
+            offsets = 0..<expandedCount
+        }
+
+        var rows = offsets.map {
+            expandedContextRow(
+                group: group,
+                groupIndex: groupIndex,
+                boundary: boundary,
+                range: range,
+                offset: $0,
+                totalCount: available,
+                snapshot: snapshot,
+                filePath: filePath
+            )
+        }
+
+        guard remaining > 0 else { return rows }
+
+        let expandable = expandableRow(
+            group: group,
+            boundary: boundary,
+            remaining: remaining,
+            key: key
+        )
+        switch boundary {
+        case .above:
+            rows.insert(expandable, at: rows.startIndex)
+        case .below:
+            rows.insert(expandable, at: rows.endIndex)
+        }
+        return rows
+    }
+
+    private static func ownsBoundary(groupIndex: Int, boundary: DiffContextBoundary) -> Bool {
+        switch boundary {
+        case .above:
+            groupIndex == 0
+        case .below:
+            true
+        }
+    }
+
+    private static func optimisticBoundaryAvailable(
+        for group: DiffDisplayGroup,
+        groupIndex: Int,
+        boundary: DiffContextBoundary,
+        groups: [DiffDisplayGroup]
+    ) -> Bool {
+        let currentOld = hunkSideExtent(in: group, side: .old)
+        let currentNew = hunkSideExtent(in: group, side: .new)
+
+        switch boundary {
+        case .above:
+            let previous = groupIndex > 0 ? groups[groupIndex - 1] : nil
+            guard let previous else {
+                return currentOld.lineBefore > 0 || currentNew.lineBefore > 0
+            }
+            let previousOld = hunkSideExtent(in: previous, side: .old)
+            let previousNew = hunkSideExtent(in: previous, side: .new)
+            return optimisticLineCount(start: previousOld.lineAfter, end: currentOld.lineBefore) > 0
+                || optimisticLineCount(start: previousNew.lineAfter, end: currentNew.lineBefore) > 0
+        case .below:
+            guard groupIndex + 1 < groups.count else {
+                return true
+            }
+            let next = groups[groupIndex + 1]
+            let nextOld = hunkSideExtent(in: next, side: .old)
+            let nextNew = hunkSideExtent(in: next, side: .new)
+            return optimisticLineCount(start: currentOld.lineAfter, end: nextOld.lineBefore) > 0
+                || optimisticLineCount(start: currentNew.lineAfter, end: nextNew.lineBefore) > 0
+        }
+    }
+
+    private static func optimisticLineCount(start: Int, end: Int) -> Int {
+        guard start <= end else { return 0 }
+        return end - start + 1
+    }
+
+    private static func boundaryRange(
+        for group: DiffDisplayGroup,
+        groupIndex: Int,
+        boundary: DiffContextBoundary,
+        groups: [DiffDisplayGroup],
+        snapshot: DiffReviewFileContextSnapshot
+    ) -> BoundaryRange {
+        let previous = groupIndex > 0 ? groups[groupIndex - 1] : nil
+        let next = groupIndex + 1 < groups.count ? groups[groupIndex + 1] : nil
+        let currentOld = hunkSideExtent(in: group, side: .old)
+        let currentNew = hunkSideExtent(in: group, side: .new)
+        let previousOld = previous.map { hunkSideExtent(in: $0, side: .old) }
+        let previousNew = previous.map { hunkSideExtent(in: $0, side: .new) }
+        let nextOld = next.map { hunkSideExtent(in: $0, side: .old) }
+        let nextNew = next.map { hunkSideExtent(in: $0, side: .new) }
+
+        switch boundary {
+        case .above:
+            let oldStart = previousOld?.lineAfter ?? 1
+            let newStart = previousNew?.lineAfter ?? 1
+            return BoundaryRange(
+                oldStart: oldStart,
+                oldCount: lineCount(
+                    start: oldStart,
+                    end: currentOld.lineBefore,
+                    snapshotLines: snapshot.old.lineCount
+                ),
+                newStart: newStart,
+                newCount: lineCount(
+                    start: newStart,
+                    end: currentNew.lineBefore,
+                    snapshotLines: snapshot.new.lineCount
+                )
+            )
+        case .below:
+            let oldStart = currentOld.lineAfter
+            let newStart = currentNew.lineAfter
+            return BoundaryRange(
+                oldStart: oldStart,
+                oldCount: lineCount(
+                    start: oldStart,
+                    end: nextOld?.lineBefore ?? snapshot.old.lineCount,
+                    snapshotLines: snapshot.old.lineCount
+                ),
+                newStart: newStart,
+                newCount: lineCount(
+                    start: newStart,
+                    end: nextNew?.lineBefore ?? snapshot.new.lineCount,
+                    snapshotLines: snapshot.new.lineCount
+                )
+            )
+        }
+    }
+
+    private static func lineCount(start: Int, end: Int?, snapshotLines: Int?) -> Int {
+        guard let snapshotLines, let end else { return 0 }
+        let clampedStart = max(1, start)
+        let clampedEnd = min(end, snapshotLines)
+        guard clampedStart <= clampedEnd else { return 0 }
+        return clampedEnd - clampedStart + 1
+    }
+
+    private static func hunkSideExtent(in group: DiffDisplayGroup, side: DiffLineSide) -> HunkSideExtent {
+        let start = side == .old ? group.sourceHunk.oldStart : group.sourceHunk.newStart
+        let count = group.sourceHunk.lines.reduce(0) { partial, line in
+            partial + (lineConsumes(line, side: side) ? 1 : 0)
+        }
+        return HunkSideExtent(start: start, count: count)
+    }
+
+    private static func lineConsumes(_ line: ParsedDiff.Hunk.Line, side: DiffLineSide) -> Bool {
+        switch (line.kind, side) {
+        case (.context, .old), (.context, .new), (.delete, .old), (.add, .new):
+            return true
+        case (_, .paired), (.add, .old), (.delete, .new):
+            return false
+        }
+    }
+
+    private static func expandedContextRow(
+        group: DiffDisplayGroup,
+        groupIndex: Int,
+        boundary: DiffContextBoundary,
+        range: BoundaryRange,
+        offset: Int,
+        totalCount: Int,
+        snapshot: DiffReviewFileContextSnapshot,
+        filePath: String
+    ) -> DiffDisplayRow {
+        let oldNumber = lineNumber(
+            start: range.oldStart,
+            count: range.oldCount,
+            offset: offset,
+            totalCount: totalCount,
+            boundary: boundary
+        )
+        let newNumber = lineNumber(
+            start: range.newStart,
+            count: range.newCount,
+            offset: offset,
+            totalCount: totalCount,
+            boundary: boundary
+        )
+        let rowIndex = syntheticRowIndex(boundary: boundary, offset: offset)
+        let anchorSide = anchorSide(oldNumber: oldNumber, newNumber: newNumber)
+        let anchor = DiffLineAnchor(
+            filePath: filePath,
+            hunkIndex: groupIndex,
+            rowIndex: rowIndex,
+            side: anchorSide,
+            oldLine: anchorSide == .new ? nil : oldNumber,
+            newLine: anchorSide == .old ? nil : newNumber
+        )
+
+        return DiffDisplayRow(
+            id: "\(group.id)-expanded-\(boundary.rawValue)-\(offset)-\(oldNumber ?? 0)-\(newNumber ?? 0)",
+            kind: .expandedContext,
+            old: displayLine(
+                anchor: anchor,
+                number: oldNumber,
+                text: oldNumber.flatMap { snapshot.old.line(at: $0) }
+            ),
+            new: displayLine(
+                anchor: anchor,
+                number: newNumber,
+                text: newNumber.flatMap { snapshot.new.line(at: $0) }
+            ),
+            collapsedLineCount: 0
+        )
+    }
+
+    private static func expandableRow(
+        group: DiffDisplayGroup,
+        boundary: DiffContextBoundary,
+        remaining: Int,
+        key: DiffContextExpansionKey
+    ) -> DiffDisplayRow {
+        DiffDisplayRow(
+            id: "\(group.id)-expand-\(boundary.rawValue)",
+            kind: .expandableContext,
+            old: nil,
+            new: nil,
+            collapsedLineCount: remaining,
+            contextExpansion: DiffContextExpansionRow(
+                key: key,
+                boundary: boundary,
+                remainingLineCount: remaining
+            )
+        )
+    }
+
+    private static func displayLine(anchor: DiffLineAnchor, number: Int?, text: String?) -> DiffDisplayLine? {
+        guard let number, let text else { return nil }
+        return DiffDisplayLine(
+            id: "\(anchor.filePath):\(anchor.side.rawValue):\(anchor.oldLine ?? 0):\(anchor.newLine ?? 0):\(number)",
+            anchor: anchor,
+            text: text,
+            lineNumber: number,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+    }
+
+    private static func lineNumber(
+        start: Int?,
+        count: Int,
+        offset: Int,
+        totalCount: Int,
+        boundary: DiffContextBoundary
+    ) -> Int? {
+        guard let start, count > 0 else { return nil }
+        switch boundary {
+        case .above:
+            let alignedOffset = offset - (totalCount - count)
+            guard alignedOffset >= 0, alignedOffset < count else { return nil }
+            return start + alignedOffset
+        case .below:
+            guard offset < count else { return nil }
+            return start + offset
+        }
+    }
+
+    private static func syntheticRowIndex(boundary: DiffContextBoundary, offset: Int) -> Int {
+        switch boundary {
+        case .above:
+            return -100_000 + offset
+        case .below:
+            return 100_000 + offset
+        }
+    }
+
+    private static func anchorSide(oldNumber: Int?, newNumber: Int?) -> DiffLineSide {
+        if oldNumber != nil, newNumber != nil {
+            return .paired
+        }
+        return oldNumber == nil ? .new : .old
+    }
+}
+
+private extension DiffReviewFileContextLines {
+    var lineCount: Int? {
+        switch self {
+        case .unavailable:
+            return nil
+        case let .available(lines):
+            return lines.count
+        }
+    }
+
+    func line(at number: Int) -> String? {
+        switch self {
+        case .unavailable:
+            return nil
+        case let .available(lines):
+            let index = number - 1
+            guard lines.indices.contains(index) else { return nil }
+            return lines[index]
+        }
+    }
+}

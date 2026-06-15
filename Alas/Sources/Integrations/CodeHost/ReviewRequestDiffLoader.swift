@@ -52,7 +52,8 @@ struct ReviewRequestDiffLoader {
                 ? try await buildDisplayModel(diff: parsed, filePath: section.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: section, diff: parsed),
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
     }
 

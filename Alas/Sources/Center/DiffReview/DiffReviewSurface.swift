@@ -32,6 +32,7 @@ struct DiffReviewSurface: View {
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
     @State private var renderedFileIDs: Set<DiffReviewFileID> = []
+    @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
 
     private static let scrollCoordinateSpace = "diff-review-scroll"
@@ -281,6 +282,9 @@ struct DiffReviewSurface: View {
                 onSaveDraftComment: { anchor, body in
                     onSaveDraftComment(file.id, anchor, body)
                 },
+                onContextExpansionActivated: {
+                    contextExpandedFileIDs.insert(file.id)
+                },
                 reviewFeedbackTarget: effectiveReviewFeedbackTarget
             )
         } else {
@@ -356,7 +360,7 @@ struct DiffReviewSurface: View {
                 draftCommentScrollCommand: draftCommentScrollCommand
             ),
             firstFileID: firstFileID
-        )
+        ).union(contextExpandedFileIDs)
     }
 
     private func sectionFrameReader(for id: DiffReviewFileID) -> some View {
@@ -401,7 +405,7 @@ struct DiffReviewSurface: View {
                 draftCommentScrollCommand: draftCommentScrollCommand
             ),
             firstFileID: firstFileID
-        )
+        ).union(contextExpandedFileIDs)
         guard updated != renderedFileIDs else { return }
 
         renderedFileIDs = updated
@@ -421,6 +425,7 @@ struct DiffReviewSurface: View {
         synchronizedFileSetKey = result.fileSetKey
         programmaticScroll = result.programmaticScroll
         renderedFileIDs = []
+        contextExpandedFileIDs.formIntersection(Set(fileIDs))
         if DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
             previousFileSetKey: previousFileSetKey,
             previousSelection: previousSelection,

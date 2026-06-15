@@ -151,6 +151,51 @@ struct CommitReviewLoaderTests {
         #expect(withoutOpenFile.files.first?.openFile == nil)
     }
 
+    @Test func attachesContextProviderForCommitFiles() async throws {
+        let snapshot = DiffReviewFileContextSnapshot(
+            old: .available(["old"]),
+            new: .available(["new"])
+        )
+        let git = FakeCommitReviewGitClient(
+            diffs: [
+                "Sources/NewName.swift": diff(lines: [
+                    .init(kind: .delete, text: "old", oldNumber: 1, newNumber: nil),
+                    .init(kind: .add, text: "new", oldNumber: nil, newNumber: 1),
+                ]),
+            ],
+            snapshots: [
+                "abc123:Sources/NewName.swift": snapshot,
+            ]
+        )
+        let loader = CommitReviewLoader(git: git)
+        let worktreePath = URL(fileURLWithPath: "/tmp/repo")
+
+        let session = try await loader.load(
+            worktreePath: worktreePath,
+            sha: "abc123",
+            files: [
+                CommitChangedFile(
+                    path: "Sources/NewName.swift",
+                    originalPath: "Sources/OldName.swift",
+                    status: "R",
+                    add: 1,
+                    del: 1
+                ),
+            ],
+            openFileForPath: { _ in nil }
+        )
+
+        #expect(try await session.files.first?.contextProvider?.snapshot() == snapshot)
+        #expect(git.contextSnapshotRequests == [
+            .init(
+                worktreePath: worktreePath,
+                sha: "abc123",
+                file: "Sources/NewName.swift",
+                originalPath: "Sources/OldName.swift"
+            ),
+        ])
+    }
+
     private func diff(lines: [ParsedDiff.Hunk.Line]) -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
@@ -172,15 +217,25 @@ private final class FakeCommitReviewGitClient: CommitReviewGitClient, @unchecked
     }
 
     private let diffs: [String: ParsedDiff]
+    private let snapshots: [String: DiffReviewFileContextSnapshot]
     private let lock = NSLock()
     private var recordedRequests: [Request] = []
+    private var recordedContextSnapshotRequests: [Request] = []
 
-    init(diffs: [String: ParsedDiff]) {
+    init(
+        diffs: [String: ParsedDiff],
+        snapshots: [String: DiffReviewFileContextSnapshot] = [:]
+    ) {
         self.diffs = diffs
+        self.snapshots = snapshots
     }
 
     var requests: [Request] {
         lock.withLock { recordedRequests }
+    }
+
+    var contextSnapshotRequests: [Request] {
+        lock.withLock { recordedContextSnapshotRequests }
     }
 
     func diff(worktreePath: URL, sha: String, file: String, originalPath: String?) async throws -> ParsedDiff {
@@ -193,6 +248,23 @@ private final class FakeCommitReviewGitClient: CommitReviewGitClient, @unchecked
             ))
         }
         return diffs[file, default: ParsedDiff(hunks: [])]
+    }
+
+    func commitContextSnapshot(
+        worktreePath: URL,
+        sha: String,
+        file: String,
+        originalPath: String?
+    ) async throws -> DiffReviewFileContextSnapshot {
+        lock.withLock {
+            recordedContextSnapshotRequests.append(Request(
+                worktreePath: worktreePath,
+                sha: sha,
+                file: file,
+                originalPath: originalPath
+            ))
+        }
+        return snapshots["\(sha):\(file)", default: DiffReviewFileContextSnapshot(old: .unavailable, new: .unavailable)]
     }
 }
 

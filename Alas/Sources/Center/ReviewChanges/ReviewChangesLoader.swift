@@ -3,6 +3,7 @@ import Foundation
 protocol ReviewChangesGitClient {
     func status(worktreePath: URL) async throws -> [ChangedFile]
     func diff(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> ParsedDiff
+    func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String?) async throws -> DiffReviewFileContextSnapshot
 }
 
 extension GitService: ReviewChangesGitClient {}
@@ -31,7 +32,7 @@ struct ReviewChangesLoader {
             )
             try Task.checkCancellation()
 
-            files.append(try await fileSection(for: change, diff: diff))
+            files.append(try await fileSection(for: change, diff: diff, worktreePath: worktreePath))
         }
 
         return ReviewChangesLoadedSession(
@@ -53,8 +54,9 @@ struct ReviewChangesLoader {
             }
     }
 
-    private func fileSection(for change: ChangedFile, diff: ParsedDiff) async throws -> ReviewChangesFileSectionModel {
+    private func fileSection(for change: ChangedFile, diff: ParsedDiff, worktreePath: URL) async throws -> ReviewChangesFileSectionModel {
         let source = ReviewChangesSource(stage: change.stage)
+        let staged = change.stage == .staged
         let canRender = !diff.hunks.isEmpty && !ImageFileType.isSupported(relativePath: change.path)
         let counts = lineCounts(in: diff)
         let summary = DiffReviewFileSummary(
@@ -76,7 +78,15 @@ struct ReviewChangesLoader {
                 ? try await buildDisplayModel(diff: diff, filePath: change.path)
                 : nil,
             placeholderMessage: canRender ? nil : placeholderMessage(for: change, diff: diff),
-            openFile: nil
+            openFile: nil,
+            contextProvider: DiffReviewContextProvider {
+                try await git.contextSnapshot(
+                    worktreePath: worktreePath,
+                    file: change.path,
+                    staged: staged,
+                    originalPath: change.renameFrom
+                )
+            }
         )
     }
 
