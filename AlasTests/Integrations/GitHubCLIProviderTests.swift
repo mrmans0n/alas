@@ -366,6 +366,7 @@ struct GitHubCLIProviderTests {
         #expect(publishThreads.first?["line"] as? Int == 14)
         #expect(publishThreads.first?["side"] as? String == "RIGHT")
         #expect(publishThreads.first?["startLine"] as? Int == 12)
+        #expect(publishThreads.first?["startSide"] as? String == "RIGHT")
         #expect(commands[2].args == [
             "pr", "view", "42",
             "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",

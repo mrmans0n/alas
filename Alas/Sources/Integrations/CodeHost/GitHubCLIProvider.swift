@@ -969,7 +969,8 @@ struct GitHubCLIProvider: CodeHostProvider {
             body: draft.bodyMarkdown,
             line: draft.lineRange.upperBound,
             side: draft.side == .old ? "LEFT" : "RIGHT",
-            startLine: draft.lineRange.lowerBound == draft.lineRange.upperBound ? nil : draft.lineRange.lowerBound
+            startLine: draft.lineRange.lowerBound == draft.lineRange.upperBound ? nil : draft.lineRange.lowerBound,
+            startSide: draft.lineRange.lowerBound == draft.lineRange.upperBound ? nil : (draft.side == .old ? "LEFT" : "RIGHT")
         )
     }
 
@@ -1071,6 +1072,7 @@ struct GitHubReviewDraftThreadPayload: Encodable, Equatable {
     let line: Int
     let side: String
     let startLine: Int?
+    let startSide: String?
 }
 
 private struct PublishReviewVariables: Encodable {
