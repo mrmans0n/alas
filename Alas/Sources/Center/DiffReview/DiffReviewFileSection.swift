@@ -34,6 +34,7 @@ struct DiffReviewFileSection: View {
     @State private var contextExpansion = DiffContextExpansionState()
     @State private var contextLoadTask: Task<Void, Never>?
     @State private var contextLoadFileID: DiffReviewFileID?
+    @State private var contextLoadSignature: String?
     @State private var contextLoadGeneration = 0
     @State private var contextLoadError: String?
     @State private var pendingContextExpansions: [PendingContextExpansion] = []
@@ -62,6 +63,9 @@ struct DiffReviewFileSection: View {
             clearPendingDraft()
         }
         .onChange(of: file.id) { _, _ in
+            resetContextState()
+        }
+        .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
         }
         .onDisappear {
@@ -471,7 +475,7 @@ struct DiffReviewFileSection: View {
         return Set(groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
     }
 
-    private var draftCommentDisplaySignature: String {
+    private var displayGroupSignature: String {
         let groupSignature = file.displayModel?.groups.map { group in
             let rowSignature = group.rows.map { row in
                 [
@@ -483,7 +487,19 @@ struct DiffReviewFileSection: View {
             }.joined(separator: ",")
             return "\(group.id)[\(rowSignature)]"
         }.joined(separator: "|") ?? "placeholder"
-        return "\(file.id.rawValue)|\(groupSignature)"
+        return groupSignature
+    }
+
+    private var draftCommentDisplaySignature: String {
+        "\(file.id.rawValue)|\(displayGroupSignature)"
+    }
+
+    private var contextStateSignature: String {
+        [
+            file.id.rawValue,
+            file.contextProvider?.id.uuidString ?? "no-context-provider",
+            displayGroupSignature,
+        ].joined(separator: "|")
     }
 
     private func loadContextAndExpand(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {
@@ -495,19 +511,25 @@ struct DiffReviewFileSection: View {
         pendingContextExpansions.append(PendingContextExpansion(key: key, mode: mode))
         guard contextLoadTask == nil else { return }
         let fileID = file.id
+        let loadSignature = contextStateSignature
         contextLoadGeneration += 1
         let loadGeneration = contextLoadGeneration
         contextLoadError = nil
         contextLoadFileID = fileID
+        contextLoadSignature = loadSignature
         contextLoadTask = Task {
             do {
                 let snapshot = try await provider.snapshot()
                 try Task.checkCancellation()
                 await MainActor.run {
-                    guard contextLoadGeneration == loadGeneration, contextLoadFileID == fileID else { return }
+                    guard contextLoadGeneration == loadGeneration,
+                          contextLoadFileID == fileID,
+                          contextLoadSignature == loadSignature
+                    else { return }
                     contextSnapshot = snapshot
                     contextLoadTask = nil
                     contextLoadFileID = nil
+                    contextLoadSignature = nil
                     let pendingExpansions = pendingContextExpansions
                     pendingContextExpansions = []
                     for expansion in pendingExpansions {
@@ -516,10 +538,14 @@ struct DiffReviewFileSection: View {
                 }
             } catch {
                 await MainActor.run {
-                    guard contextLoadGeneration == loadGeneration, contextLoadFileID == fileID else { return }
+                    guard contextLoadGeneration == loadGeneration,
+                          contextLoadFileID == fileID,
+                          contextLoadSignature == loadSignature
+                    else { return }
                     contextLoadError = error.localizedDescription
                     contextLoadTask = nil
                     contextLoadFileID = nil
+                    contextLoadSignature = nil
                     pendingContextExpansions = []
                 }
             }
@@ -543,6 +569,7 @@ struct DiffReviewFileSection: View {
         contextExpansion = DiffContextExpansionState()
         contextLoadTask = nil
         contextLoadFileID = nil
+        contextLoadSignature = nil
         contextLoadError = nil
         pendingContextExpansions = []
     }

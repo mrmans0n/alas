@@ -569,8 +569,6 @@ struct ReviewChangesTabViewTests {
         staleRuler.invokeExpansionForTesting(row: 0, optionKey: false)
         try await waitForLoadCount(1, probe: staleProbe)
 
-        controller.rootView = fileSectionView(file: providerBackedFile(path: "Sources/App/BetaView.swift"))
-        controller.view.layoutSubtreeIfNeeded()
         controller.rootView = fileSectionView(file: providerBackedFile(provider: DiffReviewContextProvider {
             try await freshProbe.snapshot()
         }))
