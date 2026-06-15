@@ -48,6 +48,19 @@ enum DiffContextExpandedDisplayBuilder {
         }
     }
 
+    private struct HunkSideExtent {
+        let start: Int
+        let count: Int
+
+        var lineBefore: Int {
+            count > 0 ? start - 1 : start
+        }
+
+        var lineAfter: Int {
+            start + max(count, 1)
+        }
+    }
+
     static func derive(
         groups: [DiffDisplayGroup],
         snapshot: DiffReviewFileContextSnapshot,
@@ -146,8 +159,7 @@ enum DiffContextExpandedDisplayBuilder {
             group: group,
             boundary: boundary,
             remaining: remaining,
-            key: key,
-            chunkSize: chunkSize
+            key: key
         )
         switch boundary {
         case .above:
@@ -167,89 +179,74 @@ enum DiffContextExpandedDisplayBuilder {
     ) -> BoundaryRange {
         let previous = groupIndex > 0 ? groups[groupIndex - 1] : nil
         let next = groupIndex + 1 < groups.count ? groups[groupIndex + 1] : nil
+        let currentOld = hunkSideExtent(in: group, side: .old)
+        let currentNew = hunkSideExtent(in: group, side: .new)
+        let previousOld = previous.map { hunkSideExtent(in: $0, side: .old) }
+        let previousNew = previous.map { hunkSideExtent(in: $0, side: .new) }
+        let nextOld = next.map { hunkSideExtent(in: $0, side: .old) }
+        let nextNew = next.map { hunkSideExtent(in: $0, side: .new) }
 
         switch boundary {
         case .above:
+            let oldStart = previousOld?.lineAfter ?? 1
+            let newStart = previousNew?.lineAfter ?? 1
             return BoundaryRange(
-                oldStart: startAfterLastLine(in: previous, side: .old),
-                oldCount: aboveCount(
-                    start: startAfterLastLine(in: previous, side: .old),
-                    end: lineBeforeFirstLine(in: group, side: .old),
+                oldStart: oldStart,
+                oldCount: lineCount(
+                    start: oldStart,
+                    end: currentOld.lineBefore,
                     snapshotLines: snapshot.old.lineCount
                 ),
-                newStart: startAfterLastLine(in: previous, side: .new),
-                newCount: aboveCount(
-                    start: startAfterLastLine(in: previous, side: .new),
-                    end: lineBeforeFirstLine(in: group, side: .new),
+                newStart: newStart,
+                newCount: lineCount(
+                    start: newStart,
+                    end: currentNew.lineBefore,
                     snapshotLines: snapshot.new.lineCount
                 )
             )
         case .below:
+            let oldStart = currentOld.lineAfter
+            let newStart = currentNew.lineAfter
             return BoundaryRange(
-                oldStart: lineAfterLastLine(in: group, side: .old),
-                oldCount: belowCount(
-                    start: lineAfterLastLine(in: group, side: .old),
-                    end: lineBeforeFirstLine(in: next, side: .old) ?? snapshot.old.lineCount,
+                oldStart: oldStart,
+                oldCount: lineCount(
+                    start: oldStart,
+                    end: nextOld?.lineBefore ?? snapshot.old.lineCount,
                     snapshotLines: snapshot.old.lineCount
                 ),
-                newStart: lineAfterLastLine(in: group, side: .new),
-                newCount: belowCount(
-                    start: lineAfterLastLine(in: group, side: .new),
-                    end: lineBeforeFirstLine(in: next, side: .new) ?? snapshot.new.lineCount,
+                newStart: newStart,
+                newCount: lineCount(
+                    start: newStart,
+                    end: nextNew?.lineBefore ?? snapshot.new.lineCount,
                     snapshotLines: snapshot.new.lineCount
                 )
             )
         }
     }
 
-    private static func aboveCount(start: Int?, end: Int?, snapshotLines: Int?) -> Int {
-        guard let snapshotLines, let start, let end else { return 0 }
+    private static func lineCount(start: Int, end: Int?, snapshotLines: Int?) -> Int {
+        guard let snapshotLines, let end else { return 0 }
         let clampedStart = max(1, start)
         let clampedEnd = min(end, snapshotLines)
         guard clampedStart <= clampedEnd else { return 0 }
         return clampedEnd - clampedStart + 1
     }
 
-    private static func belowCount(start: Int?, end: Int?, snapshotLines: Int?) -> Int {
-        guard let snapshotLines, let start, let end else { return 0 }
-        let clampedStart = max(1, start)
-        let clampedEnd = min(end, snapshotLines)
-        guard clampedStart <= clampedEnd else { return 0 }
-        return clampedEnd - clampedStart + 1
-    }
-
-    private static func startAfterLastLine(in group: DiffDisplayGroup?, side: DiffLineSide) -> Int? {
-        guard let group else { return 1 }
-        return lastLineNumber(in: group, side: side).map { $0 + 1 }
-    }
-
-    private static func lineBeforeFirstLine(in group: DiffDisplayGroup?, side: DiffLineSide) -> Int? {
-        guard let group else { return nil }
-        return firstLineNumber(in: group, side: side).map { $0 - 1 }
-    }
-
-    private static func lineAfterLastLine(in group: DiffDisplayGroup, side: DiffLineSide) -> Int? {
-        lastLineNumber(in: group, side: side).map { $0 + 1 }
-    }
-
-    private static func firstLineNumber(in group: DiffDisplayGroup, side: DiffLineSide) -> Int? {
-        for row in group.rows {
-            let line = side == .old ? row.old : row.new
-            if let number = line?.lineNumber {
-                return number
-            }
+    private static func hunkSideExtent(in group: DiffDisplayGroup, side: DiffLineSide) -> HunkSideExtent {
+        let start = side == .old ? group.sourceHunk.oldStart : group.sourceHunk.newStart
+        let count = group.sourceHunk.lines.reduce(0) { partial, line in
+            partial + (lineConsumes(line, side: side) ? 1 : 0)
         }
-        return nil
+        return HunkSideExtent(start: start, count: count)
     }
 
-    private static func lastLineNumber(in group: DiffDisplayGroup, side: DiffLineSide) -> Int? {
-        for row in group.rows.reversed() {
-            let line = side == .old ? row.old : row.new
-            if let number = line?.lineNumber {
-                return number
-            }
+    private static func lineConsumes(_ line: ParsedDiff.Hunk.Line, side: DiffLineSide) -> Bool {
+        switch (line.kind, side) {
+        case (.context, .old), (.context, .new), (.delete, .old), (.add, .new):
+            return true
+        case (_, .paired), (.add, .old), (.delete, .new):
+            return false
         }
-        return nil
     }
 
     private static func expandedContextRow(
@@ -308,11 +305,10 @@ enum DiffContextExpandedDisplayBuilder {
         group: DiffDisplayGroup,
         boundary: DiffContextBoundary,
         remaining: Int,
-        key: DiffContextExpansionKey,
-        chunkSize: Int
+        key: DiffContextExpansionKey
     ) -> DiffDisplayRow {
         DiffDisplayRow(
-            id: "\(group.id)-expand-\(boundary.rawValue)-\(remaining)-\(chunkSize)",
+            id: "\(group.id)-expand-\(boundary.rawValue)",
             kind: .expandableContext,
             old: nil,
             new: nil,
