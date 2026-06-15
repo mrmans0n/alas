@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private let diffContextExpansionChunkSize = 10
+
 struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
     let path: String
     let side: DiffReviewInlineFeedbackSide
@@ -314,6 +316,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in } {
         didSet {
+            textView.contextExpansionHandler = onContextExpansion
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.onContextExpansion = onContextExpansion
         }
     }
@@ -412,6 +415,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         textView.font = font
         textView.lineMetadata = document.lines
         textView.lineTones = lineTones
+        textView.contextExpansionHandler = onContextExpansion
         textView.theme = theme
         textView.lspContext = lspContext
         textView.allowedLSPSide = allowedLSPSide
@@ -660,6 +664,7 @@ final class DiffPaneCodeTextView: NSTextView {
     var commandClickHandler: ((NSPoint) -> Void)?
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
+    var contextExpansionHandler: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     var lspContext: DiffPaneLSPContext?
     var allowedLSPSide: DiffLineSide = .new
     var hasLSPContextForTesting: Bool { lspContext != nil }
@@ -716,8 +721,12 @@ final class DiffPaneCodeTextView: NSTextView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        if invokeExpansion(at: point, optionKey: event.modifierFlags.contains(.option)) {
+            return
+        }
         if event.modifierFlags.contains(.command), let commandClickHandler {
-            commandClickHandler(convert(event.locationInWindow, from: nil))
+            commandClickHandler(point)
             return
         }
         super.mouseDown(with: event)
@@ -897,6 +906,32 @@ final class DiffPaneCodeTextView: NSTextView {
         return reviewLineAnchor(atRow: row)
     }
 
+    func invokeExpansionForTesting(row: Int, optionKey: Bool) {
+        guard let key = expansionKey(atRow: row) else { return }
+        invokeExpansion(key: key, optionKey: optionKey)
+    }
+
+    private func invokeExpansion(at point: NSPoint, optionKey: Bool) -> Bool {
+        let rowRects = diffRowRects()
+        guard let row = rowRects.firstIndex(where: { $0.contains(point) }),
+              let key = expansionKey(atRow: row)
+        else {
+            return false
+        }
+        invokeExpansion(key: key, optionKey: optionKey)
+        return true
+    }
+
+    private func expansionKey(atRow row: Int) -> DiffContextExpansionKey? {
+        guard lineMetadata.indices.contains(row) else { return nil }
+        return lineMetadata[row].expansionKey
+    }
+
+    private func invokeExpansion(key: DiffContextExpansionKey, optionKey: Bool) {
+        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
+        contextExpansionHandler(key, mode)
+    }
+
     private func drawLineBackgrounds(in dirtyRect: NSRect) {
         guard let theme else { return }
         let rowRects = diffRowRects()
@@ -1030,7 +1065,6 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
     private let minimumThickness: CGFloat = 42
     private let horizontalPadding: CGFloat = 8
-    private let defaultExpansionChunkSize = 10
 
     init(scrollView: NSScrollView) {
         super.init(scrollView: scrollView, orientation: .verticalRuler)
@@ -1197,7 +1231,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             return false
         }
 
-        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: defaultExpansionChunkSize)
+        let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
         onContextExpansion(key, mode)
         return true
     }

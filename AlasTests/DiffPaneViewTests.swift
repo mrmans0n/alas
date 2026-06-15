@@ -979,6 +979,118 @@ struct DiffPaneViewTests {
         #expect(captured?.1 == .all)
     }
 
+    @Test @MainActor func codeTextViewInvokesExpansionActionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .above)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "9 unchanged lines above",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .above
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(scrollView)
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .old,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let textView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRect = try #require(textView.diffRowRects().first)
+        let windowPoint = textView.convert(NSPoint(x: rowRect.midX, y: rowRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .chunk(size: 10))
+    }
+
+    @Test @MainActor func codeTextViewOptionClickInvokesFullExpansionForExpandableRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let key = DiffContextExpansionKey(groupID: "hunk-0", boundary: .below)
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: "7 unchanged lines below",
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .expandableContext,
+                    range: NSRange(location: 0, length: 23),
+                    expansionKey: key,
+                    expansionBoundary: .below
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(scrollView)
+        var captured: (DiffContextExpansionKey, DiffContextExpansionMode)?
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["+"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new,
+            onContextExpansion: { key, mode in captured = (key, mode) }
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let textView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRect = try #require(textView.diffRowRects().first)
+        let windowPoint = textView.convert(NSPoint(x: rowRect.midX, y: rowRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: .option,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        #expect(captured?.0 == key)
+        #expect(captured?.1 == .all)
+    }
+
     @Test @MainActor func lineNumberRulerKeepsReviewSelectionForNonExpandableRows() throws {
         let theme = theme()
         let font = CenterTypography.resolveCodeFont(family: "", size: 13)
