@@ -340,8 +340,11 @@ final class CompletionFeature {
         requestTask?.cancel()
         requestTask = nil
         requestID &+= 1
+        candidates.removeAll()
         prefix = nil
+        selection = 0
         isRefreshing = true
+        closeUI()
     }
 
     private func canAcceptCompletion(prefix: CompletionPrefix, in textView: CodeTextView) -> Bool {
@@ -373,3 +376,43 @@ final class CompletionFeature {
         return true
     }
 }
+
+#if DEBUG
+extension CompletionFeature {
+    struct TestingSnapshot: Equatable {
+        let candidateLabels: [String]
+        let prefix: CompletionPrefix?
+        let selection: Int
+        let isRefreshing: Bool
+    }
+
+    func testingSeedVisibleCandidates(labels: [String], prefix: CompletionPrefix, selection: Int = 0) {
+        candidates = labels.map {
+            CompletionCandidate(
+                label: $0,
+                detail: nil,
+                kind: nil,
+                documentation: nil,
+                sortText: nil,
+                filterText: $0,
+                replacementText: $0,
+                textEdit: nil,
+                additionalTextEdits: [],
+                source: .lsp
+            )
+        }
+        self.prefix = prefix
+        self.selection = min(max(selection, 0), max(candidates.count - 1, 0))
+        isRefreshing = false
+    }
+
+    var testingSnapshot: TestingSnapshot {
+        TestingSnapshot(
+            candidateLabels: candidates.map(\.label),
+            prefix: prefix,
+            selection: selection,
+            isRefreshing: isRefreshing
+        )
+    }
+}
+#endif
