@@ -239,6 +239,23 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     var hasActionableFeedback: Bool {
         reviewDecision == .changesRequested || threads.contains { !$0.isResolved && $0.isActionable }
     }
+
+    static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: "",
+            url: remote.webURL,
+            state: .open,
+            isDraft: false,
+            headRefName: "",
+            baseRefName: "",
+            reviewDecision: .unknown,
+            mergeState: .unknown,
+            checks: [],
+            threads: []
+        )
+    }
 }
 
 struct ReviewLoopLocalState: Equatable, Sendable {

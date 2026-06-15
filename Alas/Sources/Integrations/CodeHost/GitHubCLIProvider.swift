@@ -158,6 +158,10 @@ struct GitHubCLIProvider: CodeHostProvider {
         return Self.withThreads(threads, on: request)
     }
 
+    func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+        try await refreshedReviewRequest(remote: remote, request: ReviewRequest.placeholder(remote: remote, number: number), cwd: cwd)
+    }
+
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,

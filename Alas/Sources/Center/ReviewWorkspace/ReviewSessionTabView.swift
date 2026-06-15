@@ -655,6 +655,18 @@ struct ReviewSessionTabView: View {
         actions.replyProvider = { item, file, body in
             Task { await mutateProviderThread(item, file: file, loaded: loaded, kind: .reply, body: body) }
         }
+        actions.openProvider = { item, _ in
+            guard let url = item.providerURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        actions.copyContext = { item, file in
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(
+                DiffReviewInlineFeedbackContextFormatter.format(item: item, file: file),
+                forType: .string
+            )
+        }
         actions.resolveProvider = { item, file in
             Task { await mutateProviderThread(item, file: file, loaded: loaded, kind: .resolve, body: nil) }
         }

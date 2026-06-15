@@ -165,6 +165,8 @@ struct ReviewSessionLoaderTests {
 
         #expect(loaded.providerContext?.remote.repositorySlug == "mrmans0n/alas")
         #expect(loaded.providerContext?.reviewRequest.number == 428)
+        #expect(loaded.providerContext?.reviewRequest.title == "Provider refreshed title")
+        #expect(loaded.providerContext?.reviewRequest.threads.map(\.id) == ["thread-1"])
         #expect(loaded.session.summary.files.map(\.path) == [summary.path])
         #expect(loaded.session.summary.files.map(\.namespace) == [summary.namespace])
     }
@@ -263,6 +265,34 @@ struct ReviewSessionLoaderTests {
             cwd: URL
         ) async throws -> ReviewRequest? {
             nil
+        }
+        func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+            ReviewRequest(
+                remote: remote,
+                number: number,
+                title: "Provider refreshed title",
+                url: URL(string: "https://github.com/mrmans0n/alas/pull/\(number)")!,
+                state: .open,
+                isDraft: false,
+                headRefName: "feature/provider-review",
+                baseRefName: "main",
+                reviewDecision: .unknown,
+                mergeState: .clean,
+                checks: [],
+                threads: [
+                    ReviewThreadSummary(
+                        id: "thread-1",
+                        author: "reviewer",
+                        body: "Please adjust this.",
+                        url: URL(string: "https://github.com/mrmans0n/alas/pull/\(number)#discussion_r1"),
+                        isResolved: false,
+                        isActionable: true,
+                        location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 1, side: .new, providerPosition: nil),
+                        providerThreadID: "thread-provider-1",
+                        providerCommentID: "comment-provider-1"
+                    ),
+                ]
+            )
         }
         func createReviewRequest(
             remote: CodeHostRemote,

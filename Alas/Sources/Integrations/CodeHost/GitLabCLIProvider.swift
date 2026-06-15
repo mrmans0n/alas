@@ -78,6 +78,10 @@ struct GitLabCLIProvider: CodeHostProvider {
         return Self.withEnrichment(threads: threads, checks: checks, on: detailedRequest)
     }
 
+    func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+        try await refreshedReviewRequest(remote: remote, request: ReviewRequest.placeholder(remote: remote, number: number), cwd: cwd)
+    }
+
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,
@@ -1352,13 +1356,14 @@ private struct GitLabCreateDiscussionLineRangePoint: Encodable {
     let newLine: Int?
 
     init(path: String, type: LineType, line: Int) {
-        self.lineCode = "\(Self.sha1Hex(path))_\(line)_\(line)"
         self.type = type
         switch type {
         case .old:
+            self.lineCode = "\(Self.sha1Hex(path))_\(line)_0"
             self.oldLine = line
             self.newLine = nil
         case .new:
+            self.lineCode = "\(Self.sha1Hex(path))_0_\(line)"
             self.oldLine = nil
             self.newLine = line
         }

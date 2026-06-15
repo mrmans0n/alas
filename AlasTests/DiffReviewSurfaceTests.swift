@@ -287,7 +287,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let feedback = DiffReviewInlineFeedback(
             id: "thread-1",
@@ -836,7 +837,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         var published = draftComment(id: "draft-published-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
         published.providerPublish = ReviewDraftProviderPublish(
@@ -934,7 +936,8 @@ struct DiffReviewSurfaceTests {
             parsedDiff: parsedDiff(),
             displayModel: displayModel(),
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
         let comment = draftComment(id: "draft-publish-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
         var layout = DiffLayoutMode.split

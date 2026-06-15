@@ -796,11 +796,54 @@ struct GitLabCLIProviderTests {
         #expect(lineRangeStart["type"] as? String == "new")
         #expect(lineRangeStart["new_line"] as? Int == 24)
         #expect(lineRangeStart["old_line"] == nil)
-        #expect(lineRangeStart["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/App.swift"))_24_24")
+        #expect(lineRangeStart["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/App.swift"))_0_24")
         #expect(lineRangeEnd["type"] as? String == "new")
         #expect(lineRangeEnd["new_line"] as? Int == 26)
         #expect(lineRangeEnd["old_line"] == nil)
-        #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/App.swift"))_26_26")
+        #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/App.swift"))_0_26")
+    }
+
+    @Test func publishReviewUsesZeroNewLineInGitLabDeletedLineRangeCodes() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+        let provider = GitLabCLIProvider(runner: runner)
+
+        _ = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                try Self.makeProviderDraftComment(
+                    localDraftID: "draft-1",
+                    path: "Sources/OldApp.swift",
+                    side: .old,
+                    lineRange: 12...14,
+                    bodyMarkdown: "This removal needs another look."
+                ),
+            ],
+            decision: .comment,
+            summaryBody: "",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
+        let position = try #require(discussionPayload["position"] as? [String: Any])
+        let lineRange = try #require(position["line_range"] as? [String: Any])
+        let lineRangeStart = try #require(lineRange["start"] as? [String: Any])
+        let lineRangeEnd = try #require(lineRange["end"] as? [String: Any])
+        #expect(lineRangeStart["type"] as? String == "old")
+        #expect(lineRangeStart["old_line"] as? Int == 12)
+        #expect(lineRangeStart["new_line"] == nil)
+        #expect(lineRangeStart["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/OldApp.swift"))_12_0")
+        #expect(lineRangeEnd["type"] as? String == "old")
+        #expect(lineRangeEnd["old_line"] as? Int == 14)
+        #expect(lineRangeEnd["new_line"] == nil)
+        #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/OldApp.swift"))_14_0")
     }
 
     @Test func publishReviewCreatesRequestChangesNoteForGitLabDecision() async throws {

@@ -138,20 +138,7 @@ struct ReviewSessionLoader {
                     remoteName: "origin",
                     webURL: target.providerURL ?? URL(string: "https://\(host)/\(repositorySlug)")!
                 )
-                let request = ReviewRequest(
-                    remote: remote,
-                    number: number,
-                    title: target.title,
-                    url: target.providerURL ?? remote.webURL,
-                    state: .open,
-                    isDraft: false,
-                    headRefName: "",
-                    baseRefName: "",
-                    reviewDecision: .unknown,
-                    mergeState: .unknown,
-                    checks: [],
-                    threads: []
-                )
+                let request = try await provider.reviewRequest(remote: remote, number: number, cwd: target.repositoryPath)
                 let loadedSession = try await ReviewRequestDiffLoader(provider: provider).load(
                     remote: remote,
                     request: request,
