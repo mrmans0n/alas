@@ -107,6 +107,7 @@ struct GitLabCLIProviderTests {
         #expect(request.isDraft == false)
         #expect(request.headRefName == "feature/gitlab-provider")
         #expect(request.baseRefName == "main")
+        #expect(request.headSHA == "head123")
         #expect(request.reviewDecision == .unknown)
         #expect(request.mergeState == .clean)
         #expect(request.provider == .gitlab)
@@ -118,6 +119,7 @@ struct GitLabCLIProviderTests {
         #expect(request.number == 42)
         #expect(request.title == "Add GitLab provider")
         #expect(request.isDraft == true)
+        #expect(request.headSHA == "head123")
         #expect(request.reviewDecision == .reviewRequired)
         #expect(request.mergeState == .blocked)
     }
@@ -781,6 +783,9 @@ struct GitLabCLIProviderTests {
         ])
         let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
         #expect(discussionPayload["body"] as? String == "Please fix this.")
+        #expect(commands[2].args.suffix(2) == ["--input", "-"])
+        let approvePayload = try Self.jsonObject(from: commands[2].stdin)
+        #expect(approvePayload["sha"] as? String == "head123")
         let position = try #require(discussionPayload["position"] as? [String: Any])
         #expect(position["position_type"] as? String == "text")
         #expect(position["base_sha"] as? String == "base123")
@@ -1578,6 +1583,7 @@ struct GitLabCLIProviderTests {
             isDraft: false,
             headRefName: "feature/gitlab-provider",
             baseRefName: "main",
+            headSHA: "head123",
             reviewDecision: .unknown,
             mergeState: .unknown,
             checks: checks,
@@ -1640,6 +1646,7 @@ struct GitLabCLIProviderTests {
         "draft": false,
         "source_branch": "feature/gitlab-provider",
         "target_branch": "main",
+        "sha": "head123",
         "merge_status": "can_be_merged",
         "detailed_merge_status": "mergeable"
       }
@@ -1655,6 +1662,7 @@ struct GitLabCLIProviderTests {
       "draft": true,
       "source_branch": "feature/gitlab-provider",
       "target_branch": "main",
+      "sha": "head123",
       "merge_status": "cannot_be_merged",
       "detailed_merge_status": "not_approved",
       "approvals_required": 1,

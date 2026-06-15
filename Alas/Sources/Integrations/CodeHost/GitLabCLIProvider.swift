@@ -477,6 +477,10 @@ struct GitLabCLIProvider: CodeHostProvider {
     }
 
     private func approveMergeRequest(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws {
+        guard let headSHA = Self.normalizedOptionalString(request.headSHA) else {
+            throw CodeHostProviderError.malformedOutput("GitLab approval requires the reviewed merge request head SHA.")
+        }
+        let payload = GitLabApproveMergeRequestPayload(sha: headSHA)
         let result = try await runner.run(
             "glab",
             args: [
@@ -484,8 +488,10 @@ struct GitLabCLIProvider: CodeHostProvider {
                 "projects/:id/merge_requests/\(request.number)/approve",
                 "--method", "POST",
                 "--hostname", remote.host,
+                "--input", "-",
             ],
-            cwd: cwd
+            cwd: cwd,
+            stdin: try Self.encodedJSON(payload)
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api merge request approve", stderr: result.stderr)
@@ -898,6 +904,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             isDraft: item.isDraft,
             headRefName: item.sourceBranch,
             baseRefName: item.targetBranch,
+            headSHA: normalizedOptionalString(item.sha),
             reviewDecision: mapReviewDecision(approvalsRequired: item.approvalsRequired, approvalsLeft: item.approvalsLeft),
             mergeState: mapMergeState(detailed: item.detailedMergeStatus, fallback: item.mergeStatus),
             checks: [],
@@ -1121,6 +1128,7 @@ struct GitLabCLIProvider: CodeHostProvider {
 private struct MRListItem: Decodable {
     let id: Int?
     let iid: Int?
+    let sha: String?
     let title: String
     let webURL: String
     let state: String
@@ -1158,6 +1166,7 @@ private struct MRListItem: Decodable {
     private enum CodingKeys: String, CodingKey {
         case id
         case iid
+        case sha
         case title
         case webURL = "web_url"
         case state
@@ -1385,6 +1394,10 @@ private struct GitLabCreateDiscussionLineRangePoint: Encodable {
 
 private struct GitLabBodyPayload: Encodable {
     let body: String
+}
+
+private struct GitLabApproveMergeRequestPayload: Encodable {
+    let sha: String
 }
 
 private struct GitLabResolveDiscussionPayload: Encodable {

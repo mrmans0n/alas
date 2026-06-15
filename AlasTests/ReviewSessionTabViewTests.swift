@@ -835,6 +835,58 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) != nil)
     }
 
+    @Test func reviewSessionShowsPublishReviewForProviderContextWithoutDraftsAndOpensPublishConfirmation() async throws {
+        let request = Self.reviewRequest(provider: .github)
+        let target = Self.reviewRequestTarget(provider: .github, request: request)
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-decision-only-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("drafts.json")
+        )
+        let provider = RecordingProviderReviewMutator(
+            kind: .github,
+            publishResult: ProviderReviewPublishResult(
+                published: [],
+                failed: [],
+                refreshedRequest: request,
+                warnings: []
+            )
+        )
+        let view = ReviewSessionTabView.testView(
+            record: record,
+            loaded: loaded,
+            draftCommentStore: draftStore,
+            provider: provider
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host) != nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: host))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.layoutSubtreeIfNeeded()
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host) != nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host))
+        let deadline = Date().addingTimeInterval(1)
+        while provider.publishRequests().isEmpty, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(provider.publishRequests().map(\.decision) == [.approve])
+    }
+
     @Test func reviewSessionShowsProviderFeedbackOpenAndCopyActions() throws {
         let thread = ReviewThreadSummary(
             id: "thread-1",

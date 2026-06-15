@@ -477,16 +477,31 @@ struct ReviewSessionTabView: View {
     }
 
     private func canPublishProviderReview(in loaded: ReviewSessionLoadedContext) -> Bool {
-        guard loaded.providerContext != nil else { return false }
-        return !ProviderReviewPublishPlanner.publishableDrafts(draftCommentController?.comments ?? []).isEmpty
+        guard let providerContext = loaded.providerContext,
+              let provider = providerRegistry.provider(for: providerContext.remote.kind)
+        else { return false }
+        let capabilities = provider.capabilities
+        return capabilities.canPublishReviewComments
+            || capabilities.canApproveReview
+            || capabilities.canRequestChanges
     }
 
     private func openProviderPublishConfirmation(commentID: String?, loaded: ReviewSessionLoadedContext) {
-        guard let providerContext = loaded.providerContext else { return }
+        guard let providerContext = loaded.providerContext,
+              let provider = providerRegistry.provider(for: providerContext.remote.kind)
+        else { return }
         let comments = providerPublishableComments(commentID: commentID)
         let unpublishableMessages = providerUnpublishableMessages(commentID: commentID)
-        guard !comments.isEmpty || !unpublishableMessages.isEmpty else { return }
-        selectedProviderDecision = .comment
+        guard commentID == nil || !comments.isEmpty || !unpublishableMessages.isEmpty else { return }
+        guard !comments.isEmpty
+            || !unpublishableMessages.isEmpty
+            || provider.capabilities.canApproveReview
+            || provider.capabilities.canRequestChanges
+        else { return }
+        selectedProviderDecision = Self.defaultProviderDecision(
+            commentCount: comments.count,
+            capabilities: provider.capabilities
+        )
         providerPublishError = nil
         providerPublishConfirmation = ProviderReviewPublishConfirmationState(
             commentID: commentID,
@@ -495,6 +510,22 @@ struct ReviewSessionTabView: View {
             commentCount: comments.count,
             unpublishableMessages: unpublishableMessages
         )
+    }
+
+    private static func defaultProviderDecision(
+        commentCount: Int,
+        capabilities: CodeHostProviderCapabilities
+    ) -> ProviderReviewDecision {
+        if commentCount > 0 {
+            return .comment
+        }
+        if capabilities.canApproveReview {
+            return .approve
+        }
+        if capabilities.canRequestChanges {
+            return .requestChanges
+        }
+        return .comment
     }
 
     private func providerPublishableComments(commentID: String?) -> [ReviewDraftComment] {

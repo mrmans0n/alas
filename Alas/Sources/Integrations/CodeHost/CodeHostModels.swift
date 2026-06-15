@@ -223,6 +223,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let isDraft: Bool
     let headRefName: String
     let baseRefName: String
+    let headSHA: String?
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
@@ -231,6 +232,36 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     var provider: CodeHostKind { remote.kind }
 
     var displayIdentity: String { "\(provider.displayName) \(provider.reviewRequestNumberPrefix)\(number)" }
+
+    init(
+        remote: CodeHostRemote,
+        number: Int,
+        title: String,
+        url: URL,
+        state: ReviewRequestState,
+        isDraft: Bool,
+        headRefName: String,
+        baseRefName: String,
+        headSHA: String? = nil,
+        reviewDecision: ReviewDecision,
+        mergeState: ReviewMergeState,
+        checks: [ReviewCheck],
+        threads: [ReviewThreadSummary]
+    ) {
+        self.remote = remote
+        self.number = number
+        self.title = title
+        self.url = url
+        self.state = state
+        self.isDraft = isDraft
+        self.headRefName = headRefName
+        self.baseRefName = baseRefName
+        self.headSHA = headSHA
+        self.reviewDecision = reviewDecision
+        self.mergeState = mergeState
+        self.checks = checks
+        self.threads = threads
+    }
 
     var worstCheckBucket: ReviewCheckBucket? {
         checks.max { $0.bucket.severity < $1.bucket.severity }?.bucket
