@@ -523,6 +523,7 @@ final class CodeEditorCoordinator {
         textView?.increaseFontSizeHandler = nil
         textView?.decreaseFontSizeHandler = nil
         textView?.resetFontSizeHandler = nil
+        textView?.undoManager?.removeAllActions()
         textView = nil
         buffer = nil
         // We deliberately do NOT close the LSP document or stop the file
