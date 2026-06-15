@@ -1,5 +1,53 @@
 import SwiftUI
 
+struct ReviewSessionTabLoadToken: Equatable {
+    private let id = UUID()
+}
+
+struct ReviewSessionTabLoadCoordinator {
+    private(set) var activeToken: ReviewSessionTabLoadToken?
+
+    mutating func begin() -> ReviewSessionTabLoadToken {
+        let token = ReviewSessionTabLoadToken()
+        activeToken = token
+        return token
+    }
+
+    func canPublish(_ token: ReviewSessionTabLoadToken) -> Bool {
+        activeToken == token
+    }
+
+    mutating func finish(_ token: ReviewSessionTabLoadToken) {
+        guard activeToken == token else { return }
+        activeToken = nil
+    }
+}
+
+struct ReviewSessionTabLoadPublication {
+    let record: ReviewSessionRecord
+    let loaded: ReviewSessionLoadedContext
+    let selectedFileID: DiffReviewFileID?
+    let focusedDraftCommentID: String?
+    let shouldPersistSelectionState: Bool
+
+    static func initial(
+        record: ReviewSessionRecord,
+        loaded: ReviewSessionLoadedContext
+    ) -> ReviewSessionTabLoadPublication {
+        let fileIDs = loaded.session.summary.files.map(\.id)
+        return ReviewSessionTabLoadPublication(
+            record: record,
+            loaded: loaded,
+            selectedFileID: DiffReviewSurfaceSelectionSync.synchronizedSelection(
+                current: record.selectedFileID,
+                fileIDs: fileIDs
+            ),
+            focusedDraftCommentID: record.focusedCommentID,
+            shouldPersistSelectionState: false
+        )
+    }
+}
+
 struct ReviewSessionTabView: View {
     let worktree: Worktree?
     let tabState: ReviewSessionTabState
@@ -28,6 +76,8 @@ struct ReviewSessionTabView: View {
     @State private var focusedDraftCommentID: String?
     @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
+    @State private var loadCoordinator = ReviewSessionTabLoadCoordinator()
+    @State private var loadGeneration = 0
 
     init(worktree: Worktree, tabState: ReviewSessionTabState, appState: AppState) {
         self.worktree = worktree
@@ -91,16 +141,15 @@ struct ReviewSessionTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
-        .task(id: tabState.sessionID.rawValue) {
+        .task(id: loadTaskID) {
             guard loadsOnAppear else { return }
-            await loadReviewSession()
+            let token = beginLoadReviewSession()
+            await loadReviewSession(token: token)
         }
-        .onChange(of: selectedFileID) { _, fileID in
-            persistSelectedFile(fileID)
-        }
-        .onChange(of: focusedDraftCommentID) { _, commentID in
-            persistFocusedComment(commentID)
-        }
+    }
+
+    private var loadTaskID: String {
+        "\(tabState.sessionID.rawValue):\(loadGeneration)"
     }
 
     private var header: some View {
@@ -168,7 +217,7 @@ struct ReviewSessionTabView: View {
             }
             if showsRetry {
                 Button("Retry") {
-                    Task { await loadReviewSession() }
+                    loadGeneration += 1
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -183,7 +232,7 @@ struct ReviewSessionTabView: View {
             session: loaded.session,
             selectedFileID: Binding(
                 get: { selectedFileID },
-                set: { selectedFileID = $0 }
+                set: { setSelectedFileID($0, persist: true) }
             ),
             railCollapsed: $railCollapsed,
             reviewSummaryCollapsed: $reviewSummaryCollapsed,
@@ -278,43 +327,49 @@ struct ReviewSessionTabView: View {
         }
     }
 
-    private func loadReviewSession() async {
+    private func beginLoadReviewSession() -> ReviewSessionTabLoadToken {
+        let token = loadCoordinator.begin()
         isLoading = true
         loadError = nil
         loaded = nil
+        return token
+    }
 
+    private func loadReviewSession(token: ReviewSessionTabLoadToken) async {
         do {
             guard let storedRecord = try sessionStore.load(id: tabState.sessionID) else {
                 throw ReviewSessionTabError.missingSession(tabState.sessionID)
             }
-            record = storedRecord
-            selectedFileID = storedRecord.selectedFileID
-            focusedDraftCommentID = storedRecord.focusedCommentID
-            loadDraftCommentController(for: storedRecord)
 
             let loadedContext = try await loader.load(target: storedRecord.target)
-            loaded = loadedContext
-            selectedFileID = synchronizedSelection(
-                selectedFileID,
-                session: loadedContext.session
+            guard loadCoordinator.canPublish(token) else { return }
+
+            publishInitialLoad(
+                ReviewSessionTabLoadPublication.initial(
+                    record: storedRecord,
+                    loaded: loadedContext
+                )
             )
+            loadDraftCommentController(for: storedRecord)
             isLoading = false
+            loadCoordinator.finish(token)
         } catch is CancellationError {
+            guard loadCoordinator.canPublish(token) else { return }
             isLoading = false
+            loadCoordinator.finish(token)
         } catch {
+            guard loadCoordinator.canPublish(token) else { return }
             loadError = error.localizedDescription
             isLoading = false
+            loadCoordinator.finish(token)
         }
     }
 
-    private func synchronizedSelection(
-        _ selected: DiffReviewFileID?,
-        session: DiffReviewLoadedSession
-    ) -> DiffReviewFileID? {
-        if let selected, session.summary.files.contains(where: { $0.id == selected }) {
-            return selected
-        }
-        return session.summary.files.first?.id
+    private func publishInitialLoad(_ publication: ReviewSessionTabLoadPublication) {
+        record = publication.record
+        loaded = publication.loaded
+        selectedFileID = publication.selectedFileID
+        focusedDraftCommentID = publication.focusedDraftCommentID
     }
 
     private func loadDraftCommentController(for record: ReviewSessionRecord) {
@@ -342,8 +397,8 @@ struct ReviewSessionTabView: View {
     }
 
     private func selectDraftComment(_ comment: ReviewDraftComment) {
-        focusedDraftCommentID = comment.id
-        selectedFileID = comment.fileID
+        setFocusedDraftCommentID(comment.id, persist: true)
+        setSelectedFileID(comment.fileID, persist: true)
         draftCommentScrollCommand = draftCommentScrollController.command(
             commentID: comment.id,
             fileID: comment.fileID
@@ -358,8 +413,23 @@ struct ReviewSessionTabView: View {
         }
     }
 
+    private func setSelectedFileID(_ fileID: DiffReviewFileID?, persist shouldPersist: Bool) {
+        guard selectedFileID != fileID else { return }
+        selectedFileID = fileID
+        guard shouldPersist else { return }
+        persistSelectedFile(fileID)
+    }
+
+    private func setFocusedDraftCommentID(_ commentID: String?, persist shouldPersist: Bool) {
+        guard focusedDraftCommentID != commentID else { return }
+        focusedDraftCommentID = commentID
+        guard shouldPersist else { return }
+        persistFocusedComment(commentID)
+    }
+
     private func persistSelectedFile(_ fileID: DiffReviewFileID?) {
         guard let current = record else { return }
+        guard current.selectedFileID != fileID else { return }
         let updated = current.selectingFile(fileID, now: now())
         persist(updated)
         updateTabState { state in
@@ -369,6 +439,7 @@ struct ReviewSessionTabView: View {
 
     private func persistFocusedComment(_ commentID: String?) {
         guard let current = record else { return }
+        guard current.focusedCommentID != commentID else { return }
         let updated = current.focusingComment(commentID, now: now())
         persist(updated)
         updateTabState { state in
