@@ -448,6 +448,58 @@ struct GitHubCLIProviderTests {
         })
     }
 
+    @Test func githubPublishReviewDoesNotRetryAfterMalformedSuccessfulBatchResponse() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"data":{}}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-1",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: nil,
+                    body: "Please simplify this."
+                ),
+                Self.makeProviderDraftComment(
+                    id: "draft-2",
+                    path: "Sources/Other.swift",
+                    side: .new,
+                    startLine: 99,
+                    endLine: nil,
+                    body: "This anchor is stale."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 4)
+        let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let publishInput = try #require(publishVariables["input"] as? [String: Any])
+        let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
+        #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
+        #expect(publishThreads.count == 2)
+        #expect(commands[2].args.first == "pr")
+        #expect(result.published.isEmpty)
+        #expect(result.failed.map(\.localDraftID) == ["draft-1", "draft-2"])
+        #expect(result.failed.allSatisfy {
+            $0.message.contains("Unable to parse gh publish review output")
+        })
+        #expect(result.warnings.isEmpty)
+        #expect(result.refreshedRequest.number == 42)
+    }
+
     @Test func githubPublishReviewPreservesMappingsWhenRefreshFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),

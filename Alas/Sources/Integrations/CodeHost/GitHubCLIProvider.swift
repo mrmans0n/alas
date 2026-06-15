@@ -413,7 +413,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
             return (published.published, published.failed, [])
         } catch {
-            guard publishableComments.count > 1 else {
+            guard Self.shouldRetryPublishIndividually(after: error), publishableComments.count > 1 else {
                 return (
                     [],
                     publishableComments.map {
@@ -446,6 +446,13 @@ struct GitHubCLIProvider: CodeHostProvider {
                 ["GitHub rejected the batch review; Alas retried publishable comments individually without submitting the review decision."]
             )
         }
+    }
+
+    private static func shouldRetryPublishIndividually(after error: Error) -> Bool {
+        guard case CodeHostProviderError.commandFailed = error else {
+            return false
+        }
+        return true
     }
 
     private func submitReview(
