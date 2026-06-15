@@ -24,6 +24,7 @@ struct DiffReviewFileSection: View {
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
     var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
 
     @Environment(\.theme) private var theme
@@ -501,6 +502,7 @@ struct DiffReviewFileSection: View {
 
     private func loadContextAndExpand(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {
         guard let provider = file.contextProvider else { return }
+        onContextExpansionActivated()
         if contextSnapshot != nil {
             applyContextExpansion(key, mode: mode)
             return
