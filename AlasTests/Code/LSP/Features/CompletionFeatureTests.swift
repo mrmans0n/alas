@@ -64,6 +64,29 @@ struct CompletionFeatureTests {
         #expect(!CompletionFeature.isMemberAccessTriggerCharacter(nil))
     }
 
+    @Test("refresh clears stale candidates before the next response")
+    func refreshClearsStaleCandidatesBeforeNextResponse() {
+        let textView = makeTextView("open")
+        let feature = CompletionFeature(
+            textView: textView,
+            getClient: { nil },
+            getURI: { "file:///tmp/foo.swift" },
+            isEnabled: { true }
+        )
+        feature.testingSeedVisibleCandidates(
+            labels: ["openAlpha", "openBeta"],
+            prefix: CompletionPrefix(text: "open", range: NSRange(location: 0, length: 4))
+        )
+
+        textView.completionChangeHandler?()
+
+        #expect(feature.testingSnapshot.candidateLabels.isEmpty)
+        #expect(feature.testingSnapshot.prefix == nil)
+        #expect(feature.testingSnapshot.selection == 0)
+        #expect(feature.testingSnapshot.isRefreshing)
+        feature.cancelAndDismiss()
+    }
+
     private func waitForCompletionRequest(events: () -> [String]) async throws {
         let deadline = Date().addingTimeInterval(2)
         while !events().contains("completion"), Date() < deadline {
