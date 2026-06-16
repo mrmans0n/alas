@@ -42,6 +42,13 @@ main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 #status[data-state="ok"]::before { background: var(--add); box-shadow: 0 0 6px color-mix(in oklab, var(--add) 70%, transparent); }
 #status[data-state="bad"]::before { background: var(--del); }
 #status[data-state="connecting"]::before { background: oklch(0.82 0.13 90); }
+@media (max-width: 360px) {
+  #bar { gap: 7px; padding-left: 9px; padding-right: 9px; }
+  #new-session { font-size: 0; width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+  #new-session::before { content: "+"; font-size: 18px; line-height: 1; }
+  #status.chip { font-size: 0; gap: 0; padding: 7px; }
+  #status.chip::before { width: 8px; height: 8px; }
+}
 /* The active view fills the shell; long content scrolls inside it, not the page. */
 .view { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 12px calc(28px + env(safe-area-inset-bottom)); }
 .hidden { display: none !important; }   /* !important: beats .sheet's later display:flex */

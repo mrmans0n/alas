@@ -48,11 +48,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=42"#))
-        #expect(html.contains(#"/style.css?v=30"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v18";"#))
-        #expect(sw.contains(#""/app.js?v=42""#))
-        #expect(sw.contains(#""/style.css?v=30""#))
+        #expect(html.contains(#"/app.js?v=43"#))
+        #expect(html.contains(#"/style.css?v=31"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v19";"#))
+        #expect(sw.contains(#""/app.js?v=43""#))
+        #expect(sw.contains(#""/style.css?v=31""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -83,8 +83,8 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=42"))
-        #expect(html.contains("/style.css?v=30"))
+        #expect(html.contains("/app.js?v=43"))
+        #expect(html.contains("/style.css?v=31"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -109,8 +109,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=42""#))
-        #expect(sw.contains(#""/style.css?v=30""#))
+        #expect(sw.contains(#""/app.js?v=43""#))
+        #expect(sw.contains(#""/style.css?v=31""#))
     }
 
     @Test func remoteWebIncludesNewSessionControls() throws {
@@ -129,6 +129,43 @@ struct RemoteWebAssetTests {
         #expect(js.contains(#"case "agentList""#))
         #expect(js.contains(#"case "sessionCreated""#))
         #expect(js.contains(#"case "createSessionFailed""#))
+    }
+
+    @Test func remoteWebClearsSessionSheetsWhenOpeningSession() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("function hideCreateSheet(force)"))
+        #expect(js.contains("const forced = force === true;"))
+        #expect(js.contains("function clearSessionSheetsForOpen()"))
+        #expect(js.contains("hidePermission();"))
+        #expect(js.contains("hideQuestion();"))
+        #expect(js.contains("hideConfig();"))
+        #expect(js.contains("hideRenameSheet();"))
+        #expect(js.contains("hideCreateSheet(true);"))
+        #expect(js.contains("clearSessionSheetsForOpen();"))
+        #expect(js.contains(#"case "permissionRequest": if (msg.sessionId === currentSession && !createState.open)"#))
+        #expect(js.contains(#"case "questionRequest": if (msg.sessionId === currentSession && !createState.open)"#))
+    }
+
+    @Test func remoteWebRefreshesCreateSelectionsFromServerLists() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("createState.worktrees = msg.worktrees || [];"))
+        #expect(js.contains("!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)"))
+        #expect(js.contains("createState.agents = msg.agents || [];"))
+        #expect(js.contains("!createState.agents.some(a => a.id === createState.selectedAgentId)"))
+        #expect(js.contains("worktrees: [],"))
+        #expect(js.contains("agents: [],"))
+    }
+
+    @Test func remoteWebCompactsHeaderOnNarrowScreens() throws {
+        let css = try asset("style.css")
+
+        #expect(css.contains("@media (max-width: 360px)"))
+        #expect(css.contains(#"#new-session { font-size: 0;"#))
+        #expect(css.contains(#"#new-session::before { content: "+";"#))
+        #expect(css.contains("#status.chip { font-size: 0;"))
+        #expect(css.contains("#status.chip::before"))
     }
 
     @Test func serviceWorkerKeepsControlAndDiagnosticRoutesNetworkOnly() throws {

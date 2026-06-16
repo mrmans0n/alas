@@ -163,19 +163,20 @@ function handle(msg) {
     case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; canDriveKnown = true; renderMessages(false); renderDriveBar(msg.streamingState); } break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
-    case "permissionRequest": if (msg.sessionId === currentSession) showPermission(msg.sessionId, msg.payload); break;
+    case "permissionRequest": if (msg.sessionId === currentSession && !createState.open) showPermission(msg.sessionId, msg.payload); break;
     case "permissionResolved": if (msg.sessionId === currentSession) hidePermission(); break;
-    case "questionRequest": if (msg.sessionId === currentSession) showQuestion(msg.sessionId, msg.payload); break;
+    case "questionRequest": if (msg.sessionId === currentSession && !createState.open) showQuestion(msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "worktreeList":
       createState.worktrees = msg.worktrees || [];
+      if (!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)) createState.selectedWorktreeId = null;
       renderCreateSheet();
       break;
     case "agentList":
       createState.agents = msg.agents || [];
-      if (!createState.selectedAgentId) {
+      if (!createState.selectedAgentId || !createState.agents.some(a => a.id === createState.selectedAgentId)) {
         const preferred = createState.agents.find(a => a.isDefault) || createState.agents[0];
         createState.selectedAgentId = preferred ? preferred.id : null;
       }
@@ -265,6 +266,7 @@ function plural(count, singular) {
 }
 
 function openSession(id) {
+  clearSessionSheetsForOpen();
   currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments();
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
@@ -272,6 +274,15 @@ function openSession(id) {
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
   $("messages").innerHTML = ""; renderConfigAffordances(); renderDriveBar("idle"); send({ type: "subscribe", sessionId: id });
 }
+
+function clearSessionSheetsForOpen() {
+  hidePermission();
+  hideQuestion();
+  hideConfig();
+  hideRenameSheet();
+  hideCreateSheet(true);
+}
+
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
@@ -324,6 +335,8 @@ function showCreateSheet() {
     ...createState,
     open: true,
     step: "worktree",
+    worktrees: [],
+    agents: [],
     selectedWorktreeId: null,
     selectedAgentId: null,
     filter: "",
@@ -338,9 +351,11 @@ function showCreateSheet() {
   requestAnimationFrame(() => $("worktree-search").focus());
 }
 
-function hideCreateSheet() {
-  if (createState.busy) return;
+function hideCreateSheet(force) {
+  const forced = force === true;
+  if (createState.busy && !forced) return;
   createState.open = false;
+  createState.busy = false;
   createState.error = "";
   $("new-session-sheet").classList.add("hidden");
 }
@@ -489,8 +504,7 @@ function applyCreatedSession(session) {
   }
 
   const previousSession = currentSession;
-  createState.busy = false;
-  hideCreateSheet();
+  hideCreateSheet(true);
   sessionTitles.set(session.id, session.title);
   const list = $("session-list");
   const row = renderSessionRow(session);
