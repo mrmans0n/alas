@@ -77,7 +77,7 @@ struct ReviewLoopDrawer: View {
 
             if let requestNumberTitle = model.requestNumberTitle {
                 Button {
-                    onAction(.inspectReviewEvidence)
+                    onAction(.openReviewRequest)
                 } label: {
                     Text(requestNumberTitle.uppercased())
                         .font(.system(size: 10.5, weight: .semibold))
