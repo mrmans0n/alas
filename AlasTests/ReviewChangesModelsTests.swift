@@ -210,6 +210,38 @@ struct ReviewChangesModelsTests {
         ])
     }
 
+    @Test func preparationStatsFormatFileAndLineCounts() {
+        let single = ChangesPreparationCardText.reviewStats(
+            fileCount: 1,
+            additions: 3,
+            deletions: 1
+        )
+        #expect(single == "1 file · +3 −1")
+
+        let duplicatePath = ChangesPreparationCardText.reviewStats(
+            fileCount: 2,
+            additions: nil,
+            deletions: nil
+        )
+        #expect(duplicatePath == "2 files")
+    }
+
+    @Test func preparationStatsFormatDraftCounts() {
+        let staged = ChangesPreparationCardText.draftStats(
+            stagedCount: 2,
+            additions: 9,
+            deletions: 4
+        )
+        #expect(staged == "2 staged · +9 −4")
+
+        let empty = ChangesPreparationCardText.draftStats(
+            stagedCount: 0,
+            additions: 0,
+            deletions: 0
+        )
+        #expect(empty == "0 staged")
+    }
+
     @Test func preparationModelShowsReviewActionForNonConflictChangesOnly() throws {
         let changes = [
             changedFile("conflicted.swift", stage: .unstaged, add: 40, del: 5, conflict: .bothModified),
