@@ -143,7 +143,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--state", "open",
                 "--limit", "20",
                 "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
-                "-R", remote.repositorySlug,
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -180,7 +180,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "--head", head,
             "--title", title,
             "--body", body,
-            "-R", remote.repositorySlug,
+            "-R", Self.highLevelRepositorySelector(remote: remote),
         ]
         if isDraft {
             args.append("--draft")
@@ -214,7 +214,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             args: [
                 "pr", "checks", "\(request.number)",
                 "--json", "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
-                "-R", remote.repositorySlug,
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -231,7 +231,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
         let result = try await runner.run(
             "gh",
-            args: ["pr", "diff", "\(request.number)", "-R", remote.repositorySlug],
+            args: ["pr", "diff", "\(request.number)", "-R", Self.highLevelRepositorySelector(remote: remote)],
             cwd: cwd
         )
         guard result.exitCode == 0 else {
@@ -270,7 +270,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
         }
 
-        var args = ["run", "view", runID, "--log-failed", "-R", remote.repositorySlug]
+        var args = ["run", "view", runID, "--log-failed", "-R", Self.highLevelRepositorySelector(remote: remote)]
         if let jobID = Self.githubJobID(from: item.providerURL) {
             args.append(contentsOf: ["--job", jobID])
         }
@@ -519,7 +519,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             args: [
                 "pr", "view", "\(request.number)",
                 "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
-                "-R", remote.repositorySlug,
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -619,7 +619,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--status", "failure",
                 "--limit", "20",
                 "--json", "databaseId,status,conclusion,url",
-                "-R", remote.repositorySlug,
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -630,7 +630,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         for runID in try Self.parseRunIDs(listResult.stdout) {
             let rerunResult = try await runner.run(
                 "gh",
-                args: ["run", "rerun", "\(runID)", "--failed", "-R", remote.repositorySlug],
+                args: ["run", "rerun", "\(runID)", "--failed", "-R", Self.highLevelRepositorySelector(remote: remote)],
                 cwd: cwd
             )
             guard rerunResult.exitCode == 0 else {
@@ -1095,6 +1095,10 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static func graphQLAPIStdinArgs(remote: CodeHostRemote) -> [String] {
         ["api", "graphql", "--hostname", remote.host, "--input", "-"]
+    }
+
+    static func highLevelRepositorySelector(remote: CodeHostRemote) -> String {
+        remote.host == "github.com" ? remote.repositorySlug : "\(remote.host)/\(remote.repositorySlug)"
     }
 
     static func githubReviewThreadPayload(for draft: ProviderReviewDraftComment) -> GitHubReviewDraftThreadPayload {

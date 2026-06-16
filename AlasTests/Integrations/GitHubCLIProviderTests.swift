@@ -723,6 +723,36 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func githubRefreshUsesHostQualifiedRepositoryForEnterpriseRemote() async throws {
+        let enterpriseRemote = CodeHostRemote(
+            kind: .github,
+            host: "github.enterprise.example.com",
+            owner: "platform",
+            repository: "alas",
+            remoteName: "enterprise",
+            webURL: URL(string: "https://github.enterprise.example.com/platform/alas")!
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        _ = try await provider.reviewRequest(remote: enterpriseRemote, number: 42, cwd: Self.cwd)
+
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+        #expect(commands[0].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "github.enterprise.example.com/platform/alas",
+        ])
+        #expect(commands[1].args.prefix(3) == ["api", "graphql", "--hostname"])
+        #expect(commands[1].args.contains("github.enterprise.example.com"))
+        #expect(commands[1].args.contains("owner=platform"))
+        #expect(commands[1].args.contains("repo=alas"))
+    }
+
     @Test func githubThreadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
         let thread = ReviewThreadSummary(
             id: "thread-1",
