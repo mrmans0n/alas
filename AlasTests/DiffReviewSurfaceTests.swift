@@ -879,6 +879,22 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "GitLab error: Line is no longer commentable.") != nil)
     }
 
+    @Test func draftComposerKeyboardShortcutsMapToSaveAndCancel() {
+        #expect(ReviewDraftComposerKeyboardAction.resolve(key: "\r", modifiers: [.command]) == .save)
+        #expect(ReviewDraftComposerKeyboardAction.resolve(key: "\u{1b}", modifiers: []) == .cancel)
+        #expect(ReviewDraftComposerKeyboardAction.resolve(key: "\r", modifiers: []) == nil)
+    }
+
+    @Test func gutterCommentAffordanceUsesCompactPlusButton() {
+        let rowRect = NSRect(x: 0, y: 10, width: 42, height: 20)
+        let plusRect = DiffPaneLineNumberRulerView.reviewAffordanceRect(in: rowRect, ruleThickness: 42)
+
+        #expect(plusRect.width == 16)
+        #expect(plusRect.height == 16)
+        #expect(plusRect.maxX <= rowRect.maxX - 4)
+        #expect(plusRect.midY == rowRect.midY)
+    }
+
     @Test func fileSectionDraftCommentCardCanDismissComment() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),

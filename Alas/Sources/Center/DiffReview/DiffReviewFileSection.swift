@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private struct PendingContextExpansion {
@@ -395,18 +396,20 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private var draftComposer: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            TextEditor(text: $pendingDraftBody)
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg"))
-                .frame(minHeight: 64, maxHeight: 90)
-                .background(theme.color("bg-2"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(theme.color("line"), lineWidth: 0.5)
-                )
-                .accessibilityIdentifier("diff-review-draft-composer")
+        VStack(alignment: .leading, spacing: 10) {
+            ReviewDraftComposerTextEditor(
+                text: $pendingDraftBody,
+                theme: theme,
+                onSave: savePendingDraft,
+                onCancel: clearPendingDraft
+            )
+            .frame(minHeight: 76, maxHeight: 104)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(theme.color("accent").opacity(0.65), lineWidth: 0.75)
+            )
+            .accessibilityIdentifier("diff-review-draft-composer")
 
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
@@ -435,8 +438,8 @@ struct DiffReviewFileSection: View {
                 .accessibilityIdentifier("diff-review-draft-composer-save")
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(theme.color("bg-1"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         .background(
@@ -616,6 +619,124 @@ struct DiffReviewFileSection: View {
         case .modified, .unknown:
             theme.color("fg-dim")
         }
+    }
+}
+
+enum ReviewDraftComposerKeyboardAction: Equatable {
+    case save
+    case cancel
+
+    static func resolve(key: String, modifiers: NSEvent.ModifierFlags) -> Self? {
+        let flags = modifiers.intersection(.deviceIndependentFlagsMask)
+        if key == "\r", flags.contains(.command) {
+            return .save
+        }
+        if key == "\u{1b}" {
+            return .cancel
+        }
+        return nil
+    }
+}
+
+private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    let theme: Theme
+    let onSave: () -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+
+        let textView = ReviewDraftComposerNSTextView()
+        textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.importsGraphics = false
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 10, height: 9)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: scrollView.contentSize.width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.string = text
+        textView.onKeyboardAction = context.coordinator.perform
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        applyTheme(to: scrollView, textView: textView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = scrollView.documentView as? ReviewDraftComposerNSTextView else { return }
+        if textView.string != text {
+            textView.string = text
+        }
+        textView.onKeyboardAction = context.coordinator.perform
+        applyTheme(to: scrollView, textView: textView)
+    }
+
+    private func applyTheme(to scrollView: NSScrollView, textView: NSTextView) {
+        scrollView.wantsLayer = true
+        scrollView.layer?.backgroundColor = NSColor(theme.color("bg-2")).cgColor
+        textView.font = .systemFont(ofSize: 12)
+        textView.textColor = NSColor(theme.color("fg"))
+        textView.insertionPointColor = NSColor(theme.color("accent"))
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ReviewDraftComposerTextEditor
+        weak var textView: NSTextView?
+
+        init(_ parent: ReviewDraftComposerTextEditor) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+        }
+
+        func perform(_ action: ReviewDraftComposerKeyboardAction) {
+            switch action {
+            case .save:
+                parent.onSave()
+            case .cancel:
+                parent.onCancel()
+            }
+        }
+    }
+}
+
+private final class ReviewDraftComposerNSTextView: NSTextView {
+    var onKeyboardAction: ((ReviewDraftComposerKeyboardAction) -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let key = event.charactersIgnoringModifiers ?? event.characters ?? ""
+        if let action = ReviewDraftComposerKeyboardAction.resolve(key: key, modifiers: event.modifierFlags) {
+            onKeyboardAction?(action)
+            return
+        }
+        super.keyDown(with: event)
     }
 }
 
@@ -1065,14 +1186,19 @@ private struct ReviewDraftCommentCard: View {
                 }
 
                 if isEditing {
-                    TextEditor(text: $editingBody)
-                        .font(.system(size: 11.5))
-                        .foregroundColor(theme.color("fg"))
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 72)
-                        .background(theme.color("bg-1"))
-                        .clipShape(RoundedRectangle(cornerRadius: 5))
-                        .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
+                    ReviewDraftComposerTextEditor(
+                        text: $editingBody,
+                        theme: theme,
+                        onSave: saveEditingComment,
+                        onCancel: cancelEditingComment
+                    )
+                    .frame(minHeight: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(theme.color("line"), lineWidth: 0.75)
+                    )
+                    .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
                 } else {
                     Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
                         .font(.system(size: 11.5))
@@ -1111,13 +1237,10 @@ private struct ReviewDraftCommentCard: View {
                 Spacer(minLength: 0)
                 if isEditing {
                     actionButton(id: "save", title: "Save") {
-                        actions.edit(comment, editingBody)
-                        isEditing = false
-                        editingBody = ""
+                        saveEditingComment()
                     }
                     actionButton(id: "cancel", title: "Cancel") {
-                        isEditing = false
-                        editingBody = ""
+                        cancelEditingComment()
                     }
                 } else if availability.canEdit {
                     actionButton(id: "edit", title: "Edit") {
@@ -1228,6 +1351,16 @@ private struct ReviewDraftCommentCard: View {
             return "diff-review-draft-comment-publish-\(comment.id)"
         }
         return "diff-review-draft-comment-action-\(id)-\(comment.id)"
+    }
+
+    private func saveEditingComment() {
+        actions.edit(comment, editingBody)
+        cancelEditingComment()
+    }
+
+    private func cancelEditingComment() {
+        isEditing = false
+        editingBody = ""
     }
 
     private var feedbackBundle: ReviewFeedbackBundle {

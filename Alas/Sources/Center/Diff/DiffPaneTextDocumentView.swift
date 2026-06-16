@@ -1057,6 +1057,14 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     private var lineTones: [DiffPaneLineTone] = []
     private var expansionKeys: [DiffContextExpansionKey?] = []
     private var theme: Theme?
+    private var hoverRowIndex: Int? {
+        didSet {
+            if hoverRowIndex != oldValue {
+                needsDisplay = true
+            }
+        }
+    }
+    private var trackingArea: NSTrackingArea?
     var rowHeight: CGFloat = 16
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
@@ -1123,6 +1131,32 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         onReviewLineSelected(anchor)
     }
 
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateHoverRow(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hoverRowIndex = nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+            self.trackingArea = nil
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        trackingArea = area
+        addTrackingArea(area)
+    }
+
     override func drawHashMarksAndLabels(in rect: NSRect) {
         guard let theme else { return }
         NSColor(theme.color("bg-0")).setFill()
@@ -1152,6 +1186,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
                 height: textHeight
             )
             NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label, row: index))
+            if index == hoverRowIndex, isReviewCommentableRow(index) {
+                drawReviewAffordance(in: rowRect, theme: theme)
+            }
         }
     }
 
@@ -1247,6 +1284,31 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         }
     }
 
+    private func updateHoverRow(with event: NSEvent) {
+        guard let scrollView else {
+            hoverRowIndex = nil
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        let sourcePoint = NSPoint(
+            x: point.x,
+            y: point.y + scrollView.contentView.bounds.origin.y
+        )
+        let rowRects = diffRowRects()
+        guard let row = rowRects.firstIndex(where: { $0.contains(sourcePoint) }),
+              isReviewCommentableRow(row)
+        else {
+            hoverRowIndex = nil
+            return
+        }
+        hoverRowIndex = row
+    }
+
+    private func isReviewCommentableRow(_ row: Int) -> Bool {
+        guard let textView = scrollView?.documentView as? DiffPaneCodeTextView else { return false }
+        return textView.reviewLineAnchor(atRow: row) != nil
+    }
+
     private func updateThickness() {
         let maxDigits = labels
             .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "+- ")) }
@@ -1318,6 +1380,35 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         }
     }
 
+    private func drawReviewAffordance(in rowRect: NSRect, theme: Theme) {
+        let rect = Self.reviewAffordanceRect(in: rowRect, ruleThickness: ruleThickness)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        NSColor(theme.color("accent")).setFill()
+        path.fill()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .bold),
+            .foregroundColor: NSColor(theme.color("bg-1")),
+        ]
+        let string = "+" as NSString
+        let size = string.size(withAttributes: attributes)
+        let point = NSPoint(
+            x: rect.midX - size.width / 2,
+            y: rect.midY - size.height / 2 - 0.5
+        )
+        string.draw(at: point, withAttributes: attributes)
+    }
+
+    static func reviewAffordanceRect(in rowRect: NSRect, ruleThickness: CGFloat) -> NSRect {
+        let size: CGFloat = 16
+        return NSRect(
+            x: min(rowRect.maxX, ruleThickness) - size - 4,
+            y: rowRect.midY - size / 2,
+            width: size,
+            height: size
+        )
+    }
+
     static func changeRailRect(in rowRect: NSRect, tone: DiffPaneLineTone) -> NSRect? {
         switch tone {
         case .add, .delete:
@@ -1328,6 +1419,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     deinit {
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
         if let boundsObserver {
             NotificationCenter.default.removeObserver(boundsObserver)
         }
