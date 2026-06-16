@@ -209,6 +209,117 @@ struct ReviewChangesModelsTests {
             "staged:Sources/App.swift",
         ])
     }
+
+    @Test func preparationModelShowsReviewActionForNonConflictChangesOnly() throws {
+        let changes = [
+            changedFile("conflicted.swift", stage: .unstaged, add: 40, del: 5, conflict: .bothModified),
+            changedFile("Sources/App.swift", stage: .unstaged, add: 8, del: 2),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: changes,
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        #expect(model.isVisible)
+        let review = try #require(model.reviewAction)
+        #expect(review.fileCount == 1)
+        #expect(review.additions == 8)
+        #expect(review.deletions == 2)
+        #expect(review.title == "Review current changes")
+    }
+
+    @Test func preparationModelHidesReviewActionWhenOnlyConflictsExist() {
+        let changes = [
+            changedFile("conflicted.swift", stage: .unstaged, add: 40, del: 5, conflict: .bothModified),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: changes,
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelShowsDraftActionForStagedChanges() throws {
+        let model = ChangesPreparationModel(
+            changes: [
+                changedFile("Sources/App.swift", stage: .staged, add: 3, del: 1),
+                changedFile("Sources/View.swift", stage: .unstaged, add: 9, del: 0),
+            ],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        let draft = try #require(model.draftAction)
+        #expect(draft.title == "Draft commit")
+        #expect(draft.stagedCount == 1)
+        #expect(draft.additions == 3)
+        #expect(draft.deletions == 1)
+        #expect(!draft.hasNonEmptyDraft)
+    }
+
+    @Test func preparationModelShowsExistingDraftWithoutStagedChanges() throws {
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: true,
+            draftNonEmpty: true,
+            readinessActions: []
+        )
+
+        #expect(model.isVisible)
+        let draft = try #require(model.draftAction)
+        #expect(draft.title == "Open draft")
+        #expect(draft.stagedCount == 0)
+        #expect(draft.additions == 0)
+        #expect(draft.deletions == 0)
+        #expect(draft.hasNonEmptyDraft)
+    }
+
+    @Test func preparationModelSelectsSingleReadinessActionByPriority() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .refresh, title: "Refresh", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .openReviewRequest, title: "Open PR", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        let reviewRequest = try #require(model.reviewRequestAction)
+        #expect(reviewRequest.kind == .createReviewRequest)
+        #expect(reviewRequest.title == "Create PR")
+    }
+
+    @Test func preparationModelFallsBackToPushBeforeOpenRequest() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .openReviewRequest, title: "Open PR", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        let reviewRequest = try #require(model.reviewRequestAction)
+        #expect(reviewRequest.kind == .pushBranch)
+        #expect(reviewRequest.title == "Push")
+    }
 }
 
 private func changedFile(
