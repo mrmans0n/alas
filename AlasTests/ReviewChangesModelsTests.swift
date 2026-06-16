@@ -352,6 +352,25 @@ struct ReviewChangesModelsTests {
         #expect(reviewRequest.kind == .pushBranch)
         #expect(reviewRequest.title == "Push")
     }
+
+    @Test func preparationModelCanBeBuiltFromReadinessModelActions() throws {
+        let readiness = ReviewReadinessModel(
+            snapshot: ReviewChangesReadinessFixtures.makeSnapshot(reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [changedFile("Sources/App.swift", stage: .unstaged, add: 2, del: 1)],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: readiness.actions
+        )
+
+        #expect(model.reviewAction?.title == "Review current changes")
+        #expect(model.reviewRequestAction?.kind == .createReviewRequest)
+        #expect(model.reviewRequestAction?.title == "Create PR")
+    }
 }
 
 private func changedFile(
@@ -392,4 +411,36 @@ private func reviewSummary(
         isRenderable: isRenderable,
         originalPath: originalPath
     )
+}
+
+private enum ReviewChangesReadinessFixtures {
+    static func makeSnapshot(reviewRequest: ReviewRequest?) -> ReviewLoopSnapshot {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+        return ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "feature/entrypoint",
+                headSHA: "abc123",
+                baseBranch: "main",
+                hasWorkingTreeChanges: true,
+                hasStagedChanges: true,
+                aheadCommitCount: 1,
+                hasUpstream: true,
+                upstreamAheadCommitCount: 0,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: reviewRequest,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
+            errorMessage: nil
+        )
+    }
 }
