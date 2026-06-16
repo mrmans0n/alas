@@ -35,8 +35,20 @@ final class RemoteSessionGateway {
         switch message {
         case .listSessions:
             refreshSessionList()
-        case .listWorktrees, .listAgents, .createSession:
-            send(.error(message: "Remote session creation is not available yet."))
+        case .listWorktrees:
+            let worktrees = await provider.remoteWorktrees()
+            send(.worktreeList(worktrees: worktrees))
+        case .listAgents:
+            send(.agentList(agents: provider.remoteAgents()))
+        case .createSession(let worktreeId, let agentId):
+            let result = await provider.createRemoteSession(worktreeId: worktreeId, agentId: agentId)
+            switch result {
+            case .success(let summary):
+                send(.sessionCreated(session: summary))
+                refreshSessionList()
+            case .failure(let message):
+                send(.createSessionFailed(message: message))
+            }
         case .subscribe(let id):
             await provider.hydrateIfNeeded(id: id)
             guard let session = provider.session(for: id) else {

@@ -5,6 +5,9 @@ import Foundation
 @MainActor
 final class FakeSessionsProvider: RemoteSessionsProvider {
     var summaries: [RemoteSessionSummary] = []
+    var worktrees: [RemoteWorktreeOption] = []
+    var agents: [RemoteAgentOption] = []
+    var createResults: [String: RemoteCreateSessionResult] = [:]
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
     var lastQuestionResponse: (id: String, response: ACPQuestionResponse)?
@@ -21,6 +24,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
     var sessionSummariesCallCount = 0
+    var remoteWorktreesCallCount = 0
+    var remoteAgentsCallCount = 0
+    var createRequests: [(worktreeId: String, agentId: String)] = []
     var pauseSessionSummaries = false
     private var sessionSummariesContinuation: CheckedContinuation<[RemoteSessionSummary], Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
@@ -31,6 +37,18 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
             }
         }
         return summaries
+    }
+    func remoteWorktrees() async -> [RemoteWorktreeOption] {
+        remoteWorktreesCallCount += 1
+        return worktrees
+    }
+    func remoteAgents() -> [RemoteAgentOption] {
+        remoteAgentsCallCount += 1
+        return agents
+    }
+    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
+        createRequests.append((worktreeId, agentId))
+        return createResults["\(worktreeId)|\(agentId)"] ?? .failure("Could not create session.")
     }
     func resumeSessionSummaries() {
         sessionSummariesContinuation?.resume(returning: summaries)
@@ -160,6 +178,72 @@ struct RemoteSessionGatewayTests {
         await Task.yield()
         #expect(provider.sessionSummariesCallCount == 1)
         #expect(sent == [.sessionList(sessions: provider.summaries)])
+    }
+
+    @Test func listWorktreesEmitsWorktreeList() async {
+        let provider = FakeSessionsProvider()
+        provider.worktrees = [
+            RemoteWorktreeOption(
+                id: "wt1",
+                projectName: "alas",
+                worktreeName: "feature-a",
+                branch: "nacho/feature-a",
+                path: "/tmp/alas-feature-a",
+                metricsAvailable: false,
+                comparisonRef: nil,
+                commitCount: 0,
+                changedFileCount: 0,
+                addedLines: 0,
+                deletedLines: 0,
+                conflictCount: 0
+            )
+        ]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listWorktrees)
+        await Task.yield()
+
+        #expect(provider.remoteWorktreesCallCount == 1)
+        #expect(sent == [.worktreeList(worktrees: provider.worktrees)])
+    }
+
+    @Test func listAgentsEmitsAgentList() async {
+        let provider = FakeSessionsProvider()
+        provider.agents = [RemoteAgentOption(id: "claude", name: "Claude", isDefault: true)]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.listAgents)
+
+        #expect(provider.remoteAgentsCallCount == 1)
+        #expect(sent == [.agentList(agents: provider.agents)])
+    }
+
+    @Test func createSessionEmitsCreatedSession() async {
+        let provider = FakeSessionsProvider()
+        let summary = RemoteSessionSummary(id: "s1", title: "New session", agentId: "claude", status: "idle", canDrive: true)
+        provider.createResults["wt1|claude"] = .success(summary)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.createSession(worktreeId: "wt1", agentId: "claude"))
+
+        #expect(provider.createRequests.count == 1)
+        #expect(provider.createRequests.first?.worktreeId == "wt1")
+        #expect(provider.createRequests.first?.agentId == "claude")
+        #expect(sent.contains(.sessionCreated(session: summary)))
+    }
+
+    @Test func createSessionEmitsFailure() async {
+        let provider = FakeSessionsProvider()
+        provider.createResults["missing|claude"] = .failure("Worktree is no longer available.")
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.createSession(worktreeId: "missing", agentId: "claude"))
+
+        #expect(sent == [.createSessionFailed(message: "Worktree is no longer available.")])
     }
 
     @Test func listSessionsDoesNotBlockFollowingSubscribe() async throws {

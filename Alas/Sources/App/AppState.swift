@@ -3546,6 +3546,14 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
+    func remoteWorktrees() async -> [RemoteWorktreeOption] { [] }
+
+    func remoteAgents() -> [RemoteAgentOption] { [] }
+
+    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
+        .failure("Could not create session.")
+    }
+
     func session(for id: String) -> ACPSession? {
         for mgr in acpManagers.values {
             if let s = mgr.liveSession(for: id) { return s }
