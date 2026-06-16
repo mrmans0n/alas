@@ -444,16 +444,20 @@ extension ProjectsManagerTests {
         defer { try? FileManager.default.removeItem(at: repo) }
         let mgr = ProjectsManager(persistedProjects: [])
         let project = try await mgr.addProject(path: repo, displayName: "ismain-false", color: "#c89d6f")
+
+        let svc = WorktreeService()
         let dest = repo.appendingPathComponent("wt-feature")
-        let feature = Worktree(
-            id: Worktree.makeId(path: dest),
-            projectId: project.id,
-            name: "feature",
-            branch: "feature",
-            path: dest,
-            status: .clean,
-            lastActivity: Date()
-        )
-        #expect(!mgr.isMain(feature, in: project))
+        _ = try await svc.add(repoPath: repo, base: "main", branch: "feature-b", destination: dest, projectId: project.id)
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.count == 2)
+
+        let repoCanonical = repo.standardizedFileURL.path
+        let mainWorktree = try #require(trees.first { $0.path.standardizedFileURL.path == repoCanonical })
+        let featureWorktree = try #require(trees.first { $0.path.standardizedFileURL.path != repoCanonical })
+
+        #expect(mgr.isMain(mainWorktree, in: project))
+        #expect(!mgr.isMain(featureWorktree, in: project))
     }
 }
