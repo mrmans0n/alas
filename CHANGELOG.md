@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-06-16
+
+### ✨ Features
+
+- Improve the changes preparation entry point with a dedicated right-pane preparation card (#534).
+- Add a house glyph for the main worktree row in the sidebar (#537).
+- Improve review request drawer affordances for clearer feedback selection (#532).
+
+### 🐛 Fixes
+
+- Open transcript file links in the editor from remote sessions (#533).
+- Prevent stale changes snapshots from flashing while the right pane refreshes (#535).
+- Improve review pane interactions around feedback readiness and file selection (#536).
+- Render remote tool execution metadata in the web client (#538).
+
 ## [0.8.0] - 2026-06-16
 
 ### ✨ Features
