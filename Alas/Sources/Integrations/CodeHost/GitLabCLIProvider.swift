@@ -766,39 +766,47 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
 
         return try discussions.compactMap { discussion in
-            guard let note = discussion.notes.first(where: { note in
+            // Collect all non-system notes with a non-empty body.
+            let actionableNotes = discussion.notes.filter { note in
                 !note.isSystem && !note.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }) else {
+            }
+            guard let firstNote = actionableNotes.first else {
                 return nil
             }
 
-            let url = try discussionURL(note: note, requestURL: requestURL)
+            // Use the first note's position for the thread-level anchor fields.
+            // Assumed GitLab note position keys: new_path, new_line, old_line, old_path
+            // (from glab mr note list --output json).
+            let position = firstNote.position
+            let comments: [ReviewComment] = try actionableNotes.map { note in
+                let commentURL = try discussionURL(note: note, requestURL: requestURL)
+                return ReviewComment(
+                    id: note.id.map(String.init) ?? discussion.id,
+                    author: note.author?.username,
+                    body: note.body,
+                    url: commentURL,
+                    createdAt: nil,
+                    viewerCanUpdate: false,
+                    viewerCanDelete: false,
+                    isPending: false
+                )
+            }
+
+            let firstURL = try discussionURL(note: firstNote, requestURL: requestURL)
             return ReviewThread(
                 id: discussion.id,
-                path: nil,
-                line: nil,
+                path: position?.newPath,
+                line: position?.newLine,
                 startLine: nil,
-                originalLine: nil,
+                originalLine: position?.oldLine,
                 diffHunk: nil,
                 isResolved: discussion.isResolved,
                 isOutdated: false,
-                isFileLevel: true,
-                // TODO: decode real per-note ID + path/line/isFileLevel from the discussion position (deferred to the rich-thread-fetch task).
-                comments: [
-                    ReviewComment(
-                        id: discussion.id,
-                        author: note.author?.username,
-                        body: note.body,
-                        url: url,
-                        createdAt: nil,
-                        viewerCanUpdate: false,
-                        viewerCanDelete: false,
-                        isPending: false
-                    ),
-                ],
-                viewerCanResolve: false,
-                viewerCanReply: false,
-                url: url
+                isFileLevel: position?.newPath == nil,
+                comments: comments,
+                viewerCanResolve: true,
+                viewerCanReply: true,
+                url: firstURL
             )
         }
     }
@@ -1510,6 +1518,8 @@ private struct GitLabDiscussionNote: Decodable {
     let resolvable: Bool?
     let resolved: Bool?
     let webURL: String?
+    // Assumed keys from `glab mr note list --output json`:
+    // "new_path", "new_line", "old_line", "old_path" inside the "position" object.
     let position: GitLabNotePosition?
 
     var isSystem: Bool {
@@ -1544,25 +1554,13 @@ private struct GitLabDiscussionAuthor: Decodable {
     let username: String?
 }
 
-private struct GitLabCreatedNote: Decodable {
-    let id: Int?
-    let webURL: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case webURL = "web_url"
-    }
-}
-
 private struct GitLabNotePosition: Decodable {
     let newPath: String?
-    let oldPath: String?
     let newLine: Int?
     let oldLine: Int?
 
     private enum CodingKeys: String, CodingKey {
         case newPath = "new_path"
-        case oldPath = "old_path"
         case newLine = "new_line"
         case oldLine = "old_line"
     }

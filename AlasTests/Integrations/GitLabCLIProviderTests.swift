@@ -1744,6 +1744,26 @@ struct GitLabCLIProviderTests {
         #expect(args.contains("--draft"))
     }
 
+    private static let discussionsWithPositionOutput = """
+    [
+      { "id": "disc-1", "resolved": false, "notes": [
+        { "id": 101, "system": false, "body": "tighten this",
+          "author": { "username": "reviewer" },
+          "position": { "new_path": "src/foo.rb", "new_line": 12, "old_line": null } }
+      ]}
+    ]
+    """
+
+    @Test func parsesDiscussionPosition() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.discussionsWithPositionOutput,
+            requestURL: URL(string: "https://gitlab.com/group/proj/-/merge_requests/7")!)
+        let thread = try #require(threads.first)
+        #expect(thread.path == "src/foo.rb")
+        #expect(thread.line == 12)
+        #expect(thread.comments.first?.id == "101")
+    }
+
     private static let remote = CodeHostRemote(
         kind: .gitlab,
         host: "gitlab.example.com",
