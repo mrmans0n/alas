@@ -7,6 +7,7 @@ struct ACPMessageList: View {
     let contentMaxWidth: CGFloat
     let typography: ACPChatTypography
     let onOpenDiff: (String) -> Void
+    let onOpenTranscriptLink: (URL) -> Bool
     let policy: ACPPermissionPolicy?
     let scopeKey: String
     let onQuestionResponse: (ACPQuestionResponse) -> Void
@@ -125,6 +126,9 @@ struct ACPMessageList: View {
                         }
                         ForEach(visibleRows, id: \.message.stableId) { item in
                             row(for: item.message)
+                                .environment(\.openURL, OpenURLAction { url in
+                                    onOpenTranscriptLink(url) ? .handled : .systemAction
+                                })
                                 .background(rowFrameReporter(id: item.message.stableId))
                         }
                         if transcript.pendingPermission != nil, let policy = policy {

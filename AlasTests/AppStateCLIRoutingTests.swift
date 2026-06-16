@@ -204,6 +204,54 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func routeTranscriptOpenURLAcceptsAbsoluteMarkdownPathWithLine() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-absolute-position")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let dir = worktree.path.appendingPathComponent("docs/design")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("spec.md")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let handled = state.routeTranscriptOpenURL(
+            URL(string: "\(file.path):2")!,
+            worktreeId: worktree.id
+        )
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 {
+                return s.relativePath == "docs/design/spec.md"
+                    && s.revealLine == 1
+                    && s.revealCharacter == 0
+                    && !s.isExternal
+            }
+            return false
+        })
+    }
+
+    @Test func routeTranscriptOpenURLAcceptsRootRelativePathWithLineParsedAsScheme() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-root-position")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("Package.swift")
+        try "first\nsecond\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let handled = state.routeTranscriptOpenURL(
+            URL(string: "Package.swift:2")!,
+            worktreeId: worktree.id
+        )
+
+        #expect(handled == true)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 {
+                return s.relativePath == "Package.swift"
+                    && s.revealLine == 1
+                    && s.revealCharacter == 0
+                    && !s.isExternal
+            }
+            return false
+        })
+    }
+
     @Test func routeTerminalOpenURLReturnsFalseForPathOutsideWorkspace() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "ghostty-outside")
         defer { try? FileManager.default.removeItem(at: worktree.path) }

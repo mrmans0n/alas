@@ -2494,6 +2494,43 @@ final class AppState {
         openFile(relativePath: relativePath, worktreeId: worktreeId)
     }
 
+    /// Route a clicked markdown link from an ACP transcript. Local file links
+    /// inside the session worktree open in Alas editor tabs; everything else
+    /// returns false so SwiftUI can continue with the default URL action.
+    func routeTranscriptOpenURL(_ url: URL, worktreeId: String) -> Bool {
+        guard let worktree = worktree(withId: worktreeId) else { return false }
+
+        let rawPath: String
+        if url.isFileURL {
+            rawPath = url.path
+        } else if url.scheme == nil {
+            rawPath = url.path.removingPercentEncoding ?? url.path
+        } else if !url.absoluteString.contains("://") {
+            rawPath = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+        } else {
+            return false
+        }
+        guard !rawPath.isEmpty else { return false }
+
+        if attemptOpenLocalFilePath(rawPath, worktree: worktree, baseDirectory: worktree.path) {
+            NSApp.activate(ignoringOtherApps: true)
+            return true
+        }
+
+        // Trailing-period fallback: transcript prose can include sentence
+        // punctuation in a markdown link destination.
+        if rawPath.hasSuffix(".") {
+            let trimmed = String(rawPath.dropLast())
+            if !trimmed.isEmpty,
+               attemptOpenLocalFilePath(trimmed, worktree: worktree, baseDirectory: worktree.path) {
+                NSApp.activate(ignoringOtherApps: true)
+                return true
+            }
+        }
+
+        return false
+    }
+
     /// Route a cmd-clicked URL from a Ghostty terminal surface. Mirrors `alas
     /// open` for files inside the session's worktree (resolving relatives
     /// against the shell cwd first, then falling back to the worktree root),
@@ -2511,68 +2548,12 @@ final class AppState {
         }
         guard !path.isEmpty else { return false }
 
-        // Resolve a path against the shell cwd (if known) and fall back to the
-        // worktree root. This handles both cwd-relative links (the common
-        // terminal case) and repo-root-relative links (common in agent output).
-        func resolve(_ rawPath: String) -> URL {
-            if (rawPath as NSString).isAbsolutePath {
-                return URL(fileURLWithPath: rawPath).standardizedFileURL
-            }
-            let cwdBase = session.surface.currentWorkingDirectory ?? worktree.path
-            let cwdRelative = cwdBase.appendingPathComponent(rawPath).standardizedFileURL
-            let rootRelative = worktree.path.appendingPathComponent(rawPath).standardizedFileURL
-            if FileManager.default.fileExists(atPath: cwdRelative.path) {
-                return cwdRelative
-            }
-            if cwdRelative.path != rootRelative.path,
-               FileManager.default.fileExists(atPath: rootRelative.path) {
-                return rootRelative
-            }
-            return cwdRelative
-        }
-
         func attemptOpen(_ candidatePath: String) -> Bool {
-            let target: TerminalOpenTarget
-            let resolved = resolve(candidatePath)
-            if FileManager.default.fileExists(atPath: resolved.path) {
-                target = TerminalOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
-            } else if let parsed = Self.parseTerminalPathPosition(candidatePath) {
-                let resolvedParsed = resolve(parsed.path)
-                target = TerminalOpenTarget(
-                    url: resolvedParsed,
-                    revealLine: parsed.line - 1,
-                    revealCharacter: (parsed.column ?? 1) - 1
-                )
-            } else {
-                return false
+            if attemptOpenLocalFilePath(candidatePath, worktree: worktree, baseDirectory: session.surface.currentWorkingDirectory) {
+                NSApp.activate(ignoringOtherApps: true)
+                return true
             }
-
-            var isDirectory: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
-                  !isDirectory.boolValue else { return false }
-
-            // Resolve symlinks on both sides before the containment check so that
-            // an in-tree symlink pointing outside the worktree (e.g.
-            // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
-            let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
-            let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
-            let rootComponents = resolvedRoot.pathComponents
-            let targetComponents = resolvedTarget.pathComponents
-            guard targetComponents.count > rootComponents.count,
-                  Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
-                return false
-            }
-            let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
-            guard !relativePath.isEmpty else { return false }
-
-            openFile(
-                relativePath: relativePath,
-                worktreeId: worktree.id,
-                revealLine: target.revealLine,
-                revealCharacter: target.revealCharacter
-            )
-            NSApp.activate(ignoringOtherApps: true)
-            return true
+            return false
         }
 
         if attemptOpen(path) { return true }
@@ -2588,28 +2569,96 @@ final class AppState {
         return false
     }
 
-    private struct TerminalOpenTarget {
+    private func attemptOpenLocalFilePath(
+        _ candidatePath: String,
+        worktree: Worktree,
+        baseDirectory: URL?
+    ) -> Bool {
+        let target: LocalFileOpenTarget
+        let resolved = resolveLocalFilePath(candidatePath, worktree: worktree, baseDirectory: baseDirectory)
+        if FileManager.default.fileExists(atPath: resolved.path) {
+            target = LocalFileOpenTarget(url: resolved, revealLine: nil, revealCharacter: nil)
+        } else if let parsed = Self.parseLocalPathPosition(candidatePath) {
+            let resolvedParsed = resolveLocalFilePath(parsed.path, worktree: worktree, baseDirectory: baseDirectory)
+            target = LocalFileOpenTarget(
+                url: resolvedParsed,
+                revealLine: parsed.line - 1,
+                revealCharacter: (parsed.column ?? 1) - 1
+            )
+        } else {
+            return false
+        }
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return false }
+
+        // Resolve symlinks on both sides before the containment check so that
+        // an in-tree symlink pointing outside the worktree (e.g.
+        // `worktree/escape -> /elsewhere`) doesn't get routed to the editor.
+        let resolvedTarget = target.url.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedRoot = worktree.path.resolvingSymlinksInPath().standardizedFileURL
+        let rootComponents = resolvedRoot.pathComponents
+        let targetComponents = resolvedTarget.pathComponents
+        guard targetComponents.count > rootComponents.count,
+              Array(targetComponents.prefix(rootComponents.count)) == rootComponents else {
+            return false
+        }
+        let relativePath = targetComponents.dropFirst(rootComponents.count).joined(separator: "/")
+        guard !relativePath.isEmpty else { return false }
+
+        openFile(
+            relativePath: relativePath,
+            worktreeId: worktree.id,
+            revealLine: target.revealLine,
+            revealCharacter: target.revealCharacter
+        )
+        return true
+    }
+
+    private func resolveLocalFilePath(
+        _ rawPath: String,
+        worktree: Worktree,
+        baseDirectory: URL?
+    ) -> URL {
+        if (rawPath as NSString).isAbsolutePath {
+            return URL(fileURLWithPath: rawPath).standardizedFileURL
+        }
+        let base = baseDirectory ?? worktree.path
+        let baseRelative = base.appendingPathComponent(rawPath).standardizedFileURL
+        let rootRelative = worktree.path.appendingPathComponent(rawPath).standardizedFileURL
+        if FileManager.default.fileExists(atPath: baseRelative.path) {
+            return baseRelative
+        }
+        if baseRelative.path != rootRelative.path,
+           FileManager.default.fileExists(atPath: rootRelative.path) {
+            return rootRelative
+        }
+        return baseRelative
+    }
+
+    private struct LocalFileOpenTarget {
         var url: URL
         var revealLine: Int?
         var revealCharacter: Int?
     }
 
-    private struct TerminalPathPosition {
+    private struct LocalPathPosition {
         var path: String
         var line: Int
         var column: Int?
     }
 
-    nonisolated private static func parseTerminalPathPosition(_ rawPath: String) -> TerminalPathPosition? {
+    nonisolated private static func parseLocalPathPosition(_ rawPath: String) -> LocalPathPosition? {
         guard let lineSplit = splitTrailingPositiveInteger(from: rawPath) else { return nil }
         if let columnSplit = splitTrailingPositiveInteger(from: lineSplit.prefix) {
-            return TerminalPathPosition(
+            return LocalPathPosition(
                 path: columnSplit.prefix,
                 line: columnSplit.value,
                 column: lineSplit.value
             )
         }
-        return TerminalPathPosition(path: lineSplit.prefix, line: lineSplit.value, column: nil)
+        return LocalPathPosition(path: lineSplit.prefix, line: lineSplit.value, column: nil)
     }
 
     nonisolated private static func splitTrailingPositiveInteger(from value: String) -> (prefix: String, value: Int)? {

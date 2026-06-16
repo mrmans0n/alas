@@ -247,6 +247,9 @@ private struct ACPSessionView: View {
                                 onOpenDiff: { relativePath in
                                     state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
                                 },
+                                onOpenTranscriptLink: { url in
+                                    state.routeTranscriptOpenURL(url, worktreeId: worktree.id)
+                                },
                                 // Use the runner's policy (where the agent's continuation
                                 // lives) — otherwise the user's click can't resolve the
                                 // pending permission request.
