@@ -457,6 +457,13 @@ final class ProjectsManager {
         return normalized
     }
 
+    /// Whether `worktree` is the project's primary on-disk checkout (the main
+    /// worktree) rather than a feature worktree. Reuses the same path
+    /// comparison the sort logic uses to pin main at position 0.
+    func isMain(_ worktree: Worktree, in project: ProjectConfig) -> Bool {
+        isMainWorktree(worktree, project: project)
+    }
+
     private func isMainWorktree(_ worktree: Worktree, project: ProjectConfig) -> Bool {
         canonical(worktree.path) == canonical(URL(fileURLWithPath: project.path))
     }

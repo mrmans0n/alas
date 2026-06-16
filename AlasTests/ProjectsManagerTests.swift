@@ -427,4 +427,37 @@ extension ProjectsManagerTests {
         #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
         #expect(mgr.operationState(for: worktree.id) == nil)
     }
+
+    @Test func isMainTrueForPrimaryCheckout() async throws {
+        let repo = try await makeRepo(name: "ismain-true")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "ismain-true", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        #expect(mgr.isMain(trees[0], in: project))
+    }
+
+    @Test func isMainFalseForFeatureWorktree() async throws {
+        let repo = try await makeRepo(name: "ismain-false")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "ismain-false", color: "#c89d6f")
+
+        let svc = WorktreeService()
+        let dest = repo.appendingPathComponent("wt-feature")
+        _ = try await svc.add(repoPath: repo, base: "main", branch: "feature-b", destination: dest, projectId: project.id)
+
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.count == 2)
+
+        let repoCanonical = repo.standardizedFileURL.path
+        let mainWorktree = try #require(trees.first { $0.path.standardizedFileURL.path == repoCanonical })
+        let featureWorktree = try #require(trees.first { $0.path.standardizedFileURL.path != repoCanonical })
+
+        #expect(mgr.isMain(mainWorktree, in: project))
+        #expect(!mgr.isMain(featureWorktree, in: project))
+    }
 }

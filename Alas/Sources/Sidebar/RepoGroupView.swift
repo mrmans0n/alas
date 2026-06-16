@@ -13,6 +13,7 @@ struct RepoGroupView: View {
     let worktrees: [Worktree]
     @Binding var collapsed: Bool
     let selectedWorktreeId: String?
+    let isMain: (Worktree) -> Bool
     let operationState: (Worktree) -> WorktreeOperationState?
     let harnessSummary: (String) -> HarnessService.WorktreeHarnessSummary?
     let onSelect: (Worktree) -> Void
@@ -134,6 +135,7 @@ struct RepoGroupView: View {
                         WorktreeRowView(
                             worktree: wt,
                             isSelected: wt.id == selectedWorktreeId,
+                            isMain: isMain(wt),
                             operationState: operationState(wt),
                             harnessSummary: harnessSummary(wt.id),
                             onTap: { onSelect(wt) },

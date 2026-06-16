@@ -28,6 +28,7 @@ struct Icon: View {
     static func symbol(for name: String) -> String {
         switch name {
         case "branch":     return "arrow.triangle.branch"
+        case "home":       return "house"
         case "terminal":   return "terminal"
         case "code":       return "chevron.left.forwardslash.chevron.right"
         case "diff":       return "plus.forwardslash.minus"

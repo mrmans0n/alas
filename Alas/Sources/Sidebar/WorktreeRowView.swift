@@ -3,6 +3,7 @@ import SwiftUI
 struct WorktreeRowView: View {
     let worktree: Worktree
     let isSelected: Bool
+    let isMain: Bool
     let operationState: WorktreeOperationState?
     let harnessSummary: HarnessService.WorktreeHarnessSummary?
     let onTap: () -> Void
@@ -60,7 +61,11 @@ struct WorktreeRowView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
+                    Icon(
+                        name: isMain ? "home" : "branch",
+                        size: 11,
+                        color: theme.color(isMain ? "fg-muted" : "fg-faint")
+                    )
                     Text(worktree.branch)
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundColor(theme.color(isPending ? "fg-faint" : "fg"))

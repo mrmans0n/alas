@@ -39,6 +39,7 @@ struct RepoGroupViewLayoutTests {
             worktrees: worktrees,
             collapsed: .constant(collapsed),
             selectedWorktreeId: nil,
+            isMain: { _ in false },
             operationState: { _ in nil },
             harnessSummary: { _ in nil },
             onSelect: { _ in },
