@@ -19,6 +19,7 @@
     <span id="detail-title" class="hidden"></span>
     <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
     <span id="nav-title">Alas Remote</span>
+    <button id="new-session" aria-label="New session">+ New</button>
     <span id="status" class="chip" data-state="connecting">connecting…</span>
   </header>
   <main>
@@ -79,6 +80,24 @@
         <input id="cfg-autorun" type="checkbox" />
       </label>
       <button id="cfg-close" class="sheet-close">Close</button>
+    </div>
+  </div>
+  <div id="new-session-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+    <div class="sheet-card create-sheet">
+      <p id="new-session-title" class="sheet-title">New session</p>
+      <div id="create-error" class="sheet-error hidden"></div>
+      <div id="worktree-step">
+        <input id="worktree-search" class="sheet-input" type="search" autocomplete="off" placeholder="Search worktrees" aria-label="Search worktrees" />
+        <div id="worktree-list" class="create-list"></div>
+      </div>
+      <div id="agent-step" class="hidden">
+        <div id="agent-list" class="create-list"></div>
+      </div>
+      <div class="create-actions">
+        <button id="create-back" class="sheet-close hidden">Back</button>
+        <button id="create-next" class="btn-submit" disabled>Next</button>
+        <button id="create-cancel" class="sheet-close">Cancel</button>
+      </div>
     </div>
   </div>
   <div id="rename-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="rename-title">

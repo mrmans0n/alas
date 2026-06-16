@@ -113,6 +113,24 @@ struct RemoteWebAssetTests {
         #expect(sw.contains(#""/style.css?v=30""#))
     }
 
+    @Test func remoteWebIncludesNewSessionControls() throws {
+        let html = try asset("index.html")
+        #expect(html.contains(#"id="new-session""#))
+        #expect(html.contains(#"id="new-session-sheet""#))
+        #expect(html.contains(#"id="worktree-search""#))
+    }
+
+    @Test func remoteWebIncludesNewSessionMessageTypes() throws {
+        let js = try asset("app.js")
+        #expect(js.contains(#"type: "listWorktrees""#))
+        #expect(js.contains(#"type: "listAgents""#))
+        #expect(js.contains(#"type: "createSession""#))
+        #expect(js.contains(#"case "worktreeList""#))
+        #expect(js.contains(#"case "agentList""#))
+        #expect(js.contains(#"case "sessionCreated""#))
+        #expect(js.contains(#"case "createSessionFailed""#))
+    }
+
     @Test func serviceWorkerKeepsControlAndDiagnosticRoutesNetworkOnly() throws {
         let sw = try asset("sw.js")
 

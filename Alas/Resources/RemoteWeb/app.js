@@ -20,6 +20,17 @@ let lastSentAttachments = [];   // images of the most recent sendPrompt, restore
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
 let renameTarget = null;
+let createState = {
+  open: false,
+  step: "worktree",
+  worktrees: [],
+  agents: [],
+  selectedWorktreeId: null,
+  selectedAgentId: null,
+  filter: "",
+  busy: false,
+  error: ""
+};
 const ATTACH_CAP = 10 * 1000 * 1000;   // 10 MB running total — matches the server's maxAttachmentsBytes
 
 // state ∈ {connecting, ok, bad} drives the chip's dot/border color via [data-state].
@@ -158,6 +169,26 @@ function handle(msg) {
     case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
+    case "worktreeList":
+      createState.worktrees = msg.worktrees || [];
+      renderCreateSheet();
+      break;
+    case "agentList":
+      createState.agents = msg.agents || [];
+      if (!createState.selectedAgentId) {
+        const preferred = createState.agents.find(a => a.isDefault) || createState.agents[0];
+        createState.selectedAgentId = preferred ? preferred.id : null;
+      }
+      renderCreateSheet();
+      break;
+    case "sessionCreated":
+      applyCreatedSession(msg.session);
+      break;
+    case "createSessionFailed":
+      createState.busy = false;
+      createState.error = msg.message || "Could not create session.";
+      renderCreateSheet();
+      break;
     case "sessionClosed": if (msg.sessionId === currentSession) showSessions(); break;
     case "promptRejected": if (msg.sessionId === currentSession) restoreRejectedPrompt(); break;
     case "error": setStatus("Error", "bad"); $("status").title = msg.message ?? ""; break;
@@ -245,7 +276,7 @@ function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances();
-  hidePermission(); hideQuestion(); hideRenameSheet();          // never leave a sheet over the list
+  hidePermission(); hideQuestion(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
@@ -286,6 +317,192 @@ function applySessionRenamed(sessionId, title) {
   if (rowTitle) rowTitle.textContent = title;
   if (currentSession === sessionId) setDetailTitle(sessionId);
   if (renameTarget === sessionId) $("rename-input").value = title;
+}
+
+function showCreateSheet() {
+  createState = {
+    ...createState,
+    open: true,
+    step: "worktree",
+    selectedWorktreeId: null,
+    selectedAgentId: null,
+    filter: "",
+    busy: false,
+    error: ""
+  };
+  $("worktree-search").value = "";
+  $("new-session-sheet").classList.remove("hidden");
+  renderCreateSheet();
+  send({ type: "listWorktrees" });
+  send({ type: "listAgents" });
+  requestAnimationFrame(() => $("worktree-search").focus());
+}
+
+function hideCreateSheet() {
+  if (createState.busy) return;
+  createState.open = false;
+  createState.error = "";
+  $("new-session-sheet").classList.add("hidden");
+}
+
+function visibleCreateWorktrees() {
+  const query = createState.filter.trim().toLowerCase();
+  if (!query) return createState.worktrees;
+  return createState.worktrees.filter(w => [
+    w.projectName,
+    w.worktreeName,
+    w.branch,
+    w.path,
+    w.comparisonRef
+  ].some(value => String(value || "").toLowerCase().includes(query)));
+}
+
+function renderCreateSheet() {
+  if (!createState.open) return;
+
+  const inWorktreeStep = createState.step === "worktree";
+  $("worktree-step").classList.toggle("hidden", !inWorktreeStep);
+  $("agent-step").classList.toggle("hidden", inWorktreeStep);
+  $("create-back").classList.toggle("hidden", inWorktreeStep);
+  $("create-back").disabled = createState.busy;
+  $("create-cancel").disabled = createState.busy;
+  $("worktree-search").disabled = createState.busy;
+
+  const error = $("create-error");
+  error.textContent = createState.error;
+  error.classList.toggle("hidden", !createState.error);
+
+  renderCreateWorktrees();
+  renderCreateAgents();
+
+  const canSubmit = inWorktreeStep ? !!createState.selectedWorktreeId : !!createState.selectedAgentId;
+  const next = $("create-next");
+  next.disabled = createState.busy || !canSubmit;
+  next.textContent = inWorktreeStep ? "Next" : (createState.busy ? "Creating..." : "Create");
+}
+
+function renderCreateWorktrees() {
+  const list = $("worktree-list");
+  list.innerHTML = "";
+  const worktrees = visibleCreateWorktrees();
+  if (worktrees.length === 0) {
+    list.append(el("div", "create-empty", "No worktrees found."));
+    return;
+  }
+
+  worktrees.forEach(worktree => {
+    const row = el("button", "create-row");
+    row.type = "button";
+    row.disabled = createState.busy;
+    row.classList.toggle("is-selected", worktree.id === createState.selectedWorktreeId);
+    row.onclick = () => {
+      if (createState.busy) return;
+      createState.selectedWorktreeId = worktree.id;
+      createState.error = "";
+      renderCreateSheet();
+    };
+    row.append(el("div", "create-row-title", `${worktree.projectName} / ${worktree.worktreeName}`));
+    if (worktree.path) row.append(el("div", "create-row-detail", worktree.path));
+    const meta = createWorktreeMeta(worktree);
+    if (meta.length) {
+      const box = el("div", "create-row-meta");
+      meta.forEach(part => box.append(el("span", "", part)));
+      row.append(box);
+    }
+    list.append(row);
+  });
+}
+
+function createWorktreeMeta(worktree) {
+  if (!worktree.metricsAvailable) return ["changes unavailable"];
+
+  const parts = [];
+  if (worktree.branch) parts.push(worktree.branch);
+  if (worktree.commitCount > 0) parts.push(plural(worktree.commitCount, "commit"));
+  if (worktree.conflictCount > 0) parts.push(plural(worktree.conflictCount, "conflict"));
+  if (worktree.changedFileCount > 0) parts.push(plural(worktree.changedFileCount, "file"));
+
+  const line = [];
+  if (worktree.addedLines > 0) line.push("+" + worktree.addedLines);
+  if (worktree.deletedLines > 0) line.push("-" + worktree.deletedLines);
+  if (line.length) parts.push(line.join(" / "));
+
+  return parts.length ? parts : ["clean"];
+}
+
+function renderCreateAgents() {
+  const list = $("agent-list");
+  list.innerHTML = "";
+  if (createState.agents.length === 0) {
+    list.append(el("div", "create-empty", "No agents available."));
+    return;
+  }
+
+  createState.agents.forEach(agent => {
+    const row = el("button", "create-row");
+    row.type = "button";
+    row.disabled = createState.busy;
+    row.classList.toggle("is-selected", agent.id === createState.selectedAgentId);
+    row.onclick = () => {
+      if (createState.busy) return;
+      createState.selectedAgentId = agent.id;
+      createState.error = "";
+      renderCreateSheet();
+    };
+    row.append(el("div", "create-row-title", agent.name || agent.id));
+    if (agent.isDefault) row.append(el("div", "create-row-detail", "Default agent"));
+    list.append(row);
+  });
+}
+
+function advanceCreateSheet() {
+  if (createState.busy) return;
+  createState.error = "";
+
+  if (createState.step === "worktree") {
+    if (!createState.selectedWorktreeId) return;
+    createState.step = "agent";
+    renderCreateSheet();
+    return;
+  }
+
+  if (!createState.selectedWorktreeId || !createState.selectedAgentId) return;
+  createState.busy = true;
+  renderCreateSheet();
+  send({ type: "createSession", worktreeId: createState.selectedWorktreeId, agentId: createState.selectedAgentId });
+}
+
+function backCreateSheet() {
+  if (createState.busy) return;
+  createState.step = "worktree";
+  createState.error = "";
+  renderCreateSheet();
+  requestAnimationFrame(() => $("worktree-search").focus());
+}
+
+function applyCreatedSession(session) {
+  if (!session || !session.id) {
+    createState.busy = false;
+    createState.error = "Could not create session.";
+    renderCreateSheet();
+    return;
+  }
+
+  const previousSession = currentSession;
+  createState.busy = false;
+  hideCreateSheet();
+  sessionTitles.set(session.id, session.title);
+  const list = $("session-list");
+  const row = renderSessionRow(session);
+  const existing = Array.from(document.querySelectorAll("[data-session-id]"))
+    .find(candidate => candidate.dataset.sessionId === session.id);
+  if (existing) {
+    existing.replaceWith(row);
+  } else {
+    list.prepend(row);
+  }
+  if (previousSession && previousSession !== session.id) send({ type: "unsubscribe", sessionId: previousSession });
+  openSession(session.id);
 }
 
 function renderMessages(forceBottom) {
@@ -1541,6 +1758,15 @@ async function onFilesPicked(files) {
   }
 }
 
+$("new-session").onclick = showCreateSheet;
+$("create-cancel").onclick = hideCreateSheet;
+$("create-next").onclick = advanceCreateSheet;
+$("create-back").onclick = backCreateSheet;
+$("new-session-sheet").onclick = (e) => { if (e.target.id === "new-session-sheet" && !createState.busy) hideCreateSheet(); };
+listen("worktree-search", "input", (e) => {
+  createState.filter = e.target.value || "";
+  renderCreateSheet();
+});
 $("config").onclick = showConfig;
 $("cfg-close").onclick = hideConfig;
 $("cfg").onclick = (e) => { if (e.target.id === "cfg") hideConfig(); };
