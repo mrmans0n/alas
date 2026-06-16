@@ -28,7 +28,9 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
     var pauseSessionSummaries = false
+    var pauseRemoteWorktrees = false
     private var sessionSummariesContinuation: CheckedContinuation<[RemoteSessionSummary], Never>?
+    private var remoteWorktreesContinuation: CheckedContinuation<[RemoteWorktreeOption], Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
         if pauseSessionSummaries {
@@ -40,6 +42,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
     func remoteWorktrees() async -> [RemoteWorktreeOption] {
         remoteWorktreesCallCount += 1
+        if pauseRemoteWorktrees {
+            return await withCheckedContinuation { continuation in
+                remoteWorktreesContinuation = continuation
+            }
+        }
         return worktrees
     }
     func remoteAgents() -> [RemoteAgentOption] {
@@ -53,6 +60,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func resumeSessionSummaries() {
         sessionSummariesContinuation?.resume(returning: summaries)
         sessionSummariesContinuation = nil
+    }
+    func resumeRemoteWorktrees() {
+        remoteWorktreesContinuation?.resume(returning: worktrees)
+        remoteWorktreesContinuation = nil
     }
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
@@ -202,7 +213,10 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
         await gw.handle(.listWorktrees)
-        await Task.yield()
+        for _ in 0..<10 {
+            if !sent.isEmpty { break }
+            await Task.yield()
+        }
 
         #expect(provider.remoteWorktreesCallCount == 1)
         #expect(sent == [.worktreeList(worktrees: provider.worktrees)])
@@ -291,6 +305,55 @@ struct RemoteSessionGatewayTests {
             await Task.yield()
         }
         #expect(sent.last == .sessionList(sessions: provider.summaries))
+    }
+
+    @Test func listWorktreesDoesNotBlockFollowingStop() async {
+        let provider = FakeSessionsProvider()
+        provider.worktrees = [
+            RemoteWorktreeOption(
+                id: "wt1",
+                projectName: "alas",
+                worktreeName: "feature-a",
+                branch: "nacho/feature-a",
+                path: "/tmp/alas-feature-a",
+                metricsAvailable: false,
+                comparisonRef: nil,
+                commitCount: 0,
+                changedFileCount: 0,
+                addedLines: 0,
+                deletedLines: 0,
+                conflictCount: 0
+            )
+        ]
+        provider.pauseRemoteWorktrees = true
+        provider.writers = ["s1"]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        var listHandleReturned = false
+        let listTask = Task { @MainActor in
+            await gw.handle(.listWorktrees)
+            listHandleReturned = true
+        }
+        for _ in 0..<10 {
+            if provider.remoteWorktreesCallCount == 1 { break }
+            await Task.yield()
+        }
+
+        #expect(provider.remoteWorktreesCallCount == 1)
+        #expect(listHandleReturned == true)
+        #expect(sent.isEmpty)
+
+        await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped == ["s1"])
+
+        provider.resumeRemoteWorktrees()
+        await listTask.value
+        for _ in 0..<10 {
+            if sent.last == .worktreeList(worktrees: provider.worktrees) { break }
+            await Task.yield()
+        }
+        #expect(sent.last == .worktreeList(worktrees: provider.worktrees))
     }
 
     @Test func subscribeEmitsSnapshot() async throws {
