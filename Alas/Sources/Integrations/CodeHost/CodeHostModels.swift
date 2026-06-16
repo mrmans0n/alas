@@ -56,69 +56,43 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
     let canCreateReviewRequest: Bool
     let canRerunFailedChecks: Bool
     let canOpenReviewRequest: Bool
-    let canPublishReviewComments: Bool
-    let canReplyToReviewThreads: Bool
-    let canResolveReviewThreads: Bool
-    let canUnresolveReviewThreads: Bool
-    let canApproveReview: Bool
-    let canRequestChanges: Bool
-
-    init(
-        canCreateReviewRequest: Bool,
-        canRerunFailedChecks: Bool,
-        canOpenReviewRequest: Bool,
-        canPublishReviewComments: Bool = false,
-        canReplyToReviewThreads: Bool = false,
-        canResolveReviewThreads: Bool = false,
-        canUnresolveReviewThreads: Bool = false,
-        canApproveReview: Bool = false,
-        canRequestChanges: Bool = false
-    ) {
-        self.canCreateReviewRequest = canCreateReviewRequest
-        self.canRerunFailedChecks = canRerunFailedChecks
-        self.canOpenReviewRequest = canOpenReviewRequest
-        self.canPublishReviewComments = canPublishReviewComments
-        self.canReplyToReviewThreads = canReplyToReviewThreads
-        self.canResolveReviewThreads = canResolveReviewThreads
-        self.canUnresolveReviewThreads = canUnresolveReviewThreads
-        self.canApproveReview = canApproveReview
-        self.canRequestChanges = canRequestChanges
-    }
+    let canReply: Bool
+    let canResolve: Bool
+    let canComment: Bool
+    let canSubmitReview: Bool
+    let canFetchAnnotations: Bool
 
     static let readOnly = CodeHostProviderCapabilities(
         canCreateReviewRequest: false,
         canRerunFailedChecks: false,
         canOpenReviewRequest: true,
-        canPublishReviewComments: false,
-        canReplyToReviewThreads: false,
-        canResolveReviewThreads: false,
-        canUnresolveReviewThreads: false,
-        canApproveReview: false,
-        canRequestChanges: false
+        canReply: false,
+        canResolve: false,
+        canComment: false,
+        canSubmitReview: false,
+        canFetchAnnotations: false
     )
 
     static let githubCLI = CodeHostProviderCapabilities(
         canCreateReviewRequest: true,
         canRerunFailedChecks: true,
         canOpenReviewRequest: true,
-        canPublishReviewComments: true,
-        canReplyToReviewThreads: true,
-        canResolveReviewThreads: true,
-        canUnresolveReviewThreads: true,
-        canApproveReview: true,
-        canRequestChanges: true
+        canReply: true,
+        canResolve: true,
+        canComment: true,
+        canSubmitReview: true,
+        canFetchAnnotations: true
     )
 
     static let gitlabCLI = CodeHostProviderCapabilities(
         canCreateReviewRequest: true,
         canRerunFailedChecks: true,
         canOpenReviewRequest: true,
-        canPublishReviewComments: true,
-        canReplyToReviewThreads: true,
-        canResolveReviewThreads: true,
-        canUnresolveReviewThreads: false,
-        canApproveReview: true,
-        canRequestChanges: true
+        canReply: true,
+        canResolve: true,
+        canComment: true,
+        canSubmitReview: true,
+        canFetchAnnotations: false
     )
 }
 

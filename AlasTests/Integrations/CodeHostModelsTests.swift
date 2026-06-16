@@ -236,6 +236,18 @@ struct CodeHostModelsTests {
     }
 }
 
+struct CapabilityPresetsTests {
+    @Test func capabilityPresetsExposeWriteFlags() {
+        #expect(CodeHostProviderCapabilities.githubCLI.canResolve == true)
+        #expect(CodeHostProviderCapabilities.githubCLI.canReply == true)
+        #expect(CodeHostProviderCapabilities.githubCLI.canSubmitReview == true)
+        #expect(CodeHostProviderCapabilities.githubCLI.canFetchAnnotations == true)
+        #expect(CodeHostProviderCapabilities.readOnly.canResolve == false)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canReply == true)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canFetchAnnotations == false)
+    }
+}
+
 struct ReviewThreadModelTests {
     @Test func backCompatAccessorsDeriveFromFirstNonEmptyComment() {
         let thread = ReviewThread(

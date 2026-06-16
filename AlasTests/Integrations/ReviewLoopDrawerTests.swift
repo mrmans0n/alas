@@ -47,7 +47,12 @@ struct ReviewLoopDrawerTests {
         let capabilities = CodeHostProviderCapabilities(
             canCreateReviewRequest: true,
             canRerunFailedChecks: false,
-            canOpenReviewRequest: true
+            canOpenReviewRequest: true,
+            canReply: true,
+            canResolve: true,
+            canComment: true,
+            canSubmitReview: true,
+            canFetchAnnotations: false
         )
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(remote: remote, reviewRequest: nil, providerCapabilities: capabilities),
