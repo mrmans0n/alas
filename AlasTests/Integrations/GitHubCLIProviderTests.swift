@@ -1344,6 +1344,20 @@ struct GitHubCLIProviderTests {
         #expect(thread.line == nil)
     }
 
+    @Test func reviewThreadsFilterEmptyBodiedCommentsAndDropEmptyThreads() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.emptyCommentReviewThreadsOutput, stderr: ""),
+        ])
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider",
+            headOwner: nil, baseBranch: "main", cwd: Self.cwd)
+        let threads = try #require(request?.threads)
+        #expect(threads.count == 1)
+        #expect(threads[0].id == "thread-kept")
+        #expect(threads[0].comments.map(\.body) == ["keep me"])
+    }
+
     @Test func commandFailureDescriptionIncludesStderr() {
         let error = CodeHostProviderError.commandFailed(
             command: "gh pr create",
@@ -1742,6 +1756,44 @@ struct GitHubCLIProviderTests {
               { "id": "cf1", "body": "file-level comment",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r10",
                 "createdAt": "2026-06-16T11:00:00Z", "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }}}}
+    }
+    """
+
+    private static let emptyCommentReviewThreadsOutput = """
+    {
+      "data": { "repository": { "pullRequest": { "reviewThreads": {
+        "nodes": [
+          {
+            "id": "thread-kept", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Foo.swift", "line": 10, "startLine": null,
+            "originalLine": 8, "diffHunk": "@@ -8,3 +8,3 @@",
+            "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "c-empty", "body": "   ",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
+                "createdAt": "2026-06-16T10:00:00Z", "author": { "login": "reviewer" },
+                "viewerDidAuthor": false },
+              { "id": "c-keep", "body": "keep me",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r2",
+                "createdAt": "2026-06-16T10:01:00Z", "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          },
+          {
+            "id": "thread-dropped", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Bar.swift", "line": 20, "startLine": null,
+            "originalLine": 18, "diffHunk": "@@ -18,3 +18,3 @@",
+            "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "c-only-empty", "body": "",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r3",
+                "createdAt": "2026-06-16T10:02:00Z", "author": { "login": "reviewer" },
                 "viewerDidAuthor": false }
             ] }
           }

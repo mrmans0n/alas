@@ -924,7 +924,7 @@ struct GitHubCLIProvider: CodeHostProvider {
 
         let connection = response.data.repository.pullRequest.reviewThreads
         let threads: [ReviewThread] = try connection.nodes.compactMap { node in
-            let comments: [ReviewComment] = try node.comments.nodes.enumerated().map { index, c in
+            let allComments: [ReviewComment] = try node.comments.nodes.enumerated().map { index, c in
                 ReviewComment(
                     id: c.id ?? "\(node.id)-\(index)",
                     author: c.author?.login,
@@ -936,7 +936,8 @@ struct GitHubCLIProvider: CodeHostProvider {
                     isPending: false
                 )
             }
-            guard comments.contains(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            let comments = allComments.filter { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            guard !comments.isEmpty else {
                 return nil
             }
             return ReviewThread(
