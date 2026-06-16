@@ -1069,6 +1069,58 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-copy-thread-1", in: host) != nil)
     }
 
+    @Test func reviewSessionKeepsNonActionableProviderFeedbackReadOnly() throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "This outdated comment should remain visible.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
+            isResolved: false,
+            isActionable: false,
+            location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 2, side: .new, providerPosition: nil),
+            providerThreadID: "thread-provider-1",
+            providerCommentID: "comment-provider-1"
+        )
+        let request = Self.reviewRequest(provider: .github, threads: [thread])
+        let target = Self.reviewRequestTarget(provider: .github, request: request)
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
+        let view = ReviewSessionTabView.testView(
+            record: record,
+            loaded: loaded,
+            provider: RecordingProviderReviewMutator(
+                kind: .github,
+                publishResult: ProviderReviewPublishResult(
+                    published: [],
+                    failed: [],
+                    refreshedRequest: request,
+                    warnings: []
+                )
+            )
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let feedback = try #require(ReviewSessionTabView.inlineFeedbackByFileID(
+            threads: [thread],
+            files: [Self.summary(path: "Sources/App.swift", namespace: "github")],
+            providerName: "GitHub"
+        )[DiffReviewFileID(namespace: "github", path: "Sources/App.swift")]?.first)
+        #expect(feedback.status == .unknown)
+
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-open-thread-1", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-copy-thread-1", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-reply-thread-1", in: host) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: host) == nil)
+    }
+
     @Test func reviewSessionShowsProviderThreadMutationFailureOutsidePublishSheet() async throws {
         let thread = ReviewThreadSummary(
             id: "thread-1",

@@ -142,7 +142,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--base", base,
                 "--state", "open",
                 "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", remote.repositorySlug,
             ],
             cwd: cwd
@@ -420,6 +420,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             let published = try await submitReview(
                 remote: request.remote,
                 pullRequestID: pullRequestID,
+                commitOID: request.reviewRequest.headSHA,
                 comments: publishableComments,
                 decision: request.decision,
                 summaryBody: request.summaryBody,
@@ -444,6 +445,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                     let result = try await submitReview(
                         remote: request.remote,
                         pullRequestID: pullRequestID,
+                        commitOID: request.reviewRequest.headSHA,
                         comments: [comment],
                         decision: .comment,
                         summaryBody: request.summaryBody,
@@ -473,6 +475,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     private func submitReview(
         remote: CodeHostRemote,
         pullRequestID: String,
+        commitOID: String?,
         comments: [ProviderReviewDraftComment],
         decision: ProviderReviewDecision,
         summaryBody: String,
@@ -480,6 +483,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     ) async throws -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment]) {
         let input = PublishReviewInput(
             pullRequestId: pullRequestID,
+            commitOID: Self.normalizedOptionalString(commitOID),
             event: Self.githubReviewEvent(for: decision),
             body: summaryBody,
             threads: comments.map(Self.githubReviewThreadPayload(for:))
@@ -506,7 +510,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "pr", "view", "\(request.number)",
-                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", remote.repositorySlug,
             ],
             cwd: cwd
@@ -658,6 +662,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: item.isDraft,
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
+            headSHA: normalizedOptionalString(item.headRefOid),
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -1022,6 +1027,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: request.isDraft,
             headRefName: request.headRefName,
             baseRefName: request.baseRefName,
+            headSHA: request.headSHA,
             reviewDecision: request.reviewDecision,
             mergeState: request.mergeState,
             checks: request.checks,
@@ -1097,6 +1103,7 @@ private struct PRListItem: Decodable {
     let state: String
     let isDraft: Bool
     let headRefName: String
+    let headRefOid: String?
     let headRepositoryOwner: HeadRepositoryOwner?
     let baseRefName: String
     let reviewDecision: String?
@@ -1180,6 +1187,7 @@ private struct PublishReviewVariables: Encodable {
 
 private struct PublishReviewInput: Encodable {
     let pullRequestId: String
+    let commitOID: String?
     let event: String
     let body: String
     let threads: [GitHubReviewDraftThreadPayload]

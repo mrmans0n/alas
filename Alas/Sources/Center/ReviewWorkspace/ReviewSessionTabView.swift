@@ -691,13 +691,21 @@ struct ReviewSessionTabView: View {
             guard let location = thread.location,
                   let file = matcher.file(for: location)
             else { continue }
+            let status: ReviewEvidenceStatus
+            if thread.isResolved {
+                status = .resolved
+            } else if thread.isActionable {
+                status = .actionable
+            } else {
+                status = .unknown
+            }
 
             let feedback = DiffReviewInlineFeedback(
                 id: thread.id,
                 providerName: providerName,
                 author: thread.author,
                 bodyPreview: String(thread.body.prefix(240)),
-                status: thread.isResolved ? .resolved : .actionable,
+                status: status,
                 providerURL: thread.url,
                 anchor: DiffReviewInlineFeedbackAnchor(
                     path: Self.inlineFeedbackAnchorPath(for: location, matchedFile: file),
@@ -752,8 +760,8 @@ struct ReviewSessionTabView: View {
                 canOpenProvider: item.providerURL != nil,
                 canCopyContext: true,
                 canSendToAgent: false,
-                canReplyProvider: capabilities.canReplyToReviewThreads,
-                canResolveProvider: item.status != .resolved && capabilities.canResolveReviewThreads,
+                canReplyProvider: item.status == .actionable && capabilities.canReplyToReviewThreads,
+                canResolveProvider: item.status == .actionable && capabilities.canResolveReviewThreads,
                 canUnresolveProvider: item.status == .resolved && capabilities.canUnresolveReviewThreads
             )
         }
@@ -820,7 +828,7 @@ struct ReviewSessionTabView: View {
             body: item.bodyPreview,
             url: item.providerURL,
             isResolved: item.status == .resolved,
-            isActionable: item.status != .resolved,
+            isActionable: item.status == .actionable,
             location: ReviewThreadLocation(
                 path: item.anchor.path,
                 originalPath: file.originalPath,

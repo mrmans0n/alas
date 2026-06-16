@@ -14,6 +14,7 @@ struct GitHubCLIProviderTests {
                 "state": "OPEN",
                 "isDraft": false,
                 "headRefName": "feature/github-provider",
+                "headRefOid": "head-sha-42",
                 "baseRefName": "main",
                 "reviewDecision": "CHANGES_REQUESTED",
                 "mergeStateStatus": "BLOCKED"
@@ -29,6 +30,7 @@ struct GitHubCLIProviderTests {
         #expect(request.reviewDecision == .changesRequested)
         #expect(request.mergeState == .blocked)
         #expect(request.provider == .github)
+        #expect(request.headSHA == "head-sha-42")
         #expect(request.checks.isEmpty)
         #expect(request.threads.isEmpty)
     }
@@ -201,7 +203,7 @@ struct GitHubCLIProviderTests {
                     "--base", "main",
                     "--state", "open",
                     "--limit", "20",
-                    "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                    "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
                     "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
@@ -362,6 +364,7 @@ struct GitHubCLIProviderTests {
         #expect(publishInput["comments"] == nil)
         #expect(publishThreads.count == 1)
         #expect(publishInput["pullRequestId"] as? String == "PR_node_42")
+        #expect(publishInput["commitOID"] as? String == "head-sha-42")
         #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
         #expect(publishThreads.first?["path"] as? String == "Sources/App.swift")
         #expect(publishThreads.first?["line"] as? Int == 14)
@@ -370,7 +373,7 @@ struct GitHubCLIProviderTests {
         #expect(publishThreads.first?["startSide"] as? String == "RIGHT")
         #expect(commands[2].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(result.published == [
@@ -642,13 +645,13 @@ struct GitHubCLIProviderTests {
         #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[1].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[3].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[4].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
@@ -1238,6 +1241,7 @@ struct GitHubCLIProviderTests {
             isDraft: false,
             headRefName: "feature/github-provider",
             baseRefName: "main",
+            headSHA: "head-sha-42",
             reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,
@@ -1294,6 +1298,7 @@ struct GitHubCLIProviderTests {
         "state": "OPEN",
         "isDraft": false,
         "headRefName": "feature/github-provider",
+        "headRefOid": "head-sha-42",
         "baseRefName": "main",
         "reviewDecision": "APPROVED",
         "mergeStateStatus": "CLEAN"
@@ -1309,6 +1314,7 @@ struct GitHubCLIProviderTests {
       "state": "OPEN",
       "isDraft": false,
       "headRefName": "feature/github-provider",
+      "headRefOid": "head-sha-42",
       "baseRefName": "main",
       "reviewDecision": "APPROVED",
       "mergeStateStatus": "CLEAN"
