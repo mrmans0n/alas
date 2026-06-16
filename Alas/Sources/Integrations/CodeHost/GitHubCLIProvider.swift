@@ -930,7 +930,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                     author: c.author?.login,
                     body: c.body,
                     url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
-                    createdAt: parseISO8601(c.createdAt),
+                    createdAt: try? parseOptionalDate(c.createdAt),
                     viewerCanUpdate: c.viewerDidAuthor ?? false,
                     viewerCanDelete: c.viewerDidAuthor ?? false,
                     isPending: false
@@ -948,6 +948,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 diffHunk: node.diffHunk,
                 isResolved: node.isResolved,
                 isOutdated: node.isOutdated,
+                // subjectType is canonical; fall back to line == nil for servers that omit it
                 isFileLevel: (node.subjectType ?? "").uppercased() == "FILE" || node.line == nil,
                 comments: comments,
                 viewerCanResolve: node.viewerCanResolve ?? false,
@@ -1033,11 +1034,6 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput(context)
         }
         return url
-    }
-
-    private static func parseISO8601(_ string: String?) -> Date? {
-        guard let string else { return nil }
-        return ISO8601DateFormatter().date(from: string)
     }
 
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {

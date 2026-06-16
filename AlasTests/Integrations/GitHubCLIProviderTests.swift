@@ -1328,6 +1328,20 @@ struct GitHubCLIProviderTests {
         #expect(thread.viewerCanResolve == true)
         #expect(thread.comments.first?.id == "c1")
         #expect(thread.comments.first?.viewerCanUpdate == false)
+        #expect(thread.isFileLevel == false)
+    }
+
+    @Test func parsesFileLevelReviewThread() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.fileLevelReviewThreadOutput, stderr: ""),
+        ])
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider",
+            headOwner: nil, baseBranch: "main", cwd: Self.cwd)
+        let thread = try #require(request?.threads.first)
+        #expect(thread.isFileLevel == true)
+        #expect(thread.line == nil)
     }
 
     @Test func commandFailureDescriptionIncludesStderr() {
@@ -1706,6 +1720,28 @@ struct GitHubCLIProviderTests {
               { "id": "c1", "body": "rename this",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
                 "createdAt": "2026-06-16T10:00:00Z", "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }}}}
+    }
+    """
+
+    private static let fileLevelReviewThreadOutput = """
+    {
+      "data": { "repository": { "pullRequest": { "reviewThreads": {
+        "nodes": [
+          {
+            "id": "thread-file-1", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Bar.swift", "line": null, "startLine": null,
+            "originalLine": null, "diffHunk": null,
+            "subjectType": "FILE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "cf1", "body": "file-level comment",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r10",
+                "createdAt": "2026-06-16T11:00:00Z", "author": { "login": "reviewer" },
                 "viewerDidAuthor": false }
             ] }
           }
