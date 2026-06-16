@@ -24,6 +24,9 @@ struct RemoteSessionConfig: Codable, Equatable, Sendable {
 /// Client → server. `type` discriminates.
 enum RemoteClientMessage: Equatable, Sendable {
     case listSessions
+    case listWorktrees
+    case listAgents
+    case createSession(worktreeId: String, agentId: String)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
     case permissionDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?)
@@ -38,12 +41,18 @@ enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, attachments, modelId, modeId, enabled, title }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
         case "listSessions": self = .listSessions
+        case "listWorktrees": self = .listWorktrees
+        case "listAgents": self = .listAgents
+        case "createSession":
+            self = .createSession(
+                worktreeId: try c.decode(String.self, forKey: .worktreeId),
+                agentId: try c.decode(String.self, forKey: .agentId))
         case "subscribe": self = .subscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "unsubscribe": self = .unsubscribe(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "permissionDecision":
@@ -85,6 +94,14 @@ extension RemoteClientMessage: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .listSessions: try c.encode("listSessions", forKey: .type)
+        case .listWorktrees:
+            try c.encode("listWorktrees", forKey: .type)
+        case .listAgents:
+            try c.encode("listAgents", forKey: .type)
+        case .createSession(let worktreeId, let agentId):
+            try c.encode("createSession", forKey: .type)
+            try c.encode(worktreeId, forKey: .worktreeId)
+            try c.encode(agentId, forKey: .agentId)
         case .subscribe(let s): try c.encode("subscribe", forKey: .type)
         try c.encode(s, forKey: .sessionId)
         case .unsubscribe(let s): try c.encode("unsubscribe", forKey: .type)
@@ -134,6 +151,10 @@ extension RemoteClientMessage: Codable {
 /// Server → client. `type` discriminates.
 enum RemoteServerMessage: Equatable, Sendable {
     case sessionList(sessions: [RemoteSessionSummary])
+    case worktreeList(worktrees: [RemoteWorktreeOption])
+    case agentList(agents: [RemoteAgentOption])
+    case sessionCreated(session: RemoteSessionSummary)
+    case createSessionFailed(message: String)
     case transcriptSnapshot(sessionId: String, streamingState: String, canDrive: Bool, messages: [RemoteWireMessage])
     case transcriptDelta(sessionId: String, streamingState: String, canDrive: Bool, upserts: [RemoteWireMessage])
     case permissionRequest(sessionId: String, payload: RemotePermissionPayload)
@@ -153,6 +174,7 @@ enum RemoteServerMessage: Equatable, Sendable {
 extension RemoteServerMessage: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, sessions, sessionId, streamingState, canDrive, messages, upserts, payload, requestId, message
+        case worktrees, agents, session
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
     }
 
@@ -160,6 +182,14 @@ extension RemoteServerMessage: Codable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
         case "sessionList": self = .sessionList(sessions: try c.decode([RemoteSessionSummary].self, forKey: .sessions))
+        case "worktreeList":
+            self = .worktreeList(worktrees: try c.decode([RemoteWorktreeOption].self, forKey: .worktrees))
+        case "agentList":
+            self = .agentList(agents: try c.decode([RemoteAgentOption].self, forKey: .agents))
+        case "sessionCreated":
+            self = .sessionCreated(session: try c.decode(RemoteSessionSummary.self, forKey: .session))
+        case "createSessionFailed":
+            self = .createSessionFailed(message: try c.decode(String.self, forKey: .message))
         case "transcriptSnapshot":
             self = .transcriptSnapshot(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -214,6 +244,18 @@ extension RemoteServerMessage: Codable {
         switch self {
         case .sessionList(let s): try c.encode("sessionList", forKey: .type)
         try c.encode(s, forKey: .sessions)
+        case .worktreeList(let worktrees):
+            try c.encode("worktreeList", forKey: .type)
+            try c.encode(worktrees, forKey: .worktrees)
+        case .agentList(let agents):
+            try c.encode("agentList", forKey: .type)
+            try c.encode(agents, forKey: .agents)
+        case .sessionCreated(let session):
+            try c.encode("sessionCreated", forKey: .type)
+            try c.encode(session, forKey: .session)
+        case .createSessionFailed(let message):
+            try c.encode("createSessionFailed", forKey: .type)
+            try c.encode(message, forKey: .message)
         case .transcriptSnapshot(let id, let st, let cd, let m):
             try c.encode("transcriptSnapshot", forKey: .type)
             try c.encode(id, forKey: .sessionId)

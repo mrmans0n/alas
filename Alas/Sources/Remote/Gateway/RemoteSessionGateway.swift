@@ -35,6 +35,8 @@ final class RemoteSessionGateway {
         switch message {
         case .listSessions:
             refreshSessionList()
+        case .listWorktrees, .listAgents, .createSession:
+            send(.error(message: "Remote session creation is not available yet."))
         case .subscribe(let id):
             await provider.hydrateIfNeeded(id: id)
             guard let session = provider.session(for: id) else {

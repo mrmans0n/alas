@@ -92,6 +92,88 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(summary) == summary)
     }
 
+    @Test func worktreeOptionRoundTrips() throws {
+        let option = RemoteWorktreeOption(
+            id: "wt1",
+            projectName: "alas",
+            worktreeName: "feature-a",
+            branch: "nacho/feature-a",
+            path: "/tmp/alas-feature-a",
+            metricsAvailable: true,
+            comparisonRef: "origin/main",
+            commitCount: 2,
+            changedFileCount: 3,
+            addedLines: 10,
+            deletedLines: 4,
+            conflictCount: 1
+        )
+        #expect(try roundTrip(option) == option)
+    }
+
+    @Test func agentOptionRoundTrips() throws {
+        let option = RemoteAgentOption(id: "claude", name: "Claude", isDefault: true)
+        #expect(try roundTrip(option) == option)
+    }
+
+    @Test func clientCreationMessagesRoundTrip() throws {
+        #expect(try roundTrip(RemoteClientMessage.listWorktrees) == .listWorktrees)
+        #expect(try roundTrip(RemoteClientMessage.listAgents) == .listAgents)
+        #expect(
+            try roundTrip(RemoteClientMessage.createSession(worktreeId: "wt1", agentId: "claude"))
+                == .createSession(worktreeId: "wt1", agentId: "claude")
+        )
+    }
+
+    @Test func clientCreationMessagesDecode() throws {
+        let worktrees = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"listWorktrees"}"#.utf8)
+        )
+        #expect(worktrees == .listWorktrees)
+
+        let agents = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"listAgents"}"#.utf8)
+        )
+        #expect(agents == .listAgents)
+
+        let create = try JSONDecoder().decode(
+            RemoteClientMessage.self,
+            from: Data(#"{"type":"createSession","worktreeId":"wt1","agentId":"claude"}"#.utf8)
+        )
+        #expect(create == .createSession(worktreeId: "wt1", agentId: "claude"))
+    }
+
+    @Test func serverCreationMessagesRoundTrip() throws {
+        let worktree = RemoteWorktreeOption(
+            id: "wt1",
+            projectName: "alas",
+            worktreeName: "feature-a",
+            branch: "nacho/feature-a",
+            path: "/tmp/alas-feature-a",
+            metricsAvailable: false,
+            comparisonRef: nil,
+            commitCount: 0,
+            changedFileCount: 0,
+            addedLines: 0,
+            deletedLines: 0,
+            conflictCount: 0
+        )
+        let agent = RemoteAgentOption(id: "claude", name: "Claude", isDefault: true)
+        let session = RemoteSessionSummary(
+            id: "s1",
+            title: "New session",
+            agentId: "claude",
+            status: "idle",
+            canDrive: true
+        )
+
+        #expect(try roundTrip(RemoteServerMessage.worktreeList(worktrees: [worktree])) == .worktreeList(worktrees: [worktree]))
+        #expect(try roundTrip(RemoteServerMessage.agentList(agents: [agent])) == .agentList(agents: [agent]))
+        #expect(try roundTrip(RemoteServerMessage.sessionCreated(session: session)) == .sessionCreated(session: session))
+        #expect(try roundTrip(RemoteServerMessage.createSessionFailed(message: "Could not create session.")) == .createSessionFailed(message: "Could not create session."))
+    }
+
     @Test func sessionSummaryDecodesLegacyPayloadWithoutWorktree() throws {
         let json = #"{"id":"s1","title":"T","agentId":"codex","status":"idle","canDrive":false}"#
         let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: Data(json.utf8))
