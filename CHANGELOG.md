@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-16
+
+### ✨ Features
+
+- Add provider-backed review actions for publishing review feedback (#531).
+- Add expandable diff context rows for deeper review inspection (#530).
+- Add in-app review sessions with local review workspaces (#525, #523).
+- Add the review diff surface to the create PR dialog (#520).
+- Add actionable inline feedback cards and feedback action models.
+
+### 🐛 Fixes
+
+- Keep editor undo teardown and autocomplete refresh state from going stale (#529, #528).
+- Smooth diff review scrolling (#527).
+- Fix editor find attachment handling (#526).
+- Avoid duplicate remote session summaries (#524).
+- Harden inline feedback cards, context models, and stacked diff replacement ordering (#519).
+
+### 🏗️ Internal
+
+- Update GitHub artifact actions and the Markdown dependency (#522, #521).
+
 ## [0.7.9] - 2026-06-14
 
 ### ✨ Features
