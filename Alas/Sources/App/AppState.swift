@@ -3629,7 +3629,7 @@ extension AppState: RemoteSessionsProvider {
         }
 
         let session = manager.createSession(agentId: agent.id, autoRunDefault: config.harness.acpAutoRunByDefault)
-        selectedWorktreeId = resolved.worktree.id
+        focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
         let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)
         let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
         tabs.activate(worktreeId: resolved.worktree.id, tabId: tab.id)

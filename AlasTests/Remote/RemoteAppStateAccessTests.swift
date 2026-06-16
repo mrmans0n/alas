@@ -12,12 +12,21 @@ struct RemoteAppStateAccessTests {
 
     private struct ProjectMemoryStore: PersistenceStoreProtocol {
         let projectsFile: ProjectsFile
+        let spacesFile: SpacesFile?
+
+        init(projectsFile: ProjectsFile, spacesFile: SpacesFile? = nil) {
+            self.projectsFile = projectsFile
+            self.spacesFile = spacesFile
+        }
 
         func write<T: Encodable>(_: T, to _: URL) throws {}
 
         func readIfExists<T: Decodable>(_ type: T.Type, from _: URL) throws -> T? {
             if type == ProjectsFile.self {
                 return projectsFile as? T
+            }
+            if type == SpacesFile.self {
+                return spacesFile as? T
             }
             if type == AppConfig.self {
                 return AppConfig.defaults as? T
@@ -440,7 +449,7 @@ struct RemoteAppStateAccessTests {
             installedIds: ["claude"]
         )
         var scheduledAttach: (managerWorktreeId: String, sessionId: String)?
-        state.remoteSessionAttachScheduler = { manager, sessionId in
+        state.remoteSessionAttachScheduler = { (manager: ACPSessionManager, sessionId: ACPSession.ID) in
             scheduledAttach = (manager.worktreeId, sessionId)
         }
         let worktreeId = try #require(state.selectedWorktreeId)
@@ -462,6 +471,104 @@ struct RemoteAppStateAccessTests {
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         #expect(manager.liveSession(for: summary.id) != nil)
         #expect(scheduledAttach?.managerWorktreeId == worktreeId)
+        #expect(scheduledAttach?.sessionId == summary.id)
+    }
+
+    @Test func createRemoteSessionSwitchesSpaceBeforeSelectingWorktree() async throws {
+        var cleanupWorktreeIds: [String] = []
+        defer {
+            cleanupWorktreeIds.forEach(cleanupRemoteRenameFiles)
+        }
+
+        let firstProject = ProjectConfig(
+            id: UUID().uuidString,
+            name: "first",
+            path: "/tmp/first-\(UUID().uuidString)",
+            color: "blue",
+            addedAt: Date()
+        )
+        let secondProject = ProjectConfig(
+            id: UUID().uuidString,
+            name: "second",
+            path: "/tmp/second-\(UUID().uuidString)",
+            color: "green",
+            addedAt: Date()
+        )
+        let firstSpaceId = "space-\(UUID().uuidString)"
+        let secondSpaceId = "space-\(UUID().uuidString)"
+        let spaces = SpacesFile(
+            version: 1,
+            activeSpaceId: firstSpaceId,
+            spaces: [
+                SpaceConfig(
+                    id: firstSpaceId,
+                    name: "First",
+                    emoji: "1",
+                    projectIds: [firstProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: Date()
+                ),
+                SpaceConfig(
+                    id: secondSpaceId,
+                    name: "Second",
+                    emoji: "2",
+                    projectIds: [secondProject.id],
+                    lastSelectedWorktreeId: nil,
+                    createdAt: Date()
+                ),
+            ]
+        )
+        let state = AppState(store: ProjectMemoryStore(
+            projectsFile: ProjectsFile(projects: [firstProject, secondProject]),
+            spacesFile: spaces
+        ))
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
+        var scheduledAttach: (managerWorktreeId: String, sessionId: String)?
+        state.remoteSessionAttachScheduler = { manager, sessionId in
+            scheduledAttach = (manager.worktreeId, sessionId)
+        }
+        let firstWorktree = Worktree(
+            id: UUID().uuidString,
+            projectId: firstProject.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: firstProject.path),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let secondWorktree = Worktree(
+            id: UUID().uuidString,
+            projectId: secondProject.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: secondProject.path),
+            status: .clean,
+            lastActivity: Date()
+        )
+        cleanupWorktreeIds = [firstWorktree.id, secondWorktree.id]
+        state.projectsManager.insertOptimisticWorktree(firstWorktree)
+        state.projectsManager.insertOptimisticWorktree(secondWorktree)
+        state.selectedWorktreeId = firstWorktree.id
+
+        let result = await state.createRemoteSession(worktreeId: secondWorktree.id, agentId: "claude")
+
+        guard case .success(let summary) = result else {
+            Issue.record("expected success, got \(result)")
+            return
+        }
+        #expect(state.spacesManager.activeSpaceId == secondSpaceId)
+        #expect(state.selectedWorktreeId == secondWorktree.id)
+        #expect(state.spacesManager.space(id: secondSpaceId)?.lastSelectedWorktreeId == secondWorktree.id)
+        let tab = try #require(firstACPTab(in: state, worktreeId: secondWorktree.id))
+        #expect(tab.sessionId == summary.id)
+        #expect(state.tabs.activeTabId(forWorktree: secondWorktree.id) == tab.id)
+        #expect(scheduledAttach?.managerWorktreeId == secondWorktree.id)
         #expect(scheduledAttach?.sessionId == summary.id)
     }
 
