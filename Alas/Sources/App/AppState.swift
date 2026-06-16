@@ -3410,12 +3410,16 @@ extension AppState: RemoteSessionsProvider {
                 )
             )
         } catch {
-            return RemoteWorktreeSummaryBuilder.make(
-                projectName: project.name,
-                worktree: worktree,
-                metrics: .unavailable
-            )
+            return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree)
         }
+    }
+
+    private func remoteWorktreeSummaryWithoutMetrics(project: ProjectConfig, worktree: Worktree) -> RemoteWorktreeSummary {
+        RemoteWorktreeSummaryBuilder.make(
+            projectName: project.name,
+            worktree: worktree,
+            metrics: .unavailable
+        )
     }
 
     private func remoteWorktreeOption(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeOption {
@@ -3642,7 +3646,7 @@ extension AppState: RemoteSessionsProvider {
             }
         }
 
-        let worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)
+        let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
         return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
     }
 
