@@ -25,7 +25,7 @@ struct DiffReviewSurface: View {
     var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
-    var onSaveDraftComment: (DiffReviewFileID, DiffReviewLineAnchor, String) -> Void = { _, _, _ in }
+    var onSaveDraftComment: (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -62,7 +62,7 @@ struct DiffReviewSurface: View {
         draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil,
         draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
-        onSaveDraftComment: @escaping (DiffReviewFileID, DiffReviewLineAnchor, String) -> Void = { _, _, _ in }
+        onSaveDraftComment: @escaping (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
     ) {
         self.session = session
         self._selectedFileID = selectedFileID
@@ -280,7 +280,7 @@ struct DiffReviewSurface: View {
                 draftCommentActions: draftCommentActions,
                 onSelectDraftComment: onSelectDraftComment,
                 onSaveDraftComment: { anchor, body in
-                    onSaveDraftComment(file.id, anchor, body)
+                    onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
                 },
                 onContextExpansionActivated: {
                     contextExpandedFileIDs.insert(file.id)

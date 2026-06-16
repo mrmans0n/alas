@@ -1117,6 +1117,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             isDraft: request.isDraft,
             headRefName: request.headRefName,
             baseRefName: request.baseRefName,
+            headSHA: request.headSHA,
             reviewDecision: request.reviewDecision,
             mergeState: request.mergeState,
             checks: checks,

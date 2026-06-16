@@ -65,6 +65,44 @@ struct ReviewDraftCommentStoreTests {
         #expect(controller.errorMessage == nil)
     }
 
+    @Test @MainActor func controllerPersistsOriginalPathForRenamedFileDrafts() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("review-draft-comments.json")
+        let store = ReviewDraftCommentStore(store: PersistenceStore(), url: url)
+        let session = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt",
+            provider: .gitlab,
+            host: "gitlab.example.com",
+            repositorySlug: "platform/mobile/alas",
+            number: 42
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: session,
+            store: store,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        let anchor = DiffReviewLineAnchor(
+            path: "Sources/NewApp.swift",
+            side: .old,
+            line: 12,
+            rowIndex: 0,
+            selectedText: "oldValue"
+        )
+        let fileID = DiffReviewFileID(namespace: "gitlab-mr", path: "Sources/NewApp.swift")
+
+        try controller.load()
+        try controller.add(
+            anchor: anchor,
+            fileID: fileID,
+            originalPath: "Sources/OldApp.swift",
+            bodyMarkdown: "Please revisit this removal."
+        )
+
+        #expect(controller.comments.single?.originalPath == "Sources/OldApp.swift")
+        #expect(try store.load(sessionID: session).single?.originalPath == "Sources/OldApp.swift")
+    }
+
     @Test func savesLoadsAndDeletesCommentsBySession() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

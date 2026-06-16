@@ -35,14 +35,19 @@ final class ReviewDraftCommentController {
         }
     }
 
-    func add(anchor: DiffReviewLineAnchor, fileID: DiffReviewFileID, bodyMarkdown: String) throws {
+    func add(
+        anchor: DiffReviewLineAnchor,
+        fileID: DiffReviewFileID,
+        originalPath: String? = nil,
+        bodyMarkdown: String
+    ) throws {
         let timestamp = now()
         let comment = ReviewDraftComment(
             id: UUID().uuidString,
             sessionID: sessionID,
             fileID: fileID,
             path: anchor.path,
-            originalPath: nil,
+            originalPath: originalPath,
             side: anchor.side,
             startLine: anchor.line,
             endLine: nil,

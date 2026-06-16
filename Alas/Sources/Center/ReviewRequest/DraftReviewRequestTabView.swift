@@ -481,8 +481,8 @@ struct DraftReviewRequestTabView: View {
                 draftCommentScrollCommand: draftCommentScrollCommand,
                 draftCommentActions: draftCommentActions(),
                 onSelectDraftComment: selectDraftComment,
-                onSaveDraftComment: { fileID, anchor, body in
-                    saveDraftComment(fileID: fileID, anchor: anchor, body: body)
+                onSaveDraftComment: { fileID, originalPath, anchor, body in
+                    saveDraftComment(fileID: fileID, originalPath: originalPath, anchor: anchor, body: body)
                 }
             )
         } else {
@@ -825,9 +825,14 @@ struct DraftReviewRequestTabView: View {
         )
     }
 
-    private func saveDraftComment(fileID: DiffReviewFileID, anchor: DiffReviewLineAnchor, body: String) {
+    private func saveDraftComment(
+        fileID: DiffReviewFileID,
+        originalPath: String?,
+        anchor: DiffReviewLineAnchor,
+        body: String
+    ) {
         do {
-            try draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+            try draftCommentController?.add(anchor: anchor, fileID: fileID, originalPath: originalPath, bodyMarkdown: body)
         } catch {
             // The controller keeps the non-blocking error state for the review rail.
         }

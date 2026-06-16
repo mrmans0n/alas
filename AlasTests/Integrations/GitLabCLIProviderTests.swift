@@ -652,6 +652,7 @@ struct GitLabCLIProviderTests {
         )
 
         #expect(request?.number == 42)
+        #expect(request?.headSHA == "head123")
         #expect(request?.threads.map(\.id) == ["discussion-1", "discussion-2"])
         #expect(request?.hasActionableFeedback == true)
         #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr", "ci"])
