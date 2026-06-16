@@ -844,6 +844,7 @@ final class AppState {
                 return ""
             }
         }
+        rightPaneStore.invalidateSnapshot(worktreeId: optimisticId)
         let optimistic = Worktree(
             id: optimisticId,
             projectId: projectId,

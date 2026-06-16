@@ -206,4 +206,34 @@ struct RightPaneStateBaseBranchTests {
 
         #expect(store.commitEditorComparisonRef(worktreeId: wt.id) == "origin/main")
     }
+
+    @Test func invalidatingCachedSnapshotHidesStaleChangesUntilRefreshPublishes() async throws {
+        let tmp = try await createTestRepoWithBranches()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try "dirty\n".write(to: tmp.appendingPathComponent("stale.txt"), atomically: true, encoding: .utf8)
+        let wt = makeWorktree(at: tmp, branch: "main")
+        let store = RightPaneStore()
+        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        try await waitUntil { state.hasLoadedSnapshot && !state.displayChanges.isEmpty }
+
+        store.invalidateSnapshot(worktreeId: wt.id)
+
+        #expect(!state.hasLoadedSnapshot)
+        #expect(state.displayChanges.isEmpty)
+        #expect(state.changes.isEmpty)
+        #expect(store.commitEditorComparisonRef(worktreeId: wt.id) == nil)
+    }
+
+    @Test func refreshFailurePublishesLoadedErrorSnapshot() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-worktree-\(UUID().uuidString)")
+        let wt = makeWorktree(at: tmp, branch: "main")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+
+        await state.refresh()
+
+        #expect(state.hasLoadedSnapshot)
+        #expect(state.sidebarError != nil)
+        #expect(state.displayChanges.isEmpty)
+    }
 }

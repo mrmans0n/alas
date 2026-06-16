@@ -15,6 +15,7 @@ struct RightPaneView: View {
             baseBranch: state.config.worktrees.baseBranch,
             trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
         )
+        let displayChanges = rps.displayChanges
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
@@ -27,9 +28,9 @@ struct RightPaneView: View {
                         get: { rps.activeTab },
                         set: { rps.activeTab = $0 }
                     ),
-                    changesCount: rps.changes.count,
-                    totalAdd: rps.changes.reduce(0) { $0 + $1.add },
-                    totalDel: rps.changes.reduce(0) { $0 + $1.del },
+                    changesCount: displayChanges.count,
+                    totalAdd: displayChanges.reduce(0) { $0 + $1.add },
+                    totalDel: displayChanges.reduce(0) { $0 + $1.del },
                     onHidePane: {
                         state.config.rightPaneVisible = false
                         state.saveConfig()
@@ -41,33 +42,37 @@ struct RightPaneView: View {
                     }
                 )
 
-                switch rps.activeTab {
-                case .changes:
-                    ChangesTabView(
-                        rps: rps,
-                        appState: state,
-                        onSelect: onSelectChangedFile,
-                        onSelectCommit: onSelectCommit,
-                        onEditCommit: onEditCommit
-                    )
-                case .files:
-                    FilesTabView(
-                        nodes: rps.fileTree,
-                        fileTreeGeneration: rps.fileTreeGeneration,
-                        openPaths: Binding(
-                            get: { rps.openPaths },
-                            set: { rps.openPaths = $0 }
-                        ),
-                        onSelectFile: onSelectTreeFile,
-                        shouldAutoLoadChildren: { path, childrenState in
-                            rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
-                        },
-                        onLoadChildren: { rps.loadFileTreeChildren(path: $0) },
-                        showIgnored: state.config.files.showIgnored,
-                        revealPath: rps.revealPath,
-                        revealTick: rps.revealTick,
-                        onClearReveal: { rps.clearReveal() }
-                    )
+                if rps.hasLoadedSnapshot {
+                    switch rps.activeTab {
+                    case .changes:
+                        ChangesTabView(
+                            rps: rps,
+                            appState: state,
+                            onSelect: onSelectChangedFile,
+                            onSelectCommit: onSelectCommit,
+                            onEditCommit: onEditCommit
+                        )
+                    case .files:
+                        FilesTabView(
+                            nodes: rps.fileTree,
+                            fileTreeGeneration: rps.fileTreeGeneration,
+                            openPaths: Binding(
+                                get: { rps.openPaths },
+                                set: { rps.openPaths = $0 }
+                            ),
+                            onSelectFile: onSelectTreeFile,
+                            shouldAutoLoadChildren: { path, childrenState in
+                                rps.shouldAutoLoadFileTreeChildren(path: path, childrenState: childrenState)
+                            },
+                            onLoadChildren: { rps.loadFileTreeChildren(path: $0) },
+                            showIgnored: state.config.files.showIgnored,
+                            revealPath: rps.revealPath,
+                            revealTick: rps.revealTick,
+                            onClearReveal: { rps.clearReveal() }
+                        )
+                    }
+                } else {
+                    RightPaneLoadingSkeletonView(activeTab: rps.activeTab)
                 }
             }
             .sidebarChromeTheme(textContrast: override.textContrast)

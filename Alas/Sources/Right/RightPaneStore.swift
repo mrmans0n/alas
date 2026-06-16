@@ -95,6 +95,10 @@ final class RightPaneStore {
         await state.refresh()
     }
 
+    func invalidateSnapshot(worktreeId: String) {
+        states[worktreeId]?.markSnapshotUnknown()
+    }
+
     func commitEditorComparisonRef(worktreeId: String) -> String? {
         guard let state = states[worktreeId] else { return nil }
         return state.comparisonRef
