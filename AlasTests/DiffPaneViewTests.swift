@@ -91,6 +91,25 @@ struct DiffPaneViewTests {
         )
     }
 
+    private func diffLine(id: String, side: DiffLineSide, oldLine: Int? = nil, newLine: Int? = nil, text: String) -> DiffDisplayLine {
+        DiffDisplayLine(
+            id: id,
+            anchor: DiffLineAnchor(
+                filePath: "Sources/App.swift",
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: side,
+                oldLine: oldLine,
+                newLine: newLine
+            ),
+            text: text,
+            lineNumber: oldLine ?? newLine,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+    }
+
     @Test func splitModeHostsRendererWithoutCrashing() {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -335,6 +354,149 @@ struct DiffPaneViewTests {
         #expect(addedAnchor.selectedText == "let b = 3")
     }
 
+    @Test @MainActor func stackedTextDocumentBuildsMultilineReviewAnchor() throws {
+        let view = DiffPaneTextDocumentView(
+            group: try #require(reviewAnchorModel().groups.first),
+            expandedCollapsedRowIDs: [],
+            layoutMode: .stacked,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: theme(),
+            lspContext: nil
+        )
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(visibleCodeTextViews(in: controller.view).first)
+        let anchor = try #require(codeView.reviewLineAnchor(fromRow: 1, toRow: 2))
+
+        #expect(anchor.path == "Sources/App.swift")
+        #expect(anchor.side == .unknown)
+        #expect(anchor.line == 2)
+        #expect(anchor.endLine == 2)
+        #expect(anchor.rowIndex == 1)
+        #expect(anchor.selectedText == """
+let b = 2
+let b = 3
+""")
+    }
+
+    @Test @MainActor func multilineReviewAnchorRejectsSkippedRows() throws {
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,3 +1,3 @@",
+            sourceHunk: ParsedDiff.Hunk(header: "@@ -1,3 +1,3 @@", oldStart: 1, newStart: 1, lines: []),
+            rows: [
+                DiffDisplayRow(
+                    id: "row-1",
+                    kind: .context,
+                    old: nil,
+                    new: diffLine(id: "new-1", side: .new, newLine: 1, text: "let first = true"),
+                    collapsedLineCount: 0
+                ),
+                DiffDisplayRow(
+                    id: "collapsed",
+                    kind: .collapsed,
+                    old: nil,
+                    new: nil,
+                    collapsedLineCount: 3
+                ),
+                DiffDisplayRow(
+                    id: "row-2",
+                    kind: .context,
+                    old: nil,
+                    new: diffLine(id: "new-5", side: .new, newLine: 5, text: "let last = true"),
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let view = DiffPaneTextDocumentView(
+            group: group,
+            expandedCollapsedRowIDs: [],
+            layoutMode: .stacked,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: theme(),
+            lspContext: nil
+        )
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(visibleCodeTextViews(in: controller.view).first)
+
+        #expect(codeView.reviewLineAnchor(fromRow: 0, toRow: 2) == nil)
+    }
+
+    @Test @MainActor func splitMultilineReviewAnchorSkipsOppositeSidePlaceholders() throws {
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,3 +1,2 @@",
+            sourceHunk: ParsedDiff.Hunk(header: "@@ -1,3 +1,2 @@", oldStart: 1, newStart: 1, lines: []),
+            rows: [
+                DiffDisplayRow(
+                    id: "row-1",
+                    kind: .context,
+                    old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "let first = true"),
+                    new: diffLine(id: "new-1", side: .new, newLine: 1, text: "let first = true"),
+                    collapsedLineCount: 0
+                ),
+                DiffDisplayRow(
+                    id: "deleted",
+                    kind: .delete,
+                    old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "let removed = true"),
+                    new: nil,
+                    collapsedLineCount: 0
+                ),
+                DiffDisplayRow(
+                    id: "row-2",
+                    kind: .context,
+                    old: diffLine(id: "old-3", side: .old, oldLine: 3, text: "let second = true"),
+                    new: diffLine(id: "new-2", side: .new, newLine: 2, text: "let second = true"),
+                    collapsedLineCount: 0
+                ),
+            ]
+        )
+        let view = DiffPaneTextDocumentView(
+            group: group,
+            expandedCollapsedRowIDs: [],
+            layoutMode: .split,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: theme(),
+            lspContext: nil
+        )
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 820, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let codeViews = visibleCodeTextViews(in: controller.view)
+        let newCodeView = try #require(codeViews.last)
+        let anchor = try #require(newCodeView.reviewLineAnchor(fromRow: 0, toRow: 2))
+
+        #expect(anchor.path == "Sources/App.swift")
+        #expect(anchor.side == .new)
+        #expect(anchor.line == 1)
+        #expect(anchor.endLine == 2)
+        #expect(anchor.selectedText == """
+let first = true
+let second = true
+""")
+    }
+
     @Test @MainActor func rowHitTestingReturnsLocalReviewAnchorForCodePoint() throws {
         var layout = DiffLayoutMode.split
         var wrap = false
@@ -444,6 +606,23 @@ struct DiffPaneViewTests {
                 #expect(abs(codeCenter - labelCenter) < 0.75)
             }
         }
+    }
+
+    @Test func gutterSelectionOutlineWrapsContiguousRows() {
+        let rowRects = [
+            NSRect(x: 0, y: 8, width: 42, height: 18),
+            NSRect(x: 0, y: 26, width: 42, height: 22),
+            NSRect(x: 0, y: 48, width: 42, height: 18),
+        ]
+
+        let outline = DiffPaneLineNumberRulerView.selectionOutlineRect(
+            rowRects: rowRects,
+            rowRange: 0...2,
+            visibleMinY: 10,
+            ruleThickness: 42
+        )
+
+        #expect(outline == NSRect(x: 4, y: 0, width: 34, height: 58))
     }
 
     @Test func diffTextScrollPanesUseLeadingClipViewsAndStartScrolledLeft() throws {

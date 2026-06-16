@@ -29,6 +29,7 @@ struct DiffReviewFileSection: View {
     var reviewFeedbackTarget: ReviewFeedbackTarget?
 
     @Environment(\.theme) private var theme
+    @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
     @State private var expandedCollapsedRowIDs: Set<String> = []
@@ -40,6 +41,7 @@ struct DiffReviewFileSection: View {
     @State private var contextLoadGeneration = 0
     @State private var contextLoadError: String?
     @State private var pendingContextExpansions: [PendingContextExpansion] = []
+    @FocusState private var draftComposerFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,6 +53,7 @@ struct DiffReviewFileSection: View {
         }
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .copyFeedbackOverlay(message: copyFeedback.message)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(theme.color("line"), lineWidth: 0.75)
@@ -61,6 +64,7 @@ struct DiffReviewFileSection: View {
                 label: file.summary.path
             )
         )
+        .background(copyFeedbackMarker)
         .onChange(of: draftCommentDisplaySignature) { _, _ in
             clearPendingDraft()
         }
@@ -69,6 +73,22 @@ struct DiffReviewFileSection: View {
         }
         .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
+        }
+        .onChange(of: pendingDraftAnchor) { _, anchor in
+            guard anchor != nil else { return }
+            Task { @MainActor in
+                draftComposerFocused = true
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var copyFeedbackMarker: some View {
+        if let message = copyFeedback.message {
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-copy-feedback-\(file.id.rawValue)",
+                label: message
+            )
         }
     }
 
@@ -138,6 +158,23 @@ struct DiffReviewFileSection: View {
         )
     }
 
+    private var feedbackDraftCommentActions: ReviewDraftCommentActions {
+        ReviewDraftCommentActions(
+            availability: draftCommentActions.availability,
+            edit: draftCommentActions.edit,
+            delete: draftCommentActions.delete,
+            resolve: draftCommentActions.resolve,
+            dismiss: draftCommentActions.dismiss,
+            copyPrompt: { bundle in
+                draftCommentActions.copyPrompt(bundle)
+                copyFeedback.show("Copied prompt")
+            },
+            publishProvider: draftCommentActions.publishProvider,
+            agentTargets: draftCommentActions.agentTargets,
+            sendToAgent: draftCommentActions.sendToAgent
+        )
+    }
+
     @ViewBuilder
     private var contextLoadErrorRow: some View {
         if let contextLoadError {
@@ -175,7 +212,7 @@ struct DiffReviewFileSection: View {
                         comment: comment,
                         file: file.summary,
                         isFocused: comment.id == focusedDraftCommentID,
-                        actions: draftCommentActions,
+                        actions: feedbackDraftCommentActions,
                         reviewFeedbackTarget: effectiveReviewFeedbackTarget,
                         onSelect: onSelectDraftComment
                     )
@@ -400,10 +437,15 @@ struct DiffReviewFileSection: View {
             ReviewDraftComposerTextEditor(
                 text: $pendingDraftBody,
                 theme: theme,
+                isFocused: $draftComposerFocused,
                 onSave: savePendingDraft,
                 onCancel: clearPendingDraft
             )
             .frame(minHeight: 76, maxHeight: 104)
+            .background(focusedComposerMarker)
+            .onAppear {
+                draftComposerFocused = true
+            }
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
@@ -450,13 +492,23 @@ struct DiffReviewFileSection: View {
         )
     }
 
+    @ViewBuilder
+    private var focusedComposerMarker: some View {
+        if draftComposerFocused {
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-draft-composer-focused",
+                label: "Draft comment composer focused"
+            )
+        }
+    }
+
     private func savePendingDraft() {
         guard let pendingDraftAnchor else { return }
         let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         guard currentDraftRowKeys.contains(ReviewDraftCommentPlacement.RowKey(
             side: pendingDraftAnchor.side,
-            line: pendingDraftAnchor.line
+            line: pendingDraftAnchor.draftPlacementLine
         )) else {
             clearPendingDraft()
             return
@@ -469,6 +521,7 @@ struct DiffReviewFileSection: View {
     private func clearPendingDraft() {
         pendingDraftAnchor = nil
         pendingDraftBody = ""
+        draftComposerFocused = false
     }
 
     private var currentDraftRowKeys: Set<ReviewDraftCommentPlacement.RowKey> {
@@ -641,6 +694,7 @@ enum ReviewDraftComposerKeyboardAction: Equatable {
 private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let theme: Theme
+    let isFocused: FocusState<Bool>.Binding
     let onSave: () -> Void
     let onCancel: () -> Void
 
@@ -682,6 +736,7 @@ private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         scrollView.documentView = textView
         context.coordinator.textView = textView
         applyTheme(to: scrollView, textView: textView)
+        requestFocusIfNeeded(textView)
         return scrollView
     }
 
@@ -693,6 +748,7 @@ private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         }
         textView.onKeyboardAction = context.coordinator.perform
         applyTheme(to: scrollView, textView: textView)
+        requestFocusIfNeeded(textView)
     }
 
     private func applyTheme(to scrollView: NSScrollView, textView: NSTextView) {
@@ -701,6 +757,16 @@ private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         textView.font = .systemFont(ofSize: 12)
         textView.textColor = NSColor(theme.color("fg"))
         textView.insertionPointColor = NSColor(theme.color("accent"))
+    }
+
+    private func requestFocusIfNeeded(_ textView: NSTextView) {
+        guard isFocused.wrappedValue else { return }
+        DispatchQueue.main.async {
+            guard let window = textView.window,
+                  window.firstResponder !== textView
+            else { return }
+            window.makeFirstResponder(textView)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -716,6 +782,15 @@ private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             parent.text = textView.string
         }
 
+        func textDidBeginEditing(_ notification: Notification) {
+            parent.isFocused.wrappedValue = true
+        }
+
+        func textDidEndEditing(_ notification: Notification) {
+            parent.isFocused.wrappedValue = false
+        }
+
+        @MainActor
         func perform(_ action: ReviewDraftComposerKeyboardAction) {
             switch action {
             case .save:
@@ -728,7 +803,7 @@ private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 }
 
 private final class ReviewDraftComposerNSTextView: NSTextView {
-    var onKeyboardAction: ((ReviewDraftComposerKeyboardAction) -> Void)?
+    var onKeyboardAction: (@MainActor (ReviewDraftComposerKeyboardAction) -> Void)?
 
     override func keyDown(with event: NSEvent) {
         let key = event.charactersIgnoringModifiers ?? event.characters ?? ""
@@ -880,7 +955,7 @@ enum ReviewDraftCommentRowSegmentation {
         pendingAnchor: DiffReviewLineAnchor?
     ) -> Result {
         let pendingKey = pendingAnchor.map {
-            ReviewDraftCommentPlacement.RowKey(side: $0.side, line: $0.line)
+            ReviewDraftCommentPlacement.RowKey(side: $0.side, line: $0.draftPlacementLine)
         }
         var segments: [Segment] = []
         var bufferedRows: [DiffDisplayRow] = []
@@ -1117,6 +1192,7 @@ private struct ReviewDraftCommentCard: View {
     @Environment(\.theme) private var theme
     @State private var isEditing = false
     @State private var editingBody = ""
+    @FocusState private var editorFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1189,6 +1265,7 @@ private struct ReviewDraftCommentCard: View {
                     ReviewDraftComposerTextEditor(
                         text: $editingBody,
                         theme: theme,
+                        isFocused: $editorFocused,
                         onSave: saveEditingComment,
                         onCancel: cancelEditingComment
                     )
@@ -1246,6 +1323,7 @@ private struct ReviewDraftCommentCard: View {
                     actionButton(id: "edit", title: "Edit") {
                         editingBody = comment.bodyMarkdown
                         isEditing = true
+                        editorFocused = true
                     }
                 }
                 if availability.canDelete {
@@ -1325,7 +1403,7 @@ private struct ReviewDraftCommentCard: View {
         .accessibilityLabel(title)
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: markerIdentifier(forActionID: id),
+                identifier: "\(markerIdentifier(forActionID: id))-label",
                 label: title
             )
         )
@@ -1340,10 +1418,7 @@ private struct ReviewDraftCommentCard: View {
     }
 
     private func accessibilityIdentifier(forActionID id: String) -> String {
-        if id == "publish" {
-            return "diff-review-draft-comment-publish-\(comment.id)"
-        }
-        return "diff-review-draft-comment-\(id)-\(comment.id)"
+        return "diff-review-draft-comment-button-\(id)-\(comment.id)"
     }
 
     private func markerIdentifier(forActionID id: String) -> String {
@@ -1361,6 +1436,7 @@ private struct ReviewDraftCommentCard: View {
     private func cancelEditingComment() {
         isEditing = false
         editingBody = ""
+        editorFocused = false
     }
 
     private var feedbackBundle: ReviewFeedbackBundle {
@@ -1413,6 +1489,12 @@ private struct ReviewDraftCommentCard: View {
         case .dismissed:
             theme.color("fg-muted")
         }
+    }
+}
+
+private extension DiffReviewLineAnchor {
+    var draftPlacementLine: Int {
+        endLine ?? line
     }
 }
 

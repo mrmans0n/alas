@@ -7,8 +7,25 @@ struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
     let path: String
     let side: DiffReviewInlineFeedbackSide
     let line: Int
+    let endLine: Int?
     let rowIndex: Int
     let selectedText: String
+
+    init(
+        path: String,
+        side: DiffReviewInlineFeedbackSide,
+        line: Int,
+        endLine: Int? = nil,
+        rowIndex: Int,
+        selectedText: String
+    ) {
+        self.path = path
+        self.side = side
+        self.line = line
+        self.endLine = endLine
+        self.rowIndex = rowIndex
+        self.selectedText = selectedText
+    }
 }
 
 struct DiffPaneTextDocumentView: NSViewRepresentable {
@@ -900,10 +917,57 @@ final class DiffPaneCodeTextView: NSTextView {
         return lineMetadata[row].reviewLineAnchor(rowIndex: row)
     }
 
+    func reviewLineAnchor(fromRow startRow: Int, toRow endRow: Int) -> DiffReviewLineAnchor? {
+        let lowerRow = min(startRow, endRow)
+        let upperRow = max(startRow, endRow)
+        guard lineMetadata.indices.contains(lowerRow),
+              lineMetadata.indices.contains(upperRow)
+        else { return nil }
+
+        var resolvedAnchors: [DiffReviewLineAnchor] = []
+        for rowIndex in lowerRow...upperRow {
+            let metadata = lineMetadata[rowIndex]
+            if let anchor = metadata.reviewLineAnchor(rowIndex: rowIndex) {
+                resolvedAnchors.append(anchor)
+            } else if metadata.tone != .placeholder {
+                return nil
+            }
+        }
+        guard !resolvedAnchors.isEmpty,
+              let first = resolvedAnchors.first,
+              resolvedAnchors.allSatisfy({ $0.path == first.path })
+        else { return nil }
+        guard resolvedAnchors.count > 1 else { return first }
+
+        let side = resolvedAnchors.allSatisfy({ $0.side == first.side }) ? first.side : .unknown
+        let lineNumbers = resolvedAnchors.flatMap { anchor -> [Int] in
+            if let endLine = anchor.endLine {
+                return [anchor.line, endLine]
+            }
+            return [anchor.line]
+        }
+        guard let startLine = lineNumbers.min(),
+              let endLine = lineNumbers.max()
+        else { return nil }
+
+        return DiffReviewLineAnchor(
+            path: first.path,
+            side: side,
+            line: startLine,
+            endLine: endLine,
+            rowIndex: first.rowIndex,
+            selectedText: resolvedAnchors.map(\.selectedText).joined(separator: "\n")
+        )
+    }
+
     func reviewLineAnchor(at point: NSPoint) -> DiffReviewLineAnchor? {
-        let rowRects = diffRowRects()
-        guard let row = rowRects.firstIndex(where: { $0.contains(point) }) else { return nil }
+        guard let row = reviewLineRow(at: point) else { return nil }
         return reviewLineAnchor(atRow: row)
+    }
+
+    func reviewLineRow(at point: NSPoint) -> Int? {
+        let rowRects = diffRowRects()
+        return rowRects.firstIndex(where: { $0.contains(point) })
     }
 
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {
@@ -1070,6 +1134,8 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     private var contentTopInset: CGFloat = 6
     private var boundsObserver: NSObjectProtocol?
+    private var selectionStartRow: Int?
+    private var selectionCurrentRow: Int?
 
     private let minimumThickness: CGFloat = 42
     private let horizontalPadding: CGFloat = 8
@@ -1124,10 +1190,52 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         if let row = rowIndex(at: sourcePoint), invokeExpansion(row: row, optionKey: event.modifierFlags.contains(.option)) {
             return
         }
-        guard let anchor = textView.reviewLineAnchor(at: sourcePoint) else {
+        guard let row = textView.reviewLineRow(at: sourcePoint) else {
             super.mouseDown(with: event)
             return
         }
+
+        selectionStartRow = row
+        selectionCurrentRow = row
+        needsDisplay = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let scrollView,
+              let textView = scrollView.documentView as? DiffPaneCodeTextView,
+              selectionStartRow != nil
+        else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+        let sourcePoint = NSPoint(
+            x: point.x,
+            y: point.y + scrollView.contentView.bounds.origin.y
+        )
+        if let row = textView.reviewLineRow(at: sourcePoint), row != selectionCurrentRow {
+            selectionCurrentRow = row
+            needsDisplay = true
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            selectionStartRow = nil
+            selectionCurrentRow = nil
+            needsDisplay = true
+        }
+        guard let scrollView,
+              let textView = scrollView.documentView as? DiffPaneCodeTextView,
+              let startRow = selectionStartRow,
+              let currentRow = selectionCurrentRow,
+              let anchor = textView.reviewLineAnchor(fromRow: startRow, toRow: currentRow)
+        else {
+            super.mouseUp(with: event)
+            return
+        }
+
         onReviewLineSelected(anchor)
     }
 
@@ -1190,6 +1298,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
                 drawReviewAffordance(in: rowRect, theme: theme)
             }
         }
+        drawSelectionOutline(visibleRect: visible, rowRects: rowRects, theme: theme)
     }
 
     func visibleRowIndices(in visibleRect: NSRect) -> [Int] {
@@ -1271,6 +1380,25 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let mode: DiffContextExpansionMode = optionKey ? .all : .chunk(size: diffContextExpansionChunkSize)
         onContextExpansion(key, mode)
         return true
+    }
+
+    static func selectionOutlineRect(
+        rowRects: [NSRect],
+        rowRange: ClosedRange<Int>,
+        visibleMinY: CGFloat,
+        ruleThickness: CGFloat
+    ) -> NSRect {
+        let rows = rowRange.compactMap { index in
+            rowRects.indices.contains(index) ? rowRects[index] : nil
+        }
+        guard let first = rows.first else { return .zero }
+        let union = rows.dropFirst().reduce(first) { $0.union($1) }
+        return NSRect(
+            x: 4,
+            y: max(0, union.minY - visibleMinY),
+            width: max(ruleThickness - 8, 1),
+            height: union.height
+        )
     }
 
     private func observe(scrollView: NSScrollView) {
@@ -1409,6 +1537,26 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         )
     }
 
+    private func drawSelectionOutline(visibleRect: NSRect, rowRects: [NSRect], theme: Theme) {
+        guard let start = selectionStartRow,
+              let current = selectionCurrentRow
+        else { return }
+
+        let rowRange = min(start, current)...max(start, current)
+        let outlineRect = Self.selectionOutlineRect(
+            rowRects: rowRects,
+            rowRange: rowRange,
+            visibleMinY: visibleRect.minY,
+            ruleThickness: ruleThickness
+        )
+        guard outlineRect != .zero else { return }
+
+        NSColor(theme.color("accent")).setStroke()
+        let path = NSBezierPath(roundedRect: outlineRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
+        path.lineWidth = 1.5
+        path.stroke()
+    }
+
     static func changeRailRect(in rowRect: NSRect, tone: DiffPaneLineTone) -> NSRect? {
         switch tone {
         case .add, .delete:
@@ -1484,6 +1632,7 @@ private extension DiffPaneTextDocumentBuilder.LineMetadata {
             path: sourceLine.anchor.filePath,
             side: side,
             line: lineNumber,
+            endLine: nil,
             rowIndex: rowIndex,
             selectedText: sourceLine.text
         )

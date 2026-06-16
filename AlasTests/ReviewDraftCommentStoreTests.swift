@@ -23,8 +23,13 @@ struct ReviewDraftCommentStoreTests {
             path: "Sources/App.swift",
             side: .new,
             line: 42,
+            endLine: 44,
             rowIndex: 3,
-            selectedText: "let value = 1"
+            selectedText: """
+let value = 1
+let other = 2
+return value + other
+"""
         )
         let fileID = DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift")
 
@@ -39,8 +44,12 @@ struct ReviewDraftCommentStoreTests {
         #expect(added.originalPath == nil)
         #expect(added.side == .new)
         #expect(added.startLine == 42)
-        #expect(added.endLine == nil)
-        #expect(added.selectedText == "let value = 1")
+        #expect(added.endLine == 44)
+        #expect(added.selectedText == """
+let value = 1
+let other = 2
+return value + other
+""")
         #expect(added.bodyMarkdown == "Please revisit this.")
         #expect(added.state == .active)
         #expect(added.createdAt == Date(timeIntervalSince1970: 100))

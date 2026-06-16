@@ -627,6 +627,29 @@ struct DiffReviewSurfaceTests {
         #expect(segments.items[1].draftComments.map(\.id) == ["draft-second"])
     }
 
+    @Test func pendingMultilineDraftComposerUsesRangeEndRow() throws {
+        let model = displayModel()
+        let group = try #require(model.groups.first)
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .new,
+            line: 1,
+            endLine: 2,
+            rowIndex: 0,
+            selectedText: "line 1\nline 2"
+        )
+
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: ReviewDraftCommentPlacement.position([], in: model.groups),
+            pendingAnchor: pendingAnchor
+        )
+
+        #expect(segments.items.count == 1)
+        #expect(segments.items[0].showsComposer)
+        #expect(segments.items[0].rows.map(\.id) == [group.rows[0].id, group.rows[1].id])
+    }
+
     @Test func localDraftCommentsOnCollapsedRowsAttachToCollapsedParent() throws {
         let hiddenLine = diffLine(
             id: "hidden-new",
@@ -1055,6 +1078,9 @@ struct DiffReviewSurfaceTests {
         ))
         #expect(recorder.copied?.target == target)
         #expect(recorder.copied?.comments == [comment])
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(accessibilityLabel(in: controller.view, containing: "Copied prompt") != nil)
     }
 
     @Test func fileSectionDraftCommentCardDoesNotFireDisabledSendAction() {
