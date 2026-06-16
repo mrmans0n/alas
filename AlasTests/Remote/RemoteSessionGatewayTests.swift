@@ -223,16 +223,24 @@ struct RemoteSessionGatewayTests {
     @Test func createSessionEmitsCreatedSession() async {
         let provider = FakeSessionsProvider()
         let summary = RemoteSessionSummary(id: "s1", title: "New session", agentId: "claude", status: "idle", canDrive: true)
+        provider.summaries = [summary]
         provider.createResults["wt1|claude"] = .success(summary)
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
 
         await gw.handle(.createSession(worktreeId: "wt1", agentId: "claude"))
+        for _ in 0..<10 {
+            if provider.sessionSummariesCallCount == 1,
+               sent.contains(.sessionList(sessions: provider.summaries)) { break }
+            await Task.yield()
+        }
 
         #expect(provider.createRequests.count == 1)
         #expect(provider.createRequests.first?.worktreeId == "wt1")
         #expect(provider.createRequests.first?.agentId == "claude")
         #expect(sent.contains(.sessionCreated(session: summary)))
+        #expect(provider.sessionSummariesCallCount == 1)
+        #expect(sent.contains(.sessionList(sessions: provider.summaries)))
     }
 
     @Test func createSessionEmitsFailure() async {
