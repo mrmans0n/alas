@@ -5498,7 +5498,7 @@
 			repositoryURL = "https://github.com/apple/swift-markdown";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.4.0;
+				minimumVersion = 0.8.0;
 			};
 		};
 		CF72A36467D20A160E653761 /* XCRemoteSwiftPackageReference "swift-tree-sitter" */ = {

@@ -11,6 +11,10 @@ final class RightPaneState {
     let worktree: Worktree
     let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
+    private(set) var hasLoadedSnapshot: Bool = false
+    var displayChanges: [ChangedFile] {
+        hasLoadedSnapshot ? changes : []
+    }
     /// Increments whenever `refresh()` publishes a new change list. This
     /// catches same-line unstaged edits whose add/delete totals stay constant.
     private(set) var changesGeneration: Int = 0
@@ -381,6 +385,7 @@ final class RightPaneState {
             self.upstreamRef = resolvedUpstream?.ref
             _ = await mergeRefresh
             self.changes = entries
+            self.hasLoadedSnapshot = true
             self.changesGeneration += 1
             if let lsResult = try? await Process.git(
                 ["ls-files", "-s", "-z"],
@@ -445,6 +450,20 @@ final class RightPaneState {
             // an empty Changes pane when the very first refresh failed.
             logger.error("refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    func markSnapshotUnknown() {
+        hasLoadedSnapshot = false
+        changes = []
+        indexFingerprint = ""
+        fileTree = []
+        commits = []
+        olderCommits = []
+        comparisonRef = nil
+        sidebarError = nil
+        pendingDiscard = nil
+        changesGeneration += 1
+        invalidateFileTreeChildLoadsForRefresh()
     }
 
     private func refreshReviewLoop(

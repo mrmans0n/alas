@@ -51,7 +51,7 @@ struct RightPaneTransitionalView: View {
     private var content: some View {
         switch kind {
         case .creating:
-            CreatingSkeletonView(activeTab: activeTab)
+            RightPaneLoadingSkeletonView(activeTab: activeTab)
         case .deleting:
             CompactStateLabel(
                 systemIcon: "trash",
@@ -70,7 +70,7 @@ struct RightPaneTransitionalView: View {
 
 // MARK: - Creating skeleton
 
-private struct CreatingSkeletonView: View {
+struct RightPaneLoadingSkeletonView: View {
     let activeTab: RightPaneTab
 
     var body: some View {
