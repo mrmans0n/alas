@@ -140,6 +140,11 @@ async function connect() {
     reconnectDelay = initialReconnectDelay;   // reset back-off after a good connection
     send({ type: "listSessions" });
     if (currentSession) send({ type: "subscribe", sessionId: currentSession });   // re-sync after reconnect
+    if (createState.open) {
+      createState.error = "";
+      requestCreateLists();
+      renderCreateSheet();
+    }
   };
   socket.onclose = () => {
     if (socket !== ws) return;
@@ -378,9 +383,13 @@ function showCreateSheet() {
   $("worktree-search").value = "";
   $("new-session-sheet").classList.remove("hidden");
   renderCreateSheet();
+  requestCreateLists();
+  requestAnimationFrame(() => $("worktree-search").focus());
+}
+
+function requestCreateLists() {
   send({ type: "listWorktrees" });
   send({ type: "listAgents" });
-  requestAnimationFrame(() => $("worktree-search").focus());
 }
 
 function hideCreateSheet(force) {
@@ -398,9 +407,10 @@ function hideCreateSheet(force) {
 }
 
 function failCreateOnDisconnect() {
-  if (!createState.open || !createState.busy) return;
+  if (!createState.open) return;
+  const wasBusy = createState.busy;
   createState.busy = false;
-  createState.error = "Connection lost. Reconnect and try again.";
+  createState.error = wasBusy ? "Connection lost. Reconnect and try again." : "Connection lost. Reconnecting...";
   renderCreateSheet();
 }
 
