@@ -1312,6 +1312,24 @@ struct GitHubCLIProviderTests {
         }
     }
 
+    @Test func parsesRichReviewThreadFields() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.richReviewThreadsOutput, stderr: ""),
+        ])
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider",
+            headOwner: nil, baseBranch: "main", cwd: Self.cwd)
+        let thread = try #require(request?.threads.first)
+        #expect(thread.path == "Sources/Foo.swift")
+        #expect(thread.line == 42)
+        #expect(thread.originalLine == 40)
+        #expect(thread.diffHunk == "@@ -40,3 +40,3 @@")
+        #expect(thread.viewerCanResolve == true)
+        #expect(thread.comments.first?.id == "c1")
+        #expect(thread.comments.first?.viewerCanUpdate == false)
+    }
+
     @Test func commandFailureDescriptionIncludesStderr() {
         let error = CodeHostProviderError.commandFailed(
             command: "gh pr create",
@@ -1672,6 +1690,28 @@ struct GitHubCLIProviderTests {
           }
         }
       }
+    }
+    """
+
+    private static let richReviewThreadsOutput = """
+    {
+      "data": { "repository": { "pullRequest": { "reviewThreads": {
+        "nodes": [
+          {
+            "id": "thread-1", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Foo.swift", "line": 42, "startLine": null,
+            "originalLine": 40, "diffHunk": "@@ -40,3 +40,3 @@",
+            "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "c1", "body": "rename this",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
+                "createdAt": "2026-06-16T10:00:00Z", "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }}}}
     }
     """
 

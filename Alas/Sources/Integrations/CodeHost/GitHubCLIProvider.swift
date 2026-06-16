@@ -75,16 +75,22 @@ struct GitHubCLIProvider: CodeHostProvider {
               isOutdated
               path
               line
+              startLine
               originalLine
-              diffSide
+              diffHunk
+              subjectType
+              viewerCanResolve
+              viewerCanReply
               comments(first: 50) {
                 nodes {
                   id
                   body
                   url
+                  createdAt
                   author {
                     login
                   }
+                  viewerDidAuthor
                 }
               }
             }
@@ -917,37 +923,36 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
 
         let connection = response.data.repository.pullRequest.reviewThreads
-        let threads: [ReviewThread] = try connection.nodes.compactMap { thread in
-            guard let comment = thread.comments.nodes.first(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+        let threads: [ReviewThread] = try connection.nodes.compactMap { node in
+            let comments: [ReviewComment] = try node.comments.nodes.map { c in
+                ReviewComment(
+                    id: c.id ?? node.id,
+                    author: c.author?.login,
+                    body: c.body,
+                    url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
+                    createdAt: parseISO8601(c.createdAt),
+                    viewerCanUpdate: c.viewerDidAuthor ?? false,
+                    viewerCanDelete: c.viewerDidAuthor ?? false,
+                    isPending: false
+                )
+            }
+            guard comments.contains(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                 return nil
             }
-            let url = try parseOptionalHTTPURL(comment.url, context: "gh review threads returned an invalid URL")
             return ReviewThread(
-                id: thread.id,
-                path: nil,
-                line: nil,
-                startLine: nil,
-                originalLine: nil,
-                diffHunk: nil,
-                isResolved: thread.isResolved,
-                isOutdated: thread.isOutdated,
-                isFileLevel: true,
-                // TODO: decode real per-comment ID + path/line/isFileLevel from the GraphQL response (deferred to the rich-thread-fetch task).
-                comments: [
-                    ReviewComment(
-                        id: thread.id,
-                        author: comment.author?.login,
-                        body: comment.body,
-                        url: url,
-                        createdAt: nil,
-                        viewerCanUpdate: false,
-                        viewerCanDelete: false,
-                        isPending: false
-                    ),
-                ],
-                viewerCanResolve: false,
-                viewerCanReply: false,
-                url: url
+                id: node.id,
+                path: node.path,
+                line: node.line,
+                startLine: node.startLine,
+                originalLine: node.originalLine,
+                diffHunk: node.diffHunk,
+                isResolved: node.isResolved,
+                isOutdated: node.isOutdated,
+                isFileLevel: (node.subjectType ?? "").uppercased() == "FILE" || node.line == nil,
+                comments: comments,
+                viewerCanResolve: node.viewerCanResolve ?? false,
+                viewerCanReply: node.viewerCanReply ?? false,
+                url: comments.first?.url
             )
         }
         return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
@@ -1030,38 +1035,9 @@ struct GitHubCLIProvider: CodeHostProvider {
         return url
     }
 
-    private static func normalizedOptionalString(_ value: String?) -> String? {
-        guard let value else {
-            return nil
-        }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func reviewThreadLocation(from thread: ReviewThreadNode) -> ReviewThreadLocation? {
-        guard let path = normalizedOptionalString(thread.path) else {
-            return nil
-        }
-        let side: ReviewThreadSide
-        let line: Int?
-        switch thread.diffSide?.uppercased() {
-        case "LEFT":
-            side = .old
-            line = thread.originalLine ?? thread.line
-        case "RIGHT":
-            side = .new
-            line = thread.line ?? thread.originalLine
-        default:
-            side = .unknown
-            line = thread.line ?? thread.originalLine
-        }
-        return ReviewThreadLocation(
-            path: path,
-            originalPath: nil,
-            line: line,
-            side: side,
-            providerPosition: thread.id
-        )
+    private static func parseISO8601(_ string: String?) -> Date? {
+        guard let string else { return nil }
+        return ISO8601DateFormatter().date(from: string)
     }
 
     private static func parseDate(_ value: String, formatOptions: ISO8601DateFormatter.Options) -> Date? {
@@ -1394,8 +1370,12 @@ private struct ReviewThreadNode: Decodable {
     let isOutdated: Bool
     let path: String?
     let line: Int?
+    let startLine: Int?
     let originalLine: Int?
-    let diffSide: String?
+    let diffHunk: String?
+    let subjectType: String?
+    let viewerCanResolve: Bool?
+    let viewerCanReply: Bool?
     let comments: ReviewThreadCommentsConnection
 
     init(from decoder: Decoder) throws {
@@ -1430,22 +1410,9 @@ private struct ReviewThreadCommentNode: Decodable {
     let id: String?
     let body: String
     let url: String?
+    let createdAt: String?
     let author: ReviewThreadAuthor?
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try? container.decode(String.self, forKey: .id)
-        self.body = try container.decode(String.self, forKey: .body)
-        self.url = try? container.decode(String.self, forKey: .url)
-        self.author = try? container.decode(ReviewThreadAuthor.self, forKey: .author)
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case body
-        case url
-        case author
-    }
+    let viewerDidAuthor: Bool?
 }
 
 private struct ReviewThreadAuthor: Decodable {
