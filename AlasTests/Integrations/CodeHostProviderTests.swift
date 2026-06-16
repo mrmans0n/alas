@@ -102,30 +102,15 @@ struct CodeHostProviderTests {
                 ),
             ],
             threads: [
-                ReviewThreadSummary(
-                    id: "thread-1",
-                    author: "reviewer",
-                    body: "Please fix this.",
-                    url: URL(string: "https://github.com/thread")!,
-                    isResolved: false,
-                    isActionable: true
-                ),
-                ReviewThreadSummary(
-                    id: "thread-resolved",
-                    author: "reviewer",
-                    body: "Already handled.",
-                    url: URL(string: "https://github.com/resolved")!,
-                    isResolved: true,
-                    isActionable: true
-                ),
-                ReviewThreadSummary(
-                    id: "thread-non-actionable",
-                    author: "reviewer",
-                    body: "Looks good.",
-                    url: URL(string: "https://github.com/non-actionable")!,
-                    isResolved: false,
-                    isActionable: false
-                ),
+                makeThread(id: "thread-1", author: "reviewer", body: "Please fix this.",
+                           url: URL(string: "https://github.com/thread")!,
+                           isResolved: false, isOutdated: false),
+                makeThread(id: "thread-resolved", author: "reviewer", body: "Already handled.",
+                           url: URL(string: "https://github.com/resolved")!,
+                           isResolved: true, isOutdated: false),
+                makeThread(id: "thread-non-actionable", author: "reviewer", body: "Looks good.",
+                           url: URL(string: "https://github.com/non-actionable")!,
+                           isResolved: false, isOutdated: true),
             ]
         )
         let provider = FakeCodeHostProvider(kind: .github)
@@ -249,4 +234,40 @@ struct CodeHostProviderTests {
             cwd: URL
         ) async throws {}
     }
+}
+
+private func makeThread(
+    id: String,
+    author: String?,
+    body: String,
+    url: URL?,
+    isResolved: Bool,
+    isOutdated: Bool
+) -> ReviewThread {
+    ReviewThread(
+        id: id,
+        path: nil,
+        line: nil,
+        startLine: nil,
+        originalLine: nil,
+        diffHunk: nil,
+        isResolved: isResolved,
+        isOutdated: isOutdated,
+        isFileLevel: true,
+        comments: [
+            ReviewComment(
+                id: id,
+                author: author,
+                body: body,
+                url: url,
+                createdAt: nil,
+                viewerCanUpdate: false,
+                viewerCanDelete: false,
+                isPending: false
+            ),
+        ],
+        viewerCanResolve: false,
+        viewerCanReply: false,
+        url: url
+    )
 }

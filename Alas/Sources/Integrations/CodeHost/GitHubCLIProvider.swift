@@ -312,8 +312,8 @@ struct GitHubCLIProvider: CodeHostProvider {
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
-    ) async throws -> [ReviewThreadSummary] {
-        var threads: [ReviewThreadSummary] = []
+    ) async throws -> [ReviewThread] {
+        var threads: [ReviewThread] = []
         var cursor: String?
 
         repeat {
@@ -778,7 +778,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         return url
     }
 
-    static func parseReviewThreads(_ json: String) throws -> [ReviewThreadSummary] {
+    static func parseReviewThreads(_ json: String) throws -> [ReviewThread] {
         try parseReviewThreadsPage(json).threads
     }
 
@@ -917,21 +917,36 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
 
         let connection = response.data.repository.pullRequest.reviewThreads
-        let threads: [ReviewThreadSummary] = try connection.nodes.compactMap { thread in
+        let threads: [ReviewThread] = try connection.nodes.compactMap { thread in
             guard let comment = thread.comments.nodes.first(where: { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
                 return nil
             }
             let url = try parseOptionalHTTPURL(comment.url, context: "gh review threads returned an invalid URL")
-            return ReviewThreadSummary(
+            return ReviewThread(
                 id: thread.id,
-                author: comment.author?.login,
-                body: comment.body,
-                url: url,
+                path: nil,
+                line: nil,
+                startLine: nil,
+                originalLine: nil,
+                diffHunk: nil,
                 isResolved: thread.isResolved,
-                isActionable: !thread.isResolved && !thread.isOutdated,
-                location: reviewThreadLocation(from: thread),
-                providerThreadID: thread.id,
-                providerCommentID: normalizedOptionalString(comment.id)
+                isOutdated: thread.isOutdated,
+                isFileLevel: true,
+                comments: [
+                    ReviewComment(
+                        id: thread.id,
+                        author: comment.author?.login,
+                        body: comment.body,
+                        url: url,
+                        createdAt: nil,
+                        viewerCanUpdate: false,
+                        viewerCanDelete: false,
+                        isPending: false
+                    ),
+                ],
+                viewerCanResolve: false,
+                viewerCanReply: false,
+                url: url
             )
         }
         return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
@@ -1072,7 +1087,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             .joined(separator: "|")
     }
 
-    private static func withThreads(_ threads: [ReviewThreadSummary], on request: ReviewRequest) -> ReviewRequest {
+    private static func withThreads(_ threads: [ReviewThread], on request: ReviewRequest) -> ReviewRequest {
         ReviewRequest(
             remote: request.remote,
             number: request.number,
@@ -1363,7 +1378,7 @@ private struct ReviewThreadsConnection: Decodable {
 }
 
 private struct ReviewThreadsPage: Equatable {
-    let threads: [ReviewThreadSummary]
+    let threads: [ReviewThread]
     let pageInfo: ReviewThreadsPageInfo
 }
 

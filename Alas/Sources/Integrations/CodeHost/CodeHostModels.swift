@@ -172,52 +172,40 @@ struct ReviewCheck: Identifiable, Equatable, Sendable {
     let completedAt: Date?
 }
 
-enum ReviewThreadSide: String, Codable, Equatable, Sendable {
-    case old
-    case new
-    case unknown
-}
-
-struct ReviewThreadLocation: Codable, Equatable, Sendable {
-    let path: String
-    let originalPath: String?
-    let line: Int?
-    let side: ReviewThreadSide
-    let providerPosition: String?
-}
-
-struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
+struct ReviewComment: Identifiable, Equatable, Sendable {
     let id: String
     let author: String?
     let body: String
     let url: URL?
-    let isResolved: Bool
-    let isActionable: Bool
-    let location: ReviewThreadLocation?
-    let providerThreadID: String?
-    let providerCommentID: String?
+    let createdAt: Date?
+    let viewerCanUpdate: Bool
+    let viewerCanDelete: Bool
+    let isPending: Bool
+}
 
-    init(
-        id: String,
-        author: String?,
-        body: String,
-        url: URL?,
-        isResolved: Bool,
-        isActionable: Bool,
-        location: ReviewThreadLocation? = nil,
-        providerThreadID: String? = nil,
-        providerCommentID: String? = nil
-    ) {
-        self.id = id
-        self.author = author
-        self.body = body
-        self.url = url
-        self.isResolved = isResolved
-        self.isActionable = isActionable
-        self.location = location
-        self.providerThreadID = providerThreadID
-        self.providerCommentID = providerCommentID
+struct ReviewThread: Identifiable, Equatable, Sendable {
+    let id: String
+    let path: String?
+    let line: Int?
+    let startLine: Int?
+    let originalLine: Int?
+    let diffHunk: String?
+    let isResolved: Bool
+    let isOutdated: Bool
+    let isFileLevel: Bool
+    let comments: [ReviewComment]
+    let viewerCanResolve: Bool
+    let viewerCanReply: Bool
+    let url: URL?
+
+    private var headComment: ReviewComment? {
+        comments.first { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
+
+    var author: String? { headComment?.author }
+    var body: String { headComment?.body ?? "" }
+
+    var isActionable: Bool { !isResolved && !isOutdated }
 }
 
 struct ReviewRequest: Identifiable, Equatable, Sendable {
@@ -234,7 +222,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
-    let threads: [ReviewThreadSummary]
+    let threads: [ReviewThread]
 
     var provider: CodeHostKind { remote.kind }
 
@@ -275,7 +263,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     }
 
     var hasActionableFeedback: Bool {
-        reviewDecision == .changesRequested || threads.contains { !$0.isResolved && $0.isActionable }
+        reviewDecision == .changesRequested || threads.contains { $0.isActionable }
     }
 
     static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {

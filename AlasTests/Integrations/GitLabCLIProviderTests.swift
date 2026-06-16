@@ -1758,7 +1758,7 @@ struct GitLabCLIProviderTests {
     private static func makeRequest(
         headSHA: String = "head123",
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = []
+        threads: [ReviewThread] = []
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,

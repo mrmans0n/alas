@@ -646,7 +646,7 @@ struct GitLabCLIProvider: CodeHostProvider {
         remote: CodeHostRemote,
         request: ReviewRequest,
         cwd: URL
-    ) async throws -> [ReviewThreadSummary] {
+    ) async throws -> [ReviewThread] {
         let result = try await runner.run(
             "glab",
             args: [
@@ -756,7 +756,7 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try reviewRequest(from: item, remote: remote, context: "glab mr view")
     }
 
-    static func parseDiscussions(_ json: String, requestURL: URL) throws -> [ReviewThreadSummary] {
+    static func parseDiscussions(_ json: String, requestURL: URL) throws -> [ReviewThread] {
         let data = Data(json.utf8)
         let discussions: [GitLabDiscussion]
         do {
@@ -772,16 +772,32 @@ struct GitLabCLIProvider: CodeHostProvider {
                 return nil
             }
 
-            return ReviewThreadSummary(
+            let url = try discussionURL(note: note, requestURL: requestURL)
+            return ReviewThread(
                 id: discussion.id,
-                author: note.author?.username,
-                body: note.body,
-                url: try discussionURL(note: note, requestURL: requestURL),
+                path: nil,
+                line: nil,
+                startLine: nil,
+                originalLine: nil,
+                diffHunk: nil,
                 isResolved: discussion.isResolved,
-                isActionable: !discussion.isResolved,
-                location: reviewThreadLocation(from: note),
-                providerThreadID: discussion.id,
-                providerCommentID: note.id.map(String.init)
+                isOutdated: false,
+                isFileLevel: true,
+                comments: [
+                    ReviewComment(
+                        id: discussion.id,
+                        author: note.author?.username,
+                        body: note.body,
+                        url: url,
+                        createdAt: nil,
+                        viewerCanUpdate: false,
+                        viewerCanDelete: false,
+                        isPending: false
+                    ),
+                ],
+                viewerCanResolve: false,
+                viewerCanReply: false,
+                url: url
             )
         }
     }
@@ -1151,7 +1167,7 @@ struct GitLabCLIProvider: CodeHostProvider {
     }
 
     private static func withEnrichment(
-        threads: [ReviewThreadSummary],
+        threads: [ReviewThread],
         checks: [ReviewCheck],
         on request: ReviewRequest
     ) -> ReviewRequest {

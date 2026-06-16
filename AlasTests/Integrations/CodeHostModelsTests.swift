@@ -172,7 +172,7 @@ struct CodeHostModelsTests {
         ),
         reviewDecision: ReviewDecision = .reviewRequired,
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = []
+        threads: [ReviewThread] = []
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
@@ -190,14 +190,32 @@ struct CodeHostModelsTests {
         )
     }
 
-    private func makeThread(isResolved: Bool, isActionable: Bool) -> ReviewThreadSummary {
-        ReviewThreadSummary(
+    private func makeThread(isResolved: Bool, isActionable: Bool) -> ReviewThread {
+        ReviewThread(
             id: "thread-1",
-            author: "reviewer",
-            body: "Please adjust this",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1"),
+            path: nil,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
             isResolved: isResolved,
-            isActionable: isActionable
+            isOutdated: isResolved ? false : !isActionable,
+            isFileLevel: true,
+            comments: [
+                ReviewComment(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please adjust this",
+                    url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1"),
+                    createdAt: nil,
+                    viewerCanUpdate: false,
+                    viewerCanDelete: false,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: false,
+            viewerCanReply: false,
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1")
         )
     }
 
@@ -215,5 +233,45 @@ struct CodeHostModelsTests {
             detailURL: nil,
             completedAt: nil
         )
+    }
+}
+
+struct ReviewThreadModelTests {
+    @Test func backCompatAccessorsDeriveFromFirstNonEmptyComment() {
+        let thread = ReviewThread(
+            id: "t1",
+            path: "Sources/Foo.swift",
+            line: 42,
+            startLine: nil,
+            originalLine: 40,
+            diffHunk: "@@ -40,3 +40,3 @@",
+            isResolved: false,
+            isOutdated: false,
+            isFileLevel: false,
+            comments: [
+                ReviewComment(id: "c1", author: "octocat", body: "rename this",
+                              url: URL(string: "https://example.com/c1"),
+                              createdAt: nil, viewerCanUpdate: true,
+                              viewerCanDelete: true, isPending: false),
+            ],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: URL(string: "https://example.com/c1")
+        )
+        #expect(thread.author == "octocat")
+        #expect(thread.body == "rename this")
+        #expect(thread.isActionable == true)
+    }
+
+    @Test func resolvedOrOutdadedThreadIsNotActionable() {
+        func make(resolved: Bool, outdated: Bool) -> ReviewThread {
+            ReviewThread(id: "t", path: nil, line: nil, startLine: nil,
+                         originalLine: nil, diffHunk: nil, isResolved: resolved,
+                         isOutdated: outdated, isFileLevel: true, comments: [],
+                         viewerCanResolve: false, viewerCanReply: false, url: nil)
+        }
+        #expect(make(resolved: true, outdated: false).isActionable == false)
+        #expect(make(resolved: false, outdated: true).isActionable == false)
+        #expect(make(resolved: false, outdated: false).isActionable == true)
     }
 }

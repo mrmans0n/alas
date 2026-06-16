@@ -1334,7 +1334,7 @@ struct GitHubCLIProviderTests {
 
     private static func makeRequest(
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = [],
+        threads: [ReviewThread] = [],
         reviewDecision: ReviewDecision = .approved
     ) -> ReviewRequest {
         ReviewRequest(
