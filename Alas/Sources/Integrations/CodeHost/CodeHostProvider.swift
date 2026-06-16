@@ -97,8 +97,38 @@ protocol CodeHostProvider: Sendable {
         request: ReviewRequest?,
         cwd: URL
     ) async throws
-    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
-    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
+    func replyToThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        body: String,
+        cwd: URL
+    ) async throws -> ReviewComment
+    func resolveThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        cwd: URL
+    ) async throws -> ReviewThread
+    func unresolveThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        cwd: URL
+    ) async throws -> ReviewThread
+    func editComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ReviewComment,
+        newBody: String,
+        cwd: URL
+    ) async throws -> ReviewComment
+    func deleteComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ReviewComment,
+        cwd: URL
+    ) async throws
 }
 
 extension CodeHostProvider {
@@ -169,12 +199,51 @@ extension CodeHostProvider {
         )
     }
 
-    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
-        throw CodeHostProviderError.unsupportedProvider(request.remote.kind)
+    func replyToThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        body: String,
+        cwd: URL
+    ) async throws -> ReviewComment {
+        throw CodeHostProviderError.unsupportedProvider(kind)
     }
 
-    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
-        throw CodeHostProviderError.unsupportedProvider(mutation.remote.kind)
+    func resolveThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        cwd: URL
+    ) async throws -> ReviewThread {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func unresolveThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        cwd: URL
+    ) async throws -> ReviewThread {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func editComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ReviewComment,
+        newBody: String,
+        cwd: URL
+    ) async throws -> ReviewComment {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func deleteComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ReviewComment,
+        cwd: URL
+    ) async throws {
+        throw CodeHostProviderError.unsupportedProvider(kind)
     }
 }
 

@@ -242,9 +242,15 @@ struct CapabilityPresetsTests {
         #expect(CodeHostProviderCapabilities.githubCLI.canReply == true)
         #expect(CodeHostProviderCapabilities.githubCLI.canSubmitReview == true)
         #expect(CodeHostProviderCapabilities.githubCLI.canFetchAnnotations == true)
+        #expect(CodeHostProviderCapabilities.githubCLI.canEditComment == true)
+        #expect(CodeHostProviderCapabilities.githubCLI.canDeleteComment == true)
         #expect(CodeHostProviderCapabilities.readOnly.canResolve == false)
+        #expect(CodeHostProviderCapabilities.readOnly.canEditComment == false)
+        #expect(CodeHostProviderCapabilities.readOnly.canDeleteComment == false)
         #expect(CodeHostProviderCapabilities.gitlabCLI.canReply == true)
         #expect(CodeHostProviderCapabilities.gitlabCLI.canFetchAnnotations == false)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canEditComment == true)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canDeleteComment == true)
     }
 }
 

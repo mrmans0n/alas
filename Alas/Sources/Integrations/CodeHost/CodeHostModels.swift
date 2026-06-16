@@ -61,6 +61,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
     let canComment: Bool
     let canSubmitReview: Bool
     let canFetchAnnotations: Bool
+    let canEditComment: Bool
+    let canDeleteComment: Bool
 
     static let readOnly = CodeHostProviderCapabilities(
         canCreateReviewRequest: false,
@@ -70,7 +72,9 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canResolve: false,
         canComment: false,
         canSubmitReview: false,
-        canFetchAnnotations: false
+        canFetchAnnotations: false,
+        canEditComment: false,
+        canDeleteComment: false
     )
 
     static let githubCLI = CodeHostProviderCapabilities(
@@ -81,7 +85,9 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canResolve: true,
         canComment: true,
         canSubmitReview: true,
-        canFetchAnnotations: true
+        canFetchAnnotations: true,
+        canEditComment: true,
+        canDeleteComment: true
     )
 
     static let gitlabCLI = CodeHostProviderCapabilities(
@@ -92,8 +98,16 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canResolve: true,
         canComment: true,
         canSubmitReview: true,
-        canFetchAnnotations: false
+        canFetchAnnotations: false,
+        canEditComment: true,
+        canDeleteComment: true
     )
+}
+
+enum ReviewVerdict: String, Codable, Equatable, Sendable {
+    case approve
+    case requestChanges
+    case comment
 }
 
 enum ReviewRequestState: String, Codable, Equatable, Sendable {

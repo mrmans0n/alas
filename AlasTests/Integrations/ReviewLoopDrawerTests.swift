@@ -52,7 +52,9 @@ struct ReviewLoopDrawerTests {
             canResolve: true,
             canComment: true,
             canSubmitReview: true,
-            canFetchAnnotations: false
+            canFetchAnnotations: false,
+            canEditComment: true,
+            canDeleteComment: true
         )
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(remote: remote, reviewRequest: nil, providerCapabilities: capabilities),
