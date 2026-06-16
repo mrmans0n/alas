@@ -81,6 +81,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// persisted session fields instead.
     @Published var firstRunConnectingPhase: ACPFirstRunConnectingPhase?
 
+    private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
 
     /// Runtime-only marker for a forced queue item parked behind the current
@@ -258,6 +259,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 content: full,
                 preview: Self.previewLine(full),
                 contentLanguage: Self.wrappingFenceLanguage(raw),
+                rawInput: Self.metadataString(payload.rawInput),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: Self.extractTerminalIds(items))))
             didAppendTranscriptMessage()
@@ -643,6 +645,20 @@ final class ACPSession: ObservableObject, Identifiable {
         let s = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
         return s.count > 80 ? String(s.prefix(80)) + "…" : s
+    }
+
+    private static func metadataString(_ value: AnyCodable?) -> String? {
+        guard let value else { return nil }
+        if let string = value.value as? String { return boundedMetadataPreview(string) }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value) else { return nil }
+        return String(data: data, encoding: .utf8).map(boundedMetadataPreview)
+    }
+
+    private static func boundedMetadataPreview(_ string: String) -> String {
+        guard string.count > metadataPreviewLimit else { return string }
+        return String(string.prefix(metadataPreviewLimit)) + "… [truncated]"
     }
 
     private static func extractTerminalIds(_ items: [ACPToolCallContent]) -> [String] {

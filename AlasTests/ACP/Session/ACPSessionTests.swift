@@ -327,6 +327,54 @@ struct ACPSessionTests {
         } else { Issue.record("expected toolCall message") }
     }
 
+    @Test("initial toolCall preserves raw input metadata")
+    func toolCallPreservesRawInput() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-meta",
+            title: "bash",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: AnyCodable([
+                "command": AnyCodable("swift test"),
+                "timeout": AnyCodable(120)
+            ]),
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.rawInput?.contains(#""command":"swift test""#) == true)
+            #expect(tc.rawInput?.contains(#""timeout":120"#) == true)
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("initial toolCall stores bounded raw input metadata")
+    func toolCallBoundsRawInput() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-large-meta",
+            title: "write",
+            kind: "edit",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: AnyCodable([
+                "path": AnyCodable("/tmp/large.txt"),
+                "content": AnyCodable(String(repeating: "x", count: 8_192))
+            ]),
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.rawInput?.hasSuffix("… [truncated]") == true)
+            #expect((tc.rawInput?.count ?? 0) <= 4_096 + "… [truncated]".count)
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("diff content flattens to a readable text representation")
     func toolCallUpdateDiff() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

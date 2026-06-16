@@ -21,6 +21,7 @@ extension ACPSession {
             case .toolCall(let tc):
                 total &+= UInt64(tc.content.utf8.count)
                 total &+= UInt64(tc.preview?.utf8.count ?? 0)
+                total &+= UInt64(tc.rawInput?.utf8.count ?? 0)
                 total &+= UInt64(tc.title.utf8.count)
                 for path in tc.locations { total &+= UInt64(path.utf8.count) }
             case .fileEdit(_, let edit):
