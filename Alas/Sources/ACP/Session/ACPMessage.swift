@@ -67,6 +67,9 @@ enum ACPMessage: Equatable {
         /// Supported explicit language label from a wrapping markdown fence
         /// that was removed from `content`.
         var contentLanguage: String?
+        /// Compact JSON/string form of the tool input reported by ACP. Kept so
+        /// remote mirrors can show useful params even before output arrives.
+        var rawInput: String?
         var locations: [String]
         /// Terminal IDs referenced by this call's structured content, in
         /// declaration order. The expanded card renders one
@@ -97,7 +100,8 @@ enum ACPMessage: Equatable {
 
         init(toolCallId: String, title: String, kind: String? = nil,
              status: String, content: String = "", preview: String? = nil,
-             contentLanguage: String? = nil, locations: [String] = [], terminalIds: [String] = [])
+             contentLanguage: String? = nil, rawInput: String? = nil,
+             locations: [String] = [], terminalIds: [String] = [])
         {
             self.toolCallId = toolCallId
             self.title = title
@@ -106,6 +110,7 @@ enum ACPMessage: Equatable {
             self.content = content
             self.preview = preview
             self.contentLanguage = contentLanguage
+            self.rawInput = rawInput
             self.locations = locations
             self.terminalIds = terminalIds
         }
@@ -115,7 +120,7 @@ enum ACPMessage: Equatable {
         // session history doesn't go blank after upgrade.
         enum CodingKeys: String, CodingKey {
             case toolCallId, title, kind, status, content, preview,
-                 contentSummary, contentLanguage, locations, terminalIds
+                 contentSummary, contentLanguage, rawInput, locations, terminalIds
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -127,6 +132,7 @@ enum ACPMessage: Equatable {
             preview = (try? c.decode(String.self, forKey: .preview))
                 ?? (try? c.decode(String.self, forKey: .contentSummary))
             contentLanguage = try? c.decode(String.self, forKey: .contentLanguage)
+            rawInput = try? c.decode(String.self, forKey: .rawInput)
             locations = (try? c.decode([String].self, forKey: .locations)) ?? []
             terminalIds = (try? c.decode([String].self, forKey: .terminalIds)) ?? []
         }
@@ -139,6 +145,7 @@ enum ACPMessage: Equatable {
             try c.encode(content, forKey: .content)
             try c.encodeIfPresent(preview, forKey: .preview)
             try c.encodeIfPresent(contentLanguage, forKey: .contentLanguage)
+            try c.encodeIfPresent(rawInput, forKey: .rawInput)
             try c.encode(locations, forKey: .locations)
             try c.encode(terminalIds, forKey: .terminalIds)
         }
@@ -155,6 +162,7 @@ enum ACPMessage: Equatable {
                 && lhs.content == rhs.content
                 && lhs.preview == rhs.preview
                 && lhs.contentLanguage == rhs.contentLanguage
+                && lhs.rawInput == rhs.rawInput
                 && lhs.locations == rhs.locations
         }
 
@@ -166,6 +174,7 @@ enum ACPMessage: Equatable {
             hasher.combine(content)
             hasher.combine(preview)
             hasher.combine(contentLanguage)
+            hasher.combine(rawInput)
             hasher.combine(locations)
         }
     }

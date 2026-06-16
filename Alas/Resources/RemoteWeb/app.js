@@ -1165,27 +1165,84 @@ function thoughtCard(text) {
 
 function toolCard(tc) {
   const verb = TOOL_VERB[tc.kind] || (tc.kind ? cap(tc.kind) : "Tool");
-  const name = tc.title || (tc.locations && tc.locations[0]) || "";
-  const card = structCard(verb, name && name.toLowerCase() !== verb.toLowerCase() ? name : "",
-                          toolBody(tc), tc.preview);
+  const name = toolDisplayName(tc, verb);
+  const card = structCard(verb, name, toolBody(tc), tc.preview || toolCollapsedPreview(tc));
   const [ch, scls] = TOOL_STATUS[tc.status] || [tc.status || "", "run"];
   card.querySelector(".tool-chev").insertAdjacentElement("beforebegin", el("span", "tool-status " + scls, ch));
   return card;
 }
 
 function toolBody(tc) {
-  if (typeof tc.content === "string" && tc.content) return tc.content;
-  const rows = [
+  const rows = toolMetadataRows(tc);
+  if (typeof tc.content === "string" && tc.content) {
+    return rows.length ? rows.map(([key, value]) => `${key}: ${value}`).join("\n") + "\n\n" + tc.content : tc.content;
+  }
+  if (!rows.length) {
+    if (tc.status === "in_progress" || tc.status === "pending") return "Working…";
+    if (tc.status === "canceled" || tc.status === "cancelled") return "Canceled.";
+    return "Tool invoked.";
+  }
+  return rows.map(([key, value]) => `${key}: ${value}`).join("\n");
+}
+
+function toolDisplayName(tc, verb) {
+  const candidates = [
+    tc.title,
+    Array.isArray(tc.locations) ? tc.locations[0] : "",
+    tc.toolCallId
+  ];
+  const name = candidates.find(v => typeof v === "string" && v.trim().length > 0) || "";
+  return name.toLowerCase() !== verb.toLowerCase() ? name : "";
+}
+
+function toolCollapsedPreview(tc) {
+  const rows = toolMetadataRows(tc);
+  const priority = ["rawInput", "params", "input", "arguments", "locations", "toolCallId"];
+  for (const key of priority) {
+    const row = rows.find(([k]) => k === key);
+    if (row) return `${row[0]}: ${singleLine(row[1])}`;
+  }
+  if (tc.status === "in_progress" || tc.status === "pending") return "Working…";
+  if (tc.status === "completed") return "Completed";
+  if (tc.status === "failed") return "Failed";
+  if (tc.status === "canceled" || tc.status === "cancelled") return "Canceled";
+  return "Tool executed";
+}
+
+function toolMetadataRows(tc) {
+  return [
     ["toolCallId", tc.toolCallId],
     ["title", tc.title],
     ["kind", tc.kind],
     ["status", tc.status],
     ["preview", tc.preview],
+    ["rawInput", valuePreview(tc.rawInput)],
+    ["params", valuePreview(tc.params)],
+    ["input", valuePreview(tc.input)],
+    ["arguments", valuePreview(tc.arguments)],
+    ["rawOutput", valuePreview(tc.rawOutput)],
     ["locations", Array.isArray(tc.locations) ? tc.locations.join("\n") : ""],
     ["terminalIds", Array.isArray(tc.terminalIds) ? tc.terminalIds.join("\n") : ""]
   ].filter(([, value]) => typeof value === "string" && value.length > 0);
-  if (!rows.length) return "Tool invoked.";
-  return rows.map(([key, value]) => `${key}: ${value}`).join("\n");
+}
+
+function valuePreview(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
+}
+
+function singleLine(value) {
+  return (value || "").replace(/\s+/g, " ").trim();
+}
+
+function toolGlyph(verb) {
+  const v = (verb || "").toLowerCase();
+  if (v === "read") return "□";
+  if (v === "searched") return "⌕";
+  if (v === "ran") return "›";
+  if (v === "edit") return "✎";
+  return "⚙";
 }
 
 function structCard(verb, name, body, preview) {
@@ -1194,6 +1251,7 @@ function structCard(verb, name, body, preview) {
   button.type = "button";
   button.dataset.cardToggle = "true";
   button.setAttribute("aria-expanded", "false");
+  button.append(el("span", "tool-glyph", toolGlyph(verb)));
   button.append(el("span", "tool-verb", verb));
   button.append(el("span", "tool-name", name || ""));
   button.append(el("span", "tool-preview", preview || ""));
