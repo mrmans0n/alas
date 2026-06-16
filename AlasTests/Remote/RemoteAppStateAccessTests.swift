@@ -355,6 +355,85 @@ struct RemoteAppStateAccessTests {
         }
     }
 
+    @Test func remoteWorktreesIncludeVisibleProjectWorktrees() async throws {
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+
+        let worktrees = await state.remoteWorktrees()
+
+        #expect(worktrees.contains { $0.id == worktreeId })
+        #expect(worktrees.first { $0.id == worktreeId }?.projectName == "test")
+    }
+
+    @Test func remoteAgentsIncludeEnabledACPCapableAgentsOnly() throws {
+        let state = makeRemoteRenameState()
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
+        let claudeName = try #require(state.agentRegistry.enabled().first { $0.id == "claude" }?.displayName)
+
+        let agents = state.remoteAgents()
+
+        #expect(agents == [RemoteAgentOption(id: "claude", name: claudeName, isDefault: true)])
+    }
+
+    @Test func createRemoteSessionSelectsWorktreeAppendsTabAndReturnsSummary() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["claude"]
+        )
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+
+        let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "claude")
+
+        guard case .success(let summary) = result else {
+            Issue.record("expected success, got \(result)")
+            return
+        }
+        #expect(summary.agentId == "claude")
+        #expect(summary.title == "New session")
+        #expect(summary.worktree?.worktreeName != nil)
+        #expect(state.selectedWorktreeId == worktreeId)
+        let tab = try #require(firstACPTab(in: state, worktreeId: worktreeId))
+        #expect(tab.sessionId == summary.id)
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == tab.id)
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        #expect(manager.liveSession(for: summary.id) != nil)
+    }
+
+    @Test func createRemoteSessionRejectsMissingWorktree() async throws {
+        let state = makeRemoteRenameState()
+
+        let result = await state.createRemoteSession(worktreeId: "missing", agentId: "claude")
+
+        #expect(result == .failure("Worktree is no longer available."))
+    }
+
+    @Test func createRemoteSessionRejectsMissingAgent() async throws {
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+
+        let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "missing")
+
+        #expect(result == .failure("Agent is no longer available."))
+    }
+
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)\(path)")!)
         req.setValue(host, forHTTPHeaderField: "Host")
@@ -404,7 +483,7 @@ struct RemoteAppStateAccessTests {
     private func makeRemoteRenameState() -> AppState {
         let project = ProjectConfig(
             id: UUID().uuidString,
-            name: "Project",
+            name: "test",
             path: "/tmp/project-\(UUID().uuidString)",
             color: "blue",
             addedAt: Date()
@@ -451,6 +530,13 @@ struct RemoteAppStateAccessTests {
             }
             return nil
         }
+    }
+
+    private func firstACPTab(in state: AppState, worktreeId: String) -> ACPSessionTabState? {
+        state.tabs.tabs(forWorktree: worktreeId).compactMap { tab in
+            if case .acpSession(let session) = tab { return session }
+            return nil
+        }.first
     }
 
     private func seedStoredSession(
