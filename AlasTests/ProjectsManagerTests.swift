@@ -427,4 +427,33 @@ extension ProjectsManagerTests {
         #expect(!mgr.worktrees(projectId: project.id).contains { $0.id == worktree.id })
         #expect(mgr.operationState(for: worktree.id) == nil)
     }
+
+    @Test func isMainTrueForPrimaryCheckout() async throws {
+        let repo = try await makeRepo(name: "ismain-true")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "ismain-true", color: "#5fb7c4")
+        try await mgr.refreshWorktrees(projectId: project.id)
+        let trees = mgr.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        #expect(mgr.isMain(trees[0], in: project))
+    }
+
+    @Test func isMainFalseForFeatureWorktree() async throws {
+        let repo = try await makeRepo(name: "ismain-false")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let project = try await mgr.addProject(path: repo, displayName: "ismain-false", color: "#c89d6f")
+        let dest = repo.appendingPathComponent("wt-feature")
+        let feature = Worktree(
+            id: Worktree.makeId(path: dest),
+            projectId: project.id,
+            name: "feature",
+            branch: "feature",
+            path: dest,
+            status: .clean,
+            lastActivity: Date()
+        )
+        #expect(!mgr.isMain(feature, in: project))
+    }
 }
