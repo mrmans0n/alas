@@ -12,6 +12,24 @@ struct ReviewLoopDrawerTests {
         )
 
         #expect(model.identity == "GitHub #42")
+        #expect(model.providerIconName == "github")
+        #expect(model.providerTitle == "GitHub")
+        #expect(model.requestNumberTitle == "#42")
+    }
+
+    @Test func readinessIdentityUsesGitLabRequestTokenWhenPresent() {
+        let remote = Self.makeRemote(kind: .gitlab)
+        let request = Self.makeReviewRequest(remote: remote)
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(remote: remote, reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: true
+        )
+
+        #expect(model.identity == "GitLab !42")
+        #expect(model.providerIconName == "gitlab")
+        #expect(model.providerTitle == "GitLab")
+        #expect(model.requestNumberTitle == "!42")
     }
 
     @Test func githubSnapshotWithoutRequestExposesCreatePR() {

@@ -21,12 +21,7 @@ struct ReviewLoopDrawer: View {
             Rectangle()
                 .fill(toneColor(model.primaryTone).opacity(0.24))
                 .frame(height: 1)
-            Button {
-                state.setExpanded(!state.isExpanded)
-            } label: {
-                collapsedRow(model: model)
-            }
-            .buttonStyle(.plain)
+            collapsedRow(model: model)
 
             if state.isExpanded {
                 expandedBody(model: model)
@@ -46,13 +41,8 @@ struct ReviewLoopDrawer: View {
                 .fill(toneColor(model.primaryTone))
                 .frame(width: 6, height: 6)
                 .shadow(color: toneColor(model.primaryTone).opacity(model.primaryTone == .muted ? 0 : 0.45), radius: 3)
-            Icon(name: "branch", size: 11, color: theme.color("fg-faint"))
-            Text(model.identity.uppercased())
-                .font(.system(size: 10.5, weight: .semibold))
-                .tracking(0.5)
-                .foregroundColor(theme.color("fg-muted"))
-                .lineLimit(1)
-                .truncationMode(.middle)
+            Icon(name: model.providerIconName, size: 11, color: theme.color("fg-faint"))
+            headerTitle(model: model)
 
             if state.isRefreshing {
                 Spinner(lineWidth: 1.4, duration: 0.8)
@@ -71,6 +61,54 @@ struct ReviewLoopDrawer: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .contentShape(Rectangle())
+        .onTapGesture {
+            toggleExpanded()
+        }
+        .focusable()
+        .onKeyPress(.return) {
+            toggleExpanded()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            toggleExpanded()
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.identity)
+        .accessibilityHint(state.isExpanded ? "Collapse review status" : "Expand review status")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            toggleExpanded()
+        }
+    }
+
+    private func toggleExpanded() {
+        state.setExpanded(!state.isExpanded)
+    }
+
+    private func headerTitle(model: ReviewReadinessModel) -> some View {
+        HStack(spacing: 3) {
+            Text((model.providerTitle ?? model.identity).uppercased())
+                .font(.system(size: 10.5, weight: .semibold))
+                .tracking(0.5)
+                .foregroundColor(theme.color("fg-muted"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if let requestNumberTitle = model.requestNumberTitle {
+                Button {
+                    onAction(.openReviewRequest)
+                } label: {
+                    Text(requestNumberTitle.uppercased())
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .tracking(0.5)
+                        .foregroundColor(theme.color("accent"))
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .help("Open \(model.providerTitle ?? "review") \(requestNumberTitle)")
+            }
+        }
     }
 
     private func expandedBody(model: ReviewReadinessModel) -> some View {

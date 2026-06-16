@@ -48,6 +48,7 @@ struct Icon: View {
         case "palette":    return "paintpalette"
         case "keyboard":   return "keyboard"
         case "github":     return "circle.hexagongrid"
+        case "gitlab":     return "triangle"
         case "alert":      return "exclamationmark.triangle"
         case "sparkle":    return "sparkles"
         default:           return name
