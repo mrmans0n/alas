@@ -455,6 +455,12 @@ final class RightPaneState {
             )
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
+            guard snapshotGeneration == snapshotInvalidationGeneration else {
+                return
+            }
+            sidebarError = error.localizedDescription
+            hasLoadedSnapshot = true
+            changesGeneration += 1
             // Surface failures via os.Logger so they're visible in Console.app
             // and the unified log. The previous `print` here silently kept
             // `self.changes` at its last successful value, which presented as

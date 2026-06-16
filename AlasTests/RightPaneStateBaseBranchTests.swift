@@ -223,4 +223,17 @@ struct RightPaneStateBaseBranchTests {
         #expect(state.changes.isEmpty)
         #expect(store.commitEditorComparisonRef(worktreeId: wt.id) == nil)
     }
+
+    @Test func refreshFailurePublishesLoadedErrorSnapshot() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-worktree-\(UUID().uuidString)")
+        let wt = makeWorktree(at: tmp, branch: "main")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+
+        await state.refresh()
+
+        #expect(state.hasLoadedSnapshot)
+        #expect(state.sidebarError != nil)
+        #expect(state.displayChanges.isEmpty)
+    }
 }
