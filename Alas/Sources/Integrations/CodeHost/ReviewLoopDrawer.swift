@@ -62,8 +62,28 @@ struct ReviewLoopDrawer: View {
         .padding(.vertical, 7)
         .contentShape(Rectangle())
         .onTapGesture {
-            state.setExpanded(!state.isExpanded)
+            toggleExpanded()
         }
+        .focusable()
+        .onKeyPress(.return) {
+            toggleExpanded()
+            return .handled
+        }
+        .onKeyPress(.space) {
+            toggleExpanded()
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.identity)
+        .accessibilityHint(state.isExpanded ? "Collapse review status" : "Expand review status")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            toggleExpanded()
+        }
+    }
+
+    private func toggleExpanded() {
+        state.setExpanded(!state.isExpanded)
     }
 
     private func headerTitle(model: ReviewReadinessModel) -> some View {
