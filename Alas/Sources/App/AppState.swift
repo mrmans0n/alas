@@ -71,6 +71,8 @@ final class AppState {
     private(set) var remotePort: UInt16?
     private(set) var remoteAdvertisedAddresses: [RemoteAdvertisedAddress] = []
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
+    @ObservationIgnored
+    var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -3632,8 +3634,12 @@ extension AppState: RemoteSessionsProvider {
         let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
         tabs.activate(worktreeId: resolved.worktree.id, tabId: tab.id)
 
-        Task { @MainActor [weak manager] in
-            await manager?.attach(to: session.id, freshlyCreated: true)
+        if let remoteSessionAttachScheduler {
+            remoteSessionAttachScheduler(manager, session.id)
+        } else {
+            Task { @MainActor [weak manager] in
+                await manager?.attach(to: session.id, freshlyCreated: true)
+            }
         }
 
         let worktreeSummary = await remoteWorktreeSummary(project: resolved.project, worktree: resolved.worktree)

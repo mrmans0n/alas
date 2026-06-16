@@ -365,14 +365,56 @@ struct RemoteAppStateAccessTests {
         #expect(worktrees.first { $0.id == worktreeId }?.projectName == "test")
     }
 
+    @Test func remoteWorktreesFilterTransientOperationStates() async throws {
+        let state = makeRemoteRenameState()
+        let baseWorktree = try #require(state.selectedWorktreeId.flatMap { selected in
+            state.projectsManager.visibleWorktrees(projectId: state.projects[0].id).first { $0.id == selected }
+        })
+        let creating = remoteWorktreeCopy(baseWorktree, id: "creating", name: "creating")
+        let deleting = remoteWorktreeCopy(baseWorktree, id: "deleting", name: "deleting")
+        let createFailed = remoteWorktreeCopy(baseWorktree, id: "create-failed", name: "create-failed")
+        let deleteFailed = remoteWorktreeCopy(baseWorktree, id: "delete-failed", name: "delete-failed")
+        state.projectsManager.insertOptimisticWorktree(creating)
+        state.projectsManager.insertOptimisticWorktree(deleting)
+        state.projectsManager.insertOptimisticWorktree(createFailed)
+        state.projectsManager.insertOptimisticWorktree(deleteFailed)
+        state.projectsManager.setOperationState(id: creating.id, state: .creating)
+        state.projectsManager.setOperationState(id: deleting.id, state: .deleting)
+        state.projectsManager.setOperationState(
+            id: createFailed.id,
+            state: .createFailed(message: "failed", base: "main")
+        )
+        state.projectsManager.setOperationState(id: deleteFailed.id, state: .deleteFailed(message: "failed"))
+
+        let ids = Set(await state.remoteWorktrees().map(\.id))
+
+        #expect(!ids.contains(creating.id))
+        #expect(!ids.contains(deleting.id))
+        #expect(!ids.contains(createFailed.id))
+        #expect(ids.contains(deleteFailed.id))
+    }
+
     @Test func remoteAgentsIncludeEnabledACPCapableAgentsOnly() throws {
         let state = makeRemoteRenameState()
+        let customAgent = AgentDefinition(
+            id: "custom-agent",
+            displayName: "Custom Agent",
+            binary: "custom-agent",
+            binaryOverride: nil,
+            promptModeArgs: [],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true,
+            builtinLogoAssetName: nil
+        )
         state.agentRegistry = AgentRegistry(
             builtinState: [
                 "claude": BuiltinAgentState(isEnabled: true, binaryOverride: nil, extraTerminalArgs: nil),
+                "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil, extraTerminalArgs: nil),
             ],
-            customs: [],
-            installedIds: ["claude"]
+            customs: [customAgent],
+            installedIds: ["claude", "codex", "custom-agent"]
         )
         let claudeName = try #require(state.agentRegistry.enabled().first { $0.id == "claude" }?.displayName)
 
@@ -397,6 +439,10 @@ struct RemoteAppStateAccessTests {
             customs: [],
             installedIds: ["claude"]
         )
+        var scheduledAttach: (managerWorktreeId: String, sessionId: String)?
+        state.remoteSessionAttachScheduler = { manager, sessionId in
+            scheduledAttach = (manager.worktreeId, sessionId)
+        }
         let worktreeId = try #require(state.selectedWorktreeId)
         cleanupWorktreeId = worktreeId
 
@@ -415,6 +461,8 @@ struct RemoteAppStateAccessTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == tab.id)
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         #expect(manager.liveSession(for: summary.id) != nil)
+        #expect(scheduledAttach?.managerWorktreeId == worktreeId)
+        #expect(scheduledAttach?.sessionId == summary.id)
     }
 
     @Test func createRemoteSessionRejectsMissingWorktree() async throws {
@@ -432,6 +480,36 @@ struct RemoteAppStateAccessTests {
         let result = await state.createRemoteSession(worktreeId: worktreeId, agentId: "missing")
 
         #expect(result == .failure("Agent is no longer available."))
+    }
+
+    @Test func createRemoteSessionRejectsDisabledOrNonACPAgent() async throws {
+        let state = makeRemoteRenameState()
+        let customAgent = AgentDefinition(
+            id: "custom-agent",
+            displayName: "Custom Agent",
+            binary: "custom-agent",
+            binaryOverride: nil,
+            promptModeArgs: [],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true,
+            builtinLogoAssetName: nil
+        )
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: false, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [customAgent],
+            installedIds: ["claude", "custom-agent"]
+        )
+        let worktreeId = try #require(state.selectedWorktreeId)
+
+        let disabled = await state.createRemoteSession(worktreeId: worktreeId, agentId: "claude")
+        let nonACP = await state.createRemoteSession(worktreeId: worktreeId, agentId: "custom-agent")
+
+        #expect(disabled == .failure("Agent is no longer available."))
+        #expect(nonACP == .failure("Agent is no longer available."))
     }
 
     private func statusCode(port: UInt16, host: String, path: String) async throws -> Int? {
@@ -537,6 +615,18 @@ struct RemoteAppStateAccessTests {
             if case .acpSession(let session) = tab { return session }
             return nil
         }.first
+    }
+
+    private func remoteWorktreeCopy(_ source: Worktree, id: String, name: String) -> Worktree {
+        Worktree(
+            id: id,
+            projectId: source.projectId,
+            name: name,
+            branch: name,
+            path: source.path.appendingPathComponent(name),
+            status: source.status,
+            lastActivity: source.lastActivity
+        )
     }
 
     private func seedStoredSession(
