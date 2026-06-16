@@ -89,7 +89,7 @@ struct ProviderReviewActionsTests {
         #expect(CodeHostProviderCapabilities.gitlabCLI.canResolveReviewThreads)
         #expect(!CodeHostProviderCapabilities.gitlabCLI.canUnresolveReviewThreads)
         #expect(CodeHostProviderCapabilities.gitlabCLI.canApproveReview)
-        #expect(!CodeHostProviderCapabilities.gitlabCLI.canRequestChanges)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canRequestChanges)
 
         #expect(!CodeHostProviderCapabilities.readOnly.canPublishReviewComments)
         #expect(!CodeHostProviderCapabilities.readOnly.canReplyToReviewThreads)

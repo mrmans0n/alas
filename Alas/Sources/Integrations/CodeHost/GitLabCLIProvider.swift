@@ -216,7 +216,16 @@ struct GitLabCLIProvider: CodeHostProvider {
                     warnings.append("GitLab approval was not submitted because \(failed.count) review comment(s) failed to publish.")
                 }
             case .requestChanges:
-                throw CodeHostProviderError.malformedOutput("GitLab request-changes review state is not supported yet.")
+                if failed.isEmpty {
+                    try await createMergeRequestNote(
+                        remote: request.remote,
+                        request: request.reviewRequest,
+                        body: request.summaryBody,
+                        cwd: request.cwd
+                    )
+                } else {
+                    warnings.append("GitLab request changes note was not submitted because \(failed.count) review comment(s) failed to publish.")
+                }
             }
         } catch {
             guard !published.isEmpty else {
@@ -487,6 +496,32 @@ struct GitLabCLIProvider: CodeHostProvider {
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api merge request approve", stderr: result.stderr)
+        }
+    }
+
+    private func createMergeRequestNote(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        body: String,
+        cwd: URL
+    ) async throws {
+        guard let body = Self.normalizedOptionalString(body) else {
+            throw CodeHostProviderError.malformedOutput("GitLab request changes note requires a non-empty body.")
+        }
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "notes"),
+                "--method", "POST",
+                "--hostname", remote.host,
+                "--input", "-",
+            ],
+            cwd: cwd,
+            stdin: try Self.encodedJSON(GitLabBodyPayload(body: body))
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api merge request note", stderr: result.stderr)
         }
     }
 

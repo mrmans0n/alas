@@ -448,7 +448,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                         commitOID: request.reviewRequest.headSHA,
                         comments: [comment],
                         decision: .comment,
-                        summaryBody: request.summaryBody,
+                        summaryBody: "",
                         cwd: request.cwd
                     )
                     published.append(contentsOf: result.published)

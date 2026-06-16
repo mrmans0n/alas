@@ -450,6 +450,7 @@ struct GitHubCLIProviderTests {
         let retryInput = try #require(retryVariables["input"] as? [String: Any])
         let retryThreads = try #require(retryInput["threads"] as? [[String: Any]])
         #expect(retryInput["event"] as? String == "COMMENT")
+        #expect(retryInput["body"] as? String == "")
         #expect(retryThreads.count == 1)
         #expect(result.published.map(\.localDraftID) == ["draft-good"])
         #expect(result.failed.map(\.localDraftID) == ["draft-bad"])

@@ -111,7 +111,7 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canResolveReviewThreads: true,
         canUnresolveReviewThreads: false,
         canApproveReview: true,
-        canRequestChanges: false
+        canRequestChanges: true
     )
 }
 

@@ -852,28 +852,11 @@ struct GitLabCLIProviderTests {
         #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/OldApp.swift"))_14_0")
     }
 
-    @Test func publishReviewRejectsUnsupportedGitLabRequestChangesDecision() async throws {
-        let runner = FakeRunner(results: [])
-
-        await #expect(throws: CodeHostProviderError.malformedOutput("GitLab request-changes review state is not supported yet.")) {
-            _ = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
-                remote: Self.remote,
-                reviewRequest: Self.makeRequest(),
-                comments: [],
-                decision: .requestChanges,
-                summaryBody: "Please address the inline notes before merging.",
-                cwd: Self.cwd
-            ))
-        }
-
-        let commands = await runner.commands
-        #expect(commands.isEmpty)
-    }
-
-    @Test func publishReviewReportsUnsupportedGitLabRequestChangesAfterPublishingComments() async throws {
+    @Test func publishReviewCreatesStatusNoteForGitLabRequestChanges() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
@@ -890,7 +873,51 @@ struct GitLabCLIProviderTests {
 
         #expect(result.published.map { $0.localDraftID } == ["draft-1"])
         #expect(result.failed.isEmpty)
-        #expect(result.warnings.contains { $0.contains("GitLab request-changes review state is not supported yet.") })
+        #expect(result.warnings.isEmpty)
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
+        let statusNotePayload = try Self.jsonObject(from: commands[2].stdin)
+        #expect(statusNotePayload["body"] as? String == "Please address the inline notes before merging.")
+    }
+
+    @Test func publishReviewCreatesGitLabRequestChangesStatusNoteWithoutDrafts() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [],
+            decision: .requestChanges,
+            summaryBody: "Please address the inline notes before merging.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.isEmpty)
+        #expect(result.failed.isEmpty)
+        #expect(result.warnings.isEmpty)
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
+        let statusNotePayload = try Self.jsonObject(from: commands[0].stdin)
+        #expect(statusNotePayload["body"] as? String == "Please address the inline notes before merging.")
     }
 
     @Test func publishReviewReturnsFailuresWithoutRemoteWriteForUnknownOnlyDrafts() async throws {
@@ -1025,6 +1052,43 @@ struct GitLabCLIProviderTests {
         #expect(result.failed.map(\.localDraftID) == ["draft-2"])
         #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
         #expect(result.warnings.contains { $0.contains("approval was not submitted") })
+    }
+
+    @Test func publishReviewDoesNotSubmitGitLabRequestChangesNoteWhenSomeDraftPublishesFail() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new, lineRange: 24...24),
+                try Self.makeProviderDraftComment(localDraftID: "draft-2", side: .new, lineRange: 25...25),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please address the inline notes before merging.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
+        #expect(result.published.map(\.localDraftID) == ["draft-1"])
+        #expect(result.failed.map(\.localDraftID) == ["draft-2"])
+        #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
+        #expect(result.warnings.contains { $0.contains("request changes note was not submitted") })
     }
 
     @Test func threadMutationsUseDiscussionEndpointsAndRefreshMR() async throws {
