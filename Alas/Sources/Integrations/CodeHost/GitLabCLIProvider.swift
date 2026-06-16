@@ -778,14 +778,14 @@ struct GitLabCLIProvider: CodeHostProvider {
             // Assumed GitLab note position keys: new_path, new_line, old_line, old_path
             // (from glab mr note list --output json).
             let position = firstNote.position
-            let comments: [ReviewComment] = try actionableNotes.map { note in
+            let comments: [ReviewComment] = try actionableNotes.enumerated().map { index, note in
                 let commentURL = try discussionURL(note: note, requestURL: requestURL)
                 return ReviewComment(
-                    id: note.id.map(String.init) ?? discussion.id,
+                    id: note.id.map(String.init) ?? "\(discussion.id)-\(index)",
                     author: note.author?.username,
                     body: note.body,
                     url: commentURL,
-                    createdAt: nil,
+                    createdAt: try? parseOptionalGitLabDate(note.createdAt),
                     viewerCanUpdate: false,
                     viewerCanDelete: false,
                     isPending: false
@@ -802,8 +802,10 @@ struct GitLabCLIProvider: CodeHostProvider {
                 diffHunk: nil,
                 isResolved: discussion.isResolved,
                 isOutdated: false,
-                isFileLevel: position?.newPath == nil,
+                // File-level when there's no specific line anchor (mirrors GitHub's line == nil rule)
+                isFileLevel: position == nil || position?.newLine == nil,
                 comments: comments,
+                // glab does not report per-thread viewer capabilities; assume true (real availability is gated by provider capabilities).
                 viewerCanResolve: true,
                 viewerCanReply: true,
                 url: firstURL
@@ -1518,6 +1520,7 @@ private struct GitLabDiscussionNote: Decodable {
     let resolvable: Bool?
     let resolved: Bool?
     let webURL: String?
+    let createdAt: String?
     // Assumed keys from `glab mr note list --output json`:
     // "new_path", "new_line", "old_line", "old_path" inside the "position" object.
     let position: GitLabNotePosition?
@@ -1546,6 +1549,7 @@ private struct GitLabDiscussionNote: Decodable {
         case resolvable
         case resolved
         case webURL = "web_url"
+        case createdAt = "created_at"
         case position
     }
 }

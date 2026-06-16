@@ -1764,6 +1764,31 @@ struct GitLabCLIProviderTests {
         #expect(thread.comments.first?.id == "101")
     }
 
+    @Test func parsesDiscussionWithoutPositionIsFileLevel() throws {
+        let output = """
+        [
+          {
+            "id": "disc-no-pos",
+            "resolved": false,
+            "notes": [
+              {
+                "id": 201,
+                "system": false,
+                "body": "General file comment, no position.",
+                "author": { "username": "reviewer" }
+              }
+            ]
+          }
+        ]
+        """
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            output,
+            requestURL: URL(string: "https://gitlab.com/group/proj/-/merge_requests/7")!)
+        let thread = try #require(threads.first)
+        #expect(thread.isFileLevel == true)
+        #expect(thread.line == nil)
+    }
+
     private static let remote = CodeHostRemote(
         kind: .gitlab,
         host: "gitlab.example.com",

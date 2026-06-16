@@ -924,9 +924,9 @@ struct GitHubCLIProvider: CodeHostProvider {
 
         let connection = response.data.repository.pullRequest.reviewThreads
         let threads: [ReviewThread] = try connection.nodes.compactMap { node in
-            let comments: [ReviewComment] = try node.comments.nodes.map { c in
+            let comments: [ReviewComment] = try node.comments.nodes.enumerated().map { index, c in
                 ReviewComment(
-                    id: c.id ?? node.id,
+                    id: c.id ?? "\(node.id)-\(index)",
                     author: c.author?.login,
                     body: c.body,
                     url: try parseOptionalHTTPURL(c.url, context: "gh review threads returned an invalid URL"),
