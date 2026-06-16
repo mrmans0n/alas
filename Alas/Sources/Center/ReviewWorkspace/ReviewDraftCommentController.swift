@@ -50,7 +50,7 @@ final class ReviewDraftCommentController {
             originalPath: originalPath,
             side: anchor.side,
             startLine: anchor.line,
-            endLine: nil,
+            endLine: anchor.endLine,
             selectedText: anchor.selectedText,
             bodyMarkdown: bodyMarkdown,
             state: .active,
