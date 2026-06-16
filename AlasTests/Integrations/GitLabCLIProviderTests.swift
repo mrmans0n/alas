@@ -852,9 +852,28 @@ struct GitLabCLIProviderTests {
         #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/OldApp.swift"))_14_0")
     }
 
-    @Test func publishReviewCreatesRequestChangesNoteForGitLabDecision() async throws {
+    @Test func publishReviewRejectsUnsupportedGitLabRequestChangesDecision() async throws {
+        let runner = FakeRunner(results: [])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("GitLab request-changes review state is not supported yet.")) {
+            _ = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+                remote: Self.remote,
+                reviewRequest: Self.makeRequest(),
+                comments: [],
+                decision: .requestChanges,
+                summaryBody: "Please address the inline notes before merging.",
+                cwd: Self.cwd
+            ))
+        }
+
+        let commands = await runner.commands
+        #expect(commands.isEmpty)
+    }
+
+    @Test func publishReviewReportsUnsupportedGitLabRequestChangesAfterPublishingComments() async throws {
         let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: Self.requestChangesNoteOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
@@ -863,27 +882,15 @@ struct GitLabCLIProviderTests {
         let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
             remote: Self.remote,
             reviewRequest: Self.makeRequest(),
-            comments: [],
+            comments: [try Self.makeProviderDraftComment()],
             decision: .requestChanges,
             summaryBody: "Please address the inline notes before merging.",
             cwd: Self.cwd
         ))
 
-        #expect(result.published.isEmpty)
+        #expect(result.published.map { $0.localDraftID } == ["draft-1"])
         #expect(result.failed.isEmpty)
-        let commands = await runner.commands
-        #expect(commands.first == FakeRunner.Command(
-            executable: "glab",
-            args: [
-                "api",
-                "projects/:id/merge_requests/42/notes",
-                "--method", "POST",
-                "--hostname", "gitlab.example.com",
-                "--input", "-",
-            ],
-            cwd: Self.cwd,
-            stdin: #"{"body":"Please address the inline notes before merging."}"#
-        ))
+        #expect(result.warnings.contains { $0.contains("GitLab request-changes review state is not supported yet.") })
     }
 
     @Test func publishReviewReturnsFailuresWithoutRemoteWriteForUnknownOnlyDrafts() async throws {
@@ -993,10 +1000,6 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.unresolveDiscussionOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
         let thread = ReviewThreadSummary(
             id: "discussion-1",
@@ -1027,14 +1030,6 @@ struct GitLabCLIProviderTests {
             bodyMarkdown: nil,
             cwd: Self.cwd
         ))
-        _ = try await provider.mutateReviewThread(ProviderThreadMutation(
-            remote: Self.remote,
-            reviewRequest: Self.makeRequest(),
-            thread: thread,
-            kind: .unresolve,
-            bodyMarkdown: nil,
-            cwd: Self.cwd
-        ))
 
         #expect(reply.providerURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_502"))
         let commands = await runner.commands
@@ -1053,7 +1048,35 @@ struct GitLabCLIProviderTests {
             "--input", "-",
         ])
         #expect(try Self.jsonObject(from: commands[4].stdin)["resolved"] as? Bool == true)
-        #expect(try Self.jsonObject(from: commands[8].stdin)["resolved"] as? Bool == false)
+    }
+
+    @Test func threadMutationRejectsUnsupportedGitLabUnresolve() async throws {
+        let runner = FakeRunner(results: [])
+        let thread = ReviewThreadSummary(
+            id: "discussion-1",
+            author: "reviewer",
+            body: "Please fix this.",
+            url: nil,
+            isResolved: true,
+            isActionable: true,
+            location: nil,
+            providerThreadID: "discussion-1",
+            providerCommentID: "501"
+        )
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("GitLab unresolve is not supported until resolved discussions are loaded.")) {
+            _ = try await GitLabCLIProvider(runner: runner).mutateReviewThread(ProviderThreadMutation(
+                remote: Self.remote,
+                reviewRequest: Self.makeRequest(),
+                thread: thread,
+                kind: .unresolve,
+                bodyMarkdown: nil,
+                cwd: Self.cwd
+            ))
+        }
+
+        let commands = await runner.commands
+        #expect(commands.isEmpty)
     }
 
     @Test func threadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
@@ -1810,25 +1833,10 @@ struct GitLabCLIProviderTests {
     }
     """
 
-    private static let requestChangesNoteOutput = """
-    {
-      "id": 601,
-      "body": "Please address the inline notes before merging.",
-      "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_601"
-    }
-    """
-
     private static let resolveDiscussionOutput = """
     {
       "id": "discussion-1",
       "resolved": true
-    }
-    """
-
-    private static let unresolveDiscussionOutput = """
-    {
-      "id": "discussion-1",
-      "resolved": false
     }
     """
 

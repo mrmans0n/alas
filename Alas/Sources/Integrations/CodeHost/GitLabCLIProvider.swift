@@ -212,12 +212,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             case .approve:
                 try await approveMergeRequest(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
             case .requestChanges:
-                try await createRequestChangesNote(
-                    remote: request.remote,
-                    request: request.reviewRequest,
-                    body: request.summaryBody,
-                    cwd: request.cwd
-                )
+                throw CodeHostProviderError.malformedOutput("GitLab request-changes review state is not supported yet.")
             }
         } catch {
             guard !published.isEmpty else {
@@ -273,14 +268,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             )
             providerURL = nil
         case .unresolve:
-            try await setDiscussionResolved(
-                remote: mutation.remote,
-                request: mutation.reviewRequest,
-                discussionID: discussionID,
-                resolved: false,
-                cwd: mutation.cwd
-            )
-            providerURL = nil
+            throw CodeHostProviderError.malformedOutput("GitLab unresolve is not supported until resolved discussions are loaded.")
         }
 
         let refreshedRequest = (try? await refreshedReviewRequest(
@@ -495,30 +483,6 @@ struct GitLabCLIProvider: CodeHostProvider {
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api merge request approve", stderr: result.stderr)
-        }
-    }
-
-    private func createRequestChangesNote(
-        remote: CodeHostRemote,
-        request: ReviewRequest,
-        body: String,
-        cwd: URL
-    ) async throws {
-        let payload = GitLabBodyPayload(body: Self.normalizedOptionalString(body) ?? "Changes requested.")
-        let result = try await runner.run(
-            "glab",
-            args: [
-                "api",
-                "projects/:id/merge_requests/\(request.number)/notes",
-                "--method", "POST",
-                "--hostname", remote.host,
-                "--input", "-",
-            ],
-            cwd: cwd,
-            stdin: try Self.encodedJSON(payload)
-        )
-        guard result.exitCode == 0 else {
-            throw CodeHostProviderError.commandFailed(command: "glab api merge request notes", stderr: result.stderr)
         }
     }
 

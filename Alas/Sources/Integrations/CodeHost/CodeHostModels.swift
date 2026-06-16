@@ -109,9 +109,9 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canPublishReviewComments: true,
         canReplyToReviewThreads: true,
         canResolveReviewThreads: true,
-        canUnresolveReviewThreads: true,
+        canUnresolveReviewThreads: false,
         canApproveReview: true,
-        canRequestChanges: true
+        canRequestChanges: false
     )
 }
 
