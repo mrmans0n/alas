@@ -377,7 +377,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 published: [],
                 failed: preflightFailures,
                 refreshedRequest: request.reviewRequest,
-                warnings: []
+                warnings: Self.skippedDecisionWarnings(decision: request.decision, provider: "GitHub")
             )
         }
         let pullRequestID = try await pullRequestNodeID(
@@ -434,7 +434,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                     publishableComments.map {
                         ProviderReviewFailedComment(localDraftID: $0.localDraftID, message: error.localizedDescription)
                     },
-                    []
+                    Self.skippedDecisionWarnings(decision: request.decision, provider: "GitHub")
                 )
             }
 
@@ -474,6 +474,17 @@ struct GitHubCLIProvider: CodeHostProvider {
             return false
         }
         return true
+    }
+
+    private static func skippedDecisionWarnings(decision: ProviderReviewDecision, provider: String) -> [String] {
+        switch decision {
+        case .comment:
+            []
+        case .approve:
+            ["\(provider) approval review was not submitted because review comments failed to publish."]
+        case .requestChanges:
+            ["\(provider) request changes review was not submitted because review comments failed to publish."]
+        }
     }
 
     private func submitReview(

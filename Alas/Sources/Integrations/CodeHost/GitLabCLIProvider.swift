@@ -170,7 +170,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                 published: [],
                 failed: preflightFailures,
                 refreshedRequest: request.reviewRequest,
-                warnings: []
+                warnings: Self.skippedDecisionWarnings(decision: request.decision)
             )
         }
 
@@ -200,7 +200,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                 published: [],
                 failed: failed,
                 refreshedRequest: request.reviewRequest,
-                warnings: []
+                warnings: Self.skippedDecisionWarnings(decision: request.decision)
             )
         }
 
@@ -577,6 +577,17 @@ struct GitLabCLIProvider: CodeHostProvider {
 
     static func mergeRequestAPIPath(remote: CodeHostRemote, request: ReviewRequest, suffix: String) -> String {
         "projects/\(encodedProjectPath(remote.repositorySlug))/merge_requests/\(request.number)/\(suffix)"
+    }
+
+    private static func skippedDecisionWarnings(decision: ProviderReviewDecision) -> [String] {
+        switch decision {
+        case .comment:
+            []
+        case .approve:
+            ["GitLab approval was not submitted because review comments failed to publish."]
+        case .requestChanges:
+            ["GitLab request changes note was not submitted because review comments failed to publish."]
+        }
     }
 
     static func encodedProjectPath(_ projectPath: String) -> String {

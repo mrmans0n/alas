@@ -545,7 +545,9 @@ struct GitHubCLIProviderTests {
         #expect(result.failed.allSatisfy {
             $0.message.contains("Unable to parse gh publish review output")
         })
-        #expect(result.warnings.isEmpty)
+        #expect(result.warnings.contains {
+            $0.contains("GitHub request changes review was not submitted")
+        })
         #expect(result.refreshedRequest.number == 42)
     }
 

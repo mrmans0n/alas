@@ -1063,6 +1063,7 @@ struct GitLabCLIProviderTests {
         #expect(result.failed.map(\.localDraftID) == ["draft-1"])
         #expect(result.failed.first?.message.contains("line is not commentable") == true)
         #expect(result.refreshedRequest == Self.makeRequest())
+        #expect(result.warnings.contains { $0.contains("approval was not submitted") })
     }
 
     @Test func publishReviewDoesNotApproveWhenSomeGitLabDraftPublishesFail() async throws {
