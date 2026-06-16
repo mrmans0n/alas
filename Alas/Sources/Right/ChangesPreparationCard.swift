@@ -29,13 +29,9 @@ struct ChangesPreparationCard: View {
                 primaryReviewButton(reviewAction)
             }
             if model.draftAction != nil || model.reviewRequestAction != nil {
-                HStack(spacing: 8) {
-                    if let draftAction = model.draftAction {
-                        secondaryDraftButton(draftAction)
-                    }
-                    if let reviewRequestAction = model.reviewRequestAction {
-                        secondaryReviewRequestButton(reviewRequestAction)
-                    }
+                ViewThatFits(in: .horizontal) {
+                    secondaryActionsHorizontal
+                    secondaryActionsVertical
                 }
             }
         }
@@ -74,6 +70,8 @@ struct ChangesPreparationCard: View {
                     Text(action.title)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundColor(theme.color("bg-0"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Text(ChangesPreparationCardText.reviewStats(
                         fileCount: action.fileCount,
                         additions: action.additions,
@@ -81,7 +79,10 @@ struct ChangesPreparationCard: View {
                     ))
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(theme.color("bg-0").opacity(0.72))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 8)
                 Icon(name: "chev-right", size: 11, color: theme.color("bg-0").opacity(0.72))
             }
@@ -96,6 +97,28 @@ struct ChangesPreparationCard: View {
         )
         .help(action.title)
         .accessibilityIdentifier("changes-preparation-review")
+    }
+
+    private var secondaryActionsHorizontal: some View {
+        HStack(spacing: 8) {
+            if let draftAction = model.draftAction {
+                secondaryDraftButton(draftAction)
+            }
+            if let reviewRequestAction = model.reviewRequestAction {
+                secondaryReviewRequestButton(reviewRequestAction)
+            }
+        }
+    }
+
+    private var secondaryActionsVertical: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let draftAction = model.draftAction {
+                secondaryDraftButton(draftAction)
+            }
+            if let reviewRequestAction = model.reviewRequestAction {
+                secondaryReviewRequestButton(reviewRequestAction)
+            }
+        }
     }
 
     private func secondaryDraftButton(_ action: ChangesPreparationModel.DraftAction) -> some View {
