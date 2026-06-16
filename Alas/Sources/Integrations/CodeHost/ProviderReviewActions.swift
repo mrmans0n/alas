@@ -4,6 +4,15 @@ enum ProviderReviewDecision: String, Codable, Equatable, Sendable {
     case comment
     case approve
     case requestChanges
+
+    var requiresSummaryBody: Bool {
+        switch self {
+        case .comment, .approve:
+            false
+        case .requestChanges:
+            true
+        }
+    }
 }
 
 struct ProviderReviewDraftComment: Codable, Equatable, Identifiable, Sendable {

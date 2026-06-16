@@ -90,6 +90,7 @@ struct ReviewSessionTabView: View {
     @State private var loadGeneration = 0
     @State private var providerPublishConfirmation: ProviderReviewPublishConfirmationState?
     @State private var selectedProviderDecision = ProviderReviewDecision.comment
+    @State private var providerReviewSummaryBody = ""
     @State private var isProviderPublishing = false
     @State private var providerPublishError: String?
 
@@ -549,6 +550,7 @@ struct ReviewSessionTabView: View {
         selectedProviderDecision = Self.defaultProviderDecision(
             allowedDecisions: allowedDecisions
         )
+        providerReviewSummaryBody = ""
         providerPublishError = nil
         providerPublishConfirmation = ProviderReviewPublishConfirmationState(
             commentID: commentID,
@@ -611,6 +613,7 @@ struct ReviewSessionTabView: View {
                     unpublishableMessages: providerPublishConfirmation.unpublishableMessages,
                     allowedDecisions: providerPublishConfirmation.allowedDecisions,
                     selectedDecision: $selectedProviderDecision,
+                    summaryBody: $providerReviewSummaryBody,
                     isPublishing: isProviderPublishing,
                     errorMessage: providerPublishError,
                     onCancel: {
@@ -644,12 +647,17 @@ struct ReviewSessionTabView: View {
                 providerPublishError = "\(selectedProviderDecision.displayName) is not supported by this provider."
                 return
             }
+            let summaryBody = providerReviewSummaryBody.trimmingCharacters(in: .whitespacesAndNewlines)
+            if selectedProviderDecision.requiresSummaryBody, summaryBody.isEmpty {
+                providerPublishError = "\(selectedProviderDecision.displayName) requires a review summary."
+                return
+            }
             let selectedDraftIDs = confirmation.commentID.map { Set([$0]) }
             let result = try await controller.publishReview(
                 remote: providerContext.remote,
                 reviewRequest: providerContext.reviewRequest,
                 decision: selectedProviderDecision,
-                summaryBody: "",
+                summaryBody: summaryBody,
                 cwd: record?.target.repositoryPath ?? URL(fileURLWithPath: loaded.feedbackTarget.repositoryPath ?? "/"),
                 localDraftIDs: selectedDraftIDs
             )

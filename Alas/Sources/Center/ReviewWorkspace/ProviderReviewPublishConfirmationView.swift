@@ -7,6 +7,7 @@ struct ProviderReviewPublishConfirmationView: View {
     let unpublishableMessages: [String]
     let allowedDecisions: [ProviderReviewDecision]
     @Binding var selectedDecision: ProviderReviewDecision
+    @Binding var summaryBody: String
     let isPublishing: Bool
     let errorMessage: String?
     let onCancel: () -> Void
@@ -42,6 +43,34 @@ struct ProviderReviewPublishConfirmationView: View {
             Text(commentCountText)
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg"))
+
+            if selectedDecision.requiresSummaryBody {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Review summary")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.color("fg-muted"))
+                    TextEditor(text: $summaryBody)
+                        .font(.system(size: 12))
+                        .foregroundColor(theme.color("fg"))
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 72)
+                        .padding(6)
+                        .background(theme.color("bg-0"))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(theme.color("line"), lineWidth: 0.75)
+                        )
+                        .disabled(isPublishing)
+                        .accessibilityIdentifier("provider-review-publish-summary")
+                }
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "provider-review-publish-summary",
+                        label: "Review summary"
+                    )
+                )
+            }
 
             if !unpublishableMessages.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
@@ -123,6 +152,7 @@ struct ProviderReviewPublishConfirmationView: View {
         isPublishing
             || !allowedDecisions.contains(selectedDecision)
             || (commentCount == 0 && selectedDecision == .comment)
+            || (selectedDecision.requiresSummaryBody && summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
 

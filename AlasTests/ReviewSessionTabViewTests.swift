@@ -725,6 +725,7 @@ struct ReviewSessionTabViewTests {
 
     @Test func providerPublishConfirmationListsProviderDecisionAndCommentCount() throws {
         var selectedDecision = ProviderReviewDecision.comment
+        var summaryBody = ""
         let view = ProviderReviewPublishConfirmationView(
             providerName: "GitHub",
             reviewIdentity: "PR #527",
@@ -732,6 +733,7 @@ struct ReviewSessionTabViewTests {
             unpublishableMessages: ["Sources/Old.swift: line is outdated"],
             allowedDecisions: [.comment, .approve, .requestChanges],
             selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            summaryBody: Binding(get: { summaryBody }, set: { summaryBody = $0 }),
             isPublishing: false,
             errorMessage: nil,
             onCancel: {},
@@ -752,6 +754,7 @@ struct ReviewSessionTabViewTests {
 
     @Test func providerPublishConfirmationDisablesCommentDecisionWithNoComments() throws {
         var selectedDecision = ProviderReviewDecision.comment
+        var summaryBody = ""
         var didConfirm = false
         let view = ProviderReviewPublishConfirmationView(
             providerName: "GitHub",
@@ -760,6 +763,7 @@ struct ReviewSessionTabViewTests {
             unpublishableMessages: ["Sources/App.swift: already published to GitHub."],
             allowedDecisions: [.comment, .approve, .requestChanges],
             selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            summaryBody: Binding(get: { summaryBody }, set: { summaryBody = $0 }),
             isPublishing: false,
             errorMessage: nil,
             onCancel: {},
@@ -774,8 +778,59 @@ struct ReviewSessionTabViewTests {
         #expect(!didConfirm)
     }
 
+    @Test func providerPublishConfirmationRequiresSummaryForRequestChanges() throws {
+        var selectedDecision = ProviderReviewDecision.requestChanges
+        var emptySummaryBody = ""
+        var emptyDidConfirm = false
+        let emptyView = ProviderReviewPublishConfirmationView(
+            providerName: "GitHub",
+            reviewIdentity: "PR #527",
+            commentCount: 2,
+            unpublishableMessages: [],
+            allowedDecisions: [.comment, .approve, .requestChanges],
+            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            summaryBody: Binding(get: { emptySummaryBody }, set: { emptySummaryBody = $0 }),
+            isPublishing: false,
+            errorMessage: nil,
+            onCancel: {},
+            onConfirm: { emptyDidConfirm = true }
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let emptyHost = NSHostingView(rootView: emptyView.frame(width: 420, height: 360))
+        emptyHost.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-summary", in: emptyHost) != nil)
+        #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: emptyHost))
+        #expect(!emptyDidConfirm)
+
+        var filledSummaryBody = "Please address the inline notes before merging."
+        var filledDidConfirm = false
+        let filledView = ProviderReviewPublishConfirmationView(
+            providerName: "GitHub",
+            reviewIdentity: "PR #527",
+            commentCount: 2,
+            unpublishableMessages: [],
+            allowedDecisions: [.comment, .approve, .requestChanges],
+            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            summaryBody: Binding(get: { filledSummaryBody }, set: { filledSummaryBody = $0 }),
+            isPublishing: false,
+            errorMessage: nil,
+            onCancel: {},
+            onConfirm: { filledDidConfirm = true }
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let filledHost = NSHostingView(rootView: filledView.frame(width: 420, height: 360))
+        filledHost.layoutSubtreeIfNeeded()
+
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: filledHost))
+        #expect(filledDidConfirm)
+    }
+
     @Test func providerPublishConfirmationHidesUnsupportedReviewDecisions() throws {
         var selectedDecision = ProviderReviewDecision.comment
+        var summaryBody = ""
         let view = ProviderReviewPublishConfirmationView(
             providerName: "GitLab",
             reviewIdentity: "MR !42",
@@ -783,6 +838,7 @@ struct ReviewSessionTabViewTests {
             unpublishableMessages: [],
             allowedDecisions: [.comment, .approve],
             selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            summaryBody: Binding(get: { summaryBody }, set: { summaryBody = $0 }),
             isPublishing: false,
             errorMessage: nil,
             onCancel: {},
