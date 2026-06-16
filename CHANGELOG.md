@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-06-16
+
+### ✨ Features
+
+- Add remote session creation from the web client (#539).
+- Support multiline review comments in review surfaces (#540).
+
 ## [0.8.1] - 2026-06-16
 
 ### ✨ Features
