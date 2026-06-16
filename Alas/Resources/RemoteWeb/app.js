@@ -20,6 +20,7 @@ let lastSentAttachments = [];   // images of the most recent sendPrompt, restore
 let sessionConfig = null;       // {models,modes,currentModel,currentMode,autoRunEnabled,acceptsImages} for the open session, or null
 let pendingAttachments = [];    // [{name, mimeType, dataBase64}] staged for the next sendPrompt
 let renameTarget = null;
+let deferredCreatePrompt = null;
 let createState = {
   open: false,
   step: "worktree",
@@ -163,10 +164,10 @@ function handle(msg) {
     case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; canDriveKnown = true; renderMessages(false); renderDriveBar(msg.streamingState); } break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
-    case "permissionRequest": if (msg.sessionId === currentSession && !createState.open) showPermission(msg.sessionId, msg.payload); break;
-    case "permissionResolved": if (msg.sessionId === currentSession) hidePermission(); break;
-    case "questionRequest": if (msg.sessionId === currentSession && !createState.open) showQuestion(msg.sessionId, msg.payload); break;
-    case "questionResolved": if (msg.sessionId === currentSession) { dismissedQuestion = null; hideQuestion(); } break;
+    case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload); break;
+    case "permissionResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("permission", msg.sessionId); hidePermission(); } break;
+    case "questionRequest": handlePromptRequest("question", msg.sessionId, msg.payload); break;
+    case "questionResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("question", msg.sessionId); dismissedQuestion = null; hideQuestion(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "worktreeList":
@@ -299,6 +300,36 @@ function setDetailTitle(sessionId) {
   $("detail-title").textContent = sessionTitles.get(sessionId) || "Session";
 }
 
+function handlePromptRequest(kind, sessionId, payload) {
+  if (sessionId !== currentSession) return;
+  if (createState.open) {
+    deferredCreatePrompt = { kind, sessionId, payload };
+    return;
+  }
+  showPromptRequest(kind, sessionId, payload);
+}
+
+function showPromptRequest(kind, sessionId, payload) {
+  if (kind === "permission") {
+    showPermission(sessionId, payload);
+  } else {
+    showQuestion(sessionId, payload);
+  }
+}
+
+function replayDeferredCreatePrompt() {
+  const prompt = deferredCreatePrompt;
+  deferredCreatePrompt = null;
+  if (!prompt || prompt.sessionId !== currentSession) return;
+  showPromptRequest(prompt.kind, prompt.sessionId, prompt.payload);
+}
+
+function clearDeferredCreatePrompt(kind, sessionId) {
+  if (deferredCreatePrompt && deferredCreatePrompt.kind === kind && deferredCreatePrompt.sessionId === sessionId) {
+    deferredCreatePrompt = null;
+  }
+}
+
 function showRenameSheet(sessionId) {
   renameTarget = sessionId;
   const input = $("rename-input");
@@ -358,6 +389,11 @@ function hideCreateSheet(force) {
   createState.busy = false;
   createState.error = "";
   $("new-session-sheet").classList.add("hidden");
+  if (forced) {
+    deferredCreatePrompt = null;
+  } else {
+    replayDeferredCreatePrompt();
+  }
 }
 
 function visibleCreateWorktrees() {
@@ -390,7 +426,7 @@ function renderCreateSheet() {
   renderCreateWorktrees();
   renderCreateAgents();
 
-  const canSubmit = inWorktreeStep ? !!createState.selectedWorktreeId : !!createState.selectedAgentId;
+  const canSubmit = inWorktreeStep ? !!createState.selectedWorktreeId : !!createState.selectedWorktreeId && !!createState.selectedAgentId;
   const next = $("create-next");
   next.disabled = createState.busy || !canSubmit;
   next.textContent = inWorktreeStep ? "Next" : (createState.busy ? "Creating..." : "Create");

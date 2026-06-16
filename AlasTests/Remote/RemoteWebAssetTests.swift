@@ -48,10 +48,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=43"#))
+        #expect(html.contains(#"/app.js?v=44"#))
         #expect(html.contains(#"/style.css?v=31"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v19";"#))
-        #expect(sw.contains(#""/app.js?v=43""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v20";"#))
+        #expect(sw.contains(#""/app.js?v=44""#))
         #expect(sw.contains(#""/style.css?v=31""#))
     }
 
@@ -83,7 +83,7 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=43"))
+        #expect(html.contains("/app.js?v=44"))
         #expect(html.contains("/style.css?v=31"))
     }
 
@@ -109,7 +109,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=43""#))
+        #expect(sw.contains(#""/app.js?v=44""#))
         #expect(sw.contains(#""/style.css?v=31""#))
     }
 
@@ -143,8 +143,16 @@ struct RemoteWebAssetTests {
         #expect(js.contains("hideRenameSheet();"))
         #expect(js.contains("hideCreateSheet(true);"))
         #expect(js.contains("clearSessionSheetsForOpen();"))
-        #expect(js.contains(#"case "permissionRequest": if (msg.sessionId === currentSession && !createState.open)"#))
-        #expect(js.contains(#"case "questionRequest": if (msg.sessionId === currentSession && !createState.open)"#))
+        #expect(js.contains("let deferredCreatePrompt = null;"))
+        #expect(js.contains("function handlePromptRequest(kind, sessionId, payload)"))
+        #expect(js.contains("deferredCreatePrompt = { kind, sessionId, payload };"))
+        #expect(js.contains("function replayDeferredCreatePrompt()"))
+        #expect(js.contains("deferredCreatePrompt = null;"))
+        #expect(js.contains("function clearDeferredCreatePrompt(kind, sessionId)"))
+        #expect(js.contains(#"case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload);"#))
+        #expect(js.contains(#"case "questionRequest": handlePromptRequest("question", msg.sessionId, msg.payload);"#))
+        #expect(js.contains(#"clearDeferredCreatePrompt("permission", msg.sessionId);"#))
+        #expect(js.contains(#"clearDeferredCreatePrompt("question", msg.sessionId);"#))
     }
 
     @Test func remoteWebRefreshesCreateSelectionsFromServerLists() throws {
@@ -154,6 +162,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("!createState.worktrees.some(w => w.id === createState.selectedWorktreeId)"))
         #expect(js.contains("createState.agents = msg.agents || [];"))
         #expect(js.contains("!createState.agents.some(a => a.id === createState.selectedAgentId)"))
+        #expect(js.contains("!!createState.selectedWorktreeId && !!createState.selectedAgentId"))
         #expect(js.contains("worktrees: [],"))
         #expect(js.contains("agents: [],"))
     }
