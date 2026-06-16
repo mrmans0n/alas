@@ -263,7 +263,7 @@ struct ReviewThreadModelTests {
         #expect(thread.isActionable == true)
     }
 
-    @Test func resolvedOrOutdadedThreadIsNotActionable() {
+    @Test func resolvedOrOutdatedThreadIsNotActionable() {
         func make(resolved: Bool, outdated: Bool) -> ReviewThread {
             ReviewThread(id: "t", path: nil, line: nil, startLine: nil,
                          originalLine: nil, diffHunk: nil, isResolved: resolved,

@@ -932,6 +932,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 isResolved: thread.isResolved,
                 isOutdated: thread.isOutdated,
                 isFileLevel: true,
+                // TODO: decode real per-comment ID + path/line/isFileLevel from the GraphQL response (deferred to the rich-thread-fetch task).
                 comments: [
                     ReviewComment(
                         id: thread.id,

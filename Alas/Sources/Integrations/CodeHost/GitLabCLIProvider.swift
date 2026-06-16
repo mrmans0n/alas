@@ -783,6 +783,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                 isResolved: discussion.isResolved,
                 isOutdated: false,
                 isFileLevel: true,
+                // TODO: decode real per-note ID + path/line/isFileLevel from the discussion position (deferred to the rich-thread-fetch task).
                 comments: [
                     ReviewComment(
                         id: discussion.id,
