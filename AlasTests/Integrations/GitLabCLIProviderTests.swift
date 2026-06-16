@@ -775,9 +775,9 @@ struct GitLabCLIProviderTests {
 
         let commands = await runner.commands
         #expect(commands.map { Array($0.args.prefix(2)) } == [
-            ["api", "projects/:id/merge_requests/42/versions"],
-            ["api", "projects/:id/merge_requests/42/discussions"],
-            ["api", "projects/:id/merge_requests/42/approve"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/approve"],
             ["mr", "view"],
             ["mr", "note"],
             ["ci", "get"],
@@ -981,8 +981,8 @@ struct GitLabCLIProviderTests {
 
         let commands = await runner.commands
         #expect(commands.map { Array($0.args.prefix(2)) } == [
-            ["api", "projects/:id/merge_requests/42/versions"],
-            ["api", "projects/:id/merge_requests/42/discussions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
         ])
         #expect(result.published.isEmpty)
         #expect(result.failed.map(\.localDraftID) == ["draft-1"])
@@ -1035,19 +1035,27 @@ struct GitLabCLIProviderTests {
         let commands = await runner.commands
         #expect(commands[0].args == [
             "api",
-            "projects/:id/merge_requests/42/discussions/discussion-1/notes",
+            "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1/notes",
             "--method", "POST",
             "--hostname", "gitlab.example.com",
             "--input", "-",
         ])
         #expect(commands[4].args == [
             "api",
-            "projects/:id/merge_requests/42/discussions/discussion-1",
+            "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1",
             "--method", "PUT",
             "--hostname", "gitlab.example.com",
             "--input", "-",
         ])
         #expect(try Self.jsonObject(from: commands[4].stdin)["resolved"] as? Bool == true)
+    }
+
+    @Test func gitLabMergeRequestAPIPathUsesSelectedRemoteProjectPath() {
+        #expect(GitLabCLIProvider.mergeRequestAPIPath(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            suffix: "discussions"
+        ) == "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions")
     }
 
     @Test func threadMutationRejectsUnsupportedGitLabUnresolve() async throws {

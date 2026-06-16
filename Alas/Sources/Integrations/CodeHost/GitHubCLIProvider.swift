@@ -340,6 +340,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     ) async throws -> ReviewThreadsPage {
         var args = [
             "api", "graphql",
+            "--hostname", remote.host,
             "-f", "query=\(Self.reviewThreadsQuery)",
             "-F", "owner=\(remote.owner)",
             "-F", "repo=\(remote.repository)",
@@ -417,6 +418,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     ) async -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment], warnings: [String]) {
         do {
             let published = try await submitReview(
+                remote: request.remote,
                 pullRequestID: pullRequestID,
                 comments: publishableComments,
                 decision: request.decision,
@@ -440,6 +442,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             for comment in publishableComments {
                 do {
                     let result = try await submitReview(
+                        remote: request.remote,
                         pullRequestID: pullRequestID,
                         comments: [comment],
                         decision: .comment,
@@ -468,6 +471,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
 
     private func submitReview(
+        remote: CodeHostRemote,
         pullRequestID: String,
         comments: [ProviderReviewDraftComment],
         decision: ProviderReviewDecision,
@@ -486,7 +490,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         )
         let result = try await runner.run(
             "gh",
-            args: ["api", "graphql", "--input", "-"],
+            args: Self.graphQLAPIStdinArgs(remote: remote),
             cwd: cwd,
             stdin: stdin
         )
@@ -536,7 +540,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
             let result = try await runner.run(
                 "gh",
-                args: ["api", "graphql", "--input", "-"],
+                args: Self.graphQLAPIStdinArgs(remote: mutation.remote),
                 cwd: mutation.cwd,
                 stdin: stdin
             )
@@ -551,7 +555,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
             let result = try await runner.run(
                 "gh",
-                args: ["api", "graphql", "--input", "-"],
+                args: Self.graphQLAPIStdinArgs(remote: mutation.remote),
                 cwd: mutation.cwd,
                 stdin: stdin
             )
@@ -567,7 +571,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
             let result = try await runner.run(
                 "gh",
-                args: ["api", "graphql", "--input", "-"],
+                args: Self.graphQLAPIStdinArgs(remote: mutation.remote),
                 cwd: mutation.cwd,
                 stdin: stdin
             )
@@ -1036,7 +1040,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         )
         let result = try await runner.run(
             "gh",
-            args: ["api", "graphql", "--input", "-"],
+            args: Self.graphQLAPIStdinArgs(remote: remote),
             cwd: cwd,
             stdin: stdin
         )
@@ -1052,6 +1056,10 @@ struct GitHubCLIProvider: CodeHostProvider {
         case .approve: "APPROVE"
         case .requestChanges: "REQUEST_CHANGES"
         }
+    }
+
+    static func graphQLAPIStdinArgs(remote: CodeHostRemote) -> [String] {
+        ["api", "graphql", "--hostname", remote.host, "--input", "-"]
     }
 
     static func githubReviewThreadPayload(for draft: ProviderReviewDraftComment) -> GitHubReviewDraftThreadPayload {

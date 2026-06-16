@@ -425,7 +425,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             "glab",
             args: [
                 "api",
-                "projects/:id/merge_requests/\(request.number)/versions",
+                Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "versions"),
                 "--hostname", remote.host,
                 "--output", "json",
             ],
@@ -450,7 +450,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             "glab",
             args: [
                 "api",
-                "projects/:id/merge_requests/\(request.number)/discussions",
+                Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "discussions"),
                 "--method", "POST",
                 "--hostname", remote.host,
                 "--input", "-",
@@ -473,7 +473,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             "glab",
             args: [
                 "api",
-                "projects/:id/merge_requests/\(request.number)/approve",
+                Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "approve"),
                 "--method", "POST",
                 "--hostname", remote.host,
                 "--input", "-",
@@ -498,7 +498,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             "glab",
             args: [
                 "api",
-                "projects/:id/merge_requests/\(request.number)/discussions/\(discussionID)/notes",
+                Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "discussions/\(discussionID)/notes"),
                 "--method", "POST",
                 "--hostname", remote.host,
                 "--input", "-",
@@ -523,7 +523,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             "glab",
             args: [
                 "api",
-                "projects/:id/merge_requests/\(request.number)/discussions/\(discussionID)",
+                Self.mergeRequestAPIPath(remote: remote, request: request, suffix: "discussions/\(discussionID)"),
                 "--method", "PUT",
                 "--hostname", remote.host,
                 "--input", "-",
@@ -534,6 +534,16 @@ struct GitLabCLIProvider: CodeHostProvider {
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api merge request discussion", stderr: result.stderr)
         }
+    }
+
+    static func mergeRequestAPIPath(remote: CodeHostRemote, request: ReviewRequest, suffix: String) -> String {
+        "projects/\(encodedProjectPath(remote.repositorySlug))/merge_requests/\(request.number)/\(suffix)"
+    }
+
+    static func encodedProjectPath(_ projectPath: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/")
+        return projectPath.addingPercentEncoding(withAllowedCharacters: allowed) ?? projectPath
     }
 
     private func sourceProjectPathsByID(

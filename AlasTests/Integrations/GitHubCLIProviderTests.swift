@@ -210,6 +210,7 @@ struct GitHubCLIProviderTests {
                 executable: "gh",
                 args: [
                     "api", "graphql",
+                    "--hostname", "github.com",
                     "-f", "query=\(GitHubCLIProvider.reviewThreadsQuery)",
                     "-F", "owner=mrmans0n",
                     "-F", "repo=alas",
@@ -352,8 +353,8 @@ struct GitHubCLIProviderTests {
 
         let commands = await runner.commands
         #expect(commands.count == 4)
-        #expect(commands[0].args == ["api", "graphql", "--input", "-"])
-        #expect(commands[1].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(commands[1].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[0].stdin?.contains("pullRequest(number: $number)") == true)
         let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
         let publishInput = try #require(publishVariables["input"] as? [String: Any])
@@ -638,13 +639,13 @@ struct GitHubCLIProviderTests {
         ))
 
         let commands = await runner.commands
-        #expect(commands[0].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[1].args == [
             "pr", "view", "42",
             "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
-        #expect(commands[3].args == ["api", "graphql", "--input", "-"])
+        #expect(commands[3].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[4].args == [
             "pr", "view", "42",
             "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
@@ -657,6 +658,21 @@ struct GitHubCLIProviderTests {
         #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
         #expect(replyResult.refreshedRequest.number == 42)
         #expect(resolveResult.refreshedRequest.number == 42)
+    }
+
+    @Test func githubGraphQLAPIArgsIncludeSelectedRemoteHost() {
+        let enterpriseRemote = CodeHostRemote(
+            kind: .github,
+            host: "github.enterprise.example.com",
+            owner: "platform",
+            repository: "alas",
+            remoteName: "enterprise",
+            webURL: URL(string: "https://github.enterprise.example.com/platform/alas")!
+        )
+
+        #expect(GitHubCLIProvider.graphQLAPIStdinArgs(remote: enterpriseRemote) == [
+            "api", "graphql", "--hostname", "github.enterprise.example.com", "--input", "-",
+        ])
     }
 
     @Test func githubThreadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
