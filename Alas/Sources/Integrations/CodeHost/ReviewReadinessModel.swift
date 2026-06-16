@@ -64,6 +64,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
     }
 
     let identity: String
+    let providerIconName: String
+    let providerTitle: String?
+    let requestNumberTitle: String?
     let title: String?
     let chips: [Chip]
     let facts: [Fact]
@@ -73,6 +76,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
     init(snapshot: ReviewLoopSnapshot?, lastError: String?, canOpenAgentHandoff: Bool) {
         guard let snapshot else {
             identity = "Review readiness"
+            providerIconName = "branch"
+            providerTitle = nil
+            requestNumberTitle = nil
             title = nil
             chips = [Chip(id: "loading", title: "Checking", tone: .accent)]
             facts = []
@@ -87,6 +93,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
         let requestLabel = kind?.reviewRequestLabel ?? "review request"
 
         identity = request?.displayIdentity ?? kind?.displayName ?? "Review readiness"
+        providerIconName = kind?.iconName ?? "branch"
+        providerTitle = kind?.displayName
+        requestNumberTitle = request.map { "\($0.provider.reviewRequestNumberPrefix)\($0.number)" }
         title = request?.title
         blockingText = lastError ?? snapshot.errorMessage ?? Self.providerBlockingText(snapshot) ?? Self.localBlockingText(snapshot)
 

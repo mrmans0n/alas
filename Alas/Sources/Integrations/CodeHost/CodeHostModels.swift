@@ -25,6 +25,13 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
         }
     }
 
+    var iconName: String {
+        switch self {
+        case .github: "github"
+        case .gitlab: "gitlab"
+        }
+    }
+
     var createReviewRequestTitle: String {
         "Create \(reviewRequestLabel)"
     }

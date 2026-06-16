@@ -18,11 +18,13 @@ struct CodeHostModelsTests {
     @Test func codeHostKindUsesProviderNativeReviewRequestLabels() {
         #expect(CodeHostKind.github.reviewRequestLabel == "PR")
         #expect(CodeHostKind.github.reviewRequestNumberPrefix == "#")
+        #expect(CodeHostKind.github.iconName == "github")
         #expect(CodeHostKind.github.createReviewRequestTitle == "Create PR")
         #expect(CodeHostKind.github.openReviewRequestTitle == "Open PR")
 
         #expect(CodeHostKind.gitlab.reviewRequestLabel == "MR")
         #expect(CodeHostKind.gitlab.reviewRequestNumberPrefix == "!")
+        #expect(CodeHostKind.gitlab.iconName == "gitlab")
         #expect(CodeHostKind.gitlab.createReviewRequestTitle == "Create MR")
         #expect(CodeHostKind.gitlab.openReviewRequestTitle == "Open MR")
     }
