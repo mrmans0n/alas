@@ -209,6 +209,227 @@ struct ReviewChangesModelsTests {
             "staged:Sources/App.swift",
         ])
     }
+
+    @Test func preparationStatsFormatFileAndLineCounts() {
+        let single = ChangesPreparationCardText.reviewStats(
+            fileCount: 1,
+            additions: 3,
+            deletions: 1
+        )
+        #expect(single == "1 file · +3 −1")
+
+        let duplicatePath = ChangesPreparationCardText.reviewStats(
+            fileCount: 2,
+            additions: nil,
+            deletions: nil
+        )
+        #expect(duplicatePath == "2 files")
+    }
+
+    @Test func preparationStatsFormatDraftCounts() {
+        let staged = ChangesPreparationCardText.draftStats(
+            stagedCount: 2,
+            additions: 9,
+            deletions: 4
+        )
+        #expect(staged == "2 staged · +9 −4")
+
+        let empty = ChangesPreparationCardText.draftStats(
+            stagedCount: 0,
+            additions: 0,
+            deletions: 0
+        )
+        #expect(empty == "0 staged")
+    }
+
+    @Test func preparationModelShowsReviewActionForNonConflictChangesOnly() throws {
+        let changes = [
+            changedFile("conflicted.swift", stage: .unstaged, add: 40, del: 5, conflict: .bothModified),
+            changedFile("Sources/App.swift", stage: .unstaged, add: 8, del: 2),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: changes,
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        #expect(model.isVisible)
+        let review = try #require(model.reviewAction)
+        #expect(review.fileCount == 1)
+        #expect(review.additions == 8)
+        #expect(review.deletions == 2)
+        #expect(review.title == "Review current changes")
+    }
+
+    @Test func preparationModelHidesReviewActionWhenOnlyConflictsExist() {
+        let changes = [
+            changedFile("conflicted.swift", stage: .unstaged, add: 40, del: 5, conflict: .bothModified),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: changes,
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelShowsDraftActionForStagedChanges() throws {
+        let model = ChangesPreparationModel(
+            changes: [
+                changedFile("Sources/App.swift", stage: .staged, add: 3, del: 1),
+                changedFile("Sources/View.swift", stage: .unstaged, add: 9, del: 0),
+            ],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        let draft = try #require(model.draftAction)
+        #expect(draft.title == "Draft commit")
+        #expect(draft.stagedCount == 1)
+        #expect(draft.additions == 3)
+        #expect(draft.deletions == 1)
+        #expect(!draft.hasNonEmptyDraft)
+    }
+
+    @Test func preparationModelShowsExistingDraftWithoutStagedChanges() throws {
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: true,
+            draftNonEmpty: true,
+            readinessActions: []
+        )
+
+        #expect(model.isVisible)
+        let draft = try #require(model.draftAction)
+        #expect(draft.title == "Open draft")
+        #expect(draft.stagedCount == 0)
+        #expect(draft.additions == 0)
+        #expect(draft.deletions == 0)
+        #expect(draft.hasNonEmptyDraft)
+    }
+
+    @Test func preparationModelSelectsSingleReadinessActionByPriority() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .refresh, title: "Refresh", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .openReviewRequest, title: "Open PR", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .createReviewRequest, title: "Create PR", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        let reviewRequest = try #require(model.reviewRequestAction)
+        #expect(reviewRequest.kind == .createReviewRequest)
+        #expect(reviewRequest.title == "Create PR")
+    }
+
+    @Test func preparationModelFallsBackToPushBeforeOpenRequest() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .openReviewRequest, title: "Open PR", isEnabled: true),
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        let reviewRequest = try #require(model.reviewRequestAction)
+        #expect(reviewRequest.kind == .pushBranch)
+        #expect(reviewRequest.title == "Push")
+    }
+
+    @Test func preparationModelCanBeBuiltFromReadinessModelActions() throws {
+        let readiness = ReviewReadinessModel(
+            snapshot: ReviewChangesReadinessFixtures.makeSnapshot(reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [changedFile("Sources/App.swift", stage: .unstaged, add: 2, del: 1)],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: readiness.actions
+        )
+
+        #expect(model.reviewAction?.title == "Review current changes")
+        #expect(model.reviewRequestAction?.kind == .createReviewRequest)
+        #expect(model.reviewRequestAction?.title == "Create PR")
+    }
+
+    @Test func preparationModelDoesNotShowStandaloneRefreshWhileReadinessLoads() {
+        let loadingReadiness = ReviewReadinessModel(
+            snapshot: nil,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: loadingReadiness.actions
+        )
+
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelKeepsRefreshWhenCardIsVisibleForChanges() throws {
+        let loadingReadiness = ReviewReadinessModel(
+            snapshot: nil,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [changedFile("Sources/App.swift", stage: .unstaged, add: 2, del: 1)],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: loadingReadiness.actions
+        )
+
+        #expect(model.isVisible)
+        let action = try #require(model.reviewRequestAction)
+        #expect(action.kind == .refresh)
+    }
+
+    @Test func preparationModelPrefersInspectOverOpenRequestForFailedChecks() throws {
+        let request = ReviewChangesReadinessFixtures.makeReviewRequest(
+            checks: [ReviewChangesReadinessFixtures.makeCheck(bucket: .fail)]
+        )
+        let readiness = ReviewReadinessModel(
+            snapshot: ReviewChangesReadinessFixtures.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: readiness.actions
+        )
+
+        let action = try #require(model.reviewRequestAction)
+        #expect(action.kind == .inspectReviewEvidence)
+        #expect(action.title == "Inspect")
+    }
 }
 
 private func changedFile(
@@ -249,4 +470,71 @@ private func reviewSummary(
         isRenderable: isRenderable,
         originalPath: originalPath
     )
+}
+
+private enum ReviewChangesReadinessFixtures {
+    static func makeSnapshot(reviewRequest: ReviewRequest?) -> ReviewLoopSnapshot {
+        let remote = makeRemote()
+        return ReviewLoopSnapshot(
+            local: ReviewLoopLocalState(
+                branchName: "feature/entrypoint",
+                headSHA: "abc123",
+                baseBranch: "main",
+                hasWorkingTreeChanges: true,
+                hasStagedChanges: true,
+                aheadCommitCount: 1,
+                hasUpstream: true,
+                upstreamAheadCommitCount: 0,
+                needsPush: false
+            ),
+            remote: remote,
+            reviewRequest: reviewRequest,
+            providerAvailable: true,
+            providerAuthenticated: true,
+            providerCapabilities: .githubCLI,
+            errorMessage: nil
+        )
+    }
+
+    static func makeReviewRequest(
+        remote: CodeHostRemote = makeRemote(),
+        checks: [ReviewCheck] = []
+    ) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: 428,
+            title: "Entry point review",
+            url: remote.webURL.appending(path: "pull/428"),
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/entrypoint",
+            baseRefName: "main",
+            reviewDecision: .reviewRequired,
+            mergeState: .blocked,
+            checks: checks,
+            threads: []
+        )
+    }
+
+    static func makeCheck(bucket: ReviewCheckBucket) -> ReviewCheck {
+        ReviewCheck(
+            id: "ci-tests",
+            name: "Tests",
+            workflow: "CI",
+            bucket: bucket,
+            detailURL: nil,
+            completedAt: nil
+        )
+    }
+
+    private static func makeRemote() -> CodeHostRemote {
+        CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+    }
 }

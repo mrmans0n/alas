@@ -8,16 +8,6 @@ struct ChangesTabView: View {
     let onSelectCommit: (CommitInfo) -> Void
     let onEditCommit: (CommitInfo, String) -> Void
 
-    private var stagedCount: Int {
-        rps.changes.filter { $0.stage == .staged }.count
-    }
-    private var stagedAdd: Int {
-        rps.changes.filter { $0.stage == .staged }.reduce(0) { $0 + $1.add }
-    }
-    private var stagedDel: Int {
-        rps.changes.filter { $0.stage == .staged }.reduce(0) { $0 + $1.del }
-    }
-
     private var conflicts: [ChangedFile] {
         rps.changes.filter { $0.conflict != nil }
     }
@@ -26,8 +16,18 @@ struct ChangesTabView: View {
         rps.changes.filter { $0.conflict == nil }
     }
 
-    private var reviewChangesSummary: ReviewChangesTriggerSummary? {
-        ReviewChangesTriggerSummary.summary(for: rps.changes)
+    private var preparationModel: ChangesPreparationModel {
+        let readiness = ReviewReadinessModel(
+            snapshot: rps.reviewLoop.snapshot,
+            lastError: rps.reviewLoop.lastError,
+            canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState)
+        )
+        return ChangesPreparationModel(
+            changes: rps.changes,
+            hasDraft: hasDraftTab,
+            draftNonEmpty: draftNonEmpty,
+            readinessActions: readiness.actions
+        )
     }
 
     var body: some View {
@@ -85,20 +85,14 @@ struct ChangesTabView: View {
                 onDismissBulkReport: { rps.dismissBulkResolveReport() }
             )
 
-            if stagedCount > 0 {
-                DraftCommitTriggerRow(
-                    stagedCount: stagedCount,
-                    stagedAdd: stagedAdd,
-                    stagedDel: stagedDel,
-                    hasDraft: hasDraftTab,
-                    draftNonEmpty: draftNonEmpty,
-                    onOpen: openDraftTab
-                )
-            }
-            if let reviewChangesSummary {
-                ReviewChangesTriggerRow(
-                    summary: reviewChangesSummary,
-                    onOpen: openReviewChangesTab
+            if preparationModel.isVisible {
+                ChangesPreparationCard(
+                    model: preparationModel,
+                    onReviewChanges: openReviewChangesTab,
+                    onDraftCommit: openDraftTab,
+                    onReviewRequestAction: { action in
+                        rps.handleReviewReadinessAction(action, appState: appState)
+                    }
                 )
             }
             WorkingTreeSectionView(
@@ -250,106 +244,5 @@ struct ReviewChangesTriggerSummary: Equatable {
             additions: hasDuplicatePath ? nil : reviewableChanges.reduce(0) { $0 + $1.add },
             deletions: hasDuplicatePath ? nil : reviewableChanges.reduce(0) { $0 + $1.del }
         )
-    }
-}
-
-private struct ReviewChangesTriggerRow: View {
-    let summary: ReviewChangesTriggerSummary
-    let onOpen: () -> Void
-
-    @Environment(\.theme) private var theme
-
-    private var fileLabel: String {
-        summary.fileCount == 1 ? "1 file" : "\(summary.fileCount) files"
-    }
-
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 8) {
-                Icon(name: "diff", size: 11, color: theme.color("fg-dim"))
-                Text(fileLabel)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(theme.color("fg-dim"))
-                if let additions = summary.additions, let deletions = summary.deletions {
-                    Text("·")
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.color("fg-faint"))
-                    Text("+\(additions)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("add"))
-                    Text("−\(deletions)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("del"))
-                }
-                Spacer()
-                Text("Review Changes")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(theme.color("accent"))
-                Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(theme.color("bg-1"))
-        .overlay(Divider().opacity(0.5), alignment: .bottom)
-    }
-}
-
-private struct DraftCommitTriggerRow: View {
-    let stagedCount: Int
-    let stagedAdd: Int
-    let stagedDel: Int
-    let hasDraft: Bool
-    let draftNonEmpty: Bool
-    let onOpen: () -> Void
-
-    @Environment(\.theme) private var theme
-
-    private var label: String {
-        hasDraft ? "Open draft" : "Draft commit"
-    }
-
-    var body: some View {
-        Button(action: onOpen) {
-            HStack(spacing: 8) {
-                Icon(name: "commit", size: 11, color: theme.color("fg-dim"))
-                if stagedCount > 0 {
-                    Text("\(stagedCount) staged")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("fg-dim"))
-                    Text("·")
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.color("fg-faint"))
-                    Text("+\(stagedAdd)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("add"))
-                    Text("−\(stagedDel)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("del"))
-                } else {
-                    Text("0 staged")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundColor(theme.color("fg-faint"))
-                }
-                Spacer()
-                if hasDraft && draftNonEmpty {
-                    Circle()
-                        .fill(theme.color("accent"))
-                        .frame(width: 5, height: 5)
-                }
-                Text(label)
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundColor(theme.color("accent"))
-                Icon(name: "chev-right", size: 10, color: theme.color("fg-faint"))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(theme.color("bg-1"))
-        .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 }
