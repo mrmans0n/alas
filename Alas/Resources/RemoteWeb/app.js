@@ -144,6 +144,7 @@ async function connect() {
   socket.onclose = () => {
     if (socket !== ws) return;
     setStatus("Reconnecting...", "bad");
+    failCreateOnDisconnect();
     showUnreachableGate();
     scheduleReconnect();
   };
@@ -394,6 +395,13 @@ function hideCreateSheet(force) {
   } else {
     replayDeferredCreatePrompt();
   }
+}
+
+function failCreateOnDisconnect() {
+  if (!createState.open || !createState.busy) return;
+  createState.busy = false;
+  createState.error = "Connection lost. Reconnect and try again.";
+  renderCreateSheet();
 }
 
 function visibleCreateWorktrees() {

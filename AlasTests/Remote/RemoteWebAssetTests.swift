@@ -48,10 +48,10 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=44"#))
+        #expect(html.contains(#"/app.js?v=45"#))
         #expect(html.contains(#"/style.css?v=31"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v20";"#))
-        #expect(sw.contains(#""/app.js?v=44""#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v21";"#))
+        #expect(sw.contains(#""/app.js?v=45""#))
         #expect(sw.contains(#""/style.css?v=31""#))
     }
 
@@ -83,7 +83,7 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=44"))
+        #expect(html.contains("/app.js?v=45"))
         #expect(html.contains("/style.css?v=31"))
     }
 
@@ -109,7 +109,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=44""#))
+        #expect(sw.contains(#""/app.js?v=45""#))
         #expect(sw.contains(#""/style.css?v=31""#))
     }
 
@@ -149,6 +149,8 @@ struct RemoteWebAssetTests {
         #expect(js.contains("function replayDeferredCreatePrompt()"))
         #expect(js.contains("deferredCreatePrompt = null;"))
         #expect(js.contains("function clearDeferredCreatePrompt(kind, sessionId)"))
+        #expect(js.contains("function failCreateOnDisconnect()"))
+        #expect(js.contains(#"createState.error = "Connection lost. Reconnect and try again.";"#))
         #expect(js.contains(#"case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload);"#))
         #expect(js.contains(#"case "questionRequest": handlePromptRequest("question", msg.sessionId, msg.payload);"#))
         #expect(js.contains(#"clearDeferredCreatePrompt("permission", msg.sessionId);"#))
