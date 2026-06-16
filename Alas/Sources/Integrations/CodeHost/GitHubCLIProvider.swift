@@ -699,6 +699,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: item.isDraft,
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
+            headSHA: normalizedOptionalString(item.headRefOid),
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],

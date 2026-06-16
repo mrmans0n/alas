@@ -35,6 +35,13 @@ struct GitHubCLIProviderTests {
         #expect(request.threads.isEmpty)
     }
 
+    @Test func prViewJSONParsesHeadSHA() throws {
+        let request = try GitHubCLIProvider.parsePRView(Self.prViewOutput, remote: Self.remote)
+
+        #expect(request.number == 42)
+        #expect(request.headSHA == "head-sha-42")
+    }
+
     @Test func checksJSONParsesBucketsURLsDatesAndDistinctIDs() throws {
         let checks = try GitHubCLIProvider.parseChecks(
             """
