@@ -49,23 +49,69 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
     let canCreateReviewRequest: Bool
     let canRerunFailedChecks: Bool
     let canOpenReviewRequest: Bool
+    let canPublishReviewComments: Bool
+    let canReplyToReviewThreads: Bool
+    let canResolveReviewThreads: Bool
+    let canUnresolveReviewThreads: Bool
+    let canApproveReview: Bool
+    let canRequestChanges: Bool
+
+    init(
+        canCreateReviewRequest: Bool,
+        canRerunFailedChecks: Bool,
+        canOpenReviewRequest: Bool,
+        canPublishReviewComments: Bool = false,
+        canReplyToReviewThreads: Bool = false,
+        canResolveReviewThreads: Bool = false,
+        canUnresolveReviewThreads: Bool = false,
+        canApproveReview: Bool = false,
+        canRequestChanges: Bool = false
+    ) {
+        self.canCreateReviewRequest = canCreateReviewRequest
+        self.canRerunFailedChecks = canRerunFailedChecks
+        self.canOpenReviewRequest = canOpenReviewRequest
+        self.canPublishReviewComments = canPublishReviewComments
+        self.canReplyToReviewThreads = canReplyToReviewThreads
+        self.canResolveReviewThreads = canResolveReviewThreads
+        self.canUnresolveReviewThreads = canUnresolveReviewThreads
+        self.canApproveReview = canApproveReview
+        self.canRequestChanges = canRequestChanges
+    }
 
     static let readOnly = CodeHostProviderCapabilities(
         canCreateReviewRequest: false,
         canRerunFailedChecks: false,
-        canOpenReviewRequest: true
+        canOpenReviewRequest: true,
+        canPublishReviewComments: false,
+        canReplyToReviewThreads: false,
+        canResolveReviewThreads: false,
+        canUnresolveReviewThreads: false,
+        canApproveReview: false,
+        canRequestChanges: false
     )
 
     static let githubCLI = CodeHostProviderCapabilities(
         canCreateReviewRequest: true,
         canRerunFailedChecks: true,
-        canOpenReviewRequest: true
+        canOpenReviewRequest: true,
+        canPublishReviewComments: true,
+        canReplyToReviewThreads: true,
+        canResolveReviewThreads: true,
+        canUnresolveReviewThreads: true,
+        canApproveReview: true,
+        canRequestChanges: true
     )
 
     static let gitlabCLI = CodeHostProviderCapabilities(
         canCreateReviewRequest: true,
         canRerunFailedChecks: true,
-        canOpenReviewRequest: true
+        canOpenReviewRequest: true,
+        canPublishReviewComments: true,
+        canReplyToReviewThreads: true,
+        canResolveReviewThreads: true,
+        canUnresolveReviewThreads: false,
+        canApproveReview: true,
+        canRequestChanges: true
     )
 }
 
@@ -141,6 +187,8 @@ struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
     let isResolved: Bool
     let isActionable: Bool
     let location: ReviewThreadLocation?
+    let providerThreadID: String?
+    let providerCommentID: String?
 
     init(
         id: String,
@@ -149,7 +197,9 @@ struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
         url: URL?,
         isResolved: Bool,
         isActionable: Bool,
-        location: ReviewThreadLocation? = nil
+        location: ReviewThreadLocation? = nil,
+        providerThreadID: String? = nil,
+        providerCommentID: String? = nil
     ) {
         self.id = id
         self.author = author
@@ -158,6 +208,8 @@ struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
         self.isResolved = isResolved
         self.isActionable = isActionable
         self.location = location
+        self.providerThreadID = providerThreadID
+        self.providerCommentID = providerCommentID
     }
 }
 
@@ -171,6 +223,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let isDraft: Bool
     let headRefName: String
     let baseRefName: String
+    let headSHA: String?
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
@@ -180,12 +233,59 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
 
     var displayIdentity: String { "\(provider.displayName) \(provider.reviewRequestNumberPrefix)\(number)" }
 
+    init(
+        remote: CodeHostRemote,
+        number: Int,
+        title: String,
+        url: URL,
+        state: ReviewRequestState,
+        isDraft: Bool,
+        headRefName: String,
+        baseRefName: String,
+        headSHA: String? = nil,
+        reviewDecision: ReviewDecision,
+        mergeState: ReviewMergeState,
+        checks: [ReviewCheck],
+        threads: [ReviewThreadSummary]
+    ) {
+        self.remote = remote
+        self.number = number
+        self.title = title
+        self.url = url
+        self.state = state
+        self.isDraft = isDraft
+        self.headRefName = headRefName
+        self.baseRefName = baseRefName
+        self.headSHA = headSHA
+        self.reviewDecision = reviewDecision
+        self.mergeState = mergeState
+        self.checks = checks
+        self.threads = threads
+    }
+
     var worstCheckBucket: ReviewCheckBucket? {
         checks.max { $0.bucket.severity < $1.bucket.severity }?.bucket
     }
 
     var hasActionableFeedback: Bool {
         reviewDecision == .changesRequested || threads.contains { !$0.isResolved && $0.isActionable }
+    }
+
+    static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: "",
+            url: remote.webURL,
+            state: .open,
+            isDraft: false,
+            headRefName: "",
+            baseRefName: "",
+            reviewDecision: .unknown,
+            mergeState: .unknown,
+            checks: [],
+            threads: []
+        )
     }
 }
 

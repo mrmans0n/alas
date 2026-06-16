@@ -281,6 +281,100 @@ struct DiffReviewSurfaceTests {
         #expect(subviews(withAccessibilityIdentifier: "diff-review-inline-feedback-copy-thread-1", in: controller.view).count <= 1)
     }
 
+    @Test func providerFeedbackCardShowsReplyResolveAndUnresolveActions() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please fix this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: 2, side: .new),
+            evidenceItemID: "thread-1"
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var resolvedID: String?
+        var unresolvedID: String?
+        var replied: (id: String, body: String)?
+        let actions = DiffReviewInlineFeedbackActions(
+            availability: { item, _ in
+                DiffReviewInlineFeedbackActionAvailability(
+                    canOpenProvider: false,
+                    canCopyContext: false,
+                    canSendToAgent: false,
+                    canReplyProvider: true,
+                    canResolveProvider: item.status != .resolved,
+                    canUnresolveProvider: item.status == .resolved
+                )
+            },
+            replyProvider: { item, _, body in
+                replied = (item.id, body)
+            },
+            resolveProvider: { item, _ in
+                resolvedID = item.id
+            },
+            unresolveProvider: { item, _ in
+                unresolvedID = item.id
+            }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: [
+                feedback,
+                DiffReviewInlineFeedback(
+                    id: "thread-2",
+                    providerName: "GitHub",
+                    author: "reviewer",
+                    bodyPreview: "Resolved thread.",
+                    status: .resolved,
+                    providerURL: nil,
+                    anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: nil, side: .unknown),
+                    evidenceItemID: "thread-2"
+                ),
+            ],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            inlineFeedbackActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 520)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-reply-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-action-unresolve-thread-2", in: controller.view) != nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: controller.view))
+        #expect(resolvedID == "thread-1")
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-unresolve-thread-2", in: controller.view))
+        #expect(unresolvedID == "thread-2")
+
+        var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
+        replyEditor.start()
+        #expect(replyEditor.isReplying)
+        replyEditor.body = "  Done  "
+        #expect(replyEditor.save(feedback) { item, body in
+            actions.replyProvider(item, file.summary, body)
+        })
+        #expect(!replyEditor.isReplying)
+        #expect(replied?.id == "thread-1")
+        #expect(replied?.body == "Done")
+    }
+
     @Test func focusedInlineFeedbackPastDisplayCapRemainsVisibleWithMoreRow() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -737,6 +831,54 @@ struct DiffReviewSurfaceTests {
         #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
     }
 
+    @Test func fileSectionDraftCommentCardShowsProviderPublishAndErrorState() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        var published = draftComment(id: "draft-published-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        published.providerPublish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: nil,
+            publishedAt: Date(timeIntervalSince1970: 3)
+        )
+        var failed = draftComment(id: "draft-error-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        failed.providerError = ReviewDraftProviderError(
+            provider: .gitlab,
+            message: "Line is no longer commentable.",
+            occurredAt: Date(timeIntervalSince1970: 4)
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [published, failed],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 620)
+
+        #expect(accessibilityLabel(in: controller.view, containing: "published to GitHub") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "GitLab error: Line is no longer commentable.") != nil)
+    }
+
     @Test func fileSectionDraftCommentCardCanDismissComment() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
@@ -786,6 +928,58 @@ struct DiffReviewSurfaceTests {
             in: controller.view
         ))
         #expect(dismissedID == "draft-dismiss-inline")
+    }
+
+    @Test func fileSectionDraftCommentCardCanPublishProviderComment() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let comment = draftComment(id: "draft-publish-inline", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var publishedID: String?
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: false,
+                    canDelete: false,
+                    canResolve: false,
+                    canDismiss: false,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false,
+                    canPublishProvider: true
+                )
+            },
+            publishProvider: { publishedID = $0.id }
+        )
+
+        let view = DiffReviewFileSection(
+            file: file,
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            draftCommentActions: actions
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+
+        #expect(pressAccessibilityElement(
+            withAccessibilityIdentifier: "diff-review-draft-comment-publish-draft-publish-inline",
+            in: controller.view
+        ))
+        #expect(publishedID == "draft-publish-inline")
     }
 
     @Test func fileSectionDraftCommentCardUsesProvidedReviewTargetForPromptActions() {
@@ -1352,6 +1546,41 @@ struct DiffReviewSurfaceTests {
         #expect(recorder.sentTarget == .newChat(agentID: "codex", title: "Codex"))
     }
 
+    @Test func summaryRailCanPublishReview() throws {
+        let file = summary(path: "Sources/App.swift")
+        let comment = draftComment(id: "draft-publish-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review provider request",
+                repositoryPath: "/repo",
+                providerDescription: "GitHub #527",
+                sourceDescription: "Provider review"
+            ),
+            comments: [comment]
+        )
+        var collapsed = false
+        var didPublish = false
+        let actions = ReviewDraftCommentActions(
+            availability: { _ in .none },
+            canPublishReview: { true },
+            publishReview: { didPublish = true }
+        )
+
+        let view = ReviewDraftSummaryRail(
+            comments: [comment],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: actions,
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 500)
+
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-draft-summary-publish-review", in: controller.view))
+        #expect(didPublish)
+    }
+
     @Test func summaryRailHidesSendActionWhenNoAgentTargetExists() throws {
         let file = summary(path: "Sources/App.swift")
         let comment = draftComment(id: "draft-disabled-actions", fileID: file.id, path: file.path, side: .new, startLine: 2)
@@ -1518,6 +1747,51 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "review-draft-summary-comment-draft-dismissed-visible", in: controller.view) != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "old line 7") != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "dismissed") != nil)
+    }
+
+    @Test func summaryRailShowsProviderPublishAndErrorState() throws {
+        let file = summary(path: "Sources/App.swift")
+        var published = draftComment(id: "draft-published-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        published.providerPublish = ReviewDraftProviderPublish(
+            provider: .github,
+            host: "github.com",
+            repositorySlug: "mrmans0n/alas",
+            reviewNumber: 527,
+            threadID: "thread-1",
+            commentID: "comment-1",
+            url: nil,
+            publishedAt: Date(timeIntervalSince1970: 3)
+        )
+        var failed = draftComment(id: "draft-error-summary", fileID: file.id, path: file.path, side: .new, startLine: 2)
+        failed.providerError = ReviewDraftProviderError(
+            provider: .gitlab,
+            message: "Line is no longer commentable.",
+            occurredAt: Date(timeIntervalSince1970: 4)
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(
+                title: "Review Sources/App.swift",
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: "Local draft comments"
+            ),
+            comments: [published, failed]
+        )
+        var collapsed = false
+
+        let view = ReviewDraftSummaryRail(
+            comments: [published, failed],
+            bundle: bundle,
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            draftCommentActions: ReviewDraftCommentActions(),
+            onSelectDraftComment: { _ in }
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 280, height: 520)
+
+        #expect(accessibilityLabel(in: controller.view, containing: "published to GitHub") != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "GitLab error: Line is no longer commentable.") != nil)
     }
 
     @Test func collapsedSummaryRailKeepsFinishActionsAccessible() throws {

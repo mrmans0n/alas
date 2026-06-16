@@ -14,6 +14,7 @@ struct GitHubCLIProviderTests {
                 "state": "OPEN",
                 "isDraft": false,
                 "headRefName": "feature/github-provider",
+                "headRefOid": "head-sha-42",
                 "baseRefName": "main",
                 "reviewDecision": "CHANGES_REQUESTED",
                 "mergeStateStatus": "BLOCKED"
@@ -29,8 +30,16 @@ struct GitHubCLIProviderTests {
         #expect(request.reviewDecision == .changesRequested)
         #expect(request.mergeState == .blocked)
         #expect(request.provider == .github)
+        #expect(request.headSHA == "head-sha-42")
         #expect(request.checks.isEmpty)
         #expect(request.threads.isEmpty)
+    }
+
+    @Test func prViewJSONParsesHeadSHA() throws {
+        let request = try GitHubCLIProvider.parsePRView(Self.prViewOutput, remote: Self.remote)
+
+        #expect(request.number == 42)
+        #expect(request.headSHA == "head-sha-42")
     }
 
     @Test func checksJSONParsesBucketsURLsDatesAndDistinctIDs() throws {
@@ -201,7 +210,7 @@ struct GitHubCLIProviderTests {
                     "--base", "main",
                     "--state", "open",
                     "--limit", "20",
-                    "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                    "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
                     "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
@@ -210,6 +219,7 @@ struct GitHubCLIProviderTests {
                 executable: "gh",
                 args: [
                     "api", "graphql",
+                    "--hostname", "github.com",
                     "-f", "query=\(GitHubCLIProvider.reviewThreadsQuery)",
                     "-F", "owner=mrmans0n",
                     "-F", "repo=alas",
@@ -309,8 +319,503 @@ struct GitHubCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable == true)
+        #expect(threads[0].providerThreadID == "thread-1")
+        #expect(threads[0].providerCommentID == "comment-1")
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable == false)
+    }
+
+    @Test func githubPublishReviewUsesGraphQLPayloadAndRefreshesPR() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-1",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: 14,
+                    body: "Please simplify this."
+                ),
+                Self.makeProviderDraftComment(
+                    id: "draft-unknown",
+                    path: "Sources/App.swift",
+                    side: .unknown,
+                    startLine: 20,
+                    endLine: nil,
+                    body: "This should not be posted to the wrong side."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 4)
+        #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(commands[1].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(commands[0].stdin?.contains("pullRequest(number: $number)") == true)
+        let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let publishInput = try #require(publishVariables["input"] as? [String: Any])
+        let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
+        #expect(publishInput["comments"] == nil)
+        #expect(publishThreads.count == 1)
+        #expect(publishInput["pullRequestId"] as? String == "PR_node_42")
+        #expect(publishInput["commitOID"] as? String == "head-sha-42")
+        #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
+        #expect(publishThreads.first?["path"] as? String == "Sources/App.swift")
+        #expect(publishThreads.first?["line"] as? Int == 14)
+        #expect(publishThreads.first?["side"] as? String == "RIGHT")
+        #expect(publishThreads.first?["startLine"] as? Int == 12)
+        #expect(publishThreads.first?["startSide"] as? String == "RIGHT")
+        #expect(commands[2].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
+        #expect(result.published == [
+            ProviderReviewPublishedComment(
+                localDraftID: "draft-1",
+                providerThreadID: "PRRT_thread_1",
+                providerCommentID: "PRRC_comment_1",
+                providerURL: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1")
+            ),
+        ])
+        #expect(result.failed == [
+            ProviderReviewFailedComment(
+                localDraftID: "draft-unknown",
+                message: "GitHub review comments require an old or new side."
+            ),
+        ])
+        #expect(result.refreshedRequest.number == 42)
+        #expect(result.refreshedRequest.threads.count == 2)
+    }
+
+    @Test func githubPublishReviewRetriesIndividuallyAfterBatchRejection() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-good",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: nil,
+                    body: "Please simplify this."
+                ),
+                Self.makeProviderDraftComment(
+                    id: "draft-bad",
+                    path: "Sources/Other.swift",
+                    side: .new,
+                    startLine: 99,
+                    endLine: nil,
+                    body: "This anchor is stale."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 6)
+        let batchVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let batchInput = try #require(batchVariables["input"] as? [String: Any])
+        let batchThreads = try #require(batchInput["threads"] as? [[String: Any]])
+        #expect(batchInput["event"] as? String == "REQUEST_CHANGES")
+        #expect(batchThreads.count == 2)
+
+        let retryVariables = try Self.graphQLVariables(from: commands[2].stdin)
+        let retryInput = try #require(retryVariables["input"] as? [String: Any])
+        let retryThreads = try #require(retryInput["threads"] as? [[String: Any]])
+        #expect(retryInput["event"] as? String == "COMMENT")
+        #expect(retryInput["body"] as? String == "")
+        #expect(retryThreads.count == 1)
+        #expect(result.published.map(\.localDraftID) == ["draft-good"])
+        #expect(result.failed.map(\.localDraftID) == ["draft-bad"])
+        #expect(result.failed.first?.message.contains("line is not commentable") == true)
+        #expect(result.warnings.contains {
+            $0.contains("retried publishable comments individually")
+        })
+    }
+
+    @Test func githubPublishReviewDoesNotFailDraftsPastReturnedCommentWindow() async throws {
+        let drafts = try (1...101).map { index in
+            try Self.makeProviderDraftComment(
+                id: "draft-\(index)",
+                path: "Sources/App.swift",
+                side: .new,
+                startLine: index,
+                endLine: nil,
+                body: "Comment \(index)"
+            )
+        }
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput(commentCount: 100), stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: drafts,
+            decision: .comment,
+            summaryBody: "Review notes.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.failed.isEmpty)
+        #expect(result.published.map(\.localDraftID) == drafts.map(\.localDraftID))
+        #expect(result.published[99].providerCommentID == "PRRC_comment_100")
+        #expect(result.published[100].providerCommentID == nil)
+        #expect(result.warnings.contains {
+            $0.contains("GitHub returned only the first 100 review comments")
+        })
+    }
+
+    @Test func githubPublishReviewDoesNotRetryAfterMalformedSuccessfulBatchResponse() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"data":{}}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-1",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: nil,
+                    body: "Please simplify this."
+                ),
+                Self.makeProviderDraftComment(
+                    id: "draft-2",
+                    path: "Sources/Other.swift",
+                    side: .new,
+                    startLine: 99,
+                    endLine: nil,
+                    body: "This anchor is stale."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 4)
+        let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let publishInput = try #require(publishVariables["input"] as? [String: Any])
+        let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
+        #expect(publishInput["event"] as? String == "REQUEST_CHANGES")
+        #expect(publishThreads.count == 2)
+        #expect(commands[2].args.first == "pr")
+        #expect(result.published.isEmpty)
+        #expect(result.failed.map(\.localDraftID) == ["draft-1", "draft-2"])
+        #expect(result.failed.allSatisfy {
+            $0.message.contains("Unable to parse gh publish review output")
+        })
+        #expect(result.warnings.contains {
+            $0.contains("GitHub request changes review was not submitted")
+        })
+        #expect(result.refreshedRequest.number == 42)
+    }
+
+    @Test func githubPublishReviewDoesNotSubmitDecisionWhenNoDraftsArePublishable() async throws {
+        let runner = FakeRunner(results: [])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-unknown",
+                    path: "Sources/App.swift",
+                    side: .unknown,
+                    startLine: 20,
+                    endLine: nil,
+                    body: "This should not submit a review decision."
+                ),
+            ],
+            decision: .requestChanges,
+            summaryBody: "Please update this before merge.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.isEmpty)
+        #expect(result.published.isEmpty)
+        #expect(result.failed == [
+            ProviderReviewFailedComment(
+                localDraftID: "draft-unknown",
+                message: "GitHub review comments require an old or new side."
+            ),
+        ])
+        #expect(result.refreshedRequest.number == 42)
+    }
+
+    @Test func githubPublishReviewSubmitsDecisionWhenNoDraftCommentsExist() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationWithoutCommentsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [],
+            decision: .approve,
+            summaryBody: "Looks good.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 4)
+        let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
+        let publishInput = try #require(publishVariables["input"] as? [String: Any])
+        let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
+        #expect(publishInput["event"] as? String == "APPROVE")
+        #expect(publishInput["body"] as? String == "Looks good.")
+        #expect(publishThreads.isEmpty)
+        #expect(result.published.isEmpty)
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest.number == 42)
+    }
+
+    @Test func githubPublishReviewThrowsDecisionOnlyReviewFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "GraphQL: Resource not accessible by integration"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "gh api graphql",
+            stderr: "GraphQL: Resource not accessible by integration"
+        )) {
+            _ = try await provider.publishReview(ProviderReviewPublishRequest(
+                remote: Self.remote,
+                reviewRequest: Self.makeRequest(),
+                comments: [],
+                decision: .approve,
+                summaryBody: "Looks good.",
+                cwd: Self.cwd
+            ))
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+    }
+
+    @Test func githubPublishReviewPreservesMappingsWhenRefreshFails() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "temporary API failure"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                Self.makeProviderDraftComment(
+                    id: "draft-1",
+                    path: "Sources/App.swift",
+                    side: .new,
+                    startLine: 12,
+                    endLine: nil,
+                    body: "Please simplify this."
+                ),
+            ],
+            decision: .comment,
+            summaryBody: "Review notes.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.published.map(\.localDraftID) == ["draft-1"])
+        #expect(result.failed.isEmpty)
+        #expect(result.refreshedRequest == Self.makeRequest())
+        #expect(result.warnings.contains {
+            $0.contains("could not refresh the PR")
+        })
+    }
+
+    @Test func githubThreadMutationsUseGraphQLAndRefreshPR() async throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please tighten this branch lookup.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+            isResolved: false,
+            isActionable: true,
+            providerThreadID: "PRRT_thread_1",
+            providerCommentID: "PRRC_comment_1"
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.resolveThreadMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let replyResult = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(threads: [thread]),
+            thread: thread,
+            kind: .reply,
+            bodyMarkdown: "Thanks, fixed.",
+            cwd: Self.cwd
+        ))
+        let resolveResult = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(threads: [thread]),
+            thread: thread,
+            kind: .resolve,
+            bodyMarkdown: nil,
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(commands[1].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
+        #expect(commands[3].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(commands[4].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "mrmans0n/alas",
+        ])
+        #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
+        #expect(commands[0].stdin?.contains("\"pullRequestReviewThreadId\":\"PRRT_thread_1\"") == true)
+        #expect(commands[3].stdin?.contains("resolveReviewThread") == true)
+        #expect(commands[3].stdin?.contains("\"threadId\":\"PRRT_thread_1\"") == true)
+        #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
+        #expect(replyResult.refreshedRequest.number == 42)
+        #expect(resolveResult.refreshedRequest.number == 42)
+    }
+
+    @Test func githubGraphQLAPIArgsIncludeSelectedRemoteHost() {
+        let enterpriseRemote = CodeHostRemote(
+            kind: .github,
+            host: "github.enterprise.example.com",
+            owner: "platform",
+            repository: "alas",
+            remoteName: "enterprise",
+            webURL: URL(string: "https://github.enterprise.example.com/platform/alas")!
+        )
+
+        #expect(GitHubCLIProvider.graphQLAPIStdinArgs(remote: enterpriseRemote) == [
+            "api", "graphql", "--hostname", "github.enterprise.example.com", "--input", "-",
+        ])
+    }
+
+    @Test func githubRefreshUsesHostQualifiedRepositoryForEnterpriseRemote() async throws {
+        let enterpriseRemote = CodeHostRemote(
+            kind: .github,
+            host: "github.enterprise.example.com",
+            owner: "platform",
+            repository: "alas",
+            remoteName: "enterprise",
+            webURL: URL(string: "https://github.enterprise.example.com/platform/alas")!
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        _ = try await provider.reviewRequest(remote: enterpriseRemote, number: 42, cwd: Self.cwd)
+
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+        #expect(commands[0].args == [
+            "pr", "view", "42",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "-R", "github.enterprise.example.com/platform/alas",
+        ])
+        #expect(commands[1].args.prefix(3) == ["api", "graphql", "--hostname"])
+        #expect(commands[1].args.contains("github.enterprise.example.com"))
+        #expect(commands[1].args.contains("owner=platform"))
+        #expect(commands[1].args.contains("repo=alas"))
+    }
+
+    @Test func githubThreadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please tighten this branch lookup.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+            isResolved: false,
+            isActionable: true,
+            providerThreadID: "PRRT_thread_1",
+            providerCommentID: "PRRC_comment_1"
+        )
+        let originalRequest = Self.makeRequest(threads: [thread])
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "temporary API failure"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let replyResult = try await provider.mutateReviewThread(ProviderThreadMutation(
+            remote: Self.remote,
+            reviewRequest: originalRequest,
+            thread: thread,
+            kind: .reply,
+            bodyMarkdown: "Thanks, fixed.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+        #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
+        #expect(commands[1].args.first == "pr")
+        #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
+        #expect(replyResult.refreshedRequest == originalRequest)
+        #expect(replyResult.warnings.contains {
+            $0.contains("GitHub thread was updated, but Alas could not refresh the PR")
+        })
     }
 
     @Test func reviewThreadsJSONPreservesLocationMetadata() throws {
@@ -841,11 +1346,52 @@ struct GitHubCLIProviderTests {
             isDraft: false,
             headRefName: "feature/github-provider",
             baseRefName: "main",
+            headSHA: "head-sha-42",
             reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,
             threads: threads
         )
+    }
+
+    private static func makeProviderDraftComment(
+        id: String,
+        path: String,
+        side: DiffReviewInlineFeedbackSide,
+        startLine: Int,
+        endLine: Int?,
+        body: String
+    ) throws -> ProviderReviewDraftComment {
+        let draft = ReviewDraftComment(
+            id: id,
+            sessionID: .reviewRequest(
+                worktreeID: "wt",
+                provider: .github,
+                host: "github.com",
+                repositorySlug: "mrmans0n/alas",
+                number: 42
+            ),
+            fileID: DiffReviewFileID(namespace: "github", path: path),
+            path: path,
+            originalPath: nil,
+            side: side,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: nil,
+            bodyMarkdown: body,
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 11)
+        )
+        return try #require(ProviderReviewDraftComment(localDraft: draft))
+    }
+
+    private static func graphQLVariables(from stdin: String?) throws -> [String: Any] {
+        let stdin = try #require(stdin)
+        let data = Data(stdin.utf8)
+        let object = try JSONSerialization.jsonObject(with: data)
+        let payload = try #require(object as? [String: Any])
+        return try #require(payload["variables"] as? [String: Any])
     }
 
     private static let prListOutput = """
@@ -857,11 +1403,27 @@ struct GitHubCLIProviderTests {
         "state": "OPEN",
         "isDraft": false,
         "headRefName": "feature/github-provider",
+        "headRefOid": "head-sha-42",
         "baseRefName": "main",
         "reviewDecision": "APPROVED",
         "mergeStateStatus": "CLEAN"
       }
     ]
+    """
+
+    private static let prViewOutput = """
+    {
+      "number": 42,
+      "title": "Add GitHub provider",
+      "url": "https://github.com/mrmans0n/alas/pull/42",
+      "state": "OPEN",
+      "isDraft": false,
+      "headRefName": "feature/github-provider",
+      "headRefOid": "head-sha-42",
+      "baseRefName": "main",
+      "reviewDecision": "APPROVED",
+      "mergeStateStatus": "CLEAN"
+    }
     """
 
     private static let checksOutput = """
@@ -970,6 +1532,7 @@ struct GitHubCLIProviderTests {
                   "comments": {
                     "nodes": [
                       {
+                        "id": "comment-1",
                         "body": "Please tighten this branch lookup.",
                         "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
                         "author": { "login": "reviewer" }
@@ -984,6 +1547,7 @@ struct GitHubCLIProviderTests {
                   "comments": {
                     "nodes": [
                       {
+                        "id": "comment-2",
                         "body": "Old feedback.",
                         "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r2",
                         "author": { "login": "reviewer" }
@@ -998,6 +1562,7 @@ struct GitHubCLIProviderTests {
                   "comments": {
                     "nodes": [
                       {
+                        "id": "comment-3",
                         "body": "",
                         "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r3",
                         "author": { "login": "reviewer" }
@@ -1015,6 +1580,33 @@ struct GitHubCLIProviderTests {
         }
       }
     }
+    """
+
+    private static let pullRequestNodeOutput = """
+    {"data":{"repository":{"pullRequest":{"id":"PR_node_42"}}}}
+    """
+
+    private static let publishReviewMutationOutput = """
+    {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[{"id":"PRRC_comment_1","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r1","pullRequestReviewThread":{"id":"PRRT_thread_1"}}]}}}}}
+    """
+
+    private static func publishReviewMutationOutput(commentCount: Int) -> String {
+        let nodes = (1...commentCount).map { index in
+            #"{"id":"PRRC_comment_\#(index)","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r\#(index)","pullRequestReviewThread":{"id":"PRRT_thread_\#(index)"}}"#
+        }.joined(separator: ",")
+        return #"{"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[\#(nodes)]}}}}}"#
+    }
+
+    private static let publishReviewMutationWithoutCommentsOutput = """
+    {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[]}}}}}
+    """
+
+    private static let replyMutationOutput = """
+    {"data":{"addPullRequestReviewThreadReply":{"comment":{"id":"PRRC_reply_1","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r2"}}}}
+    """
+
+    private static let resolveThreadMutationOutput = """
+    {"data":{"resolveReviewThread":{"thread":{"id":"PRRT_thread_1","isResolved":true}}}}
     """
 
     private static let reviewThreadsFirstPageOutput = """
@@ -1088,6 +1680,14 @@ struct GitHubCLIProviderTests {
             let executable: String
             let args: [String]
             let cwd: URL?
+            let stdin: String?
+
+            init(executable: String, args: [String], cwd: URL?, stdin: String? = nil) {
+                self.executable = executable
+                self.args = args
+                self.cwd = cwd
+                self.stdin = stdin
+            }
         }
 
         private var results: [ProcessResult]
@@ -1097,8 +1697,8 @@ struct GitHubCLIProviderTests {
             self.results = results
         }
 
-        func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
-            commands.append(Command(executable: executable, args: args, cwd: cwd))
+        func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+            commands.append(Command(executable: executable, args: args, cwd: cwd, stdin: stdin))
             guard !results.isEmpty else {
                 return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
             }

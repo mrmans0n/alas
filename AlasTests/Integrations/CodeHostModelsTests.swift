@@ -136,6 +136,29 @@ struct CodeHostModelsTests {
         #expect(first.id != second.id)
     }
 
+    @Test func reviewThreadSummaryCarriesProviderThreadIdentity() {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please fix this.",
+            url: URL(string: "https://provider/thread"),
+            isResolved: false,
+            isActionable: true,
+            location: ReviewThreadLocation(
+                path: "Sources/App.swift",
+                originalPath: nil,
+                line: 42,
+                side: .new,
+                providerPosition: "42"
+            ),
+            providerThreadID: "thread-provider-id",
+            providerCommentID: "comment-provider-id"
+        )
+
+        #expect(thread.providerThreadID == "thread-provider-id")
+        #expect(thread.providerCommentID == "comment-provider-id")
+    }
+
     private func makeReviewRequest(
         remote: CodeHostRemote = CodeHostRemote(
             kind: .github,

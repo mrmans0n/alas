@@ -11,6 +11,10 @@ final class ReviewDraftCommentController {
     private(set) var comments: [ReviewDraftComment] = []
     var errorMessage: String?
 
+    var activeUnpublishedComments: [ReviewDraftComment] {
+        comments.filter { $0.state == .active && $0.providerPublish == nil }
+    }
+
     init(
         sessionID: ReviewDraftSessionID,
         store: ReviewDraftCommentStore = .init(),
@@ -31,14 +35,19 @@ final class ReviewDraftCommentController {
         }
     }
 
-    func add(anchor: DiffReviewLineAnchor, fileID: DiffReviewFileID, bodyMarkdown: String) throws {
+    func add(
+        anchor: DiffReviewLineAnchor,
+        fileID: DiffReviewFileID,
+        originalPath: String? = nil,
+        bodyMarkdown: String
+    ) throws {
         let timestamp = now()
         let comment = ReviewDraftComment(
             id: UUID().uuidString,
             sessionID: sessionID,
             fileID: fileID,
             path: anchor.path,
-            originalPath: nil,
+            originalPath: originalPath,
             side: anchor.side,
             startLine: anchor.line,
             endLine: nil,
@@ -76,6 +85,21 @@ final class ReviewDraftCommentController {
     func dismiss(commentID: String) throws {
         guard var comment = comments.first(where: { $0.id == commentID }) else { return }
         comment.state = .dismissed
+        comment.updatedAt = now()
+        try saveAndReload(comment)
+    }
+
+    func markPublished(commentID: String, publish: ReviewDraftProviderPublish) throws {
+        guard var comment = comments.first(where: { $0.id == commentID }) else { return }
+        comment.providerPublish = publish
+        comment.providerError = nil
+        comment.updatedAt = now()
+        try saveAndReload(comment)
+    }
+
+    func recordProviderError(commentID: String, error: ReviewDraftProviderError) throws {
+        guard var comment = comments.first(where: { $0.id == commentID }) else { return }
+        comment.providerError = error
         comment.updatedAt = now()
         try saveAndReload(comment)
     }

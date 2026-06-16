@@ -1055,6 +1055,15 @@ private struct ReviewDraftCommentCard: View {
                 }
                 .lineLimit(1)
 
+                ForEach(providerStateLabels.indices, id: \.self) { index in
+                    let label = providerStateLabels[index]
+                    Text(label.text)
+                        .font(.system(size: 10))
+                        .foregroundColor(label.color)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if isEditing {
                     TextEditor(text: $editingBody)
                         .font(.system(size: 11.5))
@@ -1096,6 +1105,7 @@ private struct ReviewDraftCommentCard: View {
             || availability.canDismiss
             || availability.canCopyPrompt
             || availability.canShowSendToAgent
+            || availability.canPublishProvider
         {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
@@ -1133,6 +1143,11 @@ private struct ReviewDraftCommentCard: View {
                 if availability.canCopyPrompt {
                     actionButton(id: "copy", title: "Copy") {
                         actions.copyPrompt(feedbackBundle)
+                    }
+                }
+                if availability.canPublishProvider {
+                    actionButton(id: "publish", title: "Publish") {
+                        actions.publishProvider(comment)
                     }
                 }
                 if availability.canShowSendToAgent {
@@ -1183,22 +1198,36 @@ private struct ReviewDraftCommentCard: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .help(title)
-        .accessibilityIdentifier("diff-review-draft-comment-\(id)-\(comment.id)")
+        .accessibilityIdentifier(accessibilityIdentifier(forActionID: id))
         .accessibilityLabel(title)
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                identifier: markerIdentifier(forActionID: id),
                 label: title
             )
         )
         .background(
             ReviewDraftCommentActionPressMarker(
-                identifier: "diff-review-draft-comment-action-\(id)-\(comment.id)",
+                identifier: markerIdentifier(forActionID: id),
                 label: title,
                 isEnabled: enabled,
                 action: action
             )
         )
+    }
+
+    private func accessibilityIdentifier(forActionID id: String) -> String {
+        if id == "publish" {
+            return "diff-review-draft-comment-publish-\(comment.id)"
+        }
+        return "diff-review-draft-comment-\(id)-\(comment.id)"
+    }
+
+    private func markerIdentifier(forActionID id: String) -> String {
+        if id == "publish" {
+            return "diff-review-draft-comment-publish-\(comment.id)"
+        }
+        return "diff-review-draft-comment-action-\(id)-\(comment.id)"
     }
 
     private var feedbackBundle: ReviewFeedbackBundle {
@@ -1221,6 +1250,7 @@ private struct ReviewDraftCommentCard: View {
             "Local draft",
             lineDescription,
             comment.state == .resolved ? "resolved" : nil,
+            providerStateLabels.map(\.text).joined(separator: ", "),
             DiffReviewInlineFeedbackMarkdown.plainText(comment.bodyMarkdown),
         ]
         .compactMap { part in
@@ -1228,6 +1258,17 @@ private struct ReviewDraftCommentCard: View {
             return part
         }
         .joined(separator: ", ")
+    }
+
+    private var providerStateLabels: [(text: String, color: Color)] {
+        var labels: [(text: String, color: Color)] = []
+        if let publish = comment.providerPublish {
+            labels.append(("published to \(publish.provider.displayName)", theme.color("fg-faint")))
+        }
+        if let error = comment.providerError {
+            labels.append(("\(error.provider.displayName) error: \(error.message)", theme.color("warn")))
+        }
+        return labels
     }
 
     private var statusColor: Color {
@@ -1288,6 +1329,7 @@ private struct DiffReviewInlineFeedbackCard: View {
     let onSelect: (DiffReviewInlineFeedback) -> Void
 
     @Environment(\.theme) private var theme
+    @State private var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1365,7 +1407,35 @@ private struct DiffReviewInlineFeedbackCard: View {
     @ViewBuilder
     private var actionRow: some View {
         let availability = actions.availability(item, file)
-        if availability.canOpenProvider || availability.canCopyContext || availability.canSendToAgent {
+        if replyEditor.isReplying {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Reply", text: $replyEditor.body, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("fg"))
+                    .padding(7)
+                    .background(theme.color("bg-1"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .accessibilityIdentifier("diff-review-inline-feedback-reply-\(item.id)")
+
+                HStack(spacing: 6) {
+                    Spacer(minLength: 0)
+                    inlineActionButton(id: "reply-save", title: "Save") {
+                        _ = replyEditor.save(item) { feedback, body in
+                            actions.replyProvider(feedback, file, body)
+                        }
+                    }
+                    inlineActionButton(id: "reply-cancel", title: "Cancel") {
+                        replyEditor.cancel()
+                    }
+                }
+            }
+        } else if availability.canOpenProvider
+            || availability.canCopyContext
+            || availability.canSendToAgent
+            || availability.canReplyProvider
+            || availability.canResolveProvider
+            || availability.canUnresolveProvider {
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
                 if availability.canOpenProvider {
@@ -1387,6 +1457,21 @@ private struct DiffReviewInlineFeedbackCard: View {
                         DiffReviewInlineFeedbackCardInteraction.send(item) { feedback in
                             actions.sendToAgent(feedback, file)
                         }
+                    }
+                }
+                if availability.canReplyProvider {
+                    inlineActionButton(id: "reply", title: "Reply") {
+                        replyEditor.start()
+                    }
+                }
+                if availability.canResolveProvider {
+                    inlineActionButton(id: "resolve", title: "Resolve") {
+                        actions.resolveProvider(item, file)
+                    }
+                }
+                if availability.canUnresolveProvider {
+                    inlineActionButton(id: "unresolve", title: "Unresolve") {
+                        actions.unresolveProvider(item, file)
                     }
                 }
             }
@@ -1411,6 +1496,13 @@ private struct DiffReviewInlineFeedbackCard: View {
             DiffReviewAccessibilityMarker(
                 identifier: "diff-review-inline-feedback-action-\(id)-\(item.id)",
                 label: title
+            )
+        )
+        .background(
+            ReviewDraftCommentActionPressMarker(
+                identifier: "diff-review-inline-feedback-action-\(id)-\(item.id)",
+                label: title,
+                action: action
             )
         )
     }
@@ -1470,6 +1562,42 @@ enum DiffReviewInlineFeedbackCardInteraction {
         action: (DiffReviewInlineFeedback) -> Void
     ) {
         action(item)
+    }
+
+    static func reply(
+        _ item: DiffReviewInlineFeedback,
+        body: String,
+        action: (DiffReviewInlineFeedback, String) -> Void
+    ) {
+        action(item, body)
+    }
+}
+
+struct DiffReviewInlineFeedbackReplyEditorState: Equatable {
+    var isReplying = false
+    var body = ""
+
+    mutating func start() {
+        body = ""
+        isReplying = true
+    }
+
+    mutating func cancel() {
+        body = ""
+        isReplying = false
+    }
+
+    @discardableResult
+    mutating func save(
+        _ item: DiffReviewInlineFeedback,
+        action: (DiffReviewInlineFeedback, String) -> Void
+    ) -> Bool {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        DiffReviewInlineFeedbackCardInteraction.reply(item, body: trimmed, action: action)
+        body = ""
+        isReplying = false
+        return true
     }
 }
 

@@ -3,6 +3,67 @@ import Foundation
 struct GitHubCLIProvider: CodeHostProvider {
     let kind: CodeHostKind = .github
     let capabilities: CodeHostProviderCapabilities = .githubCLI
+    static let pullRequestNodeQuery = """
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          id
+        }
+      }
+    }
+    """
+
+    static let publishReviewMutation = """
+    mutation($input: AddPullRequestReviewInput!) {
+      addPullRequestReview(input: $input) {
+        pullRequestReview {
+          comments(first: 100) {
+            nodes {
+              id
+              url
+              pullRequestReviewThread {
+                id
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    static let replyReviewThreadMutation = """
+    mutation($input: AddPullRequestReviewThreadReplyInput!) {
+      addPullRequestReviewThreadReply(input: $input) {
+        comment {
+          id
+          url
+        }
+      }
+    }
+    """
+
+    static let resolveReviewThreadMutation = """
+    mutation($input: ResolveReviewThreadInput!) {
+      resolveReviewThread(input: $input) {
+        thread {
+          id
+          isResolved
+        }
+      }
+    }
+    """
+
+    static let unresolveReviewThreadMutation = """
+    mutation($input: UnresolveReviewThreadInput!) {
+      unresolveReviewThread(input: $input) {
+        thread {
+          id
+          isResolved
+        }
+      }
+    }
+    """
+
     static let reviewThreadsQuery = """
     query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
       repository(owner: $owner, name: $repo) {
@@ -81,8 +142,8 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--base", base,
                 "--state", "open",
                 "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
-                "-R", remote.repositorySlug,
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -95,6 +156,10 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
         let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
         return Self.withThreads(threads, on: request)
+    }
+
+    func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+        try await refreshedReviewRequest(remote: remote, request: ReviewRequest.placeholder(remote: remote, number: number), cwd: cwd)
     }
 
     func createReviewRequest(
@@ -115,7 +180,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "--head", head,
             "--title", title,
             "--body", body,
-            "-R", remote.repositorySlug,
+            "-R", Self.highLevelRepositorySelector(remote: remote),
         ]
         if isDraft {
             args.append("--draft")
@@ -149,7 +214,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             args: [
                 "pr", "checks", "\(request.number)",
                 "--json", "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
-                "-R", remote.repositorySlug,
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -166,7 +231,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
         let result = try await runner.run(
             "gh",
-            args: ["pr", "diff", "\(request.number)", "-R", remote.repositorySlug],
+            args: ["pr", "diff", "\(request.number)", "-R", Self.highLevelRepositorySelector(remote: remote)],
             cwd: cwd
         )
         guard result.exitCode == 0 else {
@@ -205,7 +270,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
         }
 
-        var args = ["run", "view", runID, "--log-failed", "-R", remote.repositorySlug]
+        var args = ["run", "view", runID, "--log-failed", "-R", Self.highLevelRepositorySelector(remote: remote)]
         if let jobID = Self.githubJobID(from: item.providerURL) {
             args.append(contentsOf: ["--job", jobID])
         }
@@ -275,6 +340,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     ) async throws -> ReviewThreadsPage {
         var args = [
             "api", "graphql",
+            "--hostname", remote.host,
             "-f", "query=\(Self.reviewThreadsQuery)",
             "-F", "owner=\(remote.owner)",
             "-F", "repo=\(remote.repository)",
@@ -296,6 +362,272 @@ struct GitHubCLIProvider: CodeHostProvider {
         return try Self.parseReviewThreadsPage(result.stdout)
     }
 
+    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+        let publishableComments = request.comments.filter { $0.side != .unknown }
+        let preflightFailures = request.comments
+            .filter { $0.side == .unknown }
+            .map {
+                ProviderReviewFailedComment(
+                    localDraftID: $0.localDraftID,
+                    message: "GitHub review comments require an old or new side."
+                )
+            }
+        guard !publishableComments.isEmpty || request.comments.isEmpty else {
+            return ProviderReviewPublishResult(
+                published: [],
+                failed: preflightFailures,
+                refreshedRequest: request.reviewRequest,
+                warnings: Self.skippedDecisionWarnings(decision: request.decision, provider: "GitHub")
+            )
+        }
+        let pullRequestID = try await pullRequestNodeID(
+            remote: request.remote,
+            request: request.reviewRequest,
+            cwd: request.cwd
+        )
+
+        let published = try await publishReviewWithFallback(
+            pullRequestID: pullRequestID,
+            request: request,
+            publishableComments: publishableComments
+        )
+        var warnings = published.warnings
+        let refreshedRequest: ReviewRequest
+        do {
+            refreshedRequest = try await refreshedReviewRequest(
+                remote: request.remote,
+                request: request.reviewRequest,
+                cwd: request.cwd
+            )
+        } catch {
+            refreshedRequest = request.reviewRequest
+            warnings.append("GitHub review was published, but Alas could not refresh the PR: \(error.localizedDescription)")
+        }
+        return ProviderReviewPublishResult(
+            published: published.published,
+            failed: preflightFailures + published.failed,
+            refreshedRequest: refreshedRequest,
+            warnings: warnings
+        )
+    }
+
+    private func publishReviewWithFallback(
+        pullRequestID: String,
+        request: ProviderReviewPublishRequest,
+        publishableComments: [ProviderReviewDraftComment]
+    ) async throws -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment], warnings: [String]) {
+        do {
+            let published = try await submitReview(
+                remote: request.remote,
+                pullRequestID: pullRequestID,
+                commitOID: request.reviewRequest.headSHA,
+                comments: publishableComments,
+                decision: request.decision,
+                summaryBody: request.summaryBody,
+                cwd: request.cwd
+            )
+            return (published.published, published.failed, published.warnings)
+        } catch {
+            guard !publishableComments.isEmpty else {
+                throw error
+            }
+            guard Self.shouldRetryPublishIndividually(after: error), publishableComments.count > 1 else {
+                return (
+                    [],
+                    publishableComments.map {
+                        ProviderReviewFailedComment(localDraftID: $0.localDraftID, message: error.localizedDescription)
+                    },
+                    Self.skippedDecisionWarnings(decision: request.decision, provider: "GitHub")
+                )
+            }
+
+            var published: [ProviderReviewPublishedComment] = []
+            var failed: [ProviderReviewFailedComment] = []
+            var warnings: [String] = []
+            for comment in publishableComments {
+                do {
+                    let result = try await submitReview(
+                        remote: request.remote,
+                        pullRequestID: pullRequestID,
+                        commitOID: request.reviewRequest.headSHA,
+                        comments: [comment],
+                        decision: .comment,
+                        summaryBody: "",
+                        cwd: request.cwd
+                    )
+                    published.append(contentsOf: result.published)
+                    failed.append(contentsOf: result.failed)
+                    warnings.append(contentsOf: result.warnings)
+                } catch {
+                    failed.append(ProviderReviewFailedComment(localDraftID: comment.localDraftID, message: error.localizedDescription))
+                }
+            }
+            return (
+                published,
+                failed,
+                warnings + [
+                    "GitHub rejected the batch review; Alas retried publishable comments individually without submitting the review decision.",
+                ]
+            )
+        }
+    }
+
+    private static func shouldRetryPublishIndividually(after error: Error) -> Bool {
+        guard case CodeHostProviderError.commandFailed = error else {
+            return false
+        }
+        return true
+    }
+
+    private static func skippedDecisionWarnings(decision: ProviderReviewDecision, provider: String) -> [String] {
+        switch decision {
+        case .comment:
+            []
+        case .approve:
+            ["\(provider) approval review was not submitted because review comments failed to publish."]
+        case .requestChanges:
+            ["\(provider) request changes review was not submitted because review comments failed to publish."]
+        }
+    }
+
+    private func submitReview(
+        remote: CodeHostRemote,
+        pullRequestID: String,
+        commitOID: String?,
+        comments: [ProviderReviewDraftComment],
+        decision: ProviderReviewDecision,
+        summaryBody: String,
+        cwd: URL
+    ) async throws -> (
+        published: [ProviderReviewPublishedComment],
+        failed: [ProviderReviewFailedComment],
+        warnings: [String]
+    ) {
+        let input = PublishReviewInput(
+            pullRequestId: pullRequestID,
+            commitOID: Self.normalizedOptionalString(commitOID),
+            event: Self.githubReviewEvent(for: decision),
+            body: summaryBody,
+            threads: comments.map(Self.githubReviewThreadPayload(for:))
+        )
+        let stdin = try Self.graphQLInput(
+            query: Self.publishReviewMutation,
+            variables: PublishReviewVariables(input: input)
+        )
+        let result = try await runner.run(
+            "gh",
+            args: Self.graphQLAPIStdinArgs(remote: remote),
+            cwd: cwd,
+            stdin: stdin
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+
+        return try Self.parsePublishReviewResult(result.stdout, drafts: comments)
+    }
+
+    private func refreshedReviewRequest(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> ReviewRequest {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "pr", "view", "\(request.number)",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "-R", Self.highLevelRepositorySelector(remote: remote),
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
+        }
+
+        let request = try Self.parsePRView(result.stdout, remote: remote)
+        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
+        return Self.withThreads(threads, on: request)
+    }
+
+    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+        guard let threadID = Self.normalizedOptionalString(mutation.thread.providerThreadID) else {
+            throw CodeHostProviderError.malformedOutput("GitHub review thread mutation is missing a provider thread ID")
+        }
+
+        let providerURL: URL?
+        switch mutation.kind {
+        case .reply:
+            guard let body = Self.normalizedOptionalString(mutation.bodyMarkdown) else {
+                throw CodeHostProviderError.malformedOutput("GitHub review thread reply requires a non-empty body")
+            }
+            let stdin = try Self.graphQLInput(
+                query: Self.replyReviewThreadMutation,
+                variables: ThreadReplyVariables(input: ThreadReplyInput(
+                    pullRequestReviewThreadId: threadID,
+                    body: body
+                ))
+            )
+            let result = try await runner.run(
+                "gh",
+                args: Self.graphQLAPIStdinArgs(remote: mutation.remote),
+                cwd: mutation.cwd,
+                stdin: stdin
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            providerURL = try Self.parseThreadReplyResult(result.stdout)
+        case .resolve:
+            let stdin = try Self.graphQLInput(
+                query: Self.resolveReviewThreadMutation,
+                variables: ThreadStateVariables(input: ThreadStateInput(threadId: threadID))
+            )
+            let result = try await runner.run(
+                "gh",
+                args: Self.graphQLAPIStdinArgs(remote: mutation.remote),
+                cwd: mutation.cwd,
+                stdin: stdin
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            try Self.parseThreadStateResult(result.stdout, mutationName: "resolveReviewThread")
+            providerURL = nil
+        case .unresolve:
+            let stdin = try Self.graphQLInput(
+                query: Self.unresolveReviewThreadMutation,
+                variables: ThreadStateVariables(input: ThreadStateInput(threadId: threadID))
+            )
+            let result = try await runner.run(
+                "gh",
+                args: Self.graphQLAPIStdinArgs(remote: mutation.remote),
+                cwd: mutation.cwd,
+                stdin: stdin
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+            }
+            try Self.parseThreadStateResult(result.stdout, mutationName: "unresolveReviewThread")
+            providerURL = nil
+        }
+
+        let refreshedRequest: ReviewRequest
+        let warnings: [String]
+        do {
+            refreshedRequest = try await refreshedReviewRequest(
+                remote: mutation.remote,
+                request: mutation.reviewRequest,
+                cwd: mutation.cwd
+            )
+            warnings = []
+        } catch {
+            refreshedRequest = mutation.reviewRequest
+            warnings = ["GitHub thread was updated, but Alas could not refresh the PR: \(error.localizedDescription)"]
+        }
+        return ProviderThreadMutationResult(
+            refreshedRequest: refreshedRequest,
+            providerURL: providerURL,
+            warnings: warnings
+        )
+    }
+
     func rerunFailedChecks(
         remote: CodeHostRemote,
         branch: String,
@@ -313,7 +645,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--status", "failure",
                 "--limit", "20",
                 "--json", "databaseId,status,conclusion,url",
-                "-R", remote.repositorySlug,
+                "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
         )
@@ -324,7 +656,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         for runID in try Self.parseRunIDs(listResult.stdout) {
             let rerunResult = try await runner.run(
                 "gh",
-                args: ["run", "rerun", "\(runID)", "--failed", "-R", remote.repositorySlug],
+                args: ["run", "rerun", "\(runID)", "--failed", "-R", Self.highLevelRepositorySelector(remote: remote)],
                 cwd: cwd
             )
             guard rerunResult.exitCode == 0 else {
@@ -364,6 +696,44 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: item.isDraft,
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
+            headSHA: normalizedOptionalString(item.headRefOid),
+            reviewDecision: mapReviewDecision(item.reviewDecision),
+            mergeState: mapMergeState(item.mergeStateStatus),
+            checks: [],
+            threads: []
+        )
+    }
+
+    static func parsePRView(_ json: String, remote: CodeHostRemote) throws -> ReviewRequest {
+        let data = Data(json.utf8)
+        let item: PRListItem
+        do {
+            item = try JSONDecoder().decode(PRListItem.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh pr view output")
+        }
+
+        guard let request = try reviewRequest(from: item, remote: remote) else {
+            throw CodeHostProviderError.malformedOutput("gh pr view returned an invalid PR")
+        }
+        return request
+    }
+
+    private static func reviewRequest(from item: PRListItem, remote: CodeHostRemote) throws -> ReviewRequest? {
+        guard let url = URL(string: item.url), url.isHTTPOrHTTPS else {
+            throw CodeHostProviderError.malformedOutput("gh pr list returned an invalid URL")
+        }
+
+        return ReviewRequest(
+            remote: remote,
+            number: item.number,
+            title: item.title,
+            url: url,
+            state: mapState(item.state),
+            isDraft: item.isDraft,
+            headRefName: item.headRefName,
+            baseRefName: item.baseRefName,
+            headSHA: normalizedOptionalString(item.headRefOid),
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -410,6 +780,103 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static func parseReviewThreads(_ json: String) throws -> [ReviewThreadSummary] {
         try parseReviewThreadsPage(json).threads
+    }
+
+    static func parsePullRequestNodeID(_ json: String) throws -> String {
+        let data = Data(json.utf8)
+        do {
+            let response = try JSONDecoder().decode(PullRequestNodeResponse.self, from: data)
+            let id = response.data.repository.pullRequest.id
+            guard !id.isEmpty else {
+                throw CodeHostProviderError.malformedOutput("gh pull request node output is missing a pull request ID")
+            }
+            return id
+        } catch let error as CodeHostProviderError {
+            throw error
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh pull request node output")
+        }
+    }
+
+    static func parsePublishReviewResult(
+        _ json: String,
+        drafts: [ProviderReviewDraftComment]
+    ) throws -> (
+        published: [ProviderReviewPublishedComment],
+        failed: [ProviderReviewFailedComment],
+        warnings: [String]
+    ) {
+        let data = Data(json.utf8)
+        let response: PublishReviewResponse
+        do {
+            response = try JSONDecoder().decode(PublishReviewResponse.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh publish review output")
+        }
+
+        let comments = response.data.addPullRequestReview.pullRequestReview.comments.nodes
+        var published = zip(drafts, comments).map { draft, comment in
+            ProviderReviewPublishedComment(
+                localDraftID: draft.localDraftID,
+                providerThreadID: normalizedOptionalString(comment.pullRequestReviewThread?.id),
+                providerCommentID: normalizedOptionalString(comment.id),
+                providerURL: try? parseOptionalHTTPURL(comment.url, context: "gh publish review returned an invalid URL")
+            )
+        }
+        var warnings: [String] = []
+        let missingDrafts = drafts.dropFirst(published.count)
+        let failed: [ProviderReviewFailedComment]
+        if !missingDrafts.isEmpty, comments.count == 100 {
+            published.append(contentsOf: missingDrafts.map {
+                ProviderReviewPublishedComment(
+                    localDraftID: $0.localDraftID,
+                    providerThreadID: nil,
+                    providerCommentID: nil,
+                    providerURL: nil
+                )
+            })
+            warnings.append("GitHub returned only the first 100 review comments; remaining drafts were marked published without provider comment IDs.")
+            failed = []
+        } else {
+            failed = missingDrafts.map {
+                ProviderReviewFailedComment(
+                    localDraftID: $0.localDraftID,
+                    message: "GitHub did not return a published comment for this draft."
+                )
+            }
+        }
+        return (Array(published), failed, warnings)
+    }
+
+    static func parseThreadReplyResult(_ json: String) throws -> URL? {
+        let data = Data(json.utf8)
+        do {
+            let response = try JSONDecoder().decode(ThreadReplyResponse.self, from: data)
+            return try parseOptionalHTTPURL(
+                response.data.addPullRequestReviewThreadReply.comment.url,
+                context: "gh review thread reply returned an invalid URL"
+            )
+        } catch let error as CodeHostProviderError {
+            throw error
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh review thread reply output")
+        }
+    }
+
+    static func parseThreadStateResult(_ json: String, mutationName: String) throws {
+        let data = Data(json.utf8)
+        do {
+            switch mutationName {
+            case "resolveReviewThread":
+                _ = try JSONDecoder().decode(ResolveThreadStateResponse.self, from: data)
+            case "unresolveReviewThread":
+                _ = try JSONDecoder().decode(UnresolveThreadStateResponse.self, from: data)
+            default:
+                throw CodeHostProviderError.malformedOutput("Unsupported GitHub review thread mutation output")
+            }
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh \(mutationName) output")
+        }
     }
 
     static func githubRunID(from url: URL?) -> String? {
@@ -462,7 +929,9 @@ struct GitHubCLIProvider: CodeHostProvider {
                 url: url,
                 isResolved: thread.isResolved,
                 isActionable: !thread.isResolved && !thread.isOutdated,
-                location: reviewThreadLocation(from: thread)
+                location: reviewThreadLocation(from: thread),
+                providerThreadID: thread.id,
+                providerCommentID: normalizedOptionalString(comment.id)
             )
         }
         return ReviewThreadsPage(threads: threads, pageInfo: connection.pageInfo)
@@ -613,11 +1082,76 @@ struct GitHubCLIProvider: CodeHostProvider {
             isDraft: request.isDraft,
             headRefName: request.headRefName,
             baseRefName: request.baseRefName,
+            headSHA: request.headSHA,
             reviewDecision: request.reviewDecision,
             mergeState: request.mergeState,
             checks: request.checks,
             threads: threads
         )
+    }
+
+    private func pullRequestNodeID(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        let stdin = try Self.graphQLInput(
+            query: Self.pullRequestNodeQuery,
+            variables: PullRequestNodeVariables(
+                owner: remote.owner,
+                repo: remote.repository,
+                number: request.number
+            )
+        )
+        let result = try await runner.run(
+            "gh",
+            args: Self.graphQLAPIStdinArgs(remote: remote),
+            cwd: cwd,
+            stdin: stdin
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+        return try Self.parsePullRequestNodeID(result.stdout)
+    }
+
+    static func githubReviewEvent(for decision: ProviderReviewDecision) -> String {
+        switch decision {
+        case .comment: "COMMENT"
+        case .approve: "APPROVE"
+        case .requestChanges: "REQUEST_CHANGES"
+        }
+    }
+
+    static func graphQLAPIStdinArgs(remote: CodeHostRemote) -> [String] {
+        ["api", "graphql", "--hostname", remote.host, "--input", "-"]
+    }
+
+    static func highLevelRepositorySelector(remote: CodeHostRemote) -> String {
+        remote.host == "github.com" ? remote.repositorySlug : "\(remote.host)/\(remote.repositorySlug)"
+    }
+
+    static func githubReviewThreadPayload(for draft: ProviderReviewDraftComment) -> GitHubReviewDraftThreadPayload {
+        GitHubReviewDraftThreadPayload(
+            path: draft.path,
+            body: draft.bodyMarkdown,
+            line: draft.lineRange.upperBound,
+            side: draft.side == .old ? "LEFT" : "RIGHT",
+            startLine: draft.lineRange.lowerBound == draft.lineRange.upperBound ? nil : draft.lineRange.lowerBound,
+            startSide: draft.lineRange.lowerBound == draft.lineRange.upperBound ? nil : (draft.side == .old ? "LEFT" : "RIGHT")
+        )
+    }
+
+    static func graphQLInput<Variables: Encodable>(query: String, variables: Variables) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            let data = try encoder.encode(GraphQLRequest(query: query, variables: variables))
+            guard let string = String(data: data, encoding: .utf8) else {
+                throw CodeHostProviderError.malformedOutput("Unable to encode gh graphql input")
+            }
+            return string
+        } catch let error as CodeHostProviderError {
+            throw error
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to encode gh graphql input")
+        }
     }
 }
 
@@ -628,6 +1162,7 @@ private struct PRListItem: Decodable {
     let state: String
     let isDraft: Bool
     let headRefName: String
+    let headRefOid: String?
     let headRepositoryOwner: HeadRepositoryOwner?
     let baseRefName: String
     let reviewDecision: String?
@@ -667,6 +1202,143 @@ private struct CheckItem: Decodable {
 
 private struct RunItem: Decodable {
     let databaseId: Int
+}
+
+private struct GraphQLRequest<Variables: Encodable>: Encodable {
+    let query: String
+    let variables: Variables
+}
+
+private struct PullRequestNodeVariables: Encodable {
+    let owner: String
+    let repo: String
+    let number: Int
+}
+
+private struct PullRequestNodeResponse: Decodable {
+    let data: PullRequestNodeData
+}
+
+private struct PullRequestNodeData: Decodable {
+    let repository: PullRequestNodeRepository
+}
+
+private struct PullRequestNodeRepository: Decodable {
+    let pullRequest: PullRequestNodePullRequest
+}
+
+private struct PullRequestNodePullRequest: Decodable {
+    let id: String
+}
+
+struct GitHubReviewDraftThreadPayload: Encodable, Equatable {
+    let path: String
+    let body: String
+    let line: Int
+    let side: String
+    let startLine: Int?
+    let startSide: String?
+}
+
+private struct PublishReviewVariables: Encodable {
+    let input: PublishReviewInput
+}
+
+private struct PublishReviewInput: Encodable {
+    let pullRequestId: String
+    let commitOID: String?
+    let event: String
+    let body: String
+    let threads: [GitHubReviewDraftThreadPayload]
+}
+
+private struct PublishReviewResponse: Decodable {
+    let data: PublishReviewData
+}
+
+private struct PublishReviewData: Decodable {
+    let addPullRequestReview: AddPullRequestReviewPayload
+}
+
+private struct AddPullRequestReviewPayload: Decodable {
+    let pullRequestReview: PublishedPullRequestReview
+}
+
+private struct PublishedPullRequestReview: Decodable {
+    let comments: PublishedReviewCommentsConnection
+}
+
+private struct PublishedReviewCommentsConnection: Decodable {
+    let nodes: [PublishedReviewCommentNode]
+}
+
+private struct PublishedReviewCommentNode: Decodable {
+    let id: String?
+    let url: String?
+    let pullRequestReviewThread: PublishedReviewThreadNode?
+}
+
+private struct PublishedReviewThreadNode: Decodable {
+    let id: String?
+}
+
+private struct ThreadReplyVariables: Encodable {
+    let input: ThreadReplyInput
+}
+
+private struct ThreadReplyInput: Encodable {
+    let pullRequestReviewThreadId: String
+    let body: String
+}
+
+private struct ThreadReplyResponse: Decodable {
+    let data: ThreadReplyData
+}
+
+private struct ThreadReplyData: Decodable {
+    let addPullRequestReviewThreadReply: AddPullRequestReviewThreadReplyPayload
+}
+
+private struct AddPullRequestReviewThreadReplyPayload: Decodable {
+    let comment: ThreadReplyComment
+}
+
+private struct ThreadReplyComment: Decodable {
+    let id: String?
+    let url: String?
+}
+
+private struct ThreadStateVariables: Encodable {
+    let input: ThreadStateInput
+}
+
+private struct ThreadStateInput: Encodable {
+    let threadId: String
+}
+
+private struct ResolveThreadStateResponse: Decodable {
+    let data: ResolveThreadStateData
+}
+
+private struct ResolveThreadStateData: Decodable {
+    let resolveReviewThread: ThreadStatePayload
+}
+
+private struct UnresolveThreadStateResponse: Decodable {
+    let data: UnresolveThreadStateData
+}
+
+private struct UnresolveThreadStateData: Decodable {
+    let unresolveReviewThread: ThreadStatePayload
+}
+
+private struct ThreadStatePayload: Decodable {
+    let thread: ThreadStateThread
+}
+
+private struct ThreadStateThread: Decodable {
+    let id: String
+    let isResolved: Bool
 }
 
 private struct ReviewThreadsResponse: Decodable {
@@ -739,9 +1411,25 @@ private struct ReviewThreadCommentsConnection: Decodable {
 }
 
 private struct ReviewThreadCommentNode: Decodable {
+    let id: String?
     let body: String
     let url: String?
     let author: ReviewThreadAuthor?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try? container.decode(String.self, forKey: .id)
+        self.body = try container.decode(String.self, forKey: .body)
+        self.url = try? container.decode(String.self, forKey: .url)
+        self.author = try? container.decode(ReviewThreadAuthor.self, forKey: .author)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case body
+        case url
+        case author
+    }
 }
 
 private struct ReviewThreadAuthor: Decodable {

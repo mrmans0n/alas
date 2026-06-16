@@ -1,8 +1,19 @@
 import Foundation
 
+struct ReviewSessionProviderContext: Equatable, Sendable {
+    let remote: CodeHostRemote
+    let reviewRequest: ReviewRequest
+}
+
+struct ReviewSessionProviderLoadedSession {
+    let loadedSession: DiffReviewLoadedSession
+    let providerContext: ReviewSessionProviderContext
+}
+
 struct ReviewSessionLoadedContext {
     let session: DiffReviewLoadedSession
     let feedbackTarget: ReviewFeedbackTarget
+    let providerContext: ReviewSessionProviderContext?
 }
 
 enum ReviewSessionLauncher {
@@ -45,7 +56,7 @@ struct ReviewSessionLoader {
     var commit: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var commitRange: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
     var branch: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
-    var reviewRequest: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
+    var reviewRequest: (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession
     var draftReviewRequest: (ReviewSessionTarget) async throws -> DiffReviewLoadedSession
 
     init(
@@ -54,7 +65,7 @@ struct ReviewSessionLoader {
         commit: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         commitRange: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         branch: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
-        reviewRequest: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
+        reviewRequest: @escaping (ReviewSessionTarget) async throws -> ReviewSessionProviderLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget },
         draftReviewRequest: @escaping (ReviewSessionTarget) async throws -> DiffReviewLoadedSession = { _ in throw ReviewSessionLoaderError.unsupportedTarget }
     ) {
         self.localChanges = localChanges
@@ -67,7 +78,11 @@ struct ReviewSessionLoader {
     }
 
     @MainActor
-    static func production(appState: AppState, worktree: Worktree) -> ReviewSessionLoader {
+    static func production(
+        appState: AppState,
+        worktree: Worktree,
+        providerRegistry: CodeHostProviderRegistry = .live()
+    ) -> ReviewSessionLoader {
         let changesLoader = ReviewChangesLoader()
         let git = GitService()
         let commitLoader = CommitReviewLoader(git: git)
@@ -103,8 +118,36 @@ struct ReviewSessionLoader {
                     }
                 )
             },
-            reviewRequest: { _ in
-                throw ReviewSessionLoaderError.unsupportedTarget
+            reviewRequest: { target in
+                guard case .reviewRequest(let providerKind, let host, let repositorySlug, let number, _) = target.payload,
+                      let provider = providerRegistry.provider(for: providerKind),
+                      let separatorIndex = repositorySlug.lastIndex(of: "/")
+                else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let owner = String(repositorySlug[..<separatorIndex])
+                let repository = String(repositorySlug[repositorySlug.index(after: separatorIndex)...])
+                guard !owner.isEmpty, !repository.isEmpty else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let remote = CodeHostRemote(
+                    kind: providerKind,
+                    host: host,
+                    owner: owner,
+                    repository: repository,
+                    remoteName: "origin",
+                    webURL: target.providerURL ?? URL(string: "https://\(host)/\(repositorySlug)")!
+                )
+                let request = try await provider.reviewRequest(remote: remote, number: number, cwd: target.repositoryPath)
+                let loadedSession = try await ReviewRequestDiffLoader(provider: provider).load(
+                    remote: remote,
+                    request: request,
+                    cwd: target.repositoryPath
+                )
+                return ReviewSessionProviderLoadedSession(
+                    loadedSession: loadedSession,
+                    providerContext: ReviewSessionProviderContext(remote: remote, reviewRequest: request)
+                )
             },
             draftReviewRequest: { target in
                 guard case .draftReviewRequest(_, _, let base, let head, let headSHA) = target.payload else {
@@ -151,21 +194,30 @@ struct ReviewSessionLoader {
         try Task.checkCancellation()
 
         let session: DiffReviewLoadedSession
+        let providerContext: ReviewSessionProviderContext?
         switch target.kind {
         case .localChanges:
             session = try await localChanges(target)
+            providerContext = nil
         case .draftCommit:
             session = try await draftCommit(target)
+            providerContext = nil
         case .commit:
             session = try await commit(target)
+            providerContext = nil
         case .commitRange:
             session = try await commitRange(target)
+            providerContext = nil
         case .branch:
             session = try await branch(target)
+            providerContext = nil
         case .reviewRequest:
-            session = try await reviewRequest(target)
+            let loaded = try await reviewRequest(target)
+            session = loaded.loadedSession
+            providerContext = loaded.providerContext
         case .draftReviewRequest:
             session = try await draftReviewRequest(target)
+            providerContext = nil
         }
 
         try Task.checkCancellation()
@@ -180,7 +232,8 @@ struct ReviewSessionLoader {
                 sessionDescription: "Review session: \(target.title)",
                 revisionDescription: target.revisionDescription,
                 priorHandoffDescription: nil
-            )
+            ),
+            providerContext: providerContext
         )
     }
 

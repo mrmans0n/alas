@@ -29,12 +29,24 @@ enum CodeHostProviderError: LocalizedError, Equatable {
 }
 
 protocol CodeHostCommandRunning: Sendable {
-    func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult
+    func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult
+}
+
+extension CodeHostCommandRunning {
+    func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
+        try await run(executable, args: args, cwd: cwd, stdin: nil)
+    }
 }
 
 struct ProcessCodeHostCommandRunner: CodeHostCommandRunning {
-    func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
-        try await Process.run("/usr/bin/env", args: [executable] + args, cwd: cwd, env: Process.gitEnv())
+    func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+        try await Process.run(
+            "/usr/bin/env",
+            args: [executable] + args,
+            cwd: cwd,
+            env: Process.gitEnv(),
+            stdin: stdin
+        )
     }
 }
 
@@ -51,6 +63,7 @@ protocol CodeHostProvider: Sendable {
         baseBranch: String,
         cwd: URL
     ) async throws -> ReviewRequest?
+    func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest
     func createReviewRequest(
         remote: CodeHostRemote,
         branch: String,
@@ -84,12 +97,18 @@ protocol CodeHostProvider: Sendable {
         request: ReviewRequest?,
         cwd: URL
     ) async throws
+    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
+    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
 }
 
 extension CodeHostProvider {
     var capabilities: CodeHostProviderCapabilities { .readOnly }
 
     func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
+        throw CodeHostProviderError.unsupportedProvider(remote.kind)
+    }
+
+    func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)
     }
 
@@ -148,6 +167,14 @@ extension CodeHostProvider {
             line: nil,
             isTruncated: false
         )
+    }
+
+    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+        throw CodeHostProviderError.unsupportedProvider(request.remote.kind)
+    }
+
+    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+        throw CodeHostProviderError.unsupportedProvider(mutation.remote.kind)
     }
 }
 

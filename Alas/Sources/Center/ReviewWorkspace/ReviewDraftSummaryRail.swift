@@ -76,6 +76,10 @@ struct ReviewDraftSummaryRail: View {
         !bundle.activeComments.isEmpty && visibleComments.contains { draftCommentActions.availability($0).canSendToAgent }
     }
 
+    private var canPublishReview: Bool {
+        draftCommentActions.canPublishReview()
+    }
+
     private var shouldShowSendToAgent: Bool {
         visibleComments.contains { draftCommentActions.availability($0).canShowSendToAgent }
     }
@@ -132,6 +136,16 @@ struct ReviewDraftSummaryRail: View {
             ) {
                 draftCommentActions.copyPrompt(bundle)
             }
+            if canPublishReview {
+                collapsedActionButton(
+                    id: "review-draft-summary-publish-review",
+                    systemName: "arrow.up.doc",
+                    label: "Publish review",
+                    enabled: true
+                ) {
+                    draftCommentActions.publishReview()
+                }
+            }
             if shouldShowSendToAgent {
                 collapsedSendToAgentControl
             }
@@ -177,6 +191,27 @@ struct ReviewDraftSummaryRail: View {
                         draftCommentActions.copyPrompt(bundle)
                     }
                 )
+
+                if canPublishReview {
+                    Button {
+                        draftCommentActions.publishReview()
+                    } label: {
+                        summaryActionIcon(systemName: "arrow.up.doc", enabled: true)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Publish review")
+                    .accessibilityIdentifier("review-draft-summary-publish-review")
+                    .accessibilityLabel("Publish review")
+                    .background(
+                        ReviewDraftSummaryPressMarker(
+                            identifier: "review-draft-summary-publish-review",
+                            label: "Publish review",
+                            isEnabled: true
+                        ) {
+                            draftCommentActions.publishReview()
+                        }
+                    )
+                }
 
                 if shouldShowSendToAgent {
                     expandedSendToAgentControl
@@ -469,6 +504,12 @@ struct ReviewDraftSummaryRail: View {
                         .font(.system(size: 10))
                         .foregroundColor(theme.color("fg-faint"))
                 }
+                ForEach(providerStateLabels(for: comment).indices, id: \.self) { index in
+                    let label = providerStateLabels(for: comment)[index]
+                    Text(label.text)
+                        .font(.system(size: 10))
+                        .foregroundColor(label.color)
+                }
                 Spacer(minLength: 0)
             }
 
@@ -535,6 +576,7 @@ struct ReviewDraftSummaryRail: View {
             comment.path,
             lineDescription(for: comment),
             stateLabel(for: comment),
+            providerStateLabels(for: comment).map(\.text).joined(separator: ", "),
             DiffReviewInlineFeedbackMarkdown.plainText(comment.bodyMarkdown),
         ]
         .compactMap { part in
@@ -553,6 +595,17 @@ struct ReviewDraftSummaryRail: View {
         case .dismissed:
             "dismissed"
         }
+    }
+
+    private func providerStateLabels(for comment: ReviewDraftComment) -> [(text: String, color: Color)] {
+        var labels: [(text: String, color: Color)] = []
+        if let publish = comment.providerPublish {
+            labels.append(("published to \(publish.provider.displayName)", theme.color("fg-faint")))
+        }
+        if let error = comment.providerError {
+            labels.append(("\(error.provider.displayName) error: \(error.message)", theme.color("warn")))
+        }
+        return labels
     }
 
     private func sideLabel(for side: DiffReviewInlineFeedbackSide) -> String {
