@@ -616,6 +616,31 @@ struct GitHubCLIProviderTests {
         #expect(result.refreshedRequest.number == 42)
     }
 
+    @Test func githubPublishReviewThrowsDecisionOnlyReviewFailure() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "GraphQL: Resource not accessible by integration"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        await #expect(throws: CodeHostProviderError.commandFailed(
+            command: "gh api graphql",
+            stderr: "GraphQL: Resource not accessible by integration"
+        )) {
+            _ = try await provider.publishReview(ProviderReviewPublishRequest(
+                remote: Self.remote,
+                reviewRequest: Self.makeRequest(),
+                comments: [],
+                decision: .approve,
+                summaryBody: "Looks good.",
+                cwd: Self.cwd
+            ))
+        }
+
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+    }
+
     @Test func githubPublishReviewPreservesMappingsWhenRefreshFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),

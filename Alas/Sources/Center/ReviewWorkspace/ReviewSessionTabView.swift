@@ -1011,7 +1011,7 @@ enum ReviewSessionHandoffPersistence {
     }
 }
 
-private struct ReviewSessionInlineFeedbackFileMatcher {
+struct ReviewSessionInlineFeedbackFileMatcher {
     private let filesByPath: [String: DiffReviewFileSummary]
     private let filesByOriginalPath: [String: DiffReviewFileSummary]
 
@@ -1026,15 +1026,19 @@ private struct ReviewSessionInlineFeedbackFileMatcher {
     func file(for location: ReviewThreadLocation) -> DiffReviewFileSummary? {
         switch location.side {
         case .new:
-            filesByPath[location.path]
+            return filesByPath[location.path]
                 ?? location.originalPath.flatMap { filesByOriginalPath[$0] }
                 ?? filesByOriginalPath[location.path]
         case .old:
-            location.originalPath.flatMap { filesByOriginalPath[$0] }
+            if let originalPath = location.originalPath, originalPath != location.path {
+                return filesByOriginalPath[originalPath]
+                    ?? filesByPath[location.path]
+                    ?? filesByOriginalPath[location.path]
+            }
+            return filesByPath[location.path]
                 ?? filesByOriginalPath[location.path]
-                ?? filesByPath[location.path]
         case .unknown:
-            filesByPath[location.path]
+            return filesByPath[location.path]
                 ?? location.originalPath.flatMap { filesByOriginalPath[$0] }
                 ?? filesByOriginalPath[location.path]
         }

@@ -1233,6 +1233,41 @@ struct ReviewSessionTabViewTests {
         #expect(description.contains("could not refresh the PR"))
     }
 
+    @Test func providerFeedbackMatcherPrefersExactOldSidePathWhenOriginalPathIsMissing() {
+        let modified = DiffReviewFileSummary(
+            path: "Sources/App.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .modified,
+            additions: 1,
+            deletions: 1,
+            isRenderable: true
+        )
+        let copied = DiffReviewFileSummary(
+            path: "Sources/CopiedApp.swift",
+            namespace: "github-pr",
+            groupID: nil,
+            groupTitle: nil,
+            status: .copied,
+            additions: 1,
+            deletions: 0,
+            isRenderable: true,
+            originalPath: "Sources/App.swift"
+        )
+        let matcher = ReviewSessionInlineFeedbackFileMatcher(files: [modified, copied])
+
+        let match = matcher.file(for: ReviewThreadLocation(
+            path: "Sources/App.swift",
+            originalPath: nil,
+            line: 7,
+            side: .old,
+            providerPosition: nil
+        ))
+
+        #expect(match?.path == "Sources/App.swift")
+    }
+
     private func recursiveDescription(_ view: NSView) -> String {
         ([view.accessibilityLabel(), view.accessibilityIdentifier()] + view.subviews.map(recursiveDescription))
             .compactMap { $0 }

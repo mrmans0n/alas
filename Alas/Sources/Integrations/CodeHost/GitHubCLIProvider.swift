@@ -386,7 +386,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             cwd: request.cwd
         )
 
-        let published = await publishReviewWithFallback(
+        let published = try await publishReviewWithFallback(
             pullRequestID: pullRequestID,
             request: request,
             publishableComments: publishableComments
@@ -415,7 +415,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         pullRequestID: String,
         request: ProviderReviewPublishRequest,
         publishableComments: [ProviderReviewDraftComment]
-    ) async -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment], warnings: [String]) {
+    ) async throws -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment], warnings: [String]) {
         do {
             let published = try await submitReview(
                 remote: request.remote,
@@ -428,6 +428,9 @@ struct GitHubCLIProvider: CodeHostProvider {
             )
             return (published.published, published.failed, published.warnings)
         } catch {
+            guard !publishableComments.isEmpty else {
+                throw error
+            }
             guard Self.shouldRetryPublishIndividually(after: error), publishableComments.count > 1 else {
                 return (
                     [],
