@@ -432,6 +432,22 @@ struct RemoteAppStateAccessTests {
         #expect(agents == [RemoteAgentOption(id: "claude", name: claudeName, isDefault: true)])
     }
 
+    @Test func remoteAgentsPreserveNativeACPLaunchOrder() throws {
+        let state = makeRemoteRenameState()
+        state.agentRegistry = AgentRegistry(
+            builtinState: [
+                "claude": BuiltinAgentState(isEnabled: false, binaryOverride: nil, extraTerminalArgs: nil),
+            ],
+            customs: [],
+            installedIds: ["codex", "gemini"]
+        )
+
+        let agents = state.remoteAgents()
+
+        #expect(agents.map(\.id) == ["gemini", "codex"])
+        #expect(agents.map(\.isDefault) == [true, false])
+    }
+
     @Test func createRemoteSessionSelectsWorktreeAppendsTabAndReturnsSummary() async throws {
         var cleanupWorktreeId: String?
         defer {

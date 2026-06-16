@@ -3603,9 +3603,9 @@ extension AppState: RemoteSessionsProvider {
     }
 
     func remoteAgents() -> [RemoteAgentOption] {
-        let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
-        let enabled = agentRegistry.enabled().filter { acpIds.contains($0.id) }
-        return enabled.enumerated().map { index, agent in
+        let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
+        let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
+        return ordered.enumerated().map { index, agent in
             RemoteAgentOption(id: agent.id, name: agent.displayName, isDefault: index == 0)
         }
     }
