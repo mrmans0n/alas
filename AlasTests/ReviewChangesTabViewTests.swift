@@ -100,6 +100,18 @@ struct ReviewChangesTabViewTests {
         #expect((reportedError as? LauncherTestError) == .saveFailed)
     }
 
+    @Test func loadingPresentationOnlyBlocksInitialLoad() {
+        #expect(ReviewChangesLoadingPresentation.showsBlockingLoader(isLoading: true, hasSession: false))
+        #expect(!ReviewChangesLoadingPresentation.showsBlockingLoader(isLoading: true, hasSession: true))
+        #expect(!ReviewChangesLoadingPresentation.showsBlockingLoader(isLoading: false, hasSession: false))
+    }
+
+    @Test func loadingPresentationSurfacesRefreshErrorsWithStaleSession() {
+        #expect(ReviewChangesLoadingPresentation.showsRefreshError(loadError: "git failed", hasSession: true))
+        #expect(!ReviewChangesLoadingPresentation.showsRefreshError(loadError: "git failed", hasSession: false))
+        #expect(!ReviewChangesLoadingPresentation.showsRefreshError(loadError: nil, hasSession: true))
+    }
+
     @Test func copyReviewPromptUsesPromptMarkdown() {
         var copiedPrompt: String?
         let bundle = ReviewFeedbackBundle(

@@ -58,6 +58,16 @@ struct ReviewChangesLoadKey {
     }
 }
 
+enum ReviewChangesLoadingPresentation {
+    static func showsBlockingLoader(isLoading: Bool, hasSession: Bool) -> Bool {
+        isLoading && !hasSession
+    }
+
+    static func showsRefreshError(loadError: String?, hasSession: Bool) -> Bool {
+        hasSession && loadError != nil
+    }
+}
+
 struct ReviewChangesTabView: View {
     static let reviewSessionLauncherLabel = "Open review session"
 
@@ -132,14 +142,18 @@ struct ReviewChangesTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
+        if ReviewChangesLoadingPresentation.showsBlockingLoader(isLoading: isLoading, hasSession: session != nil) {
             stateView(title: "Loading changes...", detail: nil, color: theme.color("fg-dim"))
+        } else if let session, session.files.isEmpty {
+            loadedSessionContent {
+                stateView(title: "No changes to review", detail: "This worktree has no staged or unstaged file diffs.", color: theme.color("fg-dim"))
+            }
+        } else if let session {
+            loadedSessionContent {
+                reviewSurface(session)
+            }
         } else if let loadError {
             stateView(title: "Could not load review changes", detail: loadError, color: theme.color("del"))
-        } else if let session, session.files.isEmpty {
-            stateView(title: "No changes to review", detail: "This worktree has no staged or unstaged file diffs.", color: theme.color("fg-dim"))
-        } else if let session {
-            reviewSurface(session)
         } else {
             stateView(title: "No changes loaded", detail: nil, color: theme.color("fg-dim"))
         }
@@ -249,6 +263,42 @@ struct ReviewChangesTabView: View {
         }
         .buttonStyle(.plain)
         .help(tooltip)
+    }
+
+    private func loadedSessionContent<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(spacing: 0) {
+            if ReviewChangesLoadingPresentation.showsRefreshError(loadError: loadError, hasSession: true),
+               let loadError
+            {
+                refreshErrorBanner(message: loadError)
+            }
+            content()
+        }
+    }
+
+    private func refreshErrorBanner(message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("del"))
+            Text("Could not refresh changes")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-muted"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 30)
+        .background(theme.color("del").opacity(0.12))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        .accessibilityIdentifier("review-changes-refresh-error")
+        .accessibilityLabel("Could not refresh changes. \(message)")
     }
 
     private func reviewSurface(_ session: ReviewChangesLoadedSession) -> some View {
@@ -368,7 +418,6 @@ struct ReviewChangesTabView: View {
         activeLoadID = requestedLoadToken.id
         isLoading = true
         loadError = nil
-        session = nil
         defer {
             if requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID) {
                 isLoading = false
