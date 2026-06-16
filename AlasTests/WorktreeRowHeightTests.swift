@@ -54,6 +54,7 @@ struct WorktreeRowHeightTests {
         let view = WorktreeRowView(
             worktree: worktree,
             isSelected: false,
+            isMain: false,
             operationState: nil,
             harnessSummary: harnessSummary,
             onTap: {},
