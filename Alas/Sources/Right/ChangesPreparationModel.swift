@@ -38,20 +38,22 @@ struct ChangesPreparationModel: Equatable {
         draftNonEmpty: Bool,
         readinessActions: [ReviewReadinessModel.Action]
     ) {
+        let builtReviewAction: ReviewAction?
         if let summary = ReviewChangesTriggerSummary.summary(for: changes) {
-            reviewAction = ReviewAction(
+            builtReviewAction = ReviewAction(
                 title: "Review current changes",
                 fileCount: summary.fileCount,
                 additions: summary.additions,
                 deletions: summary.deletions
             )
         } else {
-            reviewAction = nil
+            builtReviewAction = nil
         }
 
         let stagedChanges = changes.filter { $0.stage == .staged }
+        let builtDraftAction: DraftAction?
         if !stagedChanges.isEmpty || hasDraft {
-            draftAction = DraftAction(
+            builtDraftAction = DraftAction(
                 title: hasDraft ? "Open draft" : "Draft commit",
                 stagedCount: stagedChanges.count,
                 additions: stagedChanges.reduce(0) { $0 + $1.add },
@@ -59,10 +61,19 @@ struct ChangesPreparationModel: Equatable {
                 hasNonEmptyDraft: draftNonEmpty
             )
         } else {
-            draftAction = nil
+            builtDraftAction = nil
         }
 
-        reviewRequestAction = Self.compactReviewRequestAction(from: readinessActions)
+        reviewAction = builtReviewAction
+        draftAction = builtDraftAction
+        let builtReviewRequestAction = Self.compactReviewRequestAction(from: readinessActions)
+        if builtReviewRequestAction?.kind == .refresh,
+           builtReviewAction == nil,
+           builtDraftAction == nil {
+            reviewRequestAction = nil
+        } else {
+            reviewRequestAction = builtReviewRequestAction
+        }
     }
 
     private static func compactReviewRequestAction(
@@ -84,8 +95,8 @@ struct ChangesPreparationModel: Equatable {
     private static let compactActionPriority: [ReviewReadinessActionKind] = [
         .createReviewRequest,
         .pushBranch,
-        .openReviewRequest,
         .inspectReviewEvidence,
+        .openReviewRequest,
         .refresh,
     ]
 }

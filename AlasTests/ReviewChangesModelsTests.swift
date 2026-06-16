@@ -371,6 +371,65 @@ struct ReviewChangesModelsTests {
         #expect(model.reviewRequestAction?.kind == .createReviewRequest)
         #expect(model.reviewRequestAction?.title == "Create PR")
     }
+
+    @Test func preparationModelDoesNotShowStandaloneRefreshWhileReadinessLoads() {
+        let loadingReadiness = ReviewReadinessModel(
+            snapshot: nil,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: loadingReadiness.actions
+        )
+
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelKeepsRefreshWhenCardIsVisibleForChanges() throws {
+        let loadingReadiness = ReviewReadinessModel(
+            snapshot: nil,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [changedFile("Sources/App.swift", stage: .unstaged, add: 2, del: 1)],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: loadingReadiness.actions
+        )
+
+        #expect(model.isVisible)
+        let action = try #require(model.reviewRequestAction)
+        #expect(action.kind == .refresh)
+    }
+
+    @Test func preparationModelPrefersInspectOverOpenRequestForFailedChecks() throws {
+        let request = ReviewChangesReadinessFixtures.makeReviewRequest(
+            checks: [ReviewChangesReadinessFixtures.makeCheck(bucket: .fail)]
+        )
+        let readiness = ReviewReadinessModel(
+            snapshot: ReviewChangesReadinessFixtures.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: readiness.actions
+        )
+
+        let action = try #require(model.reviewRequestAction)
+        #expect(action.kind == .inspectReviewEvidence)
+        #expect(action.title == "Inspect")
+    }
 }
 
 private func changedFile(
@@ -415,14 +474,7 @@ private func reviewSummary(
 
 private enum ReviewChangesReadinessFixtures {
     static func makeSnapshot(reviewRequest: ReviewRequest?) -> ReviewLoopSnapshot {
-        let remote = CodeHostRemote(
-            kind: .github,
-            host: "github.com",
-            owner: "mrmans0n",
-            repository: "alas",
-            remoteName: "origin",
-            webURL: URL(string: "https://github.com/mrmans0n/alas")!
-        )
+        let remote = makeRemote()
         return ReviewLoopSnapshot(
             local: ReviewLoopLocalState(
                 branchName: "feature/entrypoint",
@@ -441,6 +493,48 @@ private enum ReviewChangesReadinessFixtures {
             providerAuthenticated: true,
             providerCapabilities: .githubCLI,
             errorMessage: nil
+        )
+    }
+
+    static func makeReviewRequest(
+        remote: CodeHostRemote = makeRemote(),
+        checks: [ReviewCheck] = []
+    ) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: 428,
+            title: "Entry point review",
+            url: remote.webURL.appending(path: "pull/428"),
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/entrypoint",
+            baseRefName: "main",
+            reviewDecision: .reviewRequired,
+            mergeState: .blocked,
+            checks: checks,
+            threads: []
+        )
+    }
+
+    static func makeCheck(bucket: ReviewCheckBucket) -> ReviewCheck {
+        ReviewCheck(
+            id: "ci-tests",
+            name: "Tests",
+            workflow: "CI",
+            bucket: bucket,
+            detailURL: nil,
+            completedAt: nil
+        )
+    }
+
+    private static func makeRemote() -> CodeHostRemote {
+        CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
         )
     }
 }
