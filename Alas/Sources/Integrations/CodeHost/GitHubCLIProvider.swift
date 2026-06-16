@@ -426,7 +426,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 summaryBody: request.summaryBody,
                 cwd: request.cwd
             )
-            return (published.published, published.failed, [])
+            return (published.published, published.failed, published.warnings)
         } catch {
             guard Self.shouldRetryPublishIndividually(after: error), publishableComments.count > 1 else {
                 return (
@@ -440,6 +440,7 @@ struct GitHubCLIProvider: CodeHostProvider {
 
             var published: [ProviderReviewPublishedComment] = []
             var failed: [ProviderReviewFailedComment] = []
+            var warnings: [String] = []
             for comment in publishableComments {
                 do {
                     let result = try await submitReview(
@@ -453,6 +454,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                     )
                     published.append(contentsOf: result.published)
                     failed.append(contentsOf: result.failed)
+                    warnings.append(contentsOf: result.warnings)
                 } catch {
                     failed.append(ProviderReviewFailedComment(localDraftID: comment.localDraftID, message: error.localizedDescription))
                 }
@@ -460,7 +462,9 @@ struct GitHubCLIProvider: CodeHostProvider {
             return (
                 published,
                 failed,
-                ["GitHub rejected the batch review; Alas retried publishable comments individually without submitting the review decision."]
+                warnings + [
+                    "GitHub rejected the batch review; Alas retried publishable comments individually without submitting the review decision.",
+                ]
             )
         }
     }
@@ -480,7 +484,11 @@ struct GitHubCLIProvider: CodeHostProvider {
         decision: ProviderReviewDecision,
         summaryBody: String,
         cwd: URL
-    ) async throws -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment]) {
+    ) async throws -> (
+        published: [ProviderReviewPublishedComment],
+        failed: [ProviderReviewFailedComment],
+        warnings: [String]
+    ) {
         let input = PublishReviewInput(
             pullRequestId: pullRequestID,
             commitOID: Self.normalizedOptionalString(commitOID),
@@ -767,7 +775,11 @@ struct GitHubCLIProvider: CodeHostProvider {
     static func parsePublishReviewResult(
         _ json: String,
         drafts: [ProviderReviewDraftComment]
-    ) throws -> (published: [ProviderReviewPublishedComment], failed: [ProviderReviewFailedComment]) {
+    ) throws -> (
+        published: [ProviderReviewPublishedComment],
+        failed: [ProviderReviewFailedComment],
+        warnings: [String]
+    ) {
         let data = Data(json.utf8)
         let response: PublishReviewResponse
         do {
@@ -777,7 +789,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
 
         let comments = response.data.addPullRequestReview.pullRequestReview.comments.nodes
-        let published = zip(drafts, comments).map { draft, comment in
+        var published = zip(drafts, comments).map { draft, comment in
             ProviderReviewPublishedComment(
                 localDraftID: draft.localDraftID,
                 providerThreadID: normalizedOptionalString(comment.pullRequestReviewThread?.id),
@@ -785,13 +797,29 @@ struct GitHubCLIProvider: CodeHostProvider {
                 providerURL: try? parseOptionalHTTPURL(comment.url, context: "gh publish review returned an invalid URL")
             )
         }
-        let failed = drafts.dropFirst(published.count).map {
-            ProviderReviewFailedComment(
-                localDraftID: $0.localDraftID,
-                message: "GitHub did not return a published comment for this draft."
-            )
+        var warnings: [String] = []
+        let missingDrafts = drafts.dropFirst(published.count)
+        let failed: [ProviderReviewFailedComment]
+        if !missingDrafts.isEmpty, comments.count == 100 {
+            published.append(contentsOf: missingDrafts.map {
+                ProviderReviewPublishedComment(
+                    localDraftID: $0.localDraftID,
+                    providerThreadID: nil,
+                    providerCommentID: nil,
+                    providerURL: nil
+                )
+            })
+            warnings.append("GitHub returned only the first 100 review comments; remaining drafts were marked published without provider comment IDs.")
+            failed = []
+        } else {
+            failed = missingDrafts.map {
+                ProviderReviewFailedComment(
+                    localDraftID: $0.localDraftID,
+                    message: "GitHub did not return a published comment for this draft."
+                )
+            }
         }
-        return (Array(published), Array(failed))
+        return (Array(published), failed, warnings)
     }
 
     static func parseThreadReplyResult(_ json: String) throws -> URL? {

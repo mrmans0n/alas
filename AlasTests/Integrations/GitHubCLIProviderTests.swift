@@ -460,6 +460,43 @@ struct GitHubCLIProviderTests {
         })
     }
 
+    @Test func githubPublishReviewDoesNotFailDraftsPastReturnedCommentWindow() async throws {
+        let drafts = try (1...101).map { index in
+            try Self.makeProviderDraftComment(
+                id: "draft-\(index)",
+                path: "Sources/App.swift",
+                side: .new,
+                startLine: index,
+                endLine: nil,
+                body: "Comment \(index)"
+            )
+        }
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput(commentCount: 100), stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        let result = try await provider.publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: drafts,
+            decision: .comment,
+            summaryBody: "Review notes.",
+            cwd: Self.cwd
+        ))
+
+        #expect(result.failed.isEmpty)
+        #expect(result.published.map(\.localDraftID) == drafts.map(\.localDraftID))
+        #expect(result.published[99].providerCommentID == "PRRC_comment_100")
+        #expect(result.published[100].providerCommentID == nil)
+        #expect(result.warnings.contains {
+            $0.contains("GitHub returned only the first 100 review comments")
+        })
+    }
+
     @Test func githubPublishReviewDoesNotRetryAfterMalformedSuccessfulBatchResponse() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
@@ -1492,6 +1529,13 @@ struct GitHubCLIProviderTests {
     private static let publishReviewMutationOutput = """
     {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[{"id":"PRRC_comment_1","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r1","pullRequestReviewThread":{"id":"PRRT_thread_1"}}]}}}}}
     """
+
+    private static func publishReviewMutationOutput(commentCount: Int) -> String {
+        let nodes = (1...commentCount).map { index in
+            #"{"id":"PRRC_comment_\#(index)","url":"https://github.com/mrmans0n/alas/pull/42#discussion_r\#(index)","pullRequestReviewThread":{"id":"PRRT_thread_\#(index)"}}"#
+        }.joined(separator: ",")
+        return #"{"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[\#(nodes)]}}}}}"#
+    }
 
     private static let publishReviewMutationWithoutCommentsOutput = """
     {"data":{"addPullRequestReview":{"pullRequestReview":{"comments":{"nodes":[]}}}}}
