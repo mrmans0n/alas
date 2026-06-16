@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=30" />
+  <link rel="stylesheet" href="/style.css?v=31" />
 </head>
 <body>
   <header id="bar">
@@ -19,6 +19,7 @@
     <span id="detail-title" class="hidden"></span>
     <button id="detail-rename" class="rename-btn hidden" aria-label="Rename session">✎</button>
     <span id="nav-title">Alas Remote</span>
+    <button id="new-session" aria-label="New session">+ New</button>
     <span id="status" class="chip" data-state="connecting">connecting…</span>
   </header>
   <main>
@@ -81,6 +82,24 @@
       <button id="cfg-close" class="sheet-close">Close</button>
     </div>
   </div>
+  <div id="new-session-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+    <div class="sheet-card create-sheet">
+      <p id="new-session-title" class="sheet-title">New session</p>
+      <div id="create-error" class="sheet-error hidden"></div>
+      <div id="worktree-step">
+        <input id="worktree-search" class="sheet-input" type="search" autocomplete="off" placeholder="Search worktrees" aria-label="Search worktrees" />
+        <div id="worktree-list" class="create-list"></div>
+      </div>
+      <div id="agent-step" class="hidden">
+        <div id="agent-list" class="create-list"></div>
+      </div>
+      <div class="create-actions">
+        <button id="create-back" class="sheet-close hidden">Back</button>
+        <button id="create-next" class="btn-submit" disabled>Next</button>
+        <button id="create-cancel" class="sheet-close">Cancel</button>
+      </div>
+    </div>
+  </div>
   <div id="rename-sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="rename-title">
     <div class="sheet-card">
       <p id="rename-title" class="sheet-title">Rename session</p>
@@ -99,7 +118,7 @@
   </div>
   <script src="/marked.min.js?v=28"></script>
   <script src="/purify.min.js?v=28"></script>
-  <script src="/app.js?v=42"></script>
+  <script src="/app.js?v=46"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

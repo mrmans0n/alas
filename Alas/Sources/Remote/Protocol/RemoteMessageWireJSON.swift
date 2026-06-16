@@ -24,6 +24,32 @@ struct RemoteWorktreeSummary: Codable, Equatable, Sendable {
     let conflictCount: Int
 }
 
+struct RemoteWorktreeOption: Codable, Equatable, Sendable {
+    let id: String
+    let projectName: String
+    let worktreeName: String
+    let branch: String
+    let path: String
+    let metricsAvailable: Bool
+    let comparisonRef: String?
+    let commitCount: Int
+    let changedFileCount: Int
+    let addedLines: Int
+    let deletedLines: Int
+    let conflictCount: Int
+}
+
+struct RemoteAgentOption: Codable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let isDefault: Bool
+}
+
+enum RemoteCreateSessionResult: Equatable, Sendable {
+    case success(RemoteSessionSummary)
+    case failure(String)
+}
+
 struct RemoteSessionSummary: Codable, Equatable, Sendable {
     let id: String
     let title: String

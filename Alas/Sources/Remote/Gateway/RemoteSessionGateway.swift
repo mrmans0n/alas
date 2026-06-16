@@ -20,6 +20,8 @@ final class RemoteSessionGateway {
     private var coalesce: [String: Task<Void, Never>] = [:]
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
+    private var worktreeListRefresh: Task<Void, Never>?
+    private var worktreeListGeneration = 0
     // Per-session request id of the permission/question prompt we last surfaced,
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
@@ -35,6 +37,19 @@ final class RemoteSessionGateway {
         switch message {
         case .listSessions:
             refreshSessionList()
+        case .listWorktrees:
+            refreshWorktreeList()
+        case .listAgents:
+            send(.agentList(agents: provider.remoteAgents()))
+        case .createSession(let worktreeId, let agentId):
+            let result = await provider.createRemoteSession(worktreeId: worktreeId, agentId: agentId)
+            switch result {
+            case .success(let summary):
+                send(.sessionCreated(session: summary))
+                refreshSessionList()
+            case .failure(let message):
+                send(.createSessionFailed(message: message))
+            }
         case .subscribe(let id):
             await provider.hydrateIfNeeded(id: id)
             guard let session = provider.session(for: id) else {
@@ -151,6 +166,18 @@ final class RemoteSessionGateway {
         }
     }
 
+    private func refreshWorktreeList() {
+        worktreeListGeneration += 1
+        let generation = worktreeListGeneration
+        worktreeListRefresh?.cancel()
+        worktreeListRefresh = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let worktrees = await provider.remoteWorktrees()
+            guard !Task.isCancelled, generation == worktreeListGeneration else { return }
+            send(.worktreeList(worktrees: worktrees))
+        }
+    }
+
     // MARK: attachment materialization
 
     private static let maxAttachmentsBytes = 10_000_000
@@ -207,6 +234,8 @@ final class RemoteSessionGateway {
     func close() {
         sessionListRefresh?.cancel()
         sessionListRefresh = nil
+        worktreeListRefresh?.cancel()
+        worktreeListRefresh = nil
         subscriptions.removeAll()
         configSubscriptions.removeAll()
         configCoalesce.values.forEach { $0.cancel() }

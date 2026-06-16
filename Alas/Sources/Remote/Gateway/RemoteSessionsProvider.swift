@@ -5,6 +5,9 @@ import Foundation
 @MainActor
 protocol RemoteSessionsProvider: AnyObject {
     func sessionSummaries() async -> [RemoteSessionSummary]
+    func remoteWorktrees() async -> [RemoteWorktreeOption]
+    func remoteAgents() -> [RemoteAgentOption]
+    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async

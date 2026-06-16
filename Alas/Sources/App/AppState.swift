@@ -71,6 +71,8 @@ final class AppState {
     private(set) var remotePort: UInt16?
     private(set) var remoteAdvertisedAddresses: [RemoteAdvertisedAddress] = []
     private(set) var remoteConnectedDeviceCountsSnapshot: [String: Int] = [:]
+    @ObservationIgnored
+    var remoteSessionAttachScheduler: (@MainActor (ACPSessionManager, ACPSession.ID) -> Void)?
 
     private func makeRemoteInterfaces() -> [RemoteNetworkInterface] {
         RemoteNetwork.interfaces()
@@ -3408,12 +3410,51 @@ extension AppState: RemoteSessionsProvider {
                 )
             )
         } catch {
-            return RemoteWorktreeSummaryBuilder.make(
-                projectName: project.name,
-                worktree: worktree,
-                metrics: .unavailable
-            )
+            return remoteWorktreeSummaryWithoutMetrics(project: project, worktree: worktree)
         }
+    }
+
+    private func remoteWorktreeSummaryWithoutMetrics(project: ProjectConfig, worktree: Worktree) -> RemoteWorktreeSummary {
+        RemoteWorktreeSummaryBuilder.make(
+            projectName: project.name,
+            worktree: worktree,
+            metrics: .unavailable
+        )
+    }
+
+    private func remoteWorktreeOption(project: ProjectConfig, worktree: Worktree) async -> RemoteWorktreeOption {
+        let summary = await remoteWorktreeSummary(project: project, worktree: worktree)
+        return RemoteWorktreeOption(
+            id: worktree.id,
+            projectName: summary.projectName,
+            worktreeName: summary.worktreeName,
+            branch: summary.branch,
+            path: summary.path,
+            metricsAvailable: summary.metricsAvailable,
+            comparisonRef: summary.comparisonRef,
+            commitCount: summary.commitCount,
+            changedFileCount: summary.changedFileCount,
+            addedLines: summary.addedLines,
+            deletedLines: summary.deletedLines,
+            conflictCount: summary.conflictCount
+        )
+    }
+
+    private func remoteSessionSummary(
+        session: ACPSession,
+        manager: ACPSessionManager,
+        worktreeSummary: RemoteWorktreeSummary?
+    ) -> RemoteSessionSummary {
+        let streamingState = manager.runners[session.id]?.session.transcript.streamingState
+            ?? session.transcript.streamingState
+        return RemoteSessionSummary(
+            id: session.id,
+            title: session.title,
+            agentId: session.agentId,
+            status: RemoteSessionGateway.stateString(streamingState),
+            canDrive: manager.isWriter(for: session.id),
+            worktree: worktreeSummary
+        )
     }
 
     func sessionSummaries() async -> [RemoteSessionSummary] {
@@ -3544,6 +3585,69 @@ extension AppState: RemoteSessionsProvider {
             }
             return (meaningfulTitle ? 100 : 0) + sourceScore
         }
+    }
+
+    func remoteWorktrees() async -> [RemoteWorktreeOption] {
+        var out: [RemoteWorktreeOption] = []
+        for project in projects {
+            for worktree in projectsManager.visibleWorktrees(projectId: project.id) {
+                switch projectsManager.operationState(for: worktree.id) {
+                case .creating, .deleting, .createFailed:
+                    continue
+                case nil, .deleteFailed:
+                    out.append(await remoteWorktreeOption(project: project, worktree: worktree))
+                }
+            }
+        }
+        return out
+    }
+
+    func remoteAgents() -> [RemoteAgentOption] {
+        let enabledById = Dictionary(uniqueKeysWithValues: agentRegistry.enabled().map { ($0.id, $0) })
+        let ordered = ACPLaunchCatalog.specs.compactMap { enabledById[$0.agentID] }
+        return ordered.enumerated().map { index, agent in
+            RemoteAgentOption(id: agent.id, name: agent.displayName, isDefault: index == 0)
+        }
+    }
+
+    func createRemoteSession(worktreeId: String, agentId: String) async -> RemoteCreateSessionResult {
+        guard let resolved = projectAndWorktree(withWorktreeId: worktreeId),
+              projectsManager.visibleWorktrees(projectId: resolved.project.id).contains(where: { $0.id == worktreeId })
+        else {
+            return .failure("Worktree is no longer available.")
+        }
+        switch projectsManager.operationState(for: worktreeId) {
+        case .creating, .deleting, .createFailed:
+            return .failure("Worktree is no longer available.")
+        case nil, .deleteFailed:
+            break
+        }
+
+        let acpIds = Set(ACPLaunchCatalog.specs.map(\.agentID))
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }), acpIds.contains(agent.id) else {
+            return .failure("Agent is no longer available.")
+        }
+
+        guard let manager = acpManager(for: resolved.worktree) else {
+            return .failure("Could not create session.")
+        }
+
+        let session = manager.createSession(agentId: agent.id, autoRunDefault: config.harness.acpAutoRunByDefault)
+        focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
+        let tabState = ACPSessionTabState(sessionId: session.id, title: session.title)
+        let tab = tabs.append(acpSession: tabState, to: resolved.worktree.id)
+        tabs.activate(worktreeId: resolved.worktree.id, tabId: tab.id)
+
+        if let remoteSessionAttachScheduler {
+            remoteSessionAttachScheduler(manager, session.id)
+        } else {
+            Task { @MainActor [weak manager] in
+                await manager?.attach(to: session.id, freshlyCreated: true)
+            }
+        }
+
+        let worktreeSummary = remoteWorktreeSummaryWithoutMetrics(project: resolved.project, worktree: resolved.worktree)
+        return .success(remoteSessionSummary(session: session, manager: manager, worktreeSummary: worktreeSummary))
     }
 
     func session(for id: String) -> ACPSession? {
