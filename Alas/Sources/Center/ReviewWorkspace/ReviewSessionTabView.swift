@@ -273,34 +273,76 @@ struct ReviewSessionTabView: View {
     }
 
     private func reviewSurface(_ loaded: ReviewSessionLoadedContext) -> some View {
-        DiffReviewSurface(
-            session: loaded.session,
-            selectedFileID: Binding(
-                get: { selectedFileID },
-                set: { setSelectedFileID($0, persist: true) }
-            ),
-            railCollapsed: $railCollapsed,
-            reviewSummaryCollapsed: $reviewSummaryCollapsed,
-            layoutMode: layoutModeBinding,
-            wrapLines: wrapLinesBinding,
-            showWhitespace: showWhitespaceBinding,
-            codeFontFamily: appState?.config.code.fontFamily ?? "",
-            codeFontSize: CGFloat(appState?.config.code.fontSize ?? 13),
-            showsSourceBadges: true,
-            showsRailDisplayControls: true,
-            showsDraftSummaryRail: true,
-            lspContextForFile: makeLSPContext,
-            inlineFeedbackByFileID: inlineFeedbackByFileID(for: loaded),
-            inlineFeedbackActions: inlineFeedbackActions(for: loaded),
-            reviewFeedbackTarget: loaded.feedbackTarget,
-            draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
-            focusedDraftCommentID: focusedDraftCommentID,
-            draftCommentScrollCommand: draftCommentScrollCommand,
-            draftCommentActions: draftCommentActions(for: loaded),
-            onSelectDraftComment: selectDraftComment,
-            onSaveDraftComment: saveDraftComment
+        VStack(spacing: 0) {
+            if let providerPublishError, !providerPublishError.isEmpty {
+                providerErrorBanner(providerPublishError)
+            }
+            DiffReviewSurface(
+                session: loaded.session,
+                selectedFileID: Binding(
+                    get: { selectedFileID },
+                    set: { setSelectedFileID($0, persist: true) }
+                ),
+                railCollapsed: $railCollapsed,
+                reviewSummaryCollapsed: $reviewSummaryCollapsed,
+                layoutMode: layoutModeBinding,
+                wrapLines: wrapLinesBinding,
+                showWhitespace: showWhitespaceBinding,
+                codeFontFamily: appState?.config.code.fontFamily ?? "",
+                codeFontSize: CGFloat(appState?.config.code.fontSize ?? 13),
+                showsSourceBadges: true,
+                showsRailDisplayControls: true,
+                showsDraftSummaryRail: true,
+                lspContextForFile: makeLSPContext,
+                inlineFeedbackByFileID: inlineFeedbackByFileID(for: loaded),
+                inlineFeedbackActions: inlineFeedbackActions(for: loaded),
+                reviewFeedbackTarget: loaded.feedbackTarget,
+                draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
+                focusedDraftCommentID: focusedDraftCommentID,
+                draftCommentScrollCommand: draftCommentScrollCommand,
+                draftCommentActions: draftCommentActions(for: loaded),
+                onSelectDraftComment: selectDraftComment,
+                onSaveDraftComment: saveDraftComment
+            )
+            .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
+        }
+    }
+
+    private func providerErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("del"))
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button {
+                providerPublishError = nil
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundColor(theme.color("fg-muted"))
+            .help("Dismiss")
+            .accessibilityIdentifier("review-session-provider-error-dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.color("del").opacity(0.08))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(theme.color("line"))
+                .frame(height: 1)
+        }
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "review-session-provider-error",
+                label: message
+            )
         )
-        .environment(\.reviewDraftSummaryRailStatus, ReviewDraftSummaryRailStatus(record: record))
     }
 
     private var layoutModeBinding: Binding<DiffLayoutMode> {
@@ -751,6 +793,7 @@ struct ReviewSessionTabView: View {
                 )
             )
             replaceProviderReviewRequest(result.refreshedRequest)
+            providerPublishError = nil
         } catch {
             providerPublishError = error.localizedDescription
         }

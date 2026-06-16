@@ -210,7 +210,11 @@ struct GitLabCLIProvider: CodeHostProvider {
             case .comment:
                 break
             case .approve:
-                try await approveMergeRequest(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
+                if failed.isEmpty {
+                    try await approveMergeRequest(remote: request.remote, request: request.reviewRequest, cwd: request.cwd)
+                } else {
+                    warnings.append("GitLab approval was not submitted because \(failed.count) review comment(s) failed to publish.")
+                }
             case .requestChanges:
                 throw CodeHostProviderError.malformedOutput("GitLab request-changes review state is not supported yet.")
             }

@@ -990,6 +990,43 @@ struct GitLabCLIProviderTests {
         #expect(result.refreshedRequest == Self.makeRequest())
     }
 
+    @Test func publishReviewDoesNotApproveWhenSomeGitLabDraftPublishesFail() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        let result = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(),
+            comments: [
+                try Self.makeProviderDraftComment(localDraftID: "draft-1", side: .new, lineRange: 24...24),
+                try Self.makeProviderDraftComment(localDraftID: "draft-2", side: .new, lineRange: 25...25),
+            ],
+            decision: .approve,
+            summaryBody: "Looks good.",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
+            ["mr", "view"],
+            ["mr", "note"],
+            ["ci", "get"],
+        ])
+        #expect(result.published.map(\.localDraftID) == ["draft-1"])
+        #expect(result.failed.map(\.localDraftID) == ["draft-2"])
+        #expect(result.refreshedRequest.threads.map(\.id) == ["discussion-1", "discussion-2"])
+        #expect(result.warnings.contains { $0.contains("approval was not submitted") })
+    }
+
     @Test func threadMutationsUseDiscussionEndpointsAndRefreshMR() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
