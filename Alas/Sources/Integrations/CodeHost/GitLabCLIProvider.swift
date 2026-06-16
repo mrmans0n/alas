@@ -284,12 +284,24 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("GitLab unresolve is not supported until resolved discussions are loaded.")
         }
 
-        let refreshedRequest = (try? await refreshedReviewRequest(
-            remote: mutation.remote,
-            request: mutation.reviewRequest,
-            cwd: mutation.cwd
-        )) ?? mutation.reviewRequest
-        return ProviderThreadMutationResult(refreshedRequest: refreshedRequest, providerURL: providerURL)
+        let refreshedRequest: ReviewRequest
+        let warnings: [String]
+        do {
+            refreshedRequest = try await refreshedReviewRequest(
+                remote: mutation.remote,
+                request: mutation.reviewRequest,
+                cwd: mutation.cwd
+            )
+            warnings = []
+        } catch {
+            refreshedRequest = mutation.reviewRequest
+            warnings = ["GitLab thread was updated, but Alas could not refresh the MR: \(error.localizedDescription)"]
+        }
+        return ProviderThreadMutationResult(
+            refreshedRequest: refreshedRequest,
+            providerURL: providerURL,
+            warnings: warnings
+        )
     }
 
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem] {

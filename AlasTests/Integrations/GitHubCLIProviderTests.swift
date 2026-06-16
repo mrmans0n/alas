@@ -788,6 +788,9 @@ struct GitHubCLIProviderTests {
         #expect(commands[1].args.first == "pr")
         #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
         #expect(replyResult.refreshedRequest == originalRequest)
+        #expect(replyResult.warnings.contains {
+            $0.contains("GitHub thread was updated, but Alas could not refresh the PR")
+        })
     }
 
     @Test func reviewThreadsJSONPreservesLocationMetadata() throws {

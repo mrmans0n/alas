@@ -812,7 +812,7 @@ struct ReviewSessionTabView: View {
                 )
             )
             replaceProviderReviewRequest(result.refreshedRequest)
-            providerPublishError = nil
+            providerPublishError = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
         } catch {
             providerPublishError = error.localizedDescription
         }

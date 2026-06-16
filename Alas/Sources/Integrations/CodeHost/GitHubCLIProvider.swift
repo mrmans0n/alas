@@ -605,12 +605,24 @@ struct GitHubCLIProvider: CodeHostProvider {
             providerURL = nil
         }
 
-        let refreshedRequest = (try? await refreshedReviewRequest(
-            remote: mutation.remote,
-            request: mutation.reviewRequest,
-            cwd: mutation.cwd
-        )) ?? mutation.reviewRequest
-        return ProviderThreadMutationResult(refreshedRequest: refreshedRequest, providerURL: providerURL)
+        let refreshedRequest: ReviewRequest
+        let warnings: [String]
+        do {
+            refreshedRequest = try await refreshedReviewRequest(
+                remote: mutation.remote,
+                request: mutation.reviewRequest,
+                cwd: mutation.cwd
+            )
+            warnings = []
+        } catch {
+            refreshedRequest = mutation.reviewRequest
+            warnings = ["GitHub thread was updated, but Alas could not refresh the PR: \(error.localizedDescription)"]
+        }
+        return ProviderThreadMutationResult(
+            refreshedRequest: refreshedRequest,
+            providerURL: providerURL,
+            warnings: warnings
+        )
     }
 
     func rerunFailedChecks(

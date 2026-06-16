@@ -83,4 +83,11 @@ struct ProviderThreadMutation: Equatable, Sendable {
 struct ProviderThreadMutationResult: Equatable, Sendable {
     let refreshedRequest: ReviewRequest
     let providerURL: URL?
+    let warnings: [String]
+
+    init(refreshedRequest: ReviewRequest, providerURL: URL?, warnings: [String] = []) {
+        self.refreshedRequest = refreshedRequest
+        self.providerURL = providerURL
+        self.warnings = warnings
+    }
 }

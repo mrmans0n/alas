@@ -1265,6 +1265,9 @@ struct GitLabCLIProviderTests {
 
         #expect(result.providerURL == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_502"))
         #expect(result.refreshedRequest == Self.makeRequest())
+        #expect(result.warnings.contains {
+            $0.contains("GitLab thread was updated, but Alas could not refresh the MR")
+        })
     }
 
     @Test func currentReviewRequestResolvesSourceProjectIDsBeforeFilteringForkMRs() async throws {

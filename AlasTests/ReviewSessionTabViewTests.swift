@@ -1177,6 +1177,62 @@ struct ReviewSessionTabViewTests {
         #expect(description.contains("resolve failed"))
     }
 
+    @Test func reviewSessionShowsProviderThreadMutationWarningsOutsidePublishSheet() async throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please fix this.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
+            isResolved: false,
+            isActionable: true,
+            location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 2, side: .new, providerPosition: nil),
+            providerThreadID: "thread-provider-1",
+            providerCommentID: "comment-provider-1"
+        )
+        let request = Self.reviewRequest(provider: .github, threads: [thread])
+        let target = Self.reviewRequestTarget(provider: .github, request: request)
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
+        let view = ReviewSessionTabView.testView(
+            record: record,
+            loaded: loaded,
+            provider: RecordingProviderReviewMutator(
+                kind: .github,
+                publishResult: ProviderReviewPublishResult(
+                    published: [],
+                    failed: [],
+                    refreshedRequest: request,
+                    warnings: []
+                ),
+                mutationWarnings: ["GitHub thread was updated, but Alas could not refresh the PR: temporary API failure"]
+            )
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: host))
+
+        let deadline = Date().addingTimeInterval(1)
+        while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            host.layoutSubtreeIfNeeded()
+        }
+
+        let description = recursiveDescription(host)
+        #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
+        #expect(subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) != nil)
+        #expect(description.contains("could not refresh the PR"))
+    }
+
     private func recursiveDescription(_ view: NSView) -> String {
         ([view.accessibilityLabel(), view.accessibilityIdentifier()] + view.subviews.map(recursiveDescription))
             .compactMap { $0 }
@@ -1427,6 +1483,7 @@ struct ReviewSessionTabViewTests {
         let capabilities: CodeHostProviderCapabilities
         private let publishResult: ProviderReviewPublishResult
         private let mutationError: Error?
+        private let mutationWarnings: [String]
         private let lock = NSLock()
         private var recordedPublishRequests: [ProviderReviewPublishRequest] = []
 
@@ -1434,12 +1491,14 @@ struct ReviewSessionTabViewTests {
             kind: CodeHostKind,
             capabilities: CodeHostProviderCapabilities = .githubCLI,
             publishResult: ProviderReviewPublishResult,
-            mutationError: Error? = nil
+            mutationError: Error? = nil,
+            mutationWarnings: [String] = []
         ) {
             self.kind = kind
             self.capabilities = capabilities
             self.publishResult = publishResult
             self.mutationError = mutationError
+            self.mutationWarnings = mutationWarnings
         }
 
         func publishRequests() -> [ProviderReviewPublishRequest] {
@@ -1510,7 +1569,8 @@ struct ReviewSessionTabViewTests {
             }
             return ProviderThreadMutationResult(
                 refreshedRequest: publishResult.refreshedRequest,
-                providerURL: publishResult.refreshedRequest.url
+                providerURL: publishResult.refreshedRequest.url,
+                warnings: mutationWarnings
             )
         }
     }
