@@ -1233,6 +1233,22 @@ private struct GitLabMRVersion: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case diffRefs = "diff_refs"
+        case baseCommitSHA = "base_commit_sha"
+        case startCommitSHA = "start_commit_sha"
+        case headCommitSHA = "head_commit_sha"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let diffRefs = try container.decodeIfPresent(GitLabDiffRefs.self, forKey: .diffRefs) {
+            self.diffRefs = diffRefs
+            return
+        }
+        self.diffRefs = GitLabDiffRefs(
+            baseSHA: try container.decodeIfPresent(String.self, forKey: .baseCommitSHA) ?? "",
+            startSHA: try container.decodeIfPresent(String.self, forKey: .startCommitSHA) ?? "",
+            headSHA: try container.decodeIfPresent(String.self, forKey: .headCommitSHA) ?? ""
+        )
     }
 }
 

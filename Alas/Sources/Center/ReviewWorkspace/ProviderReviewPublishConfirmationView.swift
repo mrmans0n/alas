@@ -5,6 +5,7 @@ struct ProviderReviewPublishConfirmationView: View {
     let reviewIdentity: String
     let commentCount: Int
     let unpublishableMessages: [String]
+    let allowedDecisions: [ProviderReviewDecision]
     @Binding var selectedDecision: ProviderReviewDecision
     let isPublishing: Bool
     let errorMessage: String?
@@ -24,13 +25,19 @@ struct ProviderReviewPublishConfirmationView: View {
                 .foregroundColor(theme.color("fg-muted"))
 
             Picker("Decision", selection: $selectedDecision) {
-                Text("Comment").tag(ProviderReviewDecision.comment)
-                Text("Approve").tag(ProviderReviewDecision.approve)
-                Text("Request changes").tag(ProviderReviewDecision.requestChanges)
+                ForEach(allowedDecisions, id: \.self) { decision in
+                    Text(decision.displayName).tag(decision)
+                }
             }
             .pickerStyle(.segmented)
             .disabled(isPublishing)
             .accessibilityIdentifier("provider-review-publish-decision")
+            .background(
+                DiffReviewAccessibilityMarker(
+                    identifier: "provider-review-publish-decisions",
+                    label: allowedDecisions.map(\.displayName).joined(separator: ", ")
+                )
+            )
 
             Text(commentCountText)
                 .font(.system(size: 12))
@@ -113,7 +120,22 @@ struct ProviderReviewPublishConfirmationView: View {
     }
 
     private var isConfirmDisabled: Bool {
-        isPublishing || (commentCount == 0 && selectedDecision == .comment)
+        isPublishing
+            || !allowedDecisions.contains(selectedDecision)
+            || (commentCount == 0 && selectedDecision == .comment)
+    }
+}
+
+private extension ProviderReviewDecision {
+    var displayName: String {
+        switch self {
+        case .comment:
+            "Comment"
+        case .approve:
+            "Approve"
+        case .requestChanges:
+            "Request changes"
+        }
     }
 }
 

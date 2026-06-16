@@ -730,6 +730,7 @@ struct ReviewSessionTabViewTests {
             reviewIdentity: "PR #527",
             commentCount: 2,
             unpublishableMessages: ["Sources/Old.swift: line is outdated"],
+            allowedDecisions: [.comment, .approve, .requestChanges],
             selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
             isPublishing: false,
             errorMessage: nil,
@@ -757,6 +758,7 @@ struct ReviewSessionTabViewTests {
             reviewIdentity: "PR #527",
             commentCount: 0,
             unpublishableMessages: ["Sources/App.swift: already published to GitHub."],
+            allowedDecisions: [.comment, .approve, .requestChanges],
             selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
             isPublishing: false,
             errorMessage: nil,
@@ -770,6 +772,31 @@ struct ReviewSessionTabViewTests {
 
         #expect(!pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host))
         #expect(!didConfirm)
+    }
+
+    @Test func providerPublishConfirmationHidesUnsupportedReviewDecisions() throws {
+        var selectedDecision = ProviderReviewDecision.comment
+        let view = ProviderReviewPublishConfirmationView(
+            providerName: "GitLab",
+            reviewIdentity: "MR !42",
+            commentCount: 1,
+            unpublishableMessages: [],
+            allowedDecisions: [.comment, .approve],
+            selectedDecision: Binding(get: { selectedDecision }, set: { selectedDecision = $0 }),
+            isPublishing: false,
+            errorMessage: nil,
+            onCancel: {},
+            onConfirm: {}
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 420, height: 260))
+        host.layoutSubtreeIfNeeded()
+        let description = recursiveDescription(host)
+
+        #expect(description.contains("Comment"))
+        #expect(description.contains("Approve"))
+        #expect(!description.contains("Request changes"))
     }
 
     @Test func reviewSessionShowsPublishReviewForProviderContextWithDraftsAndOpensPublishConfirmation() async throws {

@@ -54,6 +54,7 @@ struct ProviderReviewPublishConfirmationState: Equatable {
     let reviewIdentity: String
     let commentCount: Int
     let unpublishableMessages: [String]
+    let allowedDecisions: [ProviderReviewDecision]
 }
 
 struct ReviewSessionTabView: View {
@@ -498,9 +499,13 @@ struct ReviewSessionTabView: View {
             || provider.capabilities.canApproveReview
             || provider.capabilities.canRequestChanges
         else { return }
-        selectedProviderDecision = Self.defaultProviderDecision(
+        let allowedDecisions = Self.allowedProviderDecisions(
             commentCount: comments.count,
             capabilities: provider.capabilities
+        )
+        guard !allowedDecisions.isEmpty else { return }
+        selectedProviderDecision = Self.defaultProviderDecision(
+            allowedDecisions: allowedDecisions
         )
         providerPublishError = nil
         providerPublishConfirmation = ProviderReviewPublishConfirmationState(
@@ -508,24 +513,35 @@ struct ReviewSessionTabView: View {
             providerName: providerContext.remote.kind.displayName,
             reviewIdentity: providerContext.reviewRequest.displayIdentity,
             commentCount: comments.count,
-            unpublishableMessages: unpublishableMessages
+            unpublishableMessages: unpublishableMessages,
+            allowedDecisions: allowedDecisions
         )
     }
 
-    private static func defaultProviderDecision(
+    private static func allowedProviderDecisions(
         commentCount: Int,
         capabilities: CodeHostProviderCapabilities
-    ) -> ProviderReviewDecision {
-        if commentCount > 0 {
-            return .comment
+    ) -> [ProviderReviewDecision] {
+        var decisions: [ProviderReviewDecision] = []
+        if commentCount > 0, capabilities.canPublishReviewComments {
+            decisions.append(.comment)
         }
         if capabilities.canApproveReview {
-            return .approve
+            decisions.append(.approve)
         }
         if capabilities.canRequestChanges {
-            return .requestChanges
+            decisions.append(.requestChanges)
         }
-        return .comment
+        return decisions
+    }
+
+    private static func defaultProviderDecision(
+        allowedDecisions: [ProviderReviewDecision]
+    ) -> ProviderReviewDecision {
+        if allowedDecisions.contains(.comment) {
+            return .comment
+        }
+        return allowedDecisions.first ?? .comment
     }
 
     private func providerPublishableComments(commentID: String?) -> [ReviewDraftComment] {
@@ -551,6 +567,7 @@ struct ReviewSessionTabView: View {
                     reviewIdentity: providerPublishConfirmation.reviewIdentity,
                     commentCount: providerPublishConfirmation.commentCount,
                     unpublishableMessages: providerPublishConfirmation.unpublishableMessages,
+                    allowedDecisions: providerPublishConfirmation.allowedDecisions,
                     selectedDecision: $selectedProviderDecision,
                     isPublishing: isProviderPublishing,
                     errorMessage: providerPublishError,
@@ -581,6 +598,10 @@ struct ReviewSessionTabView: View {
         defer { isProviderPublishing = false }
 
         do {
+            guard confirmation.allowedDecisions.contains(selectedProviderDecision) else {
+                providerPublishError = "\(selectedProviderDecision.displayName) is not supported by this provider."
+                return
+            }
             let selectedDraftIDs = confirmation.commentID.map { Set([$0]) }
             let result = try await controller.publishReview(
                 remote: providerContext.remote,
@@ -994,6 +1015,19 @@ private extension ReviewThreadSide {
             self = .new
         case .unknown:
             self = .unknown
+        }
+    }
+}
+
+private extension ProviderReviewDecision {
+    var displayName: String {
+        switch self {
+        case .comment:
+            "Comment"
+        case .approve:
+            "Approve"
+        case .requestChanges:
+            "Request changes"
         }
     }
 }

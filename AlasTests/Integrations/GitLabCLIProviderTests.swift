@@ -1801,11 +1801,9 @@ struct GitLabCLIProviderTests {
     private static let versionsOutput = """
     [
       {
-        "diff_refs": {
-          "base_sha": "base123",
-          "start_sha": "start123",
-          "head_sha": "head123"
-        }
+        "base_commit_sha": "base123",
+        "start_commit_sha": "start123",
+        "head_commit_sha": "head123"
       }
     ]
     """
