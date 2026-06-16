@@ -18,6 +18,10 @@ final class RightPaneState {
     /// Increments whenever `refresh()` publishes a new change list. This
     /// catches same-line unstaged edits whose add/delete totals stay constant.
     private(set) var changesGeneration: Int = 0
+    /// Increments whenever cached snapshot data is explicitly invalidated.
+    /// In-flight refreshes capture this before doing async work and must not
+    /// publish if it changed underneath them.
+    private var snapshotInvalidationGeneration: Int = 0
     /// Fingerprint of the staged index contents (concatenated blob SHAs of
     /// staged files). Changes whenever any staged file's contents change,
     /// even when add/del totals are identical. Used by views that need to
@@ -352,6 +356,7 @@ final class RightPaneState {
     @MainActor
     func refresh() async {
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
+        let snapshotGeneration = snapshotInvalidationGeneration
         loading = true
         defer { loading = false }
         invalidateFileTreeChildLoadsForRefresh()
@@ -382,11 +387,8 @@ final class RightPaneState {
             let (commits, ref) = try await c
             let reviewLoopBaseResult = try? await reviewLoopBase
             let resolvedUpstream = try? await upstream
-            self.upstreamRef = resolvedUpstream?.ref
             _ = await mergeRefresh
-            self.changes = entries
-            self.hasLoadedSnapshot = true
-            self.changesGeneration += 1
+            let indexFingerprint: String
             if let lsResult = try? await Process.git(
                 ["ls-files", "-s", "-z"],
                 cwd: worktree.path
@@ -398,19 +400,27 @@ final class RightPaneState {
                     .split(separator: "\0", omittingEmptySubsequences: true)
                     .map(String.init)
                     .sorted()
-                self.indexFingerprint = tokens.joined(separator: "|")
+                indexFingerprint = tokens.joined(separator: "|")
             } else {
-                self.indexFingerprint = ""
+                indexFingerprint = ""
             }
+            let previousBranch = self.currentBranch
+            let previousHeadSHA = self.currentHeadSHA
+            let currentBranch = (try? await br) ?? self.currentBranch
+            let headSHA = (try? await self.git.revParseHEAD(worktreePath: self.worktree.path)) ?? ""
+            guard snapshotGeneration == snapshotInvalidationGeneration else {
+                return
+            }
+            self.upstreamRef = resolvedUpstream?.ref
+            self.changes = entries
+            self.changesGeneration += 1
+            self.indexFingerprint = indexFingerprint
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
-            let previousBranch = self.currentBranch
-            self.currentBranch = (try? await br) ?? self.currentBranch
-            let previousHeadSHA = self.currentHeadSHA
-            let headSHA = (try? await self.git.revParseHEAD(worktreePath: self.worktree.path)) ?? ""
+            self.currentBranch = currentBranch
             self.currentHeadSHA = headSHA
-            if previousBranch != self.currentBranch || previousHeadSHA != self.currentHeadSHA {
+            if previousBranch != currentBranch || previousHeadSHA != headSHA {
                 // Branch or HEAD changed (checkout, rebase, reset, amend, …).
                 // The behind chips were probed against the OLD branch's base
                 // and upstream — clear them so the header doesn't render
@@ -430,6 +440,7 @@ final class RightPaneState {
                 }
                 didInitDefaultTab = true
             }
+            self.hasLoadedSnapshot = true
             let upstreamBranchName = resolvedUpstream.map {
                 String($0.ref.dropFirst($0.remote.count + 1))
             }
@@ -453,6 +464,7 @@ final class RightPaneState {
     }
 
     func markSnapshotUnknown() {
+        snapshotInvalidationGeneration += 1
         hasLoadedSnapshot = false
         changes = []
         indexFingerprint = ""
