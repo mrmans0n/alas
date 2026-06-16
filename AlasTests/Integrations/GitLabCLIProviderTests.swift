@@ -852,6 +852,54 @@ struct GitLabCLIProviderTests {
         #expect(lineRangeEnd["line_code"] as? String == "\(Self.gitLabLineCodePathHash("Sources/OldApp.swift"))_14_0")
     }
 
+    @Test func publishReviewSelectsGitLabDiffRefsForReviewedHeadSHA() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsWithMultipleHeadsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.createDiscussionOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
+        ])
+
+        _ = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+            remote: Self.remote,
+            reviewRequest: Self.makeRequest(headSHA: "reviewed-head"),
+            comments: [try Self.makeProviderDraftComment()],
+            decision: .comment,
+            summaryBody: "",
+            cwd: Self.cwd
+        ))
+
+        let commands = await runner.commands
+        let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
+        let position = try #require(discussionPayload["position"] as? [String: Any])
+        #expect(position["base_sha"] as? String == "reviewed-base")
+        #expect(position["start_sha"] as? String == "reviewed-start")
+        #expect(position["head_sha"] as? String == "reviewed-head")
+    }
+
+    @Test func publishReviewRejectsGitLabDiffRefsWithoutReviewedHeadSHA() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsWithMultipleHeadsOutput, stderr: ""),
+        ])
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("Unable to find GitLab diff refs for reviewed head SHA.")) {
+            _ = try await GitLabCLIProvider(runner: runner).publishReview(ProviderReviewPublishRequest(
+                remote: Self.remote,
+                reviewRequest: Self.makeRequest(headSHA: "missing-head"),
+                comments: [try Self.makeProviderDraftComment()],
+                decision: .comment,
+                summaryBody: "",
+                cwd: Self.cwd
+            ))
+        }
+
+        let commands = await runner.commands
+        #expect(commands.map { Array($0.args.prefix(2)) } == [
+            ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/versions"],
+        ])
+    }
+
     @Test func publishReviewCreatesStatusNoteForGitLabRequestChanges() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
@@ -1704,6 +1752,7 @@ struct GitLabCLIProviderTests {
     private static let cwd = URL(fileURLWithPath: "/tmp/alas")
 
     private static func makeRequest(
+        headSHA: String = "head123",
         checks: [ReviewCheck] = [],
         threads: [ReviewThreadSummary] = []
     ) -> ReviewRequest {
@@ -1716,7 +1765,7 @@ struct GitLabCLIProviderTests {
             isDraft: false,
             headRefName: "feature/gitlab-provider",
             baseRefName: "main",
-            headSHA: "head123",
+            headSHA: headSHA,
             reviewDecision: .unknown,
             mergeState: .unknown,
             checks: checks,
@@ -1913,6 +1962,21 @@ struct GitLabCLIProviderTests {
         "base_commit_sha": "base123",
         "start_commit_sha": "start123",
         "head_commit_sha": "head123"
+      }
+    ]
+    """
+
+    private static let versionsWithMultipleHeadsOutput = """
+    [
+      {
+        "base_commit_sha": "latest-base",
+        "start_commit_sha": "latest-start",
+        "head_commit_sha": "latest-head"
+      },
+      {
+        "base_commit_sha": "reviewed-base",
+        "start_commit_sha": "reviewed-start",
+        "head_commit_sha": "reviewed-head"
       }
     ]
     """

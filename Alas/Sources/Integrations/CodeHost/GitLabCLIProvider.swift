@@ -447,7 +447,7 @@ struct GitLabCLIProvider: CodeHostProvider {
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api merge request versions", stderr: result.stderr)
         }
-        return try Self.parseDiffRefs(result.stdout)
+        return try Self.parseDiffRefs(result.stdout, reviewedHeadSHA: request.headSHA)
     }
 
     private func createDiscussion(
@@ -763,16 +763,27 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
     }
 
-    static func parseDiffRefs(_ json: String) throws -> GitLabDiffRefs {
+    static func parseDiffRefs(_ json: String, reviewedHeadSHA: String? = nil) throws -> GitLabDiffRefs {
         let data = Data(json.utf8)
         let decoder = JSONDecoder()
         do {
-            if let versions = try? decoder.decode([GitLabMRVersion].self, from: data),
-               let refs = versions.first?.diffRefs {
-                return try refs.validated()
+            if let versions = try? decoder.decode([GitLabMRVersion].self, from: data) {
+                guard !versions.isEmpty else {
+                    throw CodeHostProviderError.malformedOutput("glab api merge request versions output is missing diff refs")
+                }
+                if let reviewedHeadSHA = normalizedOptionalString(reviewedHeadSHA) {
+                    guard let refs = versions.first(where: { $0.diffRefs.headSHA == reviewedHeadSHA })?.diffRefs else {
+                        throw CodeHostProviderError.malformedOutput("Unable to find GitLab diff refs for reviewed head SHA.")
+                    }
+                    return try refs.validated()
+                }
+                return try versions[0].diffRefs.validated()
             }
-            let version = try decoder.decode(GitLabMRVersion.self, from: data)
-            return try version.diffRefs.validated()
+            let refs = try decoder.decode(GitLabMRVersion.self, from: data).diffRefs
+            if let reviewedHeadSHA = normalizedOptionalString(reviewedHeadSHA), refs.headSHA != reviewedHeadSHA {
+                throw CodeHostProviderError.malformedOutput("Unable to find GitLab diff refs for reviewed head SHA.")
+            }
+            return try refs.validated()
         } catch let error as CodeHostProviderError {
             throw error
         } catch {
