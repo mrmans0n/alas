@@ -537,13 +537,21 @@ struct ACPMessageList: View {
     ) {
         // Tail-follow pause/resume — reuse the shared classifier so the rules
         // match the legacy observer exactly.
+        let currentEventType = NSApp.currentEvent?.type
+        let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            currentEventType,
+            previousMinY: previousMinY,
+            newMinY: newMinY,
+            isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(NSApp.currentEvent)
+        )
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
             newOffsetY: newMinY,
             viewportHeight: viewportHeight,
             contentHeight: contentHeight,
             isRestoring: isRestoringTail,
-            isUserDriven: ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
+            isUserDriven: isUserDriven
         )
         switch decision {
         case .userScrolledUp: setFollowsTranscriptTail(false)
@@ -560,15 +568,35 @@ struct ACPMessageList: View {
             scrollToTail(proxy: proxy, animated: false)
             return
         }
-        // Head-step pagination: reveal an older chunk as the viewport nears the
-        // top of the content. When restored to the tail, `newMinY` is large, so
-        // the threshold check alone keeps this from firing prematurely.
-        guard transcript.visibleHead > 0, !isRestoringTail else { return }
-        guard newMinY < headStepScrollThreshold else { return }
+        // Head-step pagination: reveal older messages only while a live scroll
+        // gesture is driving the viewport near the top. Initial post-restore
+        // geometry can briefly report top-like offsets before tail restoration
+        // settles; geometry alone must not page the transcript upward.
+        guard Self.shouldStepHeadBackFromGeometry(
+            visibleHead: transcript.visibleHead,
+            isRestoring: isRestoringTail,
+            isHeadPaginationDriven: isHeadPaginationDriven,
+            newMinY: newMinY,
+            threshold: headStepScrollThreshold
+        ) else { return }
         let now = Date()
         guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
         lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
+    }
+
+    nonisolated static func shouldStepHeadBackFromGeometry(
+        visibleHead: Int,
+        isRestoring: Bool,
+        isHeadPaginationDriven: Bool,
+        newMinY: CGFloat,
+        threshold: CGFloat
+    ) -> Bool {
+        guard visibleHead > 0 else { return false }
+        guard !isRestoring else { return false }
+        guard isHeadPaginationDriven else { return false }
+        guard newMinY < threshold else { return false }
+        return true
     }
 
     /// Reveal an older chunk while keeping the viewport anchored to the same
@@ -897,6 +925,44 @@ enum ACPUserScrollEvent {
         default:
             return false
         }
+    }
+
+    static func isHeadPaginationDriven(
+        _ type: NSEvent.EventType?,
+        previousMinY: CGFloat? = nil,
+        newMinY: CGFloat? = nil,
+        isScrollbarTrackHit: Bool = false
+    ) -> Bool {
+        guard let type else { return false }
+        if isUserDriven(type) { return true }
+        // Track-click paging arrives as a plain mouse-down. Keep that out of
+        // tail-follow pause detection, and require both scrollbar provenance
+        // and actual upward geometry movement so tab/content clicks cannot
+        // reveal older rows during restore or layout.
+        guard type == .leftMouseDown, isScrollbarTrackHit, let previousMinY, let newMinY else {
+            return false
+        }
+        return newMinY < previousMinY - ACPScrollDirectionClassifier.upwardEpsilon
+    }
+
+    static func isScrollbarTrackMouseDown(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown, let contentView = event.window?.contentView else {
+            return false
+        }
+        return isScrollbarView(contentView.hitTest(event.locationInWindow))
+    }
+
+    private static func isScrollbarView(_ view: NSView?) -> Bool {
+        var current = view
+        while let view = current {
+            if view is NSScroller { return true }
+            let className = NSStringFromClass(type(of: view)).lowercased()
+            if className.contains("scroller") || className.contains("scrollbar") {
+                return true
+            }
+            current = view.superview
+        }
+        return false
     }
 }
 
