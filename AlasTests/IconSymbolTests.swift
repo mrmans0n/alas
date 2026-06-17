@@ -9,4 +9,11 @@ struct IconSymbolTests {
     @Test func branchMappingUnchanged() {
         #expect(Icon.symbol(for: "branch") == "arrow.triangle.branch")
     }
+
+    @Test func codeHostIconsUseCustomGlyphs() {
+        #expect(Icon.symbol(for: "github") == "github")
+        #expect(Icon.symbol(for: "gitlab") == "gitlab")
+        #expect(Icon.rendersCustomGlyph(for: "github"))
+        #expect(Icon.rendersCustomGlyph(for: "gitlab"))
+    }
 }
