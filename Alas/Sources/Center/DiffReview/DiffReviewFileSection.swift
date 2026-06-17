@@ -481,7 +481,11 @@ struct DiffReviewFileSection: View {
         in group: DiffDisplayGroup
     ) -> some View {
         let matchedThreads = threads.filter { thread in
-            segment.rows.contains { $0.new?.anchor.newLine == thread.newLine }
+            segment.rows.contains {
+                thread.isOldSide
+                    ? $0.old?.anchor.newLine == thread.newLine
+                    : $0.new?.anchor.newLine == thread.newLine
+            }
         }
         let matchedAnnotations = annotations.filter { annotation in
             segment.rows.contains { $0.new?.anchor.newLine == annotation.newLine }

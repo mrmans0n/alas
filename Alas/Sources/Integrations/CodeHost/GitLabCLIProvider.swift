@@ -608,7 +608,7 @@ struct GitLabCLIProvider: CodeHostProvider {
         // Fetch diff refs once if we have any inline (file-positioned) comments
         let hasInlineComments = comments.contains { $0.filePath != nil && $0.line != nil }
         let diffRefs: GitLabDiffRefs? = hasInlineComments
-            ? (try? await mergeRequestDiffRefs(remote: remote, request: request, cwd: cwd))
+            ? try await mergeRequestDiffRefs(remote: remote, request: request, cwd: cwd)
             : nil
 
         // Post each staged comment as either an inline discussion or a top-level MR note

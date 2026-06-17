@@ -211,6 +211,7 @@ struct DiffReviewSurface: View {
                     wrapLines: $wrapLines,
                     showWhitespace: $showWhitespace
                 ) : nil,
+                threads: threads,
                 onSelectFile: scrollToFile
             )
             mainReviewStream(session, firstFileID: firstFileID)
