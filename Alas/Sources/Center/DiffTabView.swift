@@ -487,7 +487,8 @@ struct DiffTabView: View {
 
     @ViewBuilder
     private func reviewDiffBody(model: DiffDisplayModel) -> some View {
-        let comments = draftCommentController?.comments ?? []
+        let currentFileID = fileID
+        let comments = (draftCommentController?.comments ?? []).filter { $0.fileID == currentFileID }
         let placement = ReviewDraftCommentPlacement.position(comments, in: model.groups)
         VStack(spacing: 0) {
             reviewDiffToolbar
