@@ -42,14 +42,26 @@ struct DiffPaneTextDocumentBuilder {
         showWhitespace: Bool,
         theme: Theme
     ) -> SplitResult {
+        buildSplit(
+            rows: DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: expandedCollapsedRowIDs),
+            fileExtension: fileExtension,
+            font: font,
+            showWhitespace: showWhitespace,
+            theme: theme
+        )
+    }
+
+    static func buildSplit(
+        rows: [DiffDisplayRow],
+        fileExtension: String,
+        font: NSFont,
+        showWhitespace: Bool,
+        theme: Theme
+    ) -> SplitResult {
         var oldColumn = ColumnAccumulator(font: font, theme: theme)
         var newColumn = ColumnAccumulator(font: font, theme: theme)
         var oldGutter = GutterAccumulator(font: font, theme: theme)
         var newGutter = GutterAccumulator(font: font, theme: theme)
-        let rows = DiffPaneRowProjection.visibleRows(
-            in: group,
-            expandedCollapsedRowIDs: expandedCollapsedRowIDs
-        )
 
         for row in rows {
             if row.kind == .expandableContext {
@@ -139,12 +151,24 @@ struct DiffPaneTextDocumentBuilder {
         showWhitespace: Bool,
         theme: Theme
     ) -> StackedResult {
+        buildStacked(
+            rows: DiffPaneRowProjection.visibleRows(in: group, expandedCollapsedRowIDs: expandedCollapsedRowIDs),
+            fileExtension: fileExtension,
+            font: font,
+            showWhitespace: showWhitespace,
+            theme: theme
+        )
+    }
+
+    static func buildStacked(
+        rows: [DiffDisplayRow],
+        fileExtension: String,
+        font: NSFont,
+        showWhitespace: Bool,
+        theme: Theme
+    ) -> StackedResult {
         var codeColumn = ColumnAccumulator(font: font, theme: theme)
         var gutter = GutterAccumulator(font: font, theme: theme)
-        let rows = DiffPaneRowProjection.visibleRows(
-            in: group,
-            expandedCollapsedRowIDs: expandedCollapsedRowIDs
-        )
 
         var index = 0
         while index < rows.count {
