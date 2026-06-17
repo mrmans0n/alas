@@ -313,6 +313,7 @@ struct DraftCommitTabView: View {
             // ignore
         } catch {
             guard stagedKey == token else { return }
+            stagedSession = nil
             self.error = (error as NSError).localizedDescription
         }
     }
