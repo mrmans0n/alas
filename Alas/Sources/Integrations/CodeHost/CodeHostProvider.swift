@@ -154,6 +154,9 @@ protocol CodeHostProvider: Sendable {
     ) async throws
 
     func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation]
+
+    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
+    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
 }
 
 extension CodeHostProvider {
@@ -301,6 +304,14 @@ extension CodeHostProvider {
     }
 
     func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation] {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
         throw CodeHostProviderError.unsupportedProvider(kind)
     }
 }

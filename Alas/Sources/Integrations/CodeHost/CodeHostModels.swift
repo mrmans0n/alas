@@ -198,6 +198,54 @@ struct ReviewComment: Identifiable, Equatable, Sendable {
     let isPending: Bool
 }
 
+enum ReviewThreadSide: String, Codable, Equatable, Sendable {
+    case old
+    case new
+    case unknown
+}
+
+struct ReviewThreadLocation: Codable, Equatable, Sendable {
+    let path: String
+    let originalPath: String?
+    let line: Int?
+    let side: ReviewThreadSide
+    let providerPosition: String?
+}
+
+struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
+    let id: String
+    let author: String?
+    let body: String
+    let url: URL?
+    let isResolved: Bool
+    let isActionable: Bool
+    let location: ReviewThreadLocation?
+    let providerThreadID: String?
+    let providerCommentID: String?
+
+    init(
+        id: String,
+        author: String?,
+        body: String,
+        url: URL?,
+        isResolved: Bool,
+        isActionable: Bool,
+        location: ReviewThreadLocation? = nil,
+        providerThreadID: String? = nil,
+        providerCommentID: String? = nil
+    ) {
+        self.id = id
+        self.author = author
+        self.body = body
+        self.url = url
+        self.isResolved = isResolved
+        self.isActionable = isActionable
+        self.location = location
+        self.providerThreadID = providerThreadID
+        self.providerCommentID = providerCommentID
+    }
+}
+
 struct ReviewThread: Identifiable, Equatable, Sendable {
     let id: String
     let path: String?
@@ -296,7 +344,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         reviewDecision: ReviewDecision,
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
-        threads: [ReviewThreadSummary]
+        threads: [ReviewThread]
     ) {
         self.remote = remote
         self.number = number

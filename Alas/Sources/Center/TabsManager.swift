@@ -650,6 +650,46 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusReviewSession(worktreeId: String, record: ReviewSessionRecord) -> Tab {
+        let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
+        if var file = byWorktree[worktreeId],
+           let idx = file.tabs.firstIndex(where: { $0.id == baseState.id }),
+           case .reviewSession(var existing) = file.tabs[idx] {
+            existing.title = record.target.title
+            existing.selectedFileID = record.selectedFileID
+            existing.focusedCommentID = record.focusedCommentID
+            let tab = Tab.reviewSession(existing)
+            file.tabs[idx] = tab
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+
+        let tab = Tab.reviewSession(baseState)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func updateReviewSession(
+        worktreeId: String,
+        tabId: TabID,
+        mutate: (inout ReviewSessionTabState) -> Void
+    ) -> Tab? {
+        guard var file = byWorktree[worktreeId],
+              let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
+              case .reviewSession(var state) = file.tabs[idx]
+        else { return nil }
+        mutate(&state)
+        let tab = Tab.reviewSession(state)
+        file.tabs[idx] = tab
+        byWorktree[worktreeId] = file
+        persist(worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusReviewPR(worktreeId: String, snapshot: ReviewLoopSnapshot) -> Tab {
         let baseState = ReviewPRTabState(worktreeId: worktreeId, snapshot: snapshot)
         if var file = byWorktree[worktreeId],

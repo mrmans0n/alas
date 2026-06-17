@@ -81,6 +81,24 @@ enum Tab: Codable, Equatable, Identifiable {
     }
 }
 
+struct ReviewSessionTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let sessionID: ReviewSessionID
+    var title: String
+    var selectedFileID: DiffReviewFileID?
+    var focusedCommentID: String?
+
+    init(worktreeId: String, record: ReviewSessionRecord) {
+        self.id = "review-session:\(record.id.rawValue)"
+        self.worktreeId = worktreeId
+        self.sessionID = record.id
+        self.title = record.target.title
+        self.selectedFileID = record.selectedFileID
+        self.focusedCommentID = record.focusedCommentID
+    }
+}
+
 struct ReviewChangesTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String

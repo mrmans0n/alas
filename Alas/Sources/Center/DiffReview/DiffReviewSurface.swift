@@ -15,6 +15,18 @@ struct DiffReviewSurface: View {
     var showsDraftSummaryRail: Bool = false
     var allowsDraftCommentCreation: Bool = true
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
+    var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
+    var focusedFeedbackID: String? = nil
+    var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil
+    var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
+    var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
+    var reviewFeedbackTargetOverride: ReviewFeedbackTarget? = nil
+    var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
+    var focusedDraftCommentID: String? = nil
+    var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
+    var draftCommentActions = ReviewDraftCommentActions()
+    var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
+    var onSaveDraftComment: (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
     var threads: [ReviewThread] = []
     var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
@@ -63,7 +75,18 @@ struct DiffReviewSurface: View {
         draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil,
         draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
-        onSaveDraftComment: @escaping (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
+        onSaveDraftComment: @escaping (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in },
+        threads: [ReviewThread] = [],
+        onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        onResolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onUnresolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onEdit: @escaping (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in },
+        onDelete: @escaping (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in },
+        annotations: [CheckAnnotation] = [],
+        canReply: Bool = false,
+        canResolve: Bool = false,
+        onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        canAddToReview: Bool = false
     ) {
         self.session = session
         self._selectedFileID = selectedFileID
@@ -91,6 +114,17 @@ struct DiffReviewSurface: View {
         self.draftCommentActions = draftCommentActions
         self.onSelectDraftComment = onSelectDraftComment
         self.onSaveDraftComment = onSaveDraftComment
+        self.threads = threads
+        self.onReply = onReply
+        self.onResolve = onResolve
+        self.onUnresolve = onUnresolve
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self.annotations = annotations
+        self.canReply = canReply
+        self.canResolve = canResolve
+        self.onStageReply = onStageReply
+        self.canAddToReview = canAddToReview
     }
 
     private var fileIDs: [DiffReviewFileID] {
@@ -167,21 +201,27 @@ struct DiffReviewSurface: View {
             set: { selectedFileID = $0 }
         )
 
-        return ScrollViewReader { scrollProxy in
-            HStack(spacing: 0) {
-                DiffReviewRail(
-                    session: session.summary,
-                    selectedFileID: selectedBinding,
-                    collapsed: $railCollapsed,
-                    displayControls: showsRailDisplayControls ? DiffReviewDisplayControlBindings(
-                        layoutMode: $layoutMode,
-                        wrapLines: $wrapLines,
-                        showWhitespace: $showWhitespace
-                    ) : nil,
-                    threads: threads,
-                    onSelectFile: { id in
-                        scrollToFile(id, proxy: scrollProxy)
-                    }
+        return HStack(spacing: 0) {
+            DiffReviewRail(
+                session: session.summary,
+                selectedFileID: selectedBinding,
+                collapsed: $railCollapsed,
+                displayControls: showsRailDisplayControls ? DiffReviewDisplayControlBindings(
+                    layoutMode: $layoutMode,
+                    wrapLines: $wrapLines,
+                    showWhitespace: $showWhitespace
+                ) : nil,
+                onSelectFile: scrollToFile
+            )
+            mainReviewStream(session, firstFileID: firstFileID)
+            if shouldShowReviewSummaryRail {
+                ReviewDraftSummaryRail(
+                    comments: allDraftComments,
+                    bundle: reviewFeedbackBundle,
+                    collapsed: $reviewSummaryCollapsed,
+                    focusedDraftCommentID: focusedDraftCommentID,
+                    draftCommentActions: draftCommentActions,
+                    onSelectDraftComment: onSelectDraftComment
                 )
             }
         }
@@ -189,31 +229,43 @@ struct DiffReviewSurface: View {
 
     private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
         GeometryReader { viewport in
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(session.files) { file in
-                        let fileThreads = inlineThreads(for: file.summary.path)
-                        let fileAnnotations = inlineAnnotations(for: file.summary.path)
-                        DiffReviewFileSection(
-                            file: file,
-                            layoutMode: $layoutMode,
-                            wrapLines: $wrapLines,
-                            showWhitespace: $showWhitespace,
-                            codeFontFamily: codeFontFamily,
-                            codeFontSize: codeFontSize,
-                            showsSourceBadge: showsSourceBadges,
-                            lspContext: lspContextForFile(file),
-                            threads: fileThreads,
-                            annotations: fileAnnotations,
-                            onReply: { t, body in onReply(t, body) },
-                            onResolve: { t in onResolve(t) },
-                            onUnresolve: { t in onUnresolve(t) },
-                            onEdit: { t, c, newBody in onEdit(t, c, newBody) },
-                            onDelete: { t, c in onDelete(t, c) },
-                            canReply: canReply,
-                            canResolve: canResolve,
-                            onStageReply: { t, body in onStageReply(t, body) },
-                            canAddToReview: canAddToReview
+            ScrollViewReader { scrollProxy in
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        let renderedIDs = effectiveRenderedFileIDs(firstFileID: firstFileID)
+                        ForEach(session.files) { file in
+                            fileSection(file, isRendered: renderedIDs.contains(file.id))
+                                .id(file.summary.id.rawValue)
+                                .background(sectionFrameReader(for: file.summary.id))
+                        }
+                    }
+                    .padding(16)
+                }
+                .coordinateSpace(name: Self.scrollCoordinateSpace)
+                .onPreferenceChange(DiffReviewSectionFramePreferenceKey.self) { frames in
+                    updateSelectedFileFromScroll(frames: frames, viewportHeight: viewport.size.height)
+                    updateRenderedFileIDs(
+                        frames: frames,
+                        viewportHeight: viewport.size.height,
+                        firstFileID: firstFileID
+                    )
+                }
+                .onChange(of: scrollCommand) { _, command in
+                    guard let command else { return }
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
+                    }
+                    scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                        current: scrollCommand,
+                        consumed: command
+                    )
+                }
+                .onAppear {
+                    if let command = scrollCommand {
+                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
+                        scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                            current: scrollCommand,
+                            consumed: command
                         )
                     }
                     if let command = inlineFeedbackScrollCommand {

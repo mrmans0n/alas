@@ -3104,6 +3104,7 @@
 				073E19743F9145840DD47C8B /* Merge */,
 				42C76CF381570A3B233F79D2 /* ReviewChanges */,
 				4AF44827354C470592274005 /* ReviewRequest */,
+				D01AEADFFA32827C6CFC24CB /* ReviewWorkspace */,
 				04D345963BE0422CAC97BE1B /* Review */,
 			);
 			path = Center;
@@ -4715,6 +4716,8 @@
 				DF2960A73C07F97DA0A615D4 /* ReviewDraftSummaryRail.swift in Sources */,
 				77CDD88F7C517095DE580B50 /* ReviewEvidence.swift in Sources */,
 				DF93C8550C7A78C2A03CF56A /* ReviewEvidenceModel.swift in Sources */,
+				E0F4EFE612252BDD7F999A70 /* ReviewFeedbackAgentSender.swift in Sources */,
+				D27A85DE79B3B62C6F91174A /* ReviewFeedbackBundle.swift in Sources */,
 				DB29057E7147A0774BC2B835 /* ReviewLoopDrawer.swift in Sources */,
 				877BEC66CEBB5C495536FA20 /* ReviewLoopHandoffBuilder.swift in Sources */,
 				F5626F154B2CF446FF3F917B /* ReviewLoopState.swift in Sources */,

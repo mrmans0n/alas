@@ -149,6 +149,16 @@ struct DiffPaneView: View {
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
         threads: [DiffInlineCommentThread] = [],
+        annotations: [DiffInlineAnnotation] = [],
+        onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        onResolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onUnresolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onEdit: @escaping (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in },
+        onDelete: @escaping (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in },
+        canReply: Bool = false,
+        canResolve: Bool = false,
+        onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        canAddToReview: Bool = false,
         hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
     ) {
         self.model = model
@@ -165,6 +175,16 @@ struct DiffPaneView: View {
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
         self.threads = threads
+        self.annotations = annotations
+        self.onReply = onReply
+        self.onResolve = onResolve
+        self.onUnresolve = onUnresolve
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self.canReply = canReply
+        self.canResolve = canResolve
+        self.onStageReply = onStageReply
+        self.canAddToReview = canAddToReview
         self.hunkActions = hunkActions
     }
 

@@ -525,9 +525,9 @@ struct ReviewSessionTabView: View {
               let provider = providerRegistry.provider(for: providerContext.remote.kind)
         else { return false }
         let capabilities = provider.capabilities
-        return capabilities.canPublishReviewComments
-            || capabilities.canApproveReview
-            || capabilities.canRequestChanges
+        return capabilities.canComment
+            || capabilities.canSubmitReview
+            || capabilities.canSubmitReview
     }
 
     private func openProviderPublishConfirmation(commentID: String?, loaded: ReviewSessionLoadedContext) {
@@ -539,8 +539,8 @@ struct ReviewSessionTabView: View {
         guard commentID == nil || !comments.isEmpty || !unpublishableMessages.isEmpty else { return }
         guard !comments.isEmpty
             || !unpublishableMessages.isEmpty
-            || provider.capabilities.canApproveReview
-            || provider.capabilities.canRequestChanges
+            || provider.capabilities.canSubmitReview
+            || provider.capabilities.canSubmitReview
         else { return }
         let allowedDecisions = Self.allowedProviderDecisions(
             commentCount: comments.count,
@@ -567,13 +567,13 @@ struct ReviewSessionTabView: View {
         capabilities: CodeHostProviderCapabilities
     ) -> [ProviderReviewDecision] {
         var decisions: [ProviderReviewDecision] = []
-        if commentCount > 0, capabilities.canPublishReviewComments {
+        if commentCount > 0, capabilities.canComment {
             decisions.append(.comment)
         }
-        if capabilities.canApproveReview {
+        if capabilities.canSubmitReview {
             decisions.append(.approve)
         }
-        if capabilities.canRequestChanges {
+        if capabilities.canSubmitReview {
             decisions.append(.requestChanges)
         }
         return decisions
@@ -681,15 +681,15 @@ struct ReviewSessionTabView: View {
     }
 
     static func inlineFeedbackByFileID(
-        threads: [ReviewThreadSummary],
+        threads: [ReviewThread],
         files: [DiffReviewFileSummary],
         providerName: String
     ) -> [DiffReviewFileID: [DiffReviewInlineFeedback]] {
         var grouped: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
         let matcher = ReviewSessionInlineFeedbackFileMatcher(files: files)
         for thread in threads {
-            guard let location = thread.location,
-                  let file = matcher.file(for: location)
+            guard let path = thread.path,
+                  let file = matcher.file(forPath: path)
             else { continue }
             let status: ReviewEvidenceStatus
             if thread.isResolved {
@@ -708,9 +708,9 @@ struct ReviewSessionTabView: View {
                 status: status,
                 providerURL: thread.url,
                 anchor: DiffReviewInlineFeedbackAnchor(
-                    path: Self.inlineFeedbackAnchorPath(for: location, matchedFile: file),
-                    line: location.line,
-                    side: DiffReviewInlineFeedbackSide(location.side)
+                    path: path,
+                    line: thread.line,
+                    side: .unknown
                 ),
                 evidenceItemID: thread.id
             )
@@ -736,18 +736,6 @@ struct ReviewSessionTabView: View {
         }
     }
 
-    private static func inlineFeedbackAnchorPath(
-        for location: ReviewThreadLocation,
-        matchedFile file: DiffReviewFileSummary
-    ) -> String {
-        switch location.side {
-        case .old:
-            location.originalPath ?? file.originalPath ?? location.path
-        case .new, .unknown:
-            location.path
-        }
-    }
-
     private func inlineFeedbackActions(for loaded: ReviewSessionLoadedContext) -> DiffReviewInlineFeedbackActions {
         var actions = DiffReviewInlineFeedbackActions()
         actions.availability = { item, _ in
@@ -760,9 +748,9 @@ struct ReviewSessionTabView: View {
                 canOpenProvider: item.providerURL != nil,
                 canCopyContext: true,
                 canSendToAgent: false,
-                canReplyProvider: item.status == .actionable && capabilities.canReplyToReviewThreads,
-                canResolveProvider: item.status == .actionable && capabilities.canResolveReviewThreads,
-                canUnresolveProvider: item.status == .resolved && capabilities.canUnresolveReviewThreads
+                canReplyProvider: item.status == .actionable && capabilities.canReply,
+                canResolveProvider: item.status == .actionable && capabilities.canResolve,
+                canUnresolveProvider: item.status == .resolved && capabilities.canResolve
             )
         }
         actions.replyProvider = { item, file, body in
@@ -1021,6 +1009,10 @@ struct ReviewSessionInlineFeedbackFileMatcher {
             files.compactMap { file in file.originalPath == nil ? nil : file },
             keyedBy: { $0.originalPath }
         )
+    }
+
+    func file(forPath path: String) -> DiffReviewFileSummary? {
+        filesByPath[path] ?? filesByOriginalPath[path]
     }
 
     func file(for location: ReviewThreadLocation) -> DiffReviewFileSummary? {

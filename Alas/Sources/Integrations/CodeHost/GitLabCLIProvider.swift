@@ -1884,6 +1884,7 @@ private struct GitLabDiscussionNote: Decodable {
         self.resolvable = try container.decodeIfPresent(Bool.self, forKey: .resolvable)
         self.resolved = try container.decodeIfPresent(Bool.self, forKey: .resolved)
         self.webURL = try container.decodeIfPresent(String.self, forKey: .webURL)
+        self.createdAt = try container.decodeIfPresent(String.self, forKey: .createdAt)
         self.position = try? container.decode(GitLabNotePosition.self, forKey: .position)
     }
 
@@ -1912,13 +1913,25 @@ private struct GitLabDiscussionAuthor: Decodable {
     let username: String?
 }
 
+private struct GitLabCreatedNote: Decodable {
+    let id: Int?
+    let webURL: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case webURL = "web_url"
+    }
+}
+
 private struct GitLabNotePosition: Decodable {
     let newPath: String?
+    let oldPath: String?
     let newLine: Int?
     let oldLine: Int?
 
     private enum CodingKeys: String, CodingKey {
         case newPath = "new_path"
+        case oldPath = "old_path"
         case newLine = "new_line"
         case oldLine = "old_line"
     }
