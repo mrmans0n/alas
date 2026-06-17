@@ -29,6 +29,7 @@ struct DiffReviewFileSection: View {
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
     var threads: [DiffInlineCommentThread] = []
+    var annotations: [DiffInlineAnnotation] = []
     var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
     var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
@@ -332,6 +333,7 @@ struct DiffReviewFileSection: View {
                 verticalScrollMode: .staticHeight,
                 lspContext: lspContext,
                 threads: threads,
+                annotations: annotations,
                 onReply: onReply,
                 onResolve: onResolve,
                 onUnresolve: onUnresolve,

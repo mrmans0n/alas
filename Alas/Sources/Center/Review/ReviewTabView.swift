@@ -18,6 +18,7 @@ struct ReviewTabView: View {
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
     @State private var localThreads: [ReviewThread] = []
+    @State private var annotations: [CheckAnnotation] = []
     @State private var isWriting = false
     @State private var errorMessage: String? = nil
     @State private var pendingReview: PendingReview?
@@ -27,7 +28,9 @@ struct ReviewTabView: View {
         VStack(spacing: 0) {
             toolbar
             Divider().overlay(theme.color("line"))
-            CIStatusStrip(checks: reviewRequest?.checks ?? [])
+            CIStatusStrip(checks: reviewRequest?.checks ?? [], onExpand: { check in
+                Task { await fetchAnnotations(for: check) }
+            })
             OutdatedThreadsDrawer(threads: outdatedAndFileLevelThreads)
             content
         }
@@ -278,6 +281,7 @@ struct ReviewTabView: View {
                       let c = t.comments.first(where: { $0.id == inlineComment.id }) else { return }
                 deleteAction(thread: t, comment: c)
             },
+            annotations: annotations,
             canReply: capabilities.canReply,
             canResolve: capabilities.canResolve,
             onStageReply: { inlineThread, body in
@@ -293,6 +297,22 @@ struct ReviewTabView: View {
             },
             canAddToReview: capabilities.canSubmitReview
         )
+    }
+
+    // MARK: - Annotation fetching
+
+    @MainActor
+    private func fetchAnnotations(for check: ReviewCheck) async {
+        guard capabilities.canFetchAnnotations,
+              let provider,
+              let remote = matchedSnapshot?.remote else { return }
+        do {
+            let fetched = try await provider.checkAnnotations(
+                remote: remote, check: check, cwd: worktree.path)
+            annotations = annotations.filter { $0.checkRunID != check.id } + fetched
+        } catch {
+            // Annotations are best-effort; silently ignore errors
+        }
     }
 
     // MARK: - Write actions

@@ -2,7 +2,9 @@ import SwiftUI
 
 struct CIStatusStrip: View {
     let checks: [ReviewCheck]
+    var onExpand: (ReviewCheck) -> Void = { _ in }
     @State private var isExpanded = false
+    @State private var expandedCheckIDs: Set<String> = []
 
     @Environment(\.theme) private var theme
 
@@ -64,7 +66,18 @@ struct CIStatusStrip: View {
                     Divider().overlay(theme.color("line"))
                     VStack(spacing: 0) {
                         ForEach(checks) { check in
-                            CICheckRow(check: check)
+                            CICheckRow(
+                                check: check,
+                                isExpanded: expandedCheckIDs.contains(check.id),
+                                onToggle: {
+                                    if expandedCheckIDs.contains(check.id) {
+                                        expandedCheckIDs.remove(check.id)
+                                    } else {
+                                        expandedCheckIDs.insert(check.id)
+                                        onExpand(check)
+                                    }
+                                }
+                            )
                         }
                     }
                     .padding(.vertical, 4)
@@ -80,40 +93,48 @@ struct CIStatusStrip: View {
 
 private struct CICheckRow: View {
     let check: ReviewCheck
+    var isExpanded: Bool = false
+    var onToggle: () -> Void = {}
     @Environment(\.theme) private var theme
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: statusIcon)
-                .font(.system(size: 11))
-                .foregroundColor(statusColor)
-                .frame(width: 14)
-            Text(check.name)
-                .font(.system(size: 11))
-                .foregroundColor(theme.color("fg"))
-                .lineLimit(1)
-            if let workflow = check.workflow {
-                Text(workflow)
-                    .font(.system(size: 10))
-                    .foregroundColor(theme.color("fg-dim"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-            if let url = check.detailURL {
-                Button {
-                    NSWorkspace.shared.open(url)
-                } label: {
-                    Image(systemName: "arrow.up.right.square")
-                        .font(.system(size: 10))
-                        .foregroundColor(theme.color("fg-dim"))
+        VStack(spacing: 0) {
+            Button(action: onToggle) {
+                HStack(spacing: 8) {
+                    Image(systemName: statusIcon)
+                        .font(.system(size: 11))
+                        .foregroundColor(statusColor)
+                        .frame(width: 14)
+                    Text(check.name)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg"))
+                        .lineLimit(1)
+                    if let workflow = check.workflow {
+                        Text(workflow)
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-dim"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer()
+                    if let url = check.detailURL {
+                        Button {
+                            NSWorkspace.shared.open(url)
+                        } label: {
+                            Image(systemName: "arrow.up.right.square")
+                                .font(.system(size: 10))
+                                .foregroundColor(theme.color("fg-dim"))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open in browser")
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Open in browser")
+                .padding(.horizontal, 22)
+                .padding(.vertical, 5)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 5)
     }
 
     private var statusIcon: String {

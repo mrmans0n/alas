@@ -21,6 +21,7 @@ struct DiffReviewSurface: View {
     var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
     var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
     var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var annotations: [CheckAnnotation] = []
     var canReply: Bool = false
     var canResolve: Bool = false
     var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
@@ -192,6 +193,7 @@ struct DiffReviewSurface: View {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(session.files) { file in
                         let fileThreads = inlineThreads(for: file.summary.path)
+                        let fileAnnotations = inlineAnnotations(for: file.summary.path)
                         DiffReviewFileSection(
                             file: file,
                             layoutMode: $layoutMode,
@@ -202,6 +204,7 @@ struct DiffReviewSurface: View {
                             showsSourceBadge: showsSourceBadges,
                             lspContext: lspContextForFile(file),
                             threads: fileThreads,
+                            annotations: fileAnnotations,
                             onReply: { t, body in onReply(t, body) },
                             onResolve: { t in onResolve(t) },
                             onUnresolve: { t in onUnresolve(t) },
@@ -431,6 +434,12 @@ struct DiffReviewSurface: View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             programmaticScroll.finishProgrammaticScroll(token)
         }
+    }
+
+    private func inlineAnnotations(for filePath: String) -> [DiffInlineAnnotation] {
+        annotations
+            .filter { $0.path == filePath }
+            .map { DiffInlineAnnotation.from($0) }
     }
 
     private func inlineThreads(for filePath: String) -> [DiffInlineCommentThread] {
