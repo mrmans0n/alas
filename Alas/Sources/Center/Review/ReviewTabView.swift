@@ -599,31 +599,7 @@ struct ReviewTabView: View {
         Task { @MainActor in
             var createdReviewID: String?
             do {
-                let reviewID = try await provider.startReview(remote: remote, request: request, cwd: worktree.path)
-                createdReviewID = reviewID
-                for comment in stagedComments where comment.threadID == nil {
-                    try await provider.addReviewComment(
-                        remote: remote,
-                        request: request,
-                        reviewID: reviewID,
-                        comment: comment,
-                        cwd: worktree.path
-                    )
-                }
-                try await provider.submitReview(
-                    remote: remote,
-                    request: request,
-                    reviewID: reviewID,
-                    verdict: verdict,
-                    body: body,
-                    cwd: worktree.path
-                )
-                createdReviewID = nil
-                // Remove inline comments after submitReview so providers that buffer
-                // (e.g. GitLab) don't lose drafts if the submit step fails.
-                for comment in stagedComments where comment.threadID == nil {
-                    pr.remove(id: comment.id)
-                }
+                // Post thread replies first — they don't require a pending review object.
                 for comment in stagedComments where comment.threadID != nil {
                     if let existingThread = localThreads.first(where: { $0.id == comment.threadID }) {
                         _ = try await provider.replyToThread(
@@ -633,6 +609,38 @@ struct ReviewTabView: View {
                             body: comment.body,
                             cwd: worktree.path
                         )
+                        pr.remove(id: comment.id)
+                    }
+                }
+
+                let inlineComments = stagedComments.filter { $0.threadID == nil }
+                let hasReviewContent = !inlineComments.isEmpty
+                    || !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || verdict != .comment
+                if hasReviewContent {
+                    let reviewID = try await provider.startReview(remote: remote, request: request, cwd: worktree.path)
+                    createdReviewID = reviewID
+                    for comment in inlineComments {
+                        try await provider.addReviewComment(
+                            remote: remote,
+                            request: request,
+                            reviewID: reviewID,
+                            comment: comment,
+                            cwd: worktree.path
+                        )
+                    }
+                    try await provider.submitReview(
+                        remote: remote,
+                        request: request,
+                        reviewID: reviewID,
+                        verdict: verdict,
+                        body: body,
+                        cwd: worktree.path
+                    )
+                    createdReviewID = nil
+                    // Remove inline comments after submitReview so providers that buffer
+                    // (e.g. GitLab) don't lose drafts if the submit step fails.
+                    for comment in inlineComments {
                         pr.remove(id: comment.id)
                     }
                 }

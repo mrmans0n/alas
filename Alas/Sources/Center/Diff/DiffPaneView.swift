@@ -360,7 +360,7 @@ struct DiffPaneView: View {
                         onEdit: { comment, newBody in onEdit(t, comment, newBody) },
                         onDelete: { comment in onDelete(t, comment) },
                         canReply: canReply && t.viewerCanReply,
-                        canResolve: canResolve && t.viewerCanResolve,
+                        canResolve: canResolve && (t.viewerCanResolve || t.viewerCanUnresolve),
                         canAddToReview: canAddToReview
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)

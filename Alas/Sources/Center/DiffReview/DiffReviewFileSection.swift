@@ -500,7 +500,7 @@ struct DiffReviewFileSection: View {
                 onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
                 onDelete: { comment in onDelete(thread, comment) },
                 canReply: canReply && thread.viewerCanReply,
-                canResolve: canResolve && thread.viewerCanResolve,
+                canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
                 canAddToReview: canAddToReview
             )
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -1154,13 +1154,15 @@ struct GitLabCLIProvider: CodeHostProvider {
             }
 
             let firstURL = try discussionURL(note: firstNote, requestURL: requestURL)
+            let isOldSide = position?.newLine == nil && position?.oldLine != nil
             return ReviewThread(
                 id: discussion.id,
-                path: position?.newPath,
+                path: position?.newPath ?? position?.oldPath,
                 line: position?.newLine,
                 startLine: nil,
                 originalLine: position?.oldLine,
                 diffHunk: nil,
+                diffSide: isOldSide ? "LEFT" : nil,
                 isResolved: discussion.isResolved,
                 isOutdated: false,
                 // File-level only when there is no line anchor on either side
