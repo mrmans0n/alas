@@ -10,7 +10,6 @@ enum Tab: Codable, Equatable, Identifiable {
     case commitEditor(CommitEditorTabState)
     case draftCommit(DraftCommitTabState)
     case draftReviewRequest(DraftReviewRequestTabState)
-    case reviewEvidence(ReviewEvidenceTabState)
     case reviewChanges(ReviewChangesTabState)
     case reviewSession(ReviewSessionTabState)
     case imagePreview(ImagePreviewTabState)
@@ -27,7 +26,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commitEditor(let s): return s.id
         case .draftCommit(let s):  return s.id
         case .draftReviewRequest(let s): return s.id
-        case .reviewEvidence(let s): return s.id
         case .reviewChanges(let s): return s.id
         case .reviewSession(let s): return s.id
         case .imagePreview(let s): return s.id
@@ -46,7 +44,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commitEditor(let s): return s.title
         case .draftCommit:         return "Draft commit"
         case .draftReviewRequest(let s): return s.displayTitle
-        case .reviewEvidence(let s): return s.displayTitle
         case .reviewChanges:       return "Review Changes"
         case .reviewSession(let s): return s.title
         case .imagePreview(let s): return s.title
@@ -65,7 +62,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commitEditor: return "commit"
         case .draftCommit:  return "commit"
         case .draftReviewRequest: return "pull-request"
-        case .reviewEvidence: return "doc.text.magnifyingglass"
         case .reviewChanges: return "diff"
         case .reviewSession: return "text.badge.checkmark"
         case .imagePreview: return "image"
@@ -92,80 +88,6 @@ struct ReviewChangesTabState: Codable, Equatable, Identifiable {
     init(worktreeId: String) {
         self.id = "review-changes:\(worktreeId)"
         self.worktreeId = worktreeId
-    }
-}
-
-struct ReviewSessionTabState: Codable, Equatable, Identifiable {
-    let id: TabID
-    let worktreeId: String
-    let sessionID: ReviewSessionID
-    var title: String
-    var selectedFileID: DiffReviewFileID?
-    var focusedCommentID: String?
-
-    init(worktreeId: String, record: ReviewSessionRecord) {
-        self.id = "review-session:\(record.id.rawValue)"
-        self.worktreeId = worktreeId
-        self.sessionID = record.id
-        self.title = record.target.title
-        self.selectedFileID = record.selectedFileID
-        self.focusedCommentID = record.focusedCommentID
-    }
-}
-
-struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
-    let id: TabID
-    let worktreeId: String
-    let provider: CodeHostKind
-    let repositorySlug: String
-    let number: Int
-    var url: URL
-    var title: String
-    var selectedSection: ReviewEvidenceSection
-    var selectedItemID: String?
-
-    var displayTitle: String {
-        "\(provider.reviewRequestLabel) evidence"
-    }
-
-    init(
-        worktreeId: String,
-        snapshot: ReviewLoopSnapshot,
-        initialSection: ReviewEvidenceSection?
-    ) {
-        let request = snapshot.reviewRequest
-        let remote = request?.remote ?? snapshot.remote
-        self.worktreeId = worktreeId
-        self.provider = request?.provider ?? remote?.kind ?? .github
-        self.repositorySlug = remote?.repositorySlug ?? ""
-        self.number = request?.number ?? 0
-        self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
-        self.title = request?.title ?? ""
-        self.selectedSection = initialSection ?? .files
-        self.selectedItemID = nil
-        let host = remote?.host ?? self.url.host ?? ""
-        self.id = [
-            "review-evidence",
-            worktreeId,
-            provider.rawValue,
-            host,
-            repositorySlug,
-            "\(number)",
-        ].joined(separator: ":")
-    }
-
-    mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
-        guard let request = snapshot.reviewRequest else { return }
-        url = request.url
-        title = request.title
-    }
-
-    func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {
-        guard let request = snapshot.reviewRequest else { return false }
-        return request.provider == provider
-            && request.remote.host.lowercased() == (url.host ?? "").lowercased()
-            && request.remote.repositorySlug == repositorySlug
-            && request.number == number
     }
 }
 
