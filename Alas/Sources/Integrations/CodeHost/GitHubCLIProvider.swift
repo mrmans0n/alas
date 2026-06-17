@@ -123,7 +123,7 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static let resolvePullRequestReviewThreadMutation = """
     mutation($threadId: ID!) {
-      resolvePullRequestReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
+      resolveReviewThread(input: {threadId: $threadId}) {
         thread {
           id
           isResolved
@@ -135,7 +135,7 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static let unresolvePullRequestReviewThreadMutation = """
     mutation($threadId: ID!) {
-      unresolvePullRequestReviewThread(input: {pullRequestReviewThreadId: $threadId}) {
+      unresolveReviewThread(input: {threadId: $threadId}) {
         thread {
           id
           isResolved
@@ -191,15 +191,16 @@ struct GitHubCLIProvider: CodeHostProvider {
     """
 
     static let addPullRequestReviewCommentMutation = """
-    mutation($reviewId: ID!, $path: String!, $line: Int!, $body: String!) {
-      addPullRequestReviewComment(input: {
+    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $body: String!) {
+      addPullRequestReviewThread(input: {
+        pullRequestId: $prId,
         pullRequestReviewId: $reviewId,
         path: $path,
         line: $line,
         side: RIGHT,
         body: $body
       }) {
-        comment {
+        thread {
           id
         }
       }
@@ -816,12 +817,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         body: String,
         cwd: URL
     ) async throws -> ReviewComment {
-        _ = remote
         _ = request
         let result = try await runner.run(
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.addPullRequestReviewThreadReplyMutation)",
                 "-F", "threadId=\(thread.id)",
                 "-F", "body=\(body)",
@@ -841,12 +842,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         thread: ReviewThread,
         cwd: URL
     ) async throws -> ReviewThread {
-        _ = remote
         _ = request
         let result = try await runner.run(
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.resolvePullRequestReviewThreadMutation)",
                 "-F", "threadId=\(thread.id)",
             ],
@@ -865,12 +866,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         thread: ReviewThread,
         cwd: URL
     ) async throws -> ReviewThread {
-        _ = remote
         _ = request
         let result = try await runner.run(
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.unresolvePullRequestReviewThreadMutation)",
                 "-F", "threadId=\(thread.id)",
             ],
@@ -890,12 +891,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         newBody: String,
         cwd: URL
     ) async throws -> ReviewComment {
-        _ = remote
         _ = request
         let result = try await runner.run(
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.updatePullRequestReviewCommentMutation)",
                 "-F", "commentId=\(comment.id)",
                 "-F", "body=\(newBody)",
@@ -915,12 +916,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         comment: ReviewComment,
         cwd: URL
     ) async throws {
-        _ = remote
         _ = request
         let result = try await runner.run(
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.deletePullRequestReviewCommentMutation)",
                 "-F", "commentId=\(comment.id)",
             ],
@@ -941,6 +942,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.addPullRequestReviewMutation)",
                 "-F", "prId=\(prNodeID)",
             ],
@@ -959,9 +961,8 @@ struct GitHubCLIProvider: CodeHostProvider {
         comment: StagedComment,
         cwd: URL
     ) async throws {
-        _ = remote
-        _ = request
         guard let line = comment.line else { return }
+        let prNodeID = try await fetchPRNodeID(remote: remote, request: request, cwd: cwd)
         let body: String
         if let suggestion = comment.suggestion {
             body = "```suggestion\n\(suggestion)\n```"
@@ -972,8 +973,10 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.addPullRequestReviewCommentMutation)",
-                "-F", "reviewId=\(reviewID)",
+                "-f", "prId=\(prNodeID)",
+                "-f", "reviewId=\(reviewID)",
                 "-f", "path=\(comment.filePath)",
                 "-F", "line=\(line)",
                 "-f", "body=\(body)",
@@ -990,6 +993,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "api",
+                "--hostname", remote.host,
                 "/repos/\(remote.owner)/\(remote.repository)/check-runs/\(check.id)/annotations",
                 "--paginate",
                 "--slurp",
@@ -1010,7 +1014,6 @@ struct GitHubCLIProvider: CodeHostProvider {
         body: String,
         cwd: URL
     ) async throws {
-        _ = remote
         _ = request
         let event: String
         switch verdict {
@@ -1022,6 +1025,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.submitPullRequestReviewMutation)",
                 "-F", "reviewId=\(reviewID)",
                 "-f", "event=\(event)",
@@ -1372,7 +1376,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh resolvePullRequestReviewThread output")
         }
-        return threadMutationNodeToReviewThread(response.data.resolvePullRequestReviewThread.thread, from: thread)
+        return threadMutationNodeToReviewThread(response.data.resolveReviewThread.thread, from: thread)
     }
 
     private static func parseUnresolveThreadResponse(_ json: String, from thread: ReviewThread) throws -> ReviewThread {
@@ -1381,9 +1385,9 @@ struct GitHubCLIProvider: CodeHostProvider {
         do {
             response = try JSONDecoder().decode(UnresolvePullRequestReviewThreadResponse.self, from: data)
         } catch {
-            throw CodeHostProviderError.malformedOutput("Unable to parse gh unresolvePullRequestReviewThread output")
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh unresolveReviewThread output")
         }
-        return threadMutationNodeToReviewThread(response.data.unresolvePullRequestReviewThread.thread, from: thread)
+        return threadMutationNodeToReviewThread(response.data.unresolveReviewThread.thread, from: thread)
     }
 
     private static func threadMutationNodeToReviewThread(_ mutated: ThreadMutationNode, from thread: ReviewThread) -> ReviewThread {
@@ -1940,7 +1944,7 @@ private struct ResolvePullRequestReviewThreadResponse: Decodable {
 }
 
 private struct ResolvePullRequestReviewThreadData: Decodable {
-    let resolvePullRequestReviewThread: ThreadMutationPayload
+    let resolveReviewThread: ThreadMutationPayload
 }
 
 private struct UnresolvePullRequestReviewThreadResponse: Decodable {
@@ -1948,7 +1952,7 @@ private struct UnresolvePullRequestReviewThreadResponse: Decodable {
 }
 
 private struct UnresolvePullRequestReviewThreadData: Decodable {
-    let unresolvePullRequestReviewThread: ThreadMutationPayload
+    let unresolveReviewThread: ThreadMutationPayload
 }
 
 private struct ThreadMutationPayload: Decodable {
