@@ -13,6 +13,8 @@ struct DiffInlineComment: Identifiable, Equatable {
     let id: String
     let author: String
     let body: String
+    var viewerCanUpdate: Bool = false
+    var viewerCanDelete: Bool = false
 }
 
 enum DiffInlineCommentLayout {

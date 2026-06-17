@@ -2,22 +2,38 @@ import SwiftUI
 
 struct DiffInlineCommentCard: View {
     let thread: DiffInlineCommentThread
-    var onReply: () -> Void = {}
+    var onReply: (String) -> Void = { _ in }
     var onResolve: () -> Void = {}
     var onUnresolve: () -> Void = {}
+    var onEdit: (DiffInlineComment, String) -> Void = { _, _ in }
+    var onDelete: (DiffInlineComment) -> Void = { _ in }
+    var canReply: Bool = true
+    var canResolve: Bool = true
 
     @State private var isExpanded: Bool
+    @State private var isComposerOpen = false
+    @State private var replyDraft = ""
+    @State private var editingCommentID: String? = nil
+    @State private var editDraft = ""
 
     init(
         thread: DiffInlineCommentThread,
-        onReply: @escaping () -> Void = {},
+        onReply: @escaping (String) -> Void = { _ in },
         onResolve: @escaping () -> Void = {},
-        onUnresolve: @escaping () -> Void = {}
+        onUnresolve: @escaping () -> Void = {},
+        onEdit: @escaping (DiffInlineComment, String) -> Void = { _, _ in },
+        onDelete: @escaping (DiffInlineComment) -> Void = { _ in },
+        canReply: Bool = true,
+        canResolve: Bool = true
     ) {
         self.thread = thread
         self.onReply = onReply
         self.onResolve = onResolve
         self.onUnresolve = onUnresolve
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self.canReply = canReply
+        self.canResolve = canResolve
         // Smart default: expanded when unresolved and not outdated
         _isExpanded = State(initialValue: !thread.isResolved && !thread.isOutdated)
     }
@@ -100,25 +116,63 @@ struct DiffInlineCommentCard: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
 
+            // Inline reply composer
+            if isComposerOpen {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    TextEditor(text: $replyDraft)
+                        .font(.system(size: 11))
+                        .frame(minHeight: 60)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                    HStack(spacing: 8) {
+                        Button("Submit") {
+                            onReply(replyDraft)
+                            replyDraft = ""
+                            isComposerOpen = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.accentColor)
+
+                        Button("Cancel") {
+                            replyDraft = ""
+                            isComposerOpen = false
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+
             Divider()
 
             // Action buttons
             HStack(spacing: 8) {
-                Button("Reply") { onReply() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundColor(.accentColor)
+                if canReply {
+                    Button("Reply") { isComposerOpen.toggle() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.accentColor)
+                }
 
-                if !thread.isResolved {
-                    Button("Resolve") { onResolve() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                } else {
-                    Button("Unresolve") { onUnresolve() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
+                if canResolve {
+                    if !thread.isResolved {
+                        Button("Resolve") { onResolve() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Button("Unresolve") { onUnresolve() }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                    }
                 }
 
                 Spacer(minLength: 0)
@@ -138,17 +192,78 @@ struct DiffInlineCommentCard: View {
 
     // MARK: - Comment row
 
+    @ViewBuilder
     private func commentRow(_ comment: DiffInlineComment) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(comment.author)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(.primary)
-            Text(comment.body)
-                .font(.system(size: 11))
-                .foregroundColor(.primary)
-                .fixedSize(horizontal: false, vertical: true)
+        if editingCommentID == comment.id {
+            // Edit mode for this comment
+            VStack(alignment: .leading, spacing: 3) {
+                Text(comment.author)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.primary)
+                TextEditor(text: $editDraft)
+                    .font(.system(size: 11))
+                    .frame(minHeight: 60)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                    )
+                HStack(spacing: 8) {
+                    Button("Save") {
+                        onEdit(comment, editDraft)
+                        editingCommentID = nil
+                        editDraft = ""
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(.accentColor)
+
+                    Button("Cancel") {
+                        editingCommentID = nil
+                        editDraft = ""
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            // Display mode for this comment
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .top, spacing: 4) {
+                    Text(comment.author)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.primary)
+                    Spacer(minLength: 0)
+                    if comment.viewerCanUpdate {
+                        Button {
+                            editingCommentID = comment.id
+                            editDraft = comment.body
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if comment.viewerCanDelete {
+                        Button {
+                            onDelete(comment)
+                        } label: {
+                            Image(systemName: "trash")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Text(comment.body)
+                    .font(.system(size: 11))
+                    .foregroundColor(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Helpers

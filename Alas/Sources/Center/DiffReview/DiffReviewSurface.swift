@@ -426,7 +426,13 @@ struct DiffReviewSurface: View {
                     isResolved: thread.isResolved,
                     isOutdated: thread.isOutdated,
                     comments: thread.comments.map { c in
-                        DiffInlineComment(id: c.id, author: c.author ?? "unknown", body: c.body)
+                        DiffInlineComment(
+                            id: c.id,
+                            author: c.author ?? "unknown",
+                            body: c.body,
+                            viewerCanUpdate: c.viewerCanUpdate,
+                            viewerCanDelete: c.viewerCanDelete
+                        )
                     }
                 )
             }
