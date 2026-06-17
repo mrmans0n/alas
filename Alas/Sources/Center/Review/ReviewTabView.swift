@@ -337,7 +337,8 @@ struct ReviewTabView: View {
     }
 
     private func editAction(thread: ReviewThread, comment: ReviewComment, newBody: String) {
-        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        guard capabilities.canEditComment,
+              let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         let original = comment
         isWriting = true
         localThreads = ReviewThreadMutations.applyEdit(to: localThreads, threadID: thread.id, commentID: comment.id, newBody: newBody)
@@ -354,7 +355,8 @@ struct ReviewTabView: View {
     }
 
     private func deleteAction(thread: ReviewThread, comment: ReviewComment) {
-        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        guard capabilities.canDeleteComment,
+              let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
         localThreads = ReviewThreadMutations.applyDelete(to: localThreads, threadID: thread.id, commentID: comment.id)
         Task { @MainActor in
@@ -362,7 +364,8 @@ struct ReviewTabView: View {
             do {
                 try await provider.deleteComment(remote: remote, request: request, comment: comment, cwd: worktree.path)
             } catch {
-                localThreads = reviewRequest?.threads ?? localThreads
+                // Surgical rollback: re-insert the deleted comment into its thread
+                localThreads = localThreads.map { $0.id == thread.id ? $0.addingReply(comment) : $0 }
                 showError(error.localizedDescription)
             }
         }
