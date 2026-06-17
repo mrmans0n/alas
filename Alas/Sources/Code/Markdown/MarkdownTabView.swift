@@ -14,8 +14,17 @@ struct MarkdownTabView: View {
     let onRevealInFiles: (String) -> Void
     @Environment(\.theme) var theme
 
-    @State private var renderResult: MarkdownRenderResult?
+    @State private var renderCache = MarkdownPreviewCache<MarkdownRenderResult>()
     @State private var debounceTask: Task<Void, Never>?
+
+    private var renderIdentity: MarkdownRenderIdentity {
+        MarkdownRenderIdentity(
+            worktreePath: worktreePath.standardizedFileURL.path,
+            tabId: tabId,
+            relativePath: relativePath,
+            externalAbsolutePath: externalAbsolutePath
+        )
+    }
 
     private var resolvedMode: MarkdownViewMode {
         appState.tabs.editorTabState(worktreeId: worktreeId, tabId: tabId)?.markdownViewMode
@@ -75,6 +84,10 @@ struct MarkdownTabView: View {
                 .accessibilityHidden(true)
         }
         .onAppear { scheduleRender(immediate: true) }
+        .onChange(of: renderIdentity) { _, _ in
+            invalidateRender()
+            scheduleRender(immediate: true)
+        }
         .onChange(of: buffer.editGeneration) { _, _ in scheduleRender(immediate: false) }
         // Re-render when the live theme or code font settings change — the
         // renderer captures those when invoked, so a stale `renderResult`
@@ -145,7 +158,7 @@ struct MarkdownTabView: View {
 
     @ViewBuilder
     private var preview: some View {
-        if let renderResult {
+        if let renderResult = renderCache.value(for: renderIdentity) {
             MarkdownPreviewView(result: renderResult, onLinkClick: handleLinkClick)
         } else {
             Color.clear.onAppear { scheduleRender(immediate: true) }
@@ -206,6 +219,8 @@ struct MarkdownTabView: View {
             return
         }
         debounceTask?.cancel()
+        let renderIdentity = self.renderIdentity
+        renderCache.beginRender(for: renderIdentity)
         let buffer = self.buffer
         let theme = self.theme
         let fontFamily = appState.config.code.fontFamily
@@ -231,8 +246,13 @@ struct MarkdownTabView: View {
                 worktreeRoot: worktreeRootOrNil
             )
             if Task.isCancelled { return }
-            renderResult = result
+            renderCache.storeCompletedRender(result, for: renderIdentity)
         }
+    }
+
+    private func invalidateRender() {
+        debounceTask?.cancel()
+        renderCache.invalidate()
     }
 
     private func handleLinkClick(_ url: URL) {
@@ -297,4 +317,41 @@ struct MarkdownTabView: View {
 
 extension Notification.Name {
     static let markdownScrollToAnchor = Notification.Name("io.nlopez.alas.markdown.scrollToAnchor")
+}
+
+struct MarkdownRenderIdentity: Equatable, Sendable {
+    let worktreePath: String
+    let tabId: TabID
+    let relativePath: String
+    let externalAbsolutePath: String?
+}
+
+struct MarkdownPreviewCache<Value> {
+    private var activeRenderIdentity: MarkdownRenderIdentity?
+    private var identity: MarkdownRenderIdentity?
+    private var value: Value?
+
+    init() {}
+
+    func value(for currentIdentity: MarkdownRenderIdentity) -> Value? {
+        identity == currentIdentity ? value : nil
+    }
+
+    mutating func beginRender(for identity: MarkdownRenderIdentity) {
+        activeRenderIdentity = identity
+    }
+
+    @discardableResult
+    mutating func storeCompletedRender(_ value: Value, for identity: MarkdownRenderIdentity) -> Bool {
+        guard activeRenderIdentity == identity else { return false }
+        self.identity = identity
+        self.value = value
+        return true
+    }
+
+    mutating func invalidate() {
+        activeRenderIdentity = nil
+        identity = nil
+        value = nil
+    }
 }
