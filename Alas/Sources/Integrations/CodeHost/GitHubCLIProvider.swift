@@ -189,8 +189,8 @@ struct GitHubCLIProvider: CodeHostProvider {
     """
 
     static let addPullRequestReviewMutation = """
-    mutation($prId: ID!) {
-      addPullRequestReview(input: {pullRequestId: $prId}) {
+    mutation($prId: ID!, $commitOID: GitObjectID!) {
+      addPullRequestReview(input: {pullRequestId: $prId, commitOID: $commitOID}) {
         pullRequestReview {
           id
         }
@@ -954,6 +954,9 @@ struct GitHubCLIProvider: CodeHostProvider {
         request: ReviewRequest,
         cwd: URL
     ) async throws -> String {
+        guard let headSHA = request.headSHA else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: "headSHA unavailable")
+        }
         let prNodeID = try await fetchPRNodeID(remote: remote, request: request, cwd: cwd)
         let result = try await runner.run(
             "gh",
@@ -962,6 +965,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--hostname", remote.host,
                 "-f", "query=\(Self.addPullRequestReviewMutation)",
                 "-F", "prId=\(prNodeID)",
+                "-f", "commitOID=\(headSHA)",
             ],
             cwd: cwd
         )

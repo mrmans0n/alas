@@ -736,11 +736,11 @@ struct GitLabCLIProvider: CodeHostProvider {
 
         // Approve if requested
         if verdict == .approve {
-            let result = try await runner.run(
-                "glab",
-                args: ["mr", "approve", "\(request.number)", "-R", remote.repositorySlug],
-                cwd: cwd
-            )
+            var approveArgs = ["mr", "approve", "\(request.number)", "-R", remote.repositorySlug]
+            if let sha = request.headSHA {
+                approveArgs += ["--sha", sha]
+            }
+            let result = try await runner.run("glab", args: approveArgs, cwd: cwd)
             guard result.exitCode == 0 else {
                 throw CodeHostProviderError.commandFailed(command: "glab mr approve", stderr: result.stderr)
             }
