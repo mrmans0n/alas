@@ -19,7 +19,8 @@ struct DiffReviewStagedMutationActionsTests {
             parsedDiff: nil,
             displayModel: nil,
             placeholderMessage: nil,
-            openFile: nil
+            openFile: nil,
+            contextProvider: nil
         )
 
         #expect(model.stagedMutationActions == nil)
