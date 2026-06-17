@@ -1843,7 +1843,8 @@ let second = true
             codeFontFamily: "",
             codeFontSize: 13,
             theme: theme,
-            lspContext: nil
+            lspContext: nil,
+            onContextExpansion: { _, _ in }
         )
 
         let controller = NSHostingController(rootView: view)

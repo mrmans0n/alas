@@ -50,8 +50,9 @@ struct GitLabCLIProviderVerdictTests {
     // MARK: - submitReview
 
     @Test func submitReviewPostsNoteForEachStagedComment() async throws {
-        // 1 staged comment + non-empty body → 2 API calls (one note + one summary note)
+        // 1 inline staged comment + non-empty body → 3 API calls (versions + discussion + summary note)
         let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.versionsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: "{}", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "{}", stderr: ""),
         ])
@@ -87,7 +88,7 @@ struct GitLabCLIProviderVerdictTests {
         )
 
         let commands = await runner.commands
-        #expect(commands.count == 2)
+        #expect(commands.count == 3)
     }
 
     @Test func submitReviewWithApproveCallsGlabMrApprove() async throws {
@@ -157,6 +158,16 @@ struct GitLabCLIProviderVerdictTests {
 
     private static let cwd = URL(fileURLWithPath: "/tmp/alas")
 
+    private static let versionsOutput = """
+    [
+      {
+        "base_sha": "base123",
+        "head_sha": "head123",
+        "start_sha": "start123"
+      }
+    ]
+    """
+
     private static func makeRequest(
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = []
@@ -185,6 +196,14 @@ private actor FakeRunner: CodeHostCommandRunning {
         let executable: String
         let args: [String]
         let cwd: URL?
+        let stdin: String?
+
+        init(executable: String, args: [String], cwd: URL?, stdin: String? = nil) {
+            self.executable = executable
+            self.args = args
+            self.cwd = cwd
+            self.stdin = stdin
+        }
     }
 
     private var results: [ProcessResult]
@@ -194,8 +213,8 @@ private actor FakeRunner: CodeHostCommandRunning {
         self.results = results
     }
 
-    func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
-        commands.append(Command(executable: executable, args: args, cwd: cwd))
+    func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+        commands.append(Command(executable: executable, args: args, cwd: cwd, stdin: stdin))
         guard !results.isEmpty else {
             return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
         }

@@ -137,15 +137,13 @@ struct GitLabCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable)
-        #expect(threads[0].providerThreadID == "discussion-1")
-        #expect(threads[0].providerCommentID == "501")
+        #expect(threads[0].comments.first?.id == "501")
         #expect(threads[1].id == "discussion-2")
         #expect(threads[1].author == "maintainer")
         #expect(threads[1].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_503"))
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable)
-        #expect(threads[1].providerThreadID == "discussion-2")
-        #expect(threads[1].providerCommentID == "503")
+        #expect(threads[1].comments.first?.id == "503")
     }
 
     @Test func discussionsJSONPreservesLocationMetadata() throws {
@@ -176,11 +174,9 @@ struct GitLabCLIProviderTests {
             requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
         )
 
-        #expect(threads.first?.location?.path == "Sources/App.swift")
-        #expect(threads.first?.location?.originalPath == "Sources/OldApp.swift")
-        #expect(threads.first?.location?.line == 24)
-        #expect(threads.first?.location?.side == .new)
-        #expect(threads.first?.location?.providerPosition == "100")
+        #expect(threads.first?.path == "Sources/App.swift")
+        #expect(threads.first?.line == 24)
+        #expect(threads.first?.comments.first?.id == "100")
     }
 
     @Test func discussionsJSONIgnoresMalformedPositionMetadata() throws {
@@ -227,7 +223,7 @@ struct GitLabCLIProviderTests {
 
         #expect(threads.map(\.id) == ["discussion-malformed", "discussion-position-string"])
         #expect(threads.first?.body == "Keep this discussion.")
-        #expect(threads.allSatisfy { $0.location == nil })
+        #expect(threads.allSatisfy { $0.path == nil })
     }
 
     @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
@@ -747,6 +743,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.approveOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
         let provider = GitLabCLIProvider(runner: runner)
@@ -787,6 +784,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/approve"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
@@ -914,6 +912,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -937,6 +936,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         let statusNotePayload = try Self.jsonObject(from: commands[2].stdin)
@@ -948,6 +948,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -969,6 +970,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         let statusNotePayload = try Self.jsonObject(from: commands[0].stdin)
@@ -1080,6 +1082,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -1102,6 +1105,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         #expect(result.published.map(\.localDraftID) == ["draft-1"])
@@ -1117,6 +1121,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -1139,6 +1144,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         #expect(result.published.map(\.localDraftID) == ["draft-1"])
@@ -1152,10 +1158,12 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.resolveDiscussionOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
         let thread = ReviewThreadSummary(
@@ -1197,14 +1205,14 @@ struct GitLabCLIProviderTests {
             "--hostname", "gitlab.example.com",
             "--input", "-",
         ])
-        #expect(commands[4].args == [
+        #expect(commands[5].args == [
             "api",
             "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1",
             "--method", "PUT",
             "--hostname", "gitlab.example.com",
             "--input", "-",
         ])
-        #expect(try Self.jsonObject(from: commands[4].stdin)["resolved"] as? Bool == true)
+        #expect(try Self.jsonObject(from: commands[5].stdin)["resolved"] as? Bool == true)
     }
 
     @Test func gitLabMergeRequestAPIPathUsesSelectedRemoteProjectPath() {
@@ -2580,6 +2588,13 @@ struct GitLabCLIProviderTests {
       "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777",
       "updated_at": "2026-06-01T12:36:56Z",
       "jobs": []
+    }
+    """
+
+    private static let userOutput = """
+    {
+      "id": 9001,
+      "username": "viewer"
     }
     """
 

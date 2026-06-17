@@ -340,7 +340,8 @@ struct DiffPaneView: View {
                         codeFontFamily: codeFontFamily,
                         codeFontSize: codeFontSize,
                         theme: theme,
-                        lspContext: lspContext
+                        lspContext: lspContext,
+                        onContextExpansion: onContextExpansion
                     )
                     .fixedSize(horizontal: false, vertical: true)
                 case .thread(let t):

@@ -44,6 +44,7 @@ struct GitHubCLIProviderVerdictTests {
 
     @Test func addReviewCommentCallsGraphQLWithReviewIDAndPath() async throws {
         let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prNodeIDOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.addCommentOutput, stderr: ""),
         ])
         let comment = StagedComment(
@@ -63,7 +64,9 @@ struct GitHubCLIProviderVerdictTests {
             cwd: Self.cwd
         )
 
-        let cmd = try #require(await runner.commands.first)
+        let commands = await runner.commands
+        #expect(commands.count == 2)
+        let cmd = commands[1]
         #expect(cmd.executable == "gh")
         #expect(cmd.args.contains("reviewId=review-abc123"))
         #expect(cmd.args.contains("path=Sources/Foo.swift"))
@@ -72,6 +75,7 @@ struct GitHubCLIProviderVerdictTests {
 
     @Test func addReviewCommentWrapsSuggestionInFence() async throws {
         let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prNodeIDOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.addCommentOutput, stderr: ""),
         ])
         let comment = StagedComment(
@@ -91,7 +95,8 @@ struct GitHubCLIProviderVerdictTests {
             cwd: Self.cwd
         )
 
-        let cmd = try #require(await runner.commands.first)
+        let commands = await runner.commands
+        let cmd = commands[1]
         let bodyArg = try #require(cmd.args.first { $0.hasPrefix("body=") })
         #expect(bodyArg.contains("```suggestion"))
         #expect(bodyArg.contains("let x = 42"))
@@ -228,6 +233,14 @@ private actor FakeRunner: CodeHostCommandRunning {
         let executable: String
         let args: [String]
         let cwd: URL?
+        let stdin: String?
+
+        init(executable: String, args: [String], cwd: URL?, stdin: String? = nil) {
+            self.executable = executable
+            self.args = args
+            self.cwd = cwd
+            self.stdin = stdin
+        }
     }
 
     private var results: [ProcessResult]
@@ -237,8 +250,8 @@ private actor FakeRunner: CodeHostCommandRunning {
         self.results = results
     }
 
-    func run(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResult {
-        commands.append(Command(executable: executable, args: args, cwd: cwd))
+    func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult {
+        commands.append(Command(executable: executable, args: args, cwd: cwd, stdin: stdin))
         guard !results.isEmpty else {
             return ProcessResult(exitCode: 1, stdout: "", stderr: "unexpected command")
         }

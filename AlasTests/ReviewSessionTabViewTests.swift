@@ -1106,7 +1106,7 @@ struct ReviewSessionTabViewTests {
         .environment(\.theme, try ThemeStore().current)
 
         let feedback = try #require(ReviewSessionTabView.inlineFeedbackByFileID(
-            threads: [thread],
+            threads: [Self.reviewThread(thread)],
             files: [Self.summary(path: "Sources/App.swift", namespace: "github")],
             providerName: "GitHub"
         )[DiffReviewFileID(namespace: "github", path: "Sources/App.swift")]?.first)
@@ -1350,7 +1350,36 @@ struct ReviewSessionTabViewTests {
             reviewDecision: .unknown,
             mergeState: .unknown,
             checks: [],
-            threads: threads
+            threads: threads.map(Self.reviewThread)
+        )
+    }
+
+    private static func reviewThread(_ summary: ReviewThreadSummary) -> ReviewThread {
+        ReviewThread(
+            id: summary.id,
+            path: summary.location?.path,
+            line: summary.location?.line,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: summary.isResolved,
+            isOutdated: !summary.isActionable,
+            isFileLevel: summary.location?.line == nil,
+            comments: [
+                ReviewComment(
+                    id: summary.providerCommentID ?? summary.id,
+                    author: summary.author,
+                    body: summary.body,
+                    url: summary.url,
+                    createdAt: nil,
+                    viewerCanUpdate: true,
+                    viewerCanDelete: true,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: summary.isActionable,
+            viewerCanReply: summary.isActionable,
+            url: summary.url
         )
     }
 

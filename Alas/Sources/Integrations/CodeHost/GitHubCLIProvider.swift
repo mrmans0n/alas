@@ -819,16 +819,22 @@ struct GitHubCLIProvider: CodeHostProvider {
         cwd: URL
     ) async throws -> ReviewComment {
         _ = request
+        let stdin = try Self.graphQLInput(
+            query: Self.addPullRequestReviewThreadReplyMutation,
+            variables: [
+                "threadId": thread.id,
+                "body": body,
+            ]
+        )
         let result = try await runner.run(
             "gh",
             args: [
                 "api", "graphql",
                 "--hostname", remote.host,
-                "-f", "query=\(Self.addPullRequestReviewThreadReplyMutation)",
-                "-F", "threadId=\(thread.id)",
-                "-F", "body=\(body)",
+                "--input", "-",
             ],
-            cwd: cwd
+            cwd: cwd,
+            stdin: stdin
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)

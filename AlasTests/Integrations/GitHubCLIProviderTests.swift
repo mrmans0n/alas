@@ -100,7 +100,7 @@ struct GitHubCLIProviderTests {
                 "completedAt": "2026-06-01T12:34:56Z",
                 "description": "a",
                 "event": "b|c",
-                "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/2",
+                "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/3",
                 "name": "test",
                 "startedAt": "2026-06-01T12:30:00Z",
                 "state": "SUCCESS",
@@ -319,8 +319,7 @@ struct GitHubCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable == true)
-        #expect(threads[0].providerThreadID == "thread-1")
-        #expect(threads[0].providerCommentID == "comment-1")
+        #expect(threads[0].comments.first?.id == "comment-1")
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable == false)
     }
@@ -698,7 +697,7 @@ struct GitHubCLIProviderTests {
 
         let replyResult = try await provider.mutateReviewThread(ProviderThreadMutation(
             remote: Self.remote,
-            reviewRequest: Self.makeRequest(threads: [thread]),
+            reviewRequest: Self.makeRequest(),
             thread: thread,
             kind: .reply,
             bodyMarkdown: "Thanks, fixed.",
@@ -706,7 +705,7 @@ struct GitHubCLIProviderTests {
         ))
         let resolveResult = try await provider.mutateReviewThread(ProviderThreadMutation(
             remote: Self.remote,
-            reviewRequest: Self.makeRequest(threads: [thread]),
+            reviewRequest: Self.makeRequest(),
             thread: thread,
             kind: .resolve,
             bodyMarkdown: nil,
@@ -791,7 +790,7 @@ struct GitHubCLIProviderTests {
             providerThreadID: "PRRT_thread_1",
             providerCommentID: "PRRC_comment_1"
         )
-        let originalRequest = Self.makeRequest(threads: [thread])
+        let originalRequest = Self.makeRequest()
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
             ProcessResult(exitCode: 1, stdout: "", stderr: "temporary API failure"),
@@ -856,10 +855,9 @@ struct GitHubCLIProviderTests {
             """
         )
 
-        #expect(threads.first?.location?.path == "Sources/App.swift")
-        #expect(threads.first?.location?.line == 56)
-        #expect(threads.first?.location?.side == .new)
-        #expect(threads.first?.location?.providerPosition == "PRRT_kwDO")
+        #expect(threads.first?.path == "Sources/App.swift")
+        #expect(threads.first?.line == 56)
+        #expect(threads.first?.id == "PRRT_kwDO")
     }
 
     @Test func reviewThreadsJSONIgnoresMalformedLocationMetadata() throws {
@@ -902,7 +900,8 @@ struct GitHubCLIProviderTests {
 
         #expect(threads.map(\.id) == ["PRRT_malformed"])
         #expect(threads.first?.body == "Keep this feedback.")
-        #expect(threads.first?.location == nil)
+        #expect(threads.first?.path == nil)
+        #expect(threads.first?.line == nil)
     }
 
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
@@ -1332,12 +1331,10 @@ struct GitHubCLIProviderTests {
 
         let command = try #require(await runner.commands.first)
         #expect(command.executable == "gh")
-        #expect(command.args == [
-            "api", "graphql",
-            "-f", "query=\(GitHubCLIProvider.addPullRequestReviewThreadReplyMutation)",
-            "-F", "threadId=thread-1",
-            "-F", "body=Reply body.",
-        ])
+        #expect(command.args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(command.stdin?.contains("addPullRequestReviewThreadReply") == true)
+        #expect(command.stdin?.contains("\"threadId\":\"thread-1\"") == true)
+        #expect(command.stdin?.contains("\"body\":\"Reply body.\"") == true)
     }
 
     @Test func resolveThreadUpdatesResolvedFlag() async throws {
@@ -1559,29 +1556,33 @@ struct GitHubCLIProviderTests {
         #expect(command.executable == "gh")
         #expect(command.args == [
             "api",
+            "--hostname", "github.com",
             "/repos/mrmans0n/alas/check-runs/run-99/annotations",
             "--paginate",
+            "--slurp",
         ])
     }
 
     private static let checkAnnotationsOutput = """
     [
-      {
-        "path": "Sources/App.swift",
-        "start_line": 10,
-        "end_line": 10,
-        "annotation_level": "failure",
-        "message": "Line length violation",
-        "raw_details": "Line is 120 characters long"
-      },
-      {
-        "path": "Sources/Model.swift",
-        "start_line": 25,
-        "end_line": 30,
-        "annotation_level": "warning",
-        "message": "Cyclomatic complexity violation",
-        "raw_details": null
-      }
+      [
+        {
+          "path": "Sources/App.swift",
+          "start_line": 10,
+          "end_line": 10,
+          "annotation_level": "failure",
+          "message": "Line length violation",
+          "raw_details": "Line is 120 characters long"
+        },
+        {
+          "path": "Sources/Model.swift",
+          "start_line": 25,
+          "end_line": 30,
+          "annotation_level": "warning",
+          "message": "Cyclomatic complexity violation",
+          "raw_details": null
+        }
+      ]
     ]
     """
 
@@ -1946,12 +1947,13 @@ struct GitHubCLIProviderTests {
           {
             "id": "thread-1", "isResolved": false, "isOutdated": false,
             "path": "Sources/Foo.swift", "line": 42, "startLine": null,
-            "originalLine": 40, "diffHunk": "@@ -40,3 +40,3 @@",
+            "originalLine": 40,
             "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
             "comments": { "nodes": [
               { "id": "c1", "body": "rename this",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
-                "createdAt": "2026-06-16T10:00:00Z", "author": { "login": "reviewer" },
+                "createdAt": "2026-06-16T10:00:00Z", "diffHunk": "@@ -40,3 +40,3 @@",
+                "author": { "login": "reviewer" },
                 "viewerDidAuthor": false }
             ] }
           }
@@ -1968,12 +1970,13 @@ struct GitHubCLIProviderTests {
           {
             "id": "thread-file-1", "isResolved": false, "isOutdated": false,
             "path": "Sources/Bar.swift", "line": null, "startLine": null,
-            "originalLine": null, "diffHunk": null,
+            "originalLine": null,
             "subjectType": "FILE", "viewerCanResolve": true, "viewerCanReply": true,
             "comments": { "nodes": [
               { "id": "cf1", "body": "file-level comment",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r10",
-                "createdAt": "2026-06-16T11:00:00Z", "author": { "login": "reviewer" },
+                "createdAt": "2026-06-16T11:00:00Z", "diffHunk": null,
+                "author": { "login": "reviewer" },
                 "viewerDidAuthor": false }
             ] }
           }
@@ -1990,28 +1993,31 @@ struct GitHubCLIProviderTests {
           {
             "id": "thread-kept", "isResolved": false, "isOutdated": false,
             "path": "Sources/Foo.swift", "line": 10, "startLine": null,
-            "originalLine": 8, "diffHunk": "@@ -8,3 +8,3 @@",
+            "originalLine": 8,
             "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
             "comments": { "nodes": [
               { "id": "c-empty", "body": "   ",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
-                "createdAt": "2026-06-16T10:00:00Z", "author": { "login": "reviewer" },
+                "createdAt": "2026-06-16T10:00:00Z", "diffHunk": "@@ -8,3 +8,3 @@",
+                "author": { "login": "reviewer" },
                 "viewerDidAuthor": false },
               { "id": "c-keep", "body": "keep me",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r2",
-                "createdAt": "2026-06-16T10:01:00Z", "author": { "login": "reviewer" },
+                "createdAt": "2026-06-16T10:01:00Z", "diffHunk": "@@ -8,3 +8,3 @@",
+                "author": { "login": "reviewer" },
                 "viewerDidAuthor": false }
             ] }
           },
           {
             "id": "thread-dropped", "isResolved": false, "isOutdated": false,
             "path": "Sources/Bar.swift", "line": 20, "startLine": null,
-            "originalLine": 18, "diffHunk": "@@ -18,3 +18,3 @@",
+            "originalLine": 18,
             "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
             "comments": { "nodes": [
               { "id": "c-only-empty", "body": "",
                 "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r3",
-                "createdAt": "2026-06-16T10:02:00Z", "author": { "login": "reviewer" },
+                "createdAt": "2026-06-16T10:02:00Z", "diffHunk": "@@ -18,3 +18,3 @@",
+                "author": { "login": "reviewer" },
                 "viewerDidAuthor": false }
             ] }
           }
@@ -2068,7 +2074,7 @@ struct GitHubCLIProviderTests {
     private static let resolveThreadOutput = """
     {
       "data": {
-        "resolvePullRequestReviewThread": {
+        "resolveReviewThread": {
           "thread": {
             "id": "thread-1",
             "isResolved": true,
@@ -2082,7 +2088,7 @@ struct GitHubCLIProviderTests {
     private static let unresolveThreadOutput = """
     {
       "data": {
-        "unresolvePullRequestReviewThread": {
+        "unresolveReviewThread": {
           "thread": {
             "id": "thread-1",
             "isResolved": false,
@@ -2097,7 +2103,7 @@ struct GitHubCLIProviderTests {
     {
       "data": {
         "updatePullRequestReviewComment": {
-          "comment": {
+          "pullRequestReviewComment": {
             "id": "comment-1",
             "body": "Updated body.",
             "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
@@ -2114,7 +2120,7 @@ struct GitHubCLIProviderTests {
     {
       "data": {
         "deletePullRequestReviewComment": {
-          "id": "comment-1"
+          "clientMutationId": "comment-1"
         }
       }
     }
