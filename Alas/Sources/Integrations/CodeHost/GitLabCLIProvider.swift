@@ -7,6 +7,11 @@ struct GitLabCLIProvider: CodeHostProvider {
 
     private let runner: any CodeHostCommandRunning
 
+    // Reference-type buffer so the struct doesn't need to be mutating.
+    // Access is always from the single-threaded async call chain that begins in the
+    // provider methods, so no additional synchronization is needed.
+    private let pendingComments = GitLabPendingComments()
+
     init(runner: any CodeHostCommandRunning = ProcessCodeHostCommandRunner()) {
         self.runner = runner
     }
@@ -561,6 +566,109 @@ struct GitLabCLIProvider: CodeHostProvider {
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api delete note", stderr: result.stderr)
+        }
+    }
+
+    func startReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> String {
+        _ = remote
+        _ = request
+        _ = cwd
+        let reviewID = UUID().uuidString
+        pendingComments.store[reviewID] = []
+        return reviewID
+    }
+
+    func addReviewComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        comment: StagedComment,
+        cwd: URL
+    ) async throws {
+        _ = remote
+        _ = request
+        _ = cwd
+        pendingComments.store[reviewID, default: []].append(comment)
+    }
+
+    func submitReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        verdict: ReviewVerdict,
+        body: String,
+        cwd: URL
+    ) async throws {
+        let comments = pendingComments.store.removeValue(forKey: reviewID) ?? []
+
+        // Post each staged comment as a MR note
+        for comment in comments {
+            let noteBody: String
+            if let suggestion = comment.suggestion {
+                noteBody = "```suggestion\n\(suggestion)\n```\n\n\(comment.body)"
+            } else {
+                noteBody = comment.body
+            }
+            let result = try await runner.run(
+                "glab",
+                args: [
+                    "api",
+                    "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/notes",
+                    "--hostname", remote.host,
+                    "--output", "json",
+                    "-X", "POST",
+                    "-f", "body=\(noteBody)",
+                ],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "glab api post note", stderr: result.stderr)
+            }
+        }
+
+        // Post summary note if body is non-empty
+        let summaryBody: String
+        switch verdict {
+        case .approve:
+            summaryBody = body.isEmpty ? "Approved." : body
+        case .requestChanges:
+            summaryBody = body.isEmpty ? "Changes requested." : body
+        case .comment:
+            summaryBody = body
+        }
+
+        if !summaryBody.isEmpty {
+            let result = try await runner.run(
+                "glab",
+                args: [
+                    "api",
+                    "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/notes",
+                    "--hostname", remote.host,
+                    "--output", "json",
+                    "-X", "POST",
+                    "-f", "body=\(summaryBody)",
+                ],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "glab api post summary note", stderr: result.stderr)
+            }
+        }
+
+        // Approve if requested
+        if verdict == .approve {
+            let result = try await runner.run(
+                "glab",
+                args: ["mr", "approve", "\(request.number)", "-R", remote.repositorySlug],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else {
+                throw CodeHostProviderError.commandFailed(command: "glab mr approve", stderr: result.stderr)
+            }
         }
     }
 
@@ -1432,6 +1540,10 @@ struct GitLabCLIProvider: CodeHostProvider {
             threads: threads
         )
     }
+}
+
+private final class GitLabPendingComments {
+    var store: [String: [StagedComment]] = [:]
 }
 
 private struct MRListItem: Decodable {
