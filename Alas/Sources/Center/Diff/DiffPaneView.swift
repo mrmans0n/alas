@@ -317,7 +317,7 @@ struct DiffPaneView: View {
         let hunkThreads = threads.filter { t in
             visibleRows.contains {
                 t.isOldSide
-                    ? $0.old?.anchor.newLine == t.newLine
+                    ? $0.old?.anchor.oldLine == t.newLine
                     : $0.new?.anchor.newLine == t.newLine
             }
         }

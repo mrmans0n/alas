@@ -483,7 +483,7 @@ struct DiffReviewFileSection: View {
         let matchedThreads = threads.filter { thread in
             segment.rows.contains {
                 thread.isOldSide
-                    ? $0.old?.anchor.newLine == thread.newLine
+                    ? $0.old?.anchor.oldLine == thread.newLine
                     : $0.new?.anchor.newLine == thread.newLine
             }
         }

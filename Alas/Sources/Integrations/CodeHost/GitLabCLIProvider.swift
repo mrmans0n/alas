@@ -630,10 +630,16 @@ struct GitLabCLIProvider: CodeHostProvider {
                     "-f", "position[start_sha]=\(refs.startSHA)",
                     "-f", "position[head_sha]=\(refs.headSHA)",
                 ]
+                // GitLab requires both old_path and new_path for position_type=text;
+                // vary only the line field to indicate which side the comment is on.
+                positionArgs += [
+                    "-f", "position[old_path]=\(filePath)",
+                    "-f", "position[new_path]=\(filePath)",
+                ]
                 if isOldSide {
-                    positionArgs += ["-f", "position[old_path]=\(filePath)", "-f", "position[old_line]=\(line)"]
+                    positionArgs += ["-f", "position[old_line]=\(line)"]
                 } else {
-                    positionArgs += ["-f", "position[new_path]=\(filePath)", "-f", "position[new_line]=\(line)"]
+                    positionArgs += ["-f", "position[new_line]=\(line)"]
                 }
                 let result = try await runner.run(
                     "glab",

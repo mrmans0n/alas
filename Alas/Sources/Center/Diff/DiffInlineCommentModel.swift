@@ -87,7 +87,7 @@ enum DiffInlineCommentLayout {
         for thread in threads {
             let rowIndex: Int?
             if thread.isOldSide {
-                rowIndex = visibleRows.firstIndex { $0.old?.anchor.newLine == thread.newLine }
+                rowIndex = visibleRows.firstIndex { $0.old?.anchor.oldLine == thread.newLine }
             } else {
                 rowIndex = visibleRows.firstIndex { $0.new?.anchor.newLine == thread.newLine }
             }
