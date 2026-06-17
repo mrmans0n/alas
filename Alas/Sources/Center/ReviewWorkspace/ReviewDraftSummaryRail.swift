@@ -544,6 +544,8 @@ struct ReviewDraftSummaryRail: View {
                     .accessibilityIdentifier("review-draft-summary-editor-\(comment.id)")
             } else {
                 DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
+                    .frame(maxHeight: 80, alignment: .top)
+                    .clipped()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
