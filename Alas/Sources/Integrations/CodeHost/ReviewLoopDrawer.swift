@@ -106,6 +106,7 @@ struct ReviewLoopDrawer: View {
                         .lineLimit(1)
                 }
                 .buttonStyle(.plain)
+                .focusEffectDisabled()
                 .help("Open \(model.providerTitle ?? "review") \(requestNumberTitle)")
             }
         }
@@ -249,6 +250,7 @@ private struct ReviewReadinessActionButton: View {
             )
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
         .disabled(!action.isEnabled)
         .opacity(action.isEnabled ? 1 : 0.5)
         .help(action.title)
