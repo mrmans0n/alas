@@ -261,18 +261,9 @@ final class RightPaneState {
             guard let snapshot = reviewLoop.snapshot,
                   snapshot.reviewRequest != nil
             else { return }
-            let section: ReviewEvidenceSection?
-            if snapshot.reviewRequest?.worstCheckBucket == .fail {
-                section = .ci
-            } else if snapshot.reviewRequest?.hasActionableFeedback == true {
-                section = .feedback
-            } else {
-                section = nil
-            }
-            appState.tabs.openOrFocusReviewEvidence(
+            appState.tabs.openOrFocusReviewPR(
                 worktreeId: worktree.id,
-                snapshot: snapshot,
-                initialSection: section
+                snapshot: snapshot
             )
         case .pushBranch, .forcePushBranch:
             guard let snapshot = reviewLoop.snapshot else { return }

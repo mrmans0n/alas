@@ -248,13 +248,18 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(reviewState.id)
-                    case .reviewSession(let reviewSessionState):
-                        ReviewSessionTabView(
+                    case .reviewPR(let prState):
+                        let _ = state.rightPaneStore.state(
+                            for: worktree,
+                            baseBranch: state.config.worktrees.baseBranch,
+                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
+                        )
+                        ReviewTabView(
                             worktree: worktree,
-                            tabState: reviewSessionState,
+                            tabState: prState,
                             appState: state
                         )
-                        .id(reviewSessionState.id)
+                        .id(prState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,

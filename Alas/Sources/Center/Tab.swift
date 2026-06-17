@@ -16,6 +16,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
+    case reviewPR(ReviewPRTabState)
 
     var id: TabID {
         switch self {
@@ -32,6 +33,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
+        case .reviewPR(let s):     return s.id
         }
     }
 
@@ -50,6 +52,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
+        case .reviewPR(let s):     return s.displayTitle
         }
     }
 
@@ -68,6 +71,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
+        case .reviewPR:     return "list.bullet.rectangle.portrait.fill"
         }
     }
 
@@ -142,6 +146,54 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
         let host = remote?.host ?? self.url.host ?? ""
         self.id = [
             "review-evidence",
+            worktreeId,
+            provider.rawValue,
+            host,
+            repositorySlug,
+            "\(number)",
+        ].joined(separator: ":")
+    }
+
+    mutating func refreshSnapshotMetadata(from snapshot: ReviewLoopSnapshot) {
+        guard let request = snapshot.reviewRequest else { return }
+        url = request.url
+        title = request.title
+    }
+
+    func matches(_ snapshot: ReviewLoopSnapshot) -> Bool {
+        guard let request = snapshot.reviewRequest else { return false }
+        return request.provider == provider
+            && request.remote.host.lowercased() == (url.host ?? "").lowercased()
+            && request.remote.repositorySlug == repositorySlug
+            && request.number == number
+    }
+}
+
+struct ReviewPRTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let provider: CodeHostKind
+    let repositorySlug: String
+    let number: Int
+    var url: URL
+    var title: String
+
+    var displayTitle: String {
+        "\(provider.reviewRequestLabel) Review"
+    }
+
+    init(worktreeId: String, snapshot: ReviewLoopSnapshot) {
+        let request = snapshot.reviewRequest
+        let remote = request?.remote ?? snapshot.remote
+        self.worktreeId = worktreeId
+        self.provider = request?.provider ?? remote?.kind ?? .github
+        self.repositorySlug = remote?.repositorySlug ?? ""
+        self.number = request?.number ?? 0
+        self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
+        self.title = request?.title ?? ""
+        let host = remote?.host ?? self.url.host ?? ""
+        self.id = [
+            "review-pr",
             worktreeId,
             provider.rawValue,
             host,
