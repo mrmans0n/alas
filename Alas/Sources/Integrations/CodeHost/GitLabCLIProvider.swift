@@ -637,13 +637,20 @@ struct GitLabCLIProvider: CodeHostProvider {
                     "-f", "position[new_path]=\(filePath)",
                 ]
                 if let endLine = comment.endLine {
-                    // Multi-line range: use line_range with start/end line codes.
+                    // Multi-line range: GitLab type is "old"/"new" (not "old_line"/"new_line")
+                    // and line_code is sha1hex(path)_oldLine_newLine.
                     let lineType = isOldSide ? "old" : "new"
+                    let startCode = isOldSide
+                        ? "\(Self.gitLabSHA1Hex(filePath))_\(line)_0"
+                        : "\(Self.gitLabSHA1Hex(filePath))_0_\(line)"
+                    let endCode = isOldSide
+                        ? "\(Self.gitLabSHA1Hex(filePath))_\(endLine)_0"
+                        : "\(Self.gitLabSHA1Hex(filePath))_0_\(endLine)"
                     positionArgs += [
-                        "-f", "position[line_range][start][type]=\(lineType)_line",
-                        "-f", "position[line_range][start][line_code]=\(filePath)_\(line)_\(line)",
-                        "-f", "position[line_range][end][type]=\(lineType)_line",
-                        "-f", "position[line_range][end][line_code]=\(filePath)_\(endLine)_\(endLine)",
+                        "-f", "position[line_range][start][type]=\(lineType)",
+                        "-f", "position[line_range][start][line_code]=\(startCode)",
+                        "-f", "position[line_range][end][type]=\(lineType)",
+                        "-f", "position[line_range][end][line_code]=\(endCode)",
                     ]
                 } else if isOldSide {
                     positionArgs += ["-f", "position[old_line]=\(line)"]
@@ -1340,6 +1347,12 @@ struct GitLabCLIProvider: CodeHostProvider {
             return .unknown
         }
         return approvalsLeft == 0 ? .approved : .reviewRequired
+    }
+
+    static func gitLabSHA1Hex(_ value: String) -> String {
+        Insecure.SHA1.hash(data: Data(value.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private static func mapMergeState(detailed: String?, fallback: String?) -> ReviewMergeState {

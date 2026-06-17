@@ -23,7 +23,7 @@ struct VerdictSheet: View {
             verdictPicker
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Summary (optional)")
+                Text(verdict == .requestChanges ? "Summary (required)" : "Summary (optional)")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.color("fg-dim"))
                 TextEditor(text: $summaryBody)
@@ -41,6 +41,7 @@ struct VerdictSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
+                .disabled(verdict == .requestChanges && summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 Button("Cancel") {
                     onCancel()
