@@ -51,7 +51,7 @@ struct ReviewTabView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if let pr = pendingReview, !pr.staged.isEmpty {
+            if let pr = pendingReview {
                 PendingReviewTray(pendingReview: pr) {
                     showVerdictSheet = true
                 }
@@ -607,9 +607,6 @@ struct ReviewTabView: View {
                         comment: comment,
                         cwd: worktree.path
                     )
-                    // Remove immediately after success so a later submitReview failure
-                    // doesn't leave already-posted comments retryable from the tray.
-                    pr.remove(id: comment.id)
                 }
                 try await provider.submitReview(
                     remote: remote,
@@ -619,6 +616,11 @@ struct ReviewTabView: View {
                     body: body,
                     cwd: worktree.path
                 )
+                // Remove inline comments after submitReview so providers that buffer
+                // (e.g. GitLab) don't lose drafts if the submit step fails.
+                for comment in stagedComments where comment.threadID == nil {
+                    pr.remove(id: comment.id)
+                }
                 for comment in stagedComments where comment.threadID != nil {
                     if let existingThread = localThreads.first(where: { $0.id == comment.threadID }) {
                         _ = try await provider.replyToThread(

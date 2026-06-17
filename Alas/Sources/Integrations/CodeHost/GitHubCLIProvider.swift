@@ -906,8 +906,8 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "api", "graphql",
                 "--hostname", remote.host,
                 "-f", "query=\(Self.updatePullRequestReviewCommentMutation)",
-                "-F", "commentId=\(comment.id)",
-                "-F", "body=\(newBody)",
+                "-f", "commentId=\(comment.id)",
+                "-f", "body=\(newBody)",
             ],
             cwd: cwd
         )
