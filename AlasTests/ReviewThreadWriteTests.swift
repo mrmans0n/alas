@@ -2,7 +2,6 @@ import Testing
 @testable import Alas
 
 @Suite struct ReviewThreadWriteTests {
-
     // Helper to build a minimal ReviewThread
     private func makeThread(id: String, comments: [ReviewComment] = [], isResolved: Bool = false) -> ReviewThread {
         ReviewThread(

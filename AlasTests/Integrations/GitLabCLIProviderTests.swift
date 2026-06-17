@@ -2036,7 +2036,6 @@ struct GitLabCLIProviderTests {
         ])
     }
 
-
     @Test func resolveThreadCallsDiscussionResolveEndpoint() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "", stderr: ""),
