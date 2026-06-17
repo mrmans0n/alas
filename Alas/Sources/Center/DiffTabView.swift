@@ -424,7 +424,7 @@ struct DiffTabView: View {
         ReviewDraftSessionID.localChanges(
             worktreeID: worktreeId,
             worktreePath: worktreePath,
-            scope: staged ? .staged : .unstaged
+            scope: .all
         )
     }
 
