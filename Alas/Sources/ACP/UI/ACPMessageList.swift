@@ -533,7 +533,9 @@ struct ACPMessageList: View {
     ) {
         // Tail-follow pause/resume — reuse the shared classifier so the rules
         // match the legacy observer exactly.
-        let isUserDriven = ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
+        let currentEventType = NSApp.currentEvent?.type
+        let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(currentEventType)
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
             newOffsetY: newMinY,
@@ -564,7 +566,7 @@ struct ACPMessageList: View {
         guard Self.shouldStepHeadBackFromGeometry(
             visibleHead: transcript.visibleHead,
             isRestoring: isRestoringTail,
-            isUserDriven: isUserDriven,
+            isHeadPaginationDriven: isHeadPaginationDriven,
             newMinY: newMinY,
             threshold: headStepScrollThreshold
         ) else { return }
@@ -577,13 +579,13 @@ struct ACPMessageList: View {
     nonisolated static func shouldStepHeadBackFromGeometry(
         visibleHead: Int,
         isRestoring: Bool,
-        isUserDriven: Bool,
+        isHeadPaginationDriven: Bool,
         newMinY: CGFloat,
         threshold: CGFloat
     ) -> Bool {
         guard visibleHead > 0 else { return false }
         guard !isRestoring else { return false }
-        guard isUserDriven else { return false }
+        guard isHeadPaginationDriven else { return false }
         guard newMinY < threshold else { return false }
         return true
     }
@@ -914,6 +916,15 @@ enum ACPUserScrollEvent {
         default:
             return false
         }
+    }
+
+    static func isHeadPaginationDriven(_ type: NSEvent.EventType?) -> Bool {
+        guard let type else { return false }
+        if isUserDriven(type) { return true }
+        // Track-click paging arrives as a plain mouse-down. Keep that out of
+        // tail-follow pause detection, but allow it to reveal older rows once
+        // geometry confirms the viewport is already near the transcript head.
+        return type == .leftMouseDown
     }
 }
 

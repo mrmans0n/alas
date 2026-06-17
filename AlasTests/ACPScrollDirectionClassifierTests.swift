@@ -7,7 +7,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(!ACPMessageList.shouldStepHeadBackFromGeometry(
             visibleHead: 70,
             isRestoring: true,
-            isUserDriven: false,
+            isHeadPaginationDriven: false,
             newMinY: 0,
             threshold: 200
         ))
@@ -17,7 +17,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(!ACPMessageList.shouldStepHeadBackFromGeometry(
             visibleHead: 70,
             isRestoring: false,
-            isUserDriven: false,
+            isHeadPaginationDriven: false,
             newMinY: 0,
             threshold: 200
         ))
@@ -27,7 +27,7 @@ struct ACPScrollDirectionClassifierTests {
         #expect(ACPMessageList.shouldStepHeadBackFromGeometry(
             visibleHead: 70,
             isRestoring: false,
-            isUserDriven: true,
+            isHeadPaginationDriven: true,
             newMinY: 0,
             threshold: 200
         ))

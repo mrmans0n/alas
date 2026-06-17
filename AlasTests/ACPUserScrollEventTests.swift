@@ -20,10 +20,13 @@ struct ACPUserScrollEventTests {
         // from clicking a transcript control (expanding/collapsing a card, the
         // copy button) by event type alone. If such a click coincides with a
         // streaming/layout reflow that shifts the clip view upward, treating it
-        // as a scroll would re-latch the false pause this change prevents. Only
-        // the knob drag (leftMouseDragged) counts; track-click paging is a rare
-        // interaction not worth that regression.
+        // as a tail-follow pause would re-latch the false pause this change
+        // prevents. Only the knob drag (leftMouseDragged) counts for that path.
         #expect(!ACPUserScrollEvent.isUserDriven(.leftMouseDown))
+    }
+
+    @Test func trackClickCanDriveHeadPagination() {
+        #expect(ACPUserScrollEvent.isHeadPaginationDriven(.leftMouseDown))
     }
 
     @Test func keyboardIsNotTreatedAsScroll() {
@@ -31,11 +34,15 @@ struct ACPUserScrollEventTests {
         // and currentEvent is app-wide, so keyDown would misattribute composer
         // typing during streaming. It must not count as a user scroll.
         #expect(!ACPUserScrollEvent.isUserDriven(.keyDown))
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(.keyDown))
     }
 
     @Test func incidentalEventsAreNotUserDriven() {
         #expect(!ACPUserScrollEvent.isUserDriven(.mouseMoved))
         #expect(!ACPUserScrollEvent.isUserDriven(.leftMouseUp))
         #expect(!ACPUserScrollEvent.isUserDriven(nil))
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(.mouseMoved))
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(.leftMouseUp))
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(nil))
     }
 }
