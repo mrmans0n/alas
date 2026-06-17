@@ -360,7 +360,7 @@ struct DiffReviewFileSection: View {
             placement: placement,
             pendingAnchor: pendingDraftAnchor
         )
-        if segments.containsLocalAccessories && threads.isEmpty && annotations.isEmpty {
+        if segments.containsLocalAccessories {
             VStack(alignment: .leading, spacing: 0) {
                 segmentedHunkHeader(group)
                 ForEach(segments.items) { segment in
@@ -389,6 +389,7 @@ struct DiffReviewFileSection: View {
                             onContextExpansion: loadContextAndExpand
                         )
                         .fixedSize(horizontal: false, vertical: true)
+                        inlineThreadAndAnnotationStack(for: segment, in: group)
                     }
                     if !segment.draftComments.isEmpty {
                         draftCommentStack(segment.draftComments)
@@ -472,6 +473,38 @@ struct DiffReviewFileSection: View {
         .padding(.vertical, 8)
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+    }
+
+    @ViewBuilder
+    private func inlineThreadAndAnnotationStack(
+        for segment: ReviewDraftCommentRowSegmentation.Segment,
+        in group: DiffDisplayGroup
+    ) -> some View {
+        let matchedThreads = threads.filter { thread in
+            segment.rows.contains { $0.new?.anchor.newLine == thread.newLine }
+        }
+        let matchedAnnotations = annotations.filter { annotation in
+            segment.rows.contains { $0.new?.anchor.newLine == annotation.newLine }
+        }
+        ForEach(matchedThreads) { thread in
+            DiffInlineCommentCard(
+                thread: thread,
+                onReply: { body in onReply(thread, body) },
+                onStageReply: { body in onStageReply(thread, body) },
+                onResolve: { onResolve(thread) },
+                onUnresolve: { onUnresolve(thread) },
+                onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
+                onDelete: { comment in onDelete(thread, comment) },
+                canReply: canReply,
+                canResolve: canResolve,
+                canAddToReview: canAddToReview
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        ForEach(matchedAnnotations) { annotation in
+            DiffInlineAnnotationCard(annotation: annotation)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder
