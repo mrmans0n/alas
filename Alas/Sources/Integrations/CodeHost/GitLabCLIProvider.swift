@@ -413,6 +413,174 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
     }
 
+    func replyToThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        body: String,
+        cwd: URL
+    ) async throws -> ReviewComment {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/discussions/\(thread.id)/notes",
+                "--hostname", remote.host,
+                "--output", "json",
+                "-X", "POST",
+                "-f", "body=\(body)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api add discussion note", stderr: result.stderr)
+        }
+
+        return try Self.parseNoteResponse(result.stdout, requestURL: request.url)
+    }
+
+    func resolveThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        cwd: URL
+    ) async throws -> ReviewThread {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/discussions/\(thread.id)?resolved=true",
+                "--hostname", remote.host,
+                "--output", "json",
+                "-X", "PUT",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api resolve discussion", stderr: result.stderr)
+        }
+
+        return ReviewThread(
+            id: thread.id,
+            path: thread.path,
+            line: thread.line,
+            startLine: thread.startLine,
+            originalLine: thread.originalLine,
+            diffHunk: thread.diffHunk,
+            isResolved: true,
+            isOutdated: thread.isOutdated,
+            isFileLevel: thread.isFileLevel,
+            comments: thread.comments,
+            viewerCanResolve: thread.viewerCanResolve,
+            viewerCanReply: thread.viewerCanReply,
+            url: thread.url
+        )
+    }
+
+    func unresolveThread(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        thread: ReviewThread,
+        cwd: URL
+    ) async throws -> ReviewThread {
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/discussions/\(thread.id)?resolved=false",
+                "--hostname", remote.host,
+                "--output", "json",
+                "-X", "PUT",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api unresolve discussion", stderr: result.stderr)
+        }
+
+        return ReviewThread(
+            id: thread.id,
+            path: thread.path,
+            line: thread.line,
+            startLine: thread.startLine,
+            originalLine: thread.originalLine,
+            diffHunk: thread.diffHunk,
+            isResolved: false,
+            isOutdated: thread.isOutdated,
+            isFileLevel: thread.isFileLevel,
+            comments: thread.comments,
+            viewerCanResolve: thread.viewerCanResolve,
+            viewerCanReply: thread.viewerCanReply,
+            url: thread.url
+        )
+    }
+
+    func editComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ReviewComment,
+        newBody: String,
+        cwd: URL
+    ) async throws -> ReviewComment {
+        let noteID = try Self.noteID(from: comment)
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/notes/\(noteID)",
+                "--hostname", remote.host,
+                "--output", "json",
+                "-X", "PUT",
+                "-f", "body=\(newBody)",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api edit note", stderr: result.stderr)
+        }
+
+        return try Self.parseNoteResponse(result.stdout, requestURL: request.url)
+    }
+
+    func deleteComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        comment: ReviewComment,
+        cwd: URL
+    ) async throws {
+        let noteID = try Self.noteID(from: comment)
+        let result = try await runner.run(
+            "glab",
+            args: [
+                "api",
+                "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/notes/\(noteID)",
+                "--hostname", remote.host,
+                "-X", "DELETE",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab api delete note", stderr: result.stderr)
+        }
+    }
+
+    private func currentUserUsername(
+        remote: CodeHostRemote,
+        cwd: URL
+    ) async -> String? {
+        do {
+            let result = try await runner.run(
+                "glab",
+                args: ["api", "user", "--hostname", remote.host, "--output", "json"],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else { return nil }
+            return try? Self.parseCurrentUserUsername(result.stdout)
+        } catch {
+            return nil
+        }
+    }
+
     private func reviewRequestDetails(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -661,7 +829,8 @@ struct GitLabCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "glab mr note list", stderr: result.stderr)
         }
 
-        return try Self.parseDiscussions(result.stdout, requestURL: request.url)
+        let currentUserUsername = await currentUserUsername(remote: remote, cwd: cwd)
+        return try Self.parseDiscussions(result.stdout, requestURL: request.url, currentUserUsername: currentUserUsername)
     }
 
     static func normalizedBaseBranch(_ baseBranch: String, remoteName: String) -> String {
@@ -756,7 +925,11 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try reviewRequest(from: item, remote: remote, context: "glab mr view")
     }
 
-    static func parseDiscussions(_ json: String, requestURL: URL) throws -> [ReviewThread] {
+    static func parseDiscussions(
+        _ json: String,
+        requestURL: URL,
+        currentUserUsername: String? = nil
+    ) throws -> [ReviewThread] {
         let data = Data(json.utf8)
         let discussions: [GitLabDiscussion]
         do {
@@ -780,14 +953,15 @@ struct GitLabCLIProvider: CodeHostProvider {
             let position = firstNote.position
             let comments: [ReviewComment] = try actionableNotes.enumerated().map { index, note in
                 let commentURL = try discussionURL(note: note, requestURL: requestURL)
+                let isViewer = note.author?.username.map { currentUserUsername == $0 } ?? false
                 return ReviewComment(
                     id: note.id.map(String.init) ?? "\(discussion.id)-\(index)",
                     author: note.author?.username,
                     body: note.body,
                     url: commentURL,
                     createdAt: try? parseOptionalGitLabDate(note.createdAt),
-                    viewerCanUpdate: false,
-                    viewerCanDelete: false,
+                    viewerCanUpdate: isViewer,
+                    viewerCanDelete: isViewer,
                     isPending: false
                 )
             }
@@ -1148,6 +1322,66 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
         let id = pathComponents[idIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         return id.isEmpty ? nil : id
+    }
+
+    static func urlEncodedProjectSlug(_ remote: CodeHostRemote) -> String {
+        remote.repositorySlug
+            .split(separator: "/")
+            .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
+            .joined(separator: "%2F")
+    }
+
+    static func noteID(from thread: ReviewThread) throws -> Int {
+        guard let firstComment = thread.comments.first,
+              let id = Int(firstComment.id) else {
+            throw CodeHostProviderError.malformedOutput("Unable to determine discussion note id")
+        }
+        return id
+    }
+
+    static func noteID(from comment: ReviewComment) throws -> Int {
+        guard let id = Int(comment.id) else {
+            throw CodeHostProviderError.malformedOutput("Unable to parse note id")
+        }
+        return id
+    }
+
+    static func parseNoteResponse(_ json: String, requestURL: URL) throws -> ReviewComment {
+        let data = Data(json.utf8)
+        let note: GitLabDiscussionNote
+        do {
+            note = try JSONDecoder().decode(GitLabDiscussionNote.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab note response output")
+        }
+        guard let id = note.id else {
+            throw CodeHostProviderError.malformedOutput("glab note response is missing a note id")
+        }
+        let url = try discussionURL(note: note, requestURL: requestURL)
+        return ReviewComment(
+            id: String(id),
+            author: note.author?.username,
+            body: note.body,
+            url: url,
+            createdAt: try? parseOptionalGitLabDate(note.createdAt),
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: false
+        )
+    }
+
+    static func parseCurrentUserUsername(_ json: String) throws -> String {
+        let data = Data(json.utf8)
+        let user: GitLabCurrentUser
+        do {
+            user = try JSONDecoder().decode(GitLabCurrentUser.self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse glab api user output")
+        }
+        guard let username = normalizedOptionalString(user.username) else {
+            throw CodeHostProviderError.malformedOutput("glab api user output is missing username")
+        }
+        return username
     }
 
     private static func checkID(for pipeline: GitLabPipeline) -> String {
@@ -1551,6 +1785,14 @@ private struct GitLabDiscussionNote: Decodable {
         case webURL = "web_url"
         case createdAt = "created_at"
         case position
+    }
+}
+
+private struct GitLabCurrentUser: Decodable {
+    let username: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case username
     }
 }
 
