@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-06-17
+
+### ✨ Features
+
+- Add a unified PR review surface with inline threads, CI annotations, and write actions (#545).
+- Highlight active remote sessions more prominently in the remote web client (#550).
+- Render markdown in feedback comment cards (#548).
+- Enable local review in the staged/unstaged diff pane (#546).
+- Prioritise open chats in the send-to-agent dropdown (#547).
+- Use the shared diff review surface in the draft commit tab (#544).
+
+### 🐛 Fixes
+
+- Preserve the ACP chat tail when restoring tabs (#543).
+- Fix the code host icon in the changes footer (#541).
+
+### 🏗️ Internal
+
+- Increase the worktree removal timeout to 90 seconds (#549).
+
 ## [0.8.2] - 2026-06-16
 
 ### ✨ Features
