@@ -1345,8 +1345,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 diffHunk: node.comments.nodes.first?.diffHunk,
                 isResolved: node.isResolved,
                 isOutdated: node.isOutdated,
-                // subjectType is canonical; fall back to line == nil for servers that omit it
-                isFileLevel: (node.subjectType ?? "").uppercased() == "FILE" || node.line == nil,
+                isFileLevel: (node.subjectType ?? "").uppercased() == "FILE",
                 comments: comments,
                 viewerCanResolve: node.viewerCanResolve ?? false,
                 viewerCanReply: node.viewerCanReply ?? false,

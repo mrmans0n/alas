@@ -258,6 +258,17 @@ struct ReviewTabView: View {
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
+            onSaveDraftComment: { _, _, anchor, body in
+                guard let pr = pendingReview else { return }
+                pr.stage(StagedComment(
+                    id: UUID(),
+                    threadID: nil,
+                    filePath: anchor.path,
+                    line: anchor.line,
+                    body: body,
+                    suggestion: nil
+                ))
+            },
             threads: localThreads,
             onReply: { inlineThread, body in
                 guard let t = localThreads.first(where: { $0.id == inlineThread.id }) else { return }
@@ -578,25 +589,14 @@ struct ReviewTabView: View {
         Task { @MainActor in
             do {
                 let reviewID = try await provider.startReview(remote: remote, request: request, cwd: worktree.path)
-                for comment in stagedComments {
-                    if let threadID = comment.threadID,
-                       let existingThread = localThreads.first(where: { $0.id == threadID }) {
-                        _ = try await provider.replyToThread(
-                            remote: remote,
-                            request: request,
-                            thread: existingThread,
-                            body: comment.body,
-                            cwd: worktree.path
-                        )
-                    } else {
-                        try await provider.addReviewComment(
-                            remote: remote,
-                            request: request,
-                            reviewID: reviewID,
-                            comment: comment,
-                            cwd: worktree.path
-                        )
-                    }
+                for comment in stagedComments where comment.threadID == nil {
+                    try await provider.addReviewComment(
+                        remote: remote,
+                        request: request,
+                        reviewID: reviewID,
+                        comment: comment,
+                        cwd: worktree.path
+                    )
                 }
                 try await provider.submitReview(
                     remote: remote,
@@ -606,6 +606,17 @@ struct ReviewTabView: View {
                     body: body,
                     cwd: worktree.path
                 )
+                for comment in stagedComments where comment.threadID != nil {
+                    if let existingThread = localThreads.first(where: { $0.id == comment.threadID }) {
+                        _ = try await provider.replyToThread(
+                            remote: remote,
+                            request: request,
+                            thread: existingThread,
+                            body: comment.body,
+                            cwd: worktree.path
+                        )
+                    }
+                }
                 pr.clear()
             } catch {
                 showError(error.localizedDescription)
