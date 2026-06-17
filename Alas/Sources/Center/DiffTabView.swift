@@ -128,7 +128,7 @@ struct DiffTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .onAppear { loadDraftCommentController() }
+        .onChange(of: loadKey, initial: true) { _, _ in loadDraftCommentController() }
         .task(id: loadKey) { await load() }
         .alert(
             "Discard this hunk in \u{201C}\((relativePath as NSString).lastPathComponent)\u{201D}?",
