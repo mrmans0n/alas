@@ -26,7 +26,24 @@ struct ACPUserScrollEventTests {
     }
 
     @Test func trackClickCanDriveHeadPagination() {
-        #expect(ACPUserScrollEvent.isHeadPaginationDriven(.leftMouseDown))
+        #expect(ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown,
+            previousMinY: 240,
+            newMinY: 40
+        ))
+    }
+
+    @Test func plainMouseDownWithoutUpwardMovementDoesNotDriveHeadPagination() {
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown,
+            previousMinY: 40,
+            newMinY: 40
+        ))
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown,
+            previousMinY: 40,
+            newMinY: 240
+        ))
     }
 
     @Test func keyboardIsNotTreatedAsScroll() {

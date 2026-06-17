@@ -535,7 +535,11 @@ struct ACPMessageList: View {
         // match the legacy observer exactly.
         let currentEventType = NSApp.currentEvent?.type
         let isUserDriven = ACPUserScrollEvent.isUserDriven(currentEventType)
-        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(currentEventType)
+        let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
+            currentEventType,
+            previousMinY: previousMinY,
+            newMinY: newMinY
+        )
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
             newOffsetY: newMinY,
@@ -918,13 +922,19 @@ enum ACPUserScrollEvent {
         }
     }
 
-    static func isHeadPaginationDriven(_ type: NSEvent.EventType?) -> Bool {
+    static func isHeadPaginationDriven(
+        _ type: NSEvent.EventType?,
+        previousMinY: CGFloat? = nil,
+        newMinY: CGFloat? = nil
+    ) -> Bool {
         guard let type else { return false }
         if isUserDriven(type) { return true }
         // Track-click paging arrives as a plain mouse-down. Keep that out of
-        // tail-follow pause detection, but allow it to reveal older rows once
-        // geometry confirms the viewport is already near the transcript head.
-        return type == .leftMouseDown
+        // tail-follow pause detection, and require actual upward geometry
+        // movement so top-row control clicks that only change content height do
+        // not reveal older rows.
+        guard type == .leftMouseDown, let previousMinY, let newMinY else { return false }
+        return newMinY < previousMinY - ACPScrollDirectionClassifier.upwardEpsilon
     }
 }
 
