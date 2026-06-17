@@ -233,10 +233,10 @@ struct WorktreeService {
     ) async throws {
         var args = ["worktree", "remove", worktree.path.path]
         if force { args.append("--force") }
-        var result = try await Process.git(args, cwd: repoPath)
+        var result = try await Process.git(args, cwd: repoPath, timeout: 90)
         if result.exitCode != 0 {
             if Self.looksLikeMissingLFS(result.stderr) {
-                result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath)
+                result = try await Process.git(Self.lfsFilterOverride + args, cwd: repoPath, timeout: 90)
             }
             if !force,
                result.exitCode != 0,
@@ -244,7 +244,8 @@ struct WorktreeService {
                try await canForceRemoveAfterMissingLFS(worktree.path) {
                 result = try await Process.git(
                     Self.lfsFilterOverride + ["worktree", "remove", worktree.path.path, "--force"],
-                    cwd: repoPath
+                    cwd: repoPath,
+                    timeout: 90
                 )
             }
         }
