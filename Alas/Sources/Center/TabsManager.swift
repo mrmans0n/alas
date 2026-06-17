@@ -12,6 +12,23 @@ struct TabsFile: Codable {
     var stashedDraft: DraftCommitTabState? = nil
 }
 
+extension TabsFile {
+    // Custom decoder skips unknown/removed Tab cases instead of failing the
+    // entire file when users upgrade from an older build that had more cases.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = (try? c.decode(Int.self, forKey: .version)) ?? 1
+        activeTabId = try? c.decode(TabID.self, forKey: .activeTabId)
+        stashedDraft = try? c.decode(DraftCommitTabState.self, forKey: .stashedDraft)
+        tabs = ((try? c.decode([FailableTab].self, forKey: .tabs)) ?? []).compactMap(\.value)
+    }
+
+    private struct FailableTab: Decodable {
+        let value: Tab?
+        init(from decoder: Decoder) throws { value = try? Tab(from: decoder) }
+    }
+}
+
 @Observable
 @MainActor
 final class TabsManager {

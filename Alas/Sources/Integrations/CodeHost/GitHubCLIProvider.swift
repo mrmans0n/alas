@@ -77,7 +77,6 @@ struct GitHubCLIProvider: CodeHostProvider {
               line
               startLine
               originalLine
-              diffHunk
               subjectType
               viewerCanResolve
               viewerCanReply
@@ -87,6 +86,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                   body
                   url
                   createdAt
+                  diffHunk
                   author {
                     login
                   }
@@ -182,7 +182,7 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static let addPullRequestReviewMutation = """
     mutation($prId: ID!) {
-      addPullRequestReview(input: {pullRequestId: $prId, event: PENDING}) {
+      addPullRequestReview(input: {pullRequestId: $prId}) {
         pullRequestReview {
           id
         }
@@ -494,6 +494,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "api", "graphql",
+                "--hostname", remote.host,
                 "-f", "query=\(Self.prNodeIDQuery)",
                 "-F", "owner=\(remote.owner)",
                 "-F", "repo=\(remote.repository)",
@@ -1341,7 +1342,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 line: node.line,
                 startLine: node.startLine,
                 originalLine: node.originalLine,
-                diffHunk: node.diffHunk,
+                diffHunk: node.comments.nodes.first?.diffHunk,
                 isResolved: node.isResolved,
                 isOutdated: node.isOutdated,
                 // subjectType is canonical; fall back to line == nil for servers that omit it
@@ -1872,7 +1873,6 @@ private struct ReviewThreadNode: Decodable {
     let line: Int?
     let startLine: Int?
     let originalLine: Int?
-    let diffHunk: String?
     let subjectType: String?
     let viewerCanResolve: Bool?
     let viewerCanReply: Bool?
@@ -1887,7 +1887,6 @@ private struct ReviewThreadNode: Decodable {
         self.line = try? container.decode(Int.self, forKey: .line)
         self.startLine = try? container.decode(Int.self, forKey: .startLine)
         self.originalLine = try? container.decode(Int.self, forKey: .originalLine)
-        self.diffHunk = try? container.decode(String.self, forKey: .diffHunk)
         self.subjectType = try? container.decode(String.self, forKey: .subjectType)
         self.viewerCanResolve = try? container.decode(Bool.self, forKey: .viewerCanResolve)
         self.viewerCanReply = try? container.decode(Bool.self, forKey: .viewerCanReply)
@@ -1902,7 +1901,6 @@ private struct ReviewThreadNode: Decodable {
         case line
         case startLine
         case originalLine
-        case diffHunk
         case subjectType
         case viewerCanResolve
         case viewerCanReply
@@ -1919,6 +1917,7 @@ private struct ReviewThreadCommentNode: Decodable {
     let body: String
     let url: String?
     let createdAt: String?
+    let diffHunk: String?
     let author: ReviewThreadAuthor?
     let viewerDidAuthor: Bool?
 }
