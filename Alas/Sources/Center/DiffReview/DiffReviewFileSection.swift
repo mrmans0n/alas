@@ -1384,7 +1384,17 @@ private struct ReviewDraftCommentCard: View {
         let targets = actions.agentTargets()
         if targets.count > 1 {
             Menu("Send") {
-                ForEach(targets) { target in
+                let existingTargets = targets.filter { !$0.isNewChat }
+                let newChatTargets = targets.filter { $0.isNewChat }
+                ForEach(existingTargets) { target in
+                    Button(target.title) {
+                        actions.sendToAgent(feedbackBundle, target)
+                    }
+                }
+                if !existingTargets.isEmpty, !newChatTargets.isEmpty {
+                    Divider()
+                }
+                ForEach(newChatTargets) { target in
                     Button(target.title) {
                         actions.sendToAgent(feedbackBundle, target)
                     }

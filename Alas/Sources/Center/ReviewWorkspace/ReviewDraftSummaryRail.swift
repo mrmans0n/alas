@@ -328,7 +328,17 @@ struct ReviewDraftSummaryRail: View {
     private var collapsedSendToAgentControl: some View {
         if agentTargets.count > 1 {
             Menu {
-                ForEach(agentTargets) { target in
+                let existingTargets = agentTargets.filter { !$0.isNewChat }
+                let newChatTargets = agentTargets.filter { $0.isNewChat }
+                ForEach(existingTargets) { target in
+                    Button(target.title) {
+                        draftCommentActions.sendToAgent(bundle, target)
+                    }
+                }
+                if !existingTargets.isEmpty, !newChatTargets.isEmpty {
+                    Divider()
+                }
+                ForEach(newChatTargets) { target in
                     Button(target.title) {
                         draftCommentActions.sendToAgent(bundle, target)
                     }
@@ -358,7 +368,17 @@ struct ReviewDraftSummaryRail: View {
     private var expandedSendToAgentControl: some View {
         if agentTargets.count > 1 {
             Menu {
-                ForEach(agentTargets) { target in
+                let existingTargets = agentTargets.filter { !$0.isNewChat }
+                let newChatTargets = agentTargets.filter { $0.isNewChat }
+                ForEach(existingTargets) { target in
+                    Button(target.title) {
+                        draftCommentActions.sendToAgent(bundle, target)
+                    }
+                }
+                if !existingTargets.isEmpty, !newChatTargets.isEmpty {
+                    Divider()
+                }
+                ForEach(newChatTargets) { target in
                     Button(target.title) {
                         draftCommentActions.sendToAgent(bundle, target)
                     }
