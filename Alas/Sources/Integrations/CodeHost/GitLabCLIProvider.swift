@@ -646,12 +646,25 @@ struct GitLabCLIProvider: CodeHostProvider {
                     let endCode = isOldSide
                         ? "\(Self.gitLabSHA1Hex(filePath))_\(endLine)_0"
                         : "\(Self.gitLabSHA1Hex(filePath))_0_\(endLine)"
-                    positionArgs += [
-                        "-f", "position[line_range][start][type]=\(lineType)",
-                        "-f", "position[line_range][start][line_code]=\(startCode)",
-                        "-f", "position[line_range][end][type]=\(lineType)",
-                        "-f", "position[line_range][end][line_code]=\(endCode)",
-                    ]
+                    if isOldSide {
+                        positionArgs += [
+                            "-f", "position[line_range][start][type]=\(lineType)",
+                            "-f", "position[line_range][start][line_code]=\(startCode)",
+                            "-F", "position[line_range][start][old_line]=\(line)",
+                            "-f", "position[line_range][end][type]=\(lineType)",
+                            "-f", "position[line_range][end][line_code]=\(endCode)",
+                            "-F", "position[line_range][end][old_line]=\(endLine)",
+                        ]
+                    } else {
+                        positionArgs += [
+                            "-f", "position[line_range][start][type]=\(lineType)",
+                            "-f", "position[line_range][start][line_code]=\(startCode)",
+                            "-F", "position[line_range][start][new_line]=\(line)",
+                            "-f", "position[line_range][end][type]=\(lineType)",
+                            "-f", "position[line_range][end][line_code]=\(endCode)",
+                            "-F", "position[line_range][end][new_line]=\(endLine)",
+                        ]
+                    }
                 } else if isOldSide {
                     positionArgs += ["-f", "position[old_line]=\(line)"]
                 } else {
