@@ -39,6 +39,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let codeFontSize: CGFloat
     let theme: Theme
     let lspContext: DiffPaneLSPContext?
+    var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
 
@@ -53,6 +54,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         codeFontSize: CGFloat,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
+        allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     ) {
@@ -66,6 +68,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         self.codeFontSize = codeFontSize
         self.theme = theme
         self.lspContext = lspContext
+        self.allowsReviewLineSelection = allowsReviewLineSelection
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
     }
@@ -85,6 +88,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme,
             lspContext: lspContext,
+            allowsReviewLineSelection: allowsReviewLineSelection,
             onReviewLineSelected: onReviewLineSelected,
             onContextExpansion: onContextExpansion
         )
@@ -132,9 +136,13 @@ final class DiffPaneTextDocumentContainerView: NSView {
         font: NSFont,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
+        allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     ) {
+        oldPane.allowsReviewLineSelection = allowsReviewLineSelection
+        newPane.allowsReviewLineSelection = allowsReviewLineSelection
+        stackedPane.allowsReviewLineSelection = allowsReviewLineSelection
         oldPane.onReviewLineSelected = onReviewLineSelected
         newPane.onReviewLineSelected = onReviewLineSelected
         stackedPane.onReviewLineSelected = onReviewLineSelected
@@ -330,6 +338,11 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
+    var allowsReviewLineSelection: Bool = true {
+        didSet {
+            (verticalRulerView as? DiffPaneLineNumberRulerView)?.allowsReviewLineSelection = allowsReviewLineSelection
+        }
+    }
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in } {
         didSet {
@@ -1130,6 +1143,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
     private var trackingArea: NSTrackingArea?
     var rowHeight: CGFloat = 16
+    var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     private var contentTopInset: CGFloat = 6
@@ -1190,7 +1204,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         if let row = rowIndex(at: sourcePoint), invokeExpansion(row: row, optionKey: event.modifierFlags.contains(.option)) {
             return
         }
-        guard let row = textView.reviewLineRow(at: sourcePoint) else {
+        guard allowsReviewLineSelection, let row = textView.reviewLineRow(at: sourcePoint) else {
             super.mouseDown(with: event)
             return
         }
@@ -1433,6 +1447,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     private func isReviewCommentableRow(_ row: Int) -> Bool {
+        guard allowsReviewLineSelection else { return false }
         guard let textView = scrollView?.documentView as? DiffPaneCodeTextView else { return false }
         return textView.reviewLineAnchor(atRow: row) != nil
     }

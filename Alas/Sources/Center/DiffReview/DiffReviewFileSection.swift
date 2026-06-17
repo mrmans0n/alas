@@ -370,10 +370,11 @@ struct DiffReviewFileSection: View {
                             codeFontSize: codeFontSize,
                             theme: theme,
                             lspContext: lspContext,
-                            onReviewLineSelected: allowsDraftCommentCreation ? { anchor in
+                            allowsReviewLineSelection: allowsDraftCommentCreation,
+                            onReviewLineSelected: { anchor in
                                 pendingDraftAnchor = anchor
                                 pendingDraftBody = ""
-                            } : { _ in },
+                            },
                             onContextExpansion: loadContextAndExpand
                         )
                         .fixedSize(horizontal: false, vertical: true)
@@ -405,10 +406,11 @@ struct DiffReviewFileSection: View {
                 showsToolbar: false,
                 verticalScrollMode: .staticHeight,
                 lspContext: lspContext,
-                onReviewLineSelected: allowsDraftCommentCreation ? { anchor in
+                allowsReviewLineSelection: allowsDraftCommentCreation,
+                onReviewLineSelected: { anchor in
                     pendingDraftAnchor = anchor
                     pendingDraftBody = ""
-                } : { _ in },
+                },
                 onContextExpansion: loadContextAndExpand,
                 hunkActions: { hunk in
                     let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false

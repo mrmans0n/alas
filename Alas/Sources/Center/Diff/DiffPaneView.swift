@@ -115,6 +115,7 @@ struct DiffPaneView: View {
     var showsToolbar: Bool = true
     var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
     var lspContext: DiffPaneLSPContext? = nil
+    var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
@@ -133,6 +134,7 @@ struct DiffPaneView: View {
         showsToolbar: Bool = true,
         verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll,
         lspContext: DiffPaneLSPContext? = nil,
+        allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
         hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
@@ -147,6 +149,7 @@ struct DiffPaneView: View {
         self.showsToolbar = showsToolbar
         self.verticalScrollMode = verticalScrollMode
         self.lspContext = lspContext
+        self.allowsReviewLineSelection = allowsReviewLineSelection
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
         self.hunkActions = hunkActions
@@ -287,6 +290,7 @@ struct DiffPaneView: View {
                 codeFontSize: codeFontSize,
                 theme: theme,
                 lspContext: lspContext,
+                allowsReviewLineSelection: allowsReviewLineSelection,
                 onReviewLineSelected: onReviewLineSelected,
                 onContextExpansion: onContextExpansion
             )
