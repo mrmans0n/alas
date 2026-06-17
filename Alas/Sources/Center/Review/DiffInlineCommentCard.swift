@@ -9,6 +9,8 @@ struct DiffInlineCommentCard: View {
     var onDelete: (DiffInlineComment) -> Void = { _ in }
     var canReply: Bool = true
     var canResolve: Bool = true
+    var onStageReply: (String) -> Void = { _ in }
+    var canAddToReview: Bool = false
 
     @State private var isExpanded: Bool
     @State private var isComposerOpen = false
@@ -19,21 +21,25 @@ struct DiffInlineCommentCard: View {
     init(
         thread: DiffInlineCommentThread,
         onReply: @escaping (String) -> Void = { _ in },
+        onStageReply: @escaping (String) -> Void = { _ in },
         onResolve: @escaping () -> Void = {},
         onUnresolve: @escaping () -> Void = {},
         onEdit: @escaping (DiffInlineComment, String) -> Void = { _, _ in },
         onDelete: @escaping (DiffInlineComment) -> Void = { _ in },
         canReply: Bool = true,
-        canResolve: Bool = true
+        canResolve: Bool = true,
+        canAddToReview: Bool = false
     ) {
         self.thread = thread
         self.onReply = onReply
+        self.onStageReply = onStageReply
         self.onResolve = onResolve
         self.onUnresolve = onUnresolve
         self.onEdit = onEdit
         self.onDelete = onDelete
         self.canReply = canReply
         self.canResolve = canResolve
+        self.canAddToReview = canAddToReview
         // Smart default: expanded when unresolved and not outdated
         _isExpanded = State(initialValue: !thread.isResolved && !thread.isOutdated)
     }
@@ -120,6 +126,18 @@ struct DiffInlineCommentCard: View {
             if isComposerOpen {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text("Reply")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.secondary)
+                        Spacer(minLength: 0)
+                        Button("Suggest") {
+                            replyDraft = "```suggestion\n\n```"
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.accentColor)
+                    }
                     TextEditor(text: $replyDraft)
                         .font(.system(size: 11))
                         .frame(minHeight: 60)
@@ -128,7 +146,7 @@ struct DiffInlineCommentCard: View {
                                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                         )
                     HStack(spacing: 8) {
-                        Button("Submit") {
+                        Button("Comment") {
                             onReply(replyDraft)
                             replyDraft = ""
                             isComposerOpen = false
@@ -136,6 +154,17 @@ struct DiffInlineCommentCard: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.accentColor)
+
+                        if canAddToReview {
+                            Button("Add to review") {
+                                onStageReply(replyDraft)
+                                replyDraft = ""
+                                isComposerOpen = false
+                            }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.accentColor)
+                        }
 
                         Button("Cancel") {
                             replyDraft = ""
