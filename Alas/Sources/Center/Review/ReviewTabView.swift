@@ -265,6 +265,7 @@ struct ReviewTabView: View {
                     threadID: nil,
                     filePath: anchor.path,
                     line: anchor.line,
+                    endLine: anchor.endLine,
                     side: anchor.side,
                     body: body,
                     suggestion: nil
@@ -601,6 +602,9 @@ struct ReviewTabView: View {
                         comment: comment,
                         cwd: worktree.path
                     )
+                    // Remove immediately after success so a later submitReview failure
+                    // doesn't leave already-posted comments retryable from the tray.
+                    pr.remove(id: comment.id)
                 }
                 try await provider.submitReview(
                     remote: remote,
@@ -610,12 +614,6 @@ struct ReviewTabView: View {
                     body: body,
                     cwd: worktree.path
                 )
-                // Review submitted — remove inline (non-reply) comments immediately.
-                // Remove reply comments one-by-one after each succeeds so a partial failure
-                // leaves unposted replies in the tray for retry.
-                for comment in stagedComments where comment.threadID == nil {
-                    pr.remove(id: comment.id)
-                }
                 for comment in stagedComments where comment.threadID != nil {
                     if let existingThread = localThreads.first(where: { $0.id == comment.threadID }) {
                         _ = try await provider.replyToThread(

@@ -191,12 +191,13 @@ struct GitHubCLIProvider: CodeHostProvider {
     """
 
     static let addPullRequestReviewCommentMutation = """
-    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $side: DiffSide!, $body: String!) {
+    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $startLine: Int, $side: DiffSide!, $body: String!) {
       addPullRequestReviewThread(input: {
         pullRequestId: $prId,
         pullRequestReviewId: $reviewId,
         path: $path,
         line: $line,
+        startLine: $startLine,
         side: $side,
         body: $body
       }) {
@@ -977,21 +978,23 @@ struct GitHubCLIProvider: CodeHostProvider {
             body = comment.body
         }
         let side = comment.side == .old ? "LEFT" : "RIGHT"
-        let result = try await runner.run(
-            "gh",
-            args: [
-                "api", "graphql",
-                "--hostname", remote.host,
-                "-f", "query=\(Self.addPullRequestReviewCommentMutation)",
-                "-f", "prId=\(prNodeID)",
-                "-f", "reviewId=\(reviewID)",
-                "-f", "path=\(comment.filePath)",
-                "-F", "line=\(line)",
-                "-f", "side=\(side)",
-                "-f", "body=\(body)",
-            ],
-            cwd: cwd
-        )
+        // GitHub: line = ending line of selection; startLine = starting line for multi-line ranges.
+        let endingLine = comment.endLine ?? line
+        var args: [String] = [
+            "api", "graphql",
+            "--hostname", remote.host,
+            "-f", "query=\(Self.addPullRequestReviewCommentMutation)",
+            "-f", "prId=\(prNodeID)",
+            "-f", "reviewId=\(reviewID)",
+            "-f", "path=\(comment.filePath)",
+            "-F", "line=\(endingLine)",
+            "-f", "side=\(side)",
+            "-f", "body=\(body)",
+        ]
+        if comment.endLine != nil {
+            args += ["-F", "startLine=\(line)"]
+        }
+        let result = try await runner.run("gh", args: args, cwd: cwd)
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }

@@ -5,9 +5,30 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
     let threadID: String?
     let filePath: String
     let line: Int?
+    let endLine: Int?
     let side: DiffReviewInlineFeedbackSide
     let body: String
     let suggestion: String?
+
+    init(
+        id: UUID = UUID(),
+        threadID: String? = nil,
+        filePath: String,
+        line: Int?,
+        endLine: Int? = nil,
+        side: DiffReviewInlineFeedbackSide,
+        body: String,
+        suggestion: String? = nil
+    ) {
+        self.id = id
+        self.threadID = threadID
+        self.filePath = filePath
+        self.line = line
+        self.endLine = endLine
+        self.side = side
+        self.body = body
+        self.suggestion = suggestion
+    }
 }
 
 @MainActor

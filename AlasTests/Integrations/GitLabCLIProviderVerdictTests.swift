@@ -163,9 +163,9 @@ struct GitLabCLIProviderVerdictTests {
     private static let versionsOutput = """
     [
       {
-        "base_sha": "base123",
-        "head_sha": "head123",
-        "start_sha": "start123"
+        "base_commit_sha": "base123",
+        "head_commit_sha": "head123",
+        "start_commit_sha": "start123"
       }
     ]
     """
