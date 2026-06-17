@@ -318,6 +318,116 @@ struct ReviewChangesModelsTests {
         #expect(model.isVisible)
     }
 
+    @Test func preparationModelHidesPushWhenLocalStateReportsNoCommitsEvenIfNeedsPushIsTrue() {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+        let local = ReviewLoopLocalState(
+            branchName: "feature",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: true,
+            needsPush: true
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 0,
+            local: local,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelShowsPushUsingLocalStateCommitCount() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+        let local = ReviewLoopLocalState(
+            branchName: "feature",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 2,
+            hasUpstream: true,
+            needsPush: true
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 0,
+            local: local,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        let request = try #require(model.reviewRequestAction)
+        #expect(request.kind == .pushBranch)
+        #expect(request.title == "Push")
+        #expect(model.isVisible)
+    }
+
+    @Test func preparationModelHidesWhenCleanUsingLocalState() {
+        let local = ReviewLoopLocalState(
+            branchName: "feature",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: true,
+            needsPush: false
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 0,
+            local: local,
+            readinessActions: []
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelFallsBackToAheadCommitCountParameterWhenLocalStateIsAbsent() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 1,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        let request = try #require(model.reviewRequestAction)
+        #expect(request.kind == .pushBranch)
+        #expect(request.title == "Push")
+        #expect(model.isVisible)
+    }
+
     @Test func preparationModelHidesDraftWhenWorktreeIsCleanAndNoDraftTabExists() {
         let model = ChangesPreparationModel(
             changes: [],

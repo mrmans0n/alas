@@ -38,6 +38,7 @@ struct ChangesPreparationModel: Equatable {
         hasDraft: Bool,
         draftNonEmpty: Bool,
         aheadCommitCount: Int = 0,
+        local: ReviewLoopLocalState? = nil,
         readinessActions: [ReviewReadinessModel.Action]
     ) {
         let builtReviewAction: ReviewAction?
@@ -69,14 +70,18 @@ struct ChangesPreparationModel: Equatable {
         reviewAction = builtReviewAction
         draftAction = builtDraftAction
         let builtReviewRequestAction = Self.compactReviewRequestAction(from: readinessActions)
+        let effectiveAheadCommitCount = local?.aheadCommitCount ?? aheadCommitCount
         if builtReviewRequestAction?.kind == .refresh,
+           builtReviewRequestAction?.isInFlight != true,
            builtReviewAction == nil,
-           builtDraftAction == nil {
+           builtDraftAction == nil,
+           effectiveAheadCommitCount == 0 {
             reviewRequestAction = nil
         } else if builtReviewRequestAction?.kind == .pushBranch,
-                  aheadCommitCount == 0,
-                  builtReviewAction == nil,
-                  builtDraftAction == nil {
+                   builtReviewRequestAction?.isInFlight != true,
+                   effectiveAheadCommitCount == 0,
+                   builtReviewAction == nil,
+                   builtDraftAction == nil {
             reviewRequestAction = nil
         } else {
             reviewRequestAction = builtReviewRequestAction
