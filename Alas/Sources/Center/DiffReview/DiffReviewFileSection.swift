@@ -36,6 +36,8 @@ struct DiffReviewFileSection: View {
     var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
     var canReply: Bool = false
     var canResolve: Bool = false
+    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -337,6 +339,8 @@ struct DiffReviewFileSection: View {
                 onDelete: onDelete,
                 canReply: canReply,
                 canResolve: canResolve,
+                onStageReply: onStageReply,
+                canAddToReview: canAddToReview,
                 hunkActions: { _ in DiffPaneHunkActions() }
             )
         } else {

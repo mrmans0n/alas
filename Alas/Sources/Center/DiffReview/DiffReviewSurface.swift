@@ -23,6 +23,8 @@ struct DiffReviewSurface: View {
     var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
     var canReply: Bool = false
     var canResolve: Bool = false
+    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -206,7 +208,9 @@ struct DiffReviewSurface: View {
                             onEdit: { t, c, newBody in onEdit(t, c, newBody) },
                             onDelete: { t, c in onDelete(t, c) },
                             canReply: canReply,
-                            canResolve: canResolve
+                            canResolve: canResolve,
+                            onStageReply: { t, body in onStageReply(t, body) },
+                            canAddToReview: canAddToReview
                         )
                     }
                     if let command = inlineFeedbackScrollCommand {

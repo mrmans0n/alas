@@ -126,6 +126,8 @@ struct DiffPaneView: View {
     var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
     var canReply: Bool = false
     var canResolve: Bool = false
+    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var canAddToReview: Bool = false
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -317,12 +319,14 @@ struct DiffPaneView: View {
                     DiffInlineCommentCard(
                         thread: t,
                         onReply: { body in onReply(t, body) },
+                        onStageReply: { body in onStageReply(t, body) },
                         onResolve: { onResolve(t) },
                         onUnresolve: { onUnresolve(t) },
                         onEdit: { comment, newBody in onEdit(t, comment, newBody) },
                         onDelete: { comment in onDelete(t, comment) },
                         canReply: canReply,
-                        canResolve: canResolve
+                        canResolve: canResolve,
+                        canAddToReview: canAddToReview
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
