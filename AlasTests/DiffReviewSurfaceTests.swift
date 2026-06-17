@@ -1267,7 +1267,7 @@ struct DiffReviewSurfaceTests {
     @MainActor
     @Test func inlineFeedbackMarkdownRendersCommonReviewMarkup() throws {
         let rendered = NSAttributedString(
-            DiffReviewInlineFeedbackMarkdown.render("Use **bold** and `configId`, then see [docs](https://example.com/docs).")
+            ACPMarkdownText.inlineMarkdown("Use **bold** and `configId`, then see [docs](https://example.com/docs).")
         )
 
         #expect(rendered.string == "Use bold and configId, then see docs.")

@@ -1300,6 +1300,7 @@ private struct ReviewDraftCommentCard: View {
                     .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
                 } else {
                     DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
+                        .allowsHitTesting(false)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1606,6 +1607,7 @@ private struct DiffReviewInlineFeedbackCard: View {
                         .lineLimit(1)
 
                         DiffReviewInlineFeedbackMarkdown.view(item.bodyPreview)
+                            .allowsHitTesting(false)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
