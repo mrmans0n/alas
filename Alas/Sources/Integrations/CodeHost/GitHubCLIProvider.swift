@@ -191,7 +191,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     """
 
     static let addPullRequestReviewCommentMutation = """
-    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $side: PullRequestReviewThreadSubjectType!, $body: String!) {
+    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $side: DiffSide!, $body: String!) {
       addPullRequestReviewThread(input: {
         pullRequestId: $prId,
         pullRequestReviewId: $reviewId,

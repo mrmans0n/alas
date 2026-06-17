@@ -315,7 +315,11 @@ struct DiffPaneView: View {
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
         )
         let hunkThreads = threads.filter { t in
-            visibleRows.contains { $0.new?.anchor.newLine == t.newLine }
+            visibleRows.contains {
+                t.isOldSide
+                    ? $0.old?.anchor.newLine == t.newLine
+                    : $0.new?.anchor.newLine == t.newLine
+            }
         }
         let hunkAnnotations = annotations.filter { a in
             visibleRows.contains { $0.new?.anchor.newLine == a.newLine }

@@ -610,11 +610,13 @@ struct ReviewTabView: View {
                     body: body,
                     cwd: worktree.path
                 )
-                // Review submitted — remove inline comments from pending so retries don't duplicate.
-                // Thread replies are still pending; remove them individually after each succeeds.
-                let replies = stagedComments.filter { $0.threadID != nil }
-                pr.clear()
-                for comment in replies {
+                // Review submitted — remove inline (non-reply) comments immediately.
+                // Remove reply comments one-by-one after each succeeds so a partial failure
+                // leaves unposted replies in the tray for retry.
+                for comment in stagedComments where comment.threadID == nil {
+                    pr.remove(id: comment.id)
+                }
+                for comment in stagedComments where comment.threadID != nil {
                     if let existingThread = localThreads.first(where: { $0.id == comment.threadID }) {
                         _ = try await provider.replyToThread(
                             remote: remote,
@@ -623,6 +625,7 @@ struct ReviewTabView: View {
                             body: comment.body,
                             cwd: worktree.path
                         )
+                        pr.remove(id: comment.id)
                     }
                 }
             } catch {

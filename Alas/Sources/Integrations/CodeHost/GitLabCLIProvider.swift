@@ -1124,8 +1124,8 @@ struct GitLabCLIProvider: CodeHostProvider {
                 diffHunk: nil,
                 isResolved: discussion.isResolved,
                 isOutdated: false,
-                // File-level when there's no specific line anchor (mirrors GitHub's line == nil rule)
-                isFileLevel: position == nil || position?.newLine == nil,
+                // File-level only when there is no line anchor on either side
+                isFileLevel: position == nil || (position?.newLine == nil && position?.oldLine == nil),
                 comments: comments,
                 // glab does not report per-thread viewer capabilities; assume true (real availability is gated by provider capabilities).
                 viewerCanResolve: true,
