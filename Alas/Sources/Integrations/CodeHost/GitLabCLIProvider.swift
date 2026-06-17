@@ -636,7 +636,16 @@ struct GitLabCLIProvider: CodeHostProvider {
                     "-f", "position[old_path]=\(filePath)",
                     "-f", "position[new_path]=\(filePath)",
                 ]
-                if isOldSide {
+                if let endLine = comment.endLine {
+                    // Multi-line range: use line_range with start/end line codes.
+                    let lineType = isOldSide ? "old" : "new"
+                    positionArgs += [
+                        "-f", "position[line_range][start][type]=\(lineType)_line",
+                        "-f", "position[line_range][start][line_code]=\(filePath)_\(line)_\(line)",
+                        "-f", "position[line_range][end][type]=\(lineType)_line",
+                        "-f", "position[line_range][end][line_code]=\(filePath)_\(endLine)_\(endLine)",
+                    ]
+                } else if isOldSide {
                     positionArgs += ["-f", "position[old_line]=\(line)"]
                 } else {
                     positionArgs += ["-f", "position[new_line]=\(line)"]

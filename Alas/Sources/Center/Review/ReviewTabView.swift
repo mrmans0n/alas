@@ -69,9 +69,14 @@ struct ReviewTabView: View {
             )
         }
         .task(id: loadKey) {
-            if pendingReview == nil {
-                pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
-            }
+            pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
+            await loadSession()
+            localThreads = reviewRequest?.threads ?? []
+        }
+        .task(id: reviewRequest?.number) {
+            // Re-scope PendingReview and reload when the PR number first arrives (snapshot
+            // may populate after the loadKey task has already run with prNumber: nil).
+            pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
             await loadSession()
             localThreads = reviewRequest?.threads ?? []
         }
