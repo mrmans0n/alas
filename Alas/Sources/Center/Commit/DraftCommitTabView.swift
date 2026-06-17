@@ -162,6 +162,11 @@ struct DraftCommitTabView: View {
                 showsRailDisplayControls: true,
                 allowsDraftCommentCreation: false
             )
+        } else if error != nil, hasStaged {
+            Text("Staged changes could not be loaded.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(theme.color("fg-dim"))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Text("No staged changes yet.\nStage files from the sidebar to start a commit.")
                 .multilineTextAlignment(.center)
