@@ -148,7 +148,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     static let updatePullRequestReviewCommentMutation = """
     mutation($commentId: ID!, $body: String!) {
       updatePullRequestReviewComment(input: {pullRequestReviewCommentId: $commentId, body: $body}) {
-        comment {
+        pullRequestReviewComment {
           id
           body
           url
@@ -165,7 +165,7 @@ struct GitHubCLIProvider: CodeHostProvider {
     static let deletePullRequestReviewCommentMutation = """
     mutation($commentId: ID!) {
       deletePullRequestReviewComment(input: {id: $commentId}) {
-        id
+        clientMutationId
       }
     }
     """
@@ -196,6 +196,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         pullRequestReviewId: $reviewId,
         path: $path,
         line: $line,
+        side: RIGHT,
         body: $body
       }) {
         comment {
@@ -1412,7 +1413,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh updatePullRequestReviewComment output")
         }
 
-        return commentNodeToReviewComment(response.data.updatePullRequestReviewComment.comment)
+        return commentNodeToReviewComment(response.data.updatePullRequestReviewComment.pullRequestReviewComment)
     }
 
     private static func commentNodeToReviewComment(_ comment: ReviewThreadCommentNode) -> ReviewComment {
@@ -1534,6 +1535,14 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
 
     private static func checkID(for item: CheckItem) -> String {
+        // Extract the numeric check-run (job) ID from the GitHub Actions URL:
+        // https://github.com/{owner}/{repo}/actions/runs/{run_id}/job/{job_id}
+        if let link = item.link,
+           let url = URL(string: link),
+           let jobID = url.pathComponents.dropFirst().drop(while: { $0 != "job" }).dropFirst().first,
+           !jobID.isEmpty {
+            return jobID
+        }
         let fields = [
             "github-check",
             item.workflow ?? "",
@@ -1961,7 +1970,7 @@ private struct UpdatePullRequestReviewCommentData: Decodable {
 }
 
 private struct UpdatePullRequestReviewCommentPayload: Decodable {
-    let comment: ReviewThreadCommentNode
+    let pullRequestReviewComment: ReviewThreadCommentNode
 }
 
 private struct PRNodeIDResponse: Decodable {
