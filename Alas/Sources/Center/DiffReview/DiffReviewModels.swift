@@ -171,6 +171,12 @@ struct DiffReviewFileSummary: Codable, Equatable, Identifiable {
     }
 }
 
+struct DiffReviewStagedMutationActions {
+    var unstageFile: (() -> Void)? = nil
+    var unstageHunk: ((ParsedDiff.Hunk) -> Void)? = nil
+    var isHunkUnstageEnabled: ((ParsedDiff.Hunk) -> Bool)? = nil
+}
+
 struct DiffReviewFileSectionModel: Identifiable {
     var id: DiffReviewFileID { summary.id }
 
@@ -180,6 +186,7 @@ struct DiffReviewFileSectionModel: Identifiable {
     let placeholderMessage: String?
     let openFile: (() -> Void)?
     let contextProvider: DiffReviewContextProvider?
+    var stagedMutationActions: DiffReviewStagedMutationActions? = nil
 }
 
 struct DiffReviewSourceGroup: Equatable, Identifiable {

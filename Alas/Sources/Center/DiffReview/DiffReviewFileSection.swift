@@ -139,6 +139,19 @@ struct DiffReviewFileSection: View {
                 .accessibilityIdentifier("diff-review-open-file-\(file.id.rawValue)")
                 .accessibilityLabel(openFileTitle)
             }
+            if let unstageFile = file.stagedMutationActions?.unstageFile {
+                Button("Unstage") {
+                    unstageFile()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("diff-review-unstage-file-\(file.id.rawValue)")
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -396,7 +409,12 @@ struct DiffReviewFileSection: View {
                     pendingDraftBody = ""
                 },
                 onContextExpansion: loadContextAndExpand,
-                hunkActions: { _ in DiffPaneHunkActions() }
+                hunkActions: { hunk in
+                    let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
+                    return DiffPaneHunkActions(
+                        dropFromCommit: enabled ? { file.stagedMutationActions?.unstageHunk?(hunk) } : nil
+                    )
+                }
             )
         }
     }

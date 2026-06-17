@@ -9,16 +9,8 @@ struct DraftCommitTabView: View {
     @State private var subject: String = ""
     @State private var bodyText: String = ""
     @State private var amend: Bool = false
-    @State private var selectedPath: String?
-    @State private var stagedFiles: [CommitChangedFile] = []
-    @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
-    @State private var displayModel: DiffDisplayModel?
-    @State private var displayModelKey: String?
     @State private var busy = false
     @State private var error: String?
-    @State private var loadingFiles = false
-    @State private var loadingDiff = false
-    @State private var activeDiffKey: String?
     @State private var amendPrefilled: Bool = false
     @State private var amendPrefilledSubject: String = ""
     @State private var amendPrefilledBody: String = ""
@@ -26,10 +18,14 @@ struct DraftCommitTabView: View {
     @State private var canAmend: Bool = true
     @State private var generation: Task<Void, Never>? = nil
 
+    @State private var stagedSession: DiffReviewLoadedSession?
+    @State private var selectedFileID: DiffReviewFileID?
+    @State private var loadingSession = false
+    @State private var railCollapsed = false
+
     @Environment(\.theme) private var theme
     private let git = GitService()
 
-    private static let minPaneWidth: CGFloat = 140
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
     }
@@ -38,7 +34,7 @@ struct DraftCommitTabView: View {
         subject.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var hasStaged: Bool { !stagedFiles.isEmpty }
+    private var hasStaged: Bool { (stagedSession?.summary.fileCount ?? 0) > 0 }
     private var canCommit: Bool { hasStaged && !trimmedSubject.isEmpty && !busy }
 
     /// A key that changes whenever the staged set changes in the sidebar.
@@ -56,14 +52,34 @@ struct DraftCommitTabView: View {
         return "\(rps.changes.count):\(staged):\(rps.indexFingerprint)"
     }
 
-    private var diffKey: String { "\(stagedKey):\(selectedPath ?? "")" }
-
     /// Drives `refreshCanAmend()` re-firing when HEAD changes (e.g. an
     /// external commit on an unborn branch should enable Amend without
     /// needing a tab reopen). The value itself doesn't matter, only that
     /// it shifts when HEAD does.
     private var amendProbeKey: String {
         appState.rightPaneStore.activeState(worktreeId: worktreeId)?.currentHeadSHA ?? ""
+    }
+
+    // Computed property that overlays mutation actions onto the loaded session.
+    // Reads `busy` fresh on each render so closures always see current value.
+    private var sessionWithActions: DiffReviewLoadedSession? {
+        guard let session = stagedSession else { return nil }
+        let filesWithActions = session.files.map { model in
+            var m = model
+            m.stagedMutationActions = DiffReviewStagedMutationActions(
+                unstageFile: {
+                    unstageFileByPaths(path: model.summary.path, originalPath: model.summary.originalPath)
+                },
+                unstageHunk: { hunk in
+                    unstageHunk(path: model.summary.path, hunk: hunk)
+                },
+                isHunkUnstageEnabled: { hunk in
+                    !busy && model.summary.status == .modified && !hunk.lines.isEmpty
+                }
+            )
+            return m
+        }
+        return DiffReviewLoadedSession(files: filesWithActions, summary: session.summary)
     }
 
     var body: some View {
@@ -102,7 +118,7 @@ struct DraftCommitTabView: View {
                     .padding(.top, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            splitBody
+            stagedDiffBody
         }
         .onAppear { hydrateFromTabState() }
         // Re-probe HEAD existence whenever the right-pane state observes a
@@ -119,59 +135,34 @@ struct DraftCommitTabView: View {
                 clearAmendPrefillIfUnchanged()
             }
         }
-        .onChange(of: selectedPath) { _, new in persist(selectedPath: new) }
-        .task(id: stagedKey) { await loadStaged() }
-        .task(id: diffKey) { await loadDiff() }
+        .onChange(of: selectedFileID) { _, new in persist(selectedPath: new?.path) }
+        .task(id: stagedKey) { await loadStagedSession() }
     }
 
     @ViewBuilder
-    private var splitBody: some View {
-        GeometryReader { proxy in
-            let total = proxy.size.width
-            let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
-            let leftWidth = max(Self.minPaneWidth, total * ratio)
-            HStack(spacing: 0) {
-                CommitFilesListView(
-                    files: stagedFiles,
-                    selectedPath: $selectedPath,
-                    onDropFile: { file in unstageFile(file) },
-                    dropFileEnabled: { _ in !busy }
-                )
-                .frame(width: leftWidth)
-                DragHandle(axis: .horizontal, onDrag: { delta in
-                    guard total > 0 else { return }
-                    let newWidth = max(Self.minPaneWidth, min(total - Self.minPaneWidth, leftWidth + delta))
-                    appState.config.commitDetailSplitRatio = newWidth / total
-                    appState.saveConfig()
-                })
-                if hasStaged, let path = selectedPath,
-                   let file = stagedFiles.first(where: { $0.path == path }) {
-                    let selectedDisplayModel = displayModelKey == diffKey ? displayModel : nil
-                    CommitDiffView(
-                        worktreePath: worktreePath,
-                        sha: "INDEX",
-                        file: file,
-                        path: path,
-                        diff: diff,
-                        displayModel: selectedDisplayModel,
-                        loading: loadingDiff,
-                        error: nil,
-                        codeFontFamily: appState.config.code.fontFamily,
-                        codeFontSize: CGFloat(appState.config.code.fontSize),
-                        layoutMode: diffPreferences.layoutMode,
-                        wrapLines: diffPreferences.wrapLines,
-                        showWhitespace: diffPreferences.showWhitespace,
-                        onOpenFile: nil,
-                        onDropHunk: { hunk in unstageHunk(path: path, hunk: hunk) },
-                        dropHunkEnabled: { file, hunk in !busy && file.status == "M" && !hunk.lines.isEmpty }
-                    )
-                } else {
-                    Text(hasStaged ? "Select a file" : "No staged changes yet.\nStage files from the sidebar to start a commit.")
-                        .multilineTextAlignment(.center)
-                        .foregroundColor(theme.color("fg-dim"))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            }
+    private var stagedDiffBody: some View {
+        if loadingSession && stagedSession == nil {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let session = sessionWithActions, !session.files.isEmpty {
+            DiffReviewSurface(
+                session: session,
+                selectedFileID: $selectedFileID,
+                railCollapsed: $railCollapsed,
+                reviewSummaryCollapsed: .constant(false),
+                layoutMode: diffPreferences.layoutMode,
+                wrapLines: diffPreferences.wrapLines,
+                showWhitespace: diffPreferences.showWhitespace,
+                codeFontFamily: appState.config.code.fontFamily,
+                codeFontSize: CGFloat(appState.config.code.fontSize),
+                showsSourceBadges: false,
+                showsRailDisplayControls: true
+            )
+        } else {
+            Text("No staged changes yet.\nStage files from the sidebar to start a commit.")
+                .multilineTextAlignment(.center)
+                .foregroundColor(theme.color("fg-dim"))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -179,7 +170,7 @@ struct DraftCommitTabView: View {
         subject = tabState.subject
         bodyText = tabState.bodyText
         amend = tabState.amend
-        selectedPath = tabState.selectedPath
+        selectedFileID = tabState.selectedPath.map { DiffReviewFileID(namespace: "staged", path: $0) }
     }
 
     private func persist(subject: String? = nil, body: String? = nil, amend: Bool? = nil, selectedPath: String?? = nil) {
@@ -301,78 +292,53 @@ struct DraftCommitTabView: View {
         }
     }
 
-    private func loadStaged() async {
-        loadingFiles = true
-        defer { loadingFiles = false }
-        do {
-            let files = try await git.stagedChangedFiles(at: worktreePath)
-            guard !Task.isCancelled else { return }
-            stagedFiles = files
-            if let sel = selectedPath, !files.contains(where: { $0.path == sel }) {
-                selectedPath = files.first?.path
-            } else if selectedPath == nil {
-                selectedPath = files.first?.path
-            }
-        } catch {
-            self.error = (error as NSError).localizedDescription
-        }
-    }
-
-    private func loadDiff() async {
-        guard let path = selectedPath,
-              let stagedFile = stagedFiles.first(where: { $0.path == path }) else {
-            diff = ParsedDiff(hunks: [])
-            displayModel = nil
-            displayModelKey = nil
-            activeDiffKey = nil
-            return
-        }
-        let requestedKey = "\(stagedKey):\(path)"
-        activeDiffKey = requestedKey
-        loadingDiff = true
-        displayModel = nil
-        displayModelKey = nil
+    @MainActor
+    private func loadStagedSession() async {
+        let token = stagedKey
+        loadingSession = true
+        error = nil
         defer {
-            if activeDiffKey == requestedKey { loadingDiff = false }
+            if stagedKey == token { loadingSession = false }
         }
         do {
-            let loaded = try await git.diff(
-                worktreePath: worktreePath,
-                file: path,
-                staged: true,
-                originalPath: stagedFile.originalPath
-            )
-            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
-            let loadedModel = await Task.detached(priority: .userInitiated) {
-                DiffDisplayModelBuilder.build(diff: loaded, filePath: path)
-            }.value
-            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
-            diff = loaded
-            displayModel = loadedModel
-            displayModelKey = requestedKey
+            let session = try await StagedDiffLoader().load(worktreePath: worktreePath)
+            guard !Task.isCancelled, stagedKey == token else { return }
+            stagedSession = session
+            synchronizeSelection(with: session)
+        } catch is CancellationError {
+            // ignore
         } catch {
-            guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
+            guard stagedKey == token else { return }
             self.error = (error as NSError).localizedDescription
         }
     }
 
-    private func unstageFile(_ file: CommitChangedFile) {
+    private func synchronizeSelection(with session: DiffReviewLoadedSession) {
+        let fileIDs = session.files.map { $0.summary.id }
+        if let sel = selectedFileID, fileIDs.contains(sel) {
+            // keep current selection
+        } else if let first = fileIDs.first {
+            selectedFileID = first
+            persist(selectedPath: first.path)
+        } else {
+            selectedFileID = nil
+            persist(selectedPath: nil)
+        }
+    }
+
+    private func unstageFileByPaths(path: String, originalPath: String?) {
         guard !busy else { return }
         busy = true
         error = nil
         Task { @MainActor in
             defer { busy = false }
             do {
-                // For staged renames git needs both the old and the new
-                // path; passing only `file.path` leaves the old-path
-                // deletion staged. `originalPath` is non-nil for R/C entries.
-                var paths = [file.path]
-                if let original = file.originalPath, !original.isEmpty {
+                var paths = [path]
+                if let original = originalPath, !original.isEmpty {
                     paths.append(original)
                 }
                 try await git.unstage(worktreePath: worktreePath, files: paths)
-                await loadStaged()
-                await loadDiff()
+                await loadStagedSession()
                 await appState.rightPaneStore.refresh(worktreeId: worktreeId)
             } catch {
                 self.error = (error as NSError).localizedDescription
@@ -388,8 +354,7 @@ struct DraftCommitTabView: View {
             defer { busy = false }
             do {
                 try await git.unstageHunk(worktreePath: worktreePath, path: path, hunk: hunk)
-                await loadStaged()
-                await loadDiff()
+                await loadStagedSession()
                 await appState.rightPaneStore.refresh(worktreeId: worktreeId)
             } catch {
                 self.error = (error as NSError).localizedDescription
