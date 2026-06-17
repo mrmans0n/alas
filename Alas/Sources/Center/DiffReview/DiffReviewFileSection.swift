@@ -365,31 +365,67 @@ struct DiffReviewFileSection: View {
                 segmentedHunkHeader(group)
                 ForEach(segments.items) { segment in
                     if !segment.rows.isEmpty {
-                        DiffPaneTextDocumentView(
-                            group: DiffDisplayGroup(
-                                id: segment.id,
-                                header: group.header,
-                                sourceHunk: group.sourceHunk,
-                                rows: segment.rows
-                            ),
-                            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
-                            layoutMode: layoutMode,
-                            wrapLines: wrapLines,
-                            showWhitespace: showWhitespace,
-                            fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                            codeFontFamily: codeFontFamily,
-                            codeFontSize: codeFontSize,
-                            theme: theme,
-                            lspContext: lspContext,
-                            allowsReviewLineSelection: allowsDraftCommentCreation,
-                            onReviewLineSelected: { anchor in
-                                pendingDraftAnchor = anchor
-                                pendingDraftBody = ""
-                            },
-                            onContextExpansion: loadContextAndExpand
+                        let matchedThreads = threads.filter { thread in
+                            segment.rows.contains {
+                                thread.isOldSide
+                                    ? $0.old?.anchor.oldLine == thread.newLine
+                                    : $0.new?.anchor.newLine == thread.newLine
+                            }
+                        }
+                        let matchedAnnotations = annotations.filter { annotation in
+                            segment.rows.contains { $0.new?.anchor.newLine == annotation.newLine }
+                        }
+                        let blocks = DiffInlineCommentLayout.blocks(
+                            visibleRows: segment.rows,
+                            threads: matchedThreads,
+                            annotations: matchedAnnotations
                         )
-                        .fixedSize(horizontal: false, vertical: true)
-                        inlineThreadAndAnnotationStack(for: segment, in: group)
+                        ForEach(blocks) { block in
+                            switch block {
+                            case .rows(let rowSeg):
+                                DiffPaneTextDocumentView(
+                                    group: DiffDisplayGroup(
+                                        id: "\(segment.id)-\(rowSeg.id)",
+                                        header: group.header,
+                                        sourceHunk: group.sourceHunk,
+                                        rows: rowSeg.rows
+                                    ),
+                                    expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                                    layoutMode: layoutMode,
+                                    wrapLines: wrapLines,
+                                    showWhitespace: showWhitespace,
+                                    fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                                    codeFontFamily: codeFontFamily,
+                                    codeFontSize: codeFontSize,
+                                    theme: theme,
+                                    lspContext: lspContext,
+                                    allowsReviewLineSelection: allowsDraftCommentCreation,
+                                    onReviewLineSelected: { anchor in
+                                        pendingDraftAnchor = anchor
+                                        pendingDraftBody = ""
+                                    },
+                                    onContextExpansion: loadContextAndExpand
+                                )
+                                .fixedSize(horizontal: false, vertical: true)
+                            case .thread(let thread):
+                                DiffInlineCommentCard(
+                                    thread: thread,
+                                    onReply: { body in onReply(thread, body) },
+                                    onStageReply: { body in onStageReply(thread, body) },
+                                    onResolve: { onResolve(thread) },
+                                    onUnresolve: { onUnresolve(thread) },
+                                    onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
+                                    onDelete: { comment in onDelete(thread, comment) },
+                                    canReply: canReply && thread.viewerCanReply,
+                                    canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+                                    canAddToReview: canAddToReview
+                                )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            case .annotation(let annotation):
+                                DiffInlineAnnotationCard(annotation: annotation)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                     }
                     if !segment.draftComments.isEmpty {
                         draftCommentStack(segment.draftComments)
@@ -473,42 +509,6 @@ struct DiffReviewFileSection: View {
         .padding(.vertical, 8)
         .background(theme.color("bg-2"))
         .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-    }
-
-    @ViewBuilder
-    private func inlineThreadAndAnnotationStack(
-        for segment: ReviewDraftCommentRowSegmentation.Segment,
-        in group: DiffDisplayGroup
-    ) -> some View {
-        let matchedThreads = threads.filter { thread in
-            segment.rows.contains {
-                thread.isOldSide
-                    ? $0.old?.anchor.oldLine == thread.newLine
-                    : $0.new?.anchor.newLine == thread.newLine
-            }
-        }
-        let matchedAnnotations = annotations.filter { annotation in
-            segment.rows.contains { $0.new?.anchor.newLine == annotation.newLine }
-        }
-        ForEach(matchedThreads) { thread in
-            DiffInlineCommentCard(
-                thread: thread,
-                onReply: { body in onReply(thread, body) },
-                onStageReply: { body in onStageReply(thread, body) },
-                onResolve: { onResolve(thread) },
-                onUnresolve: { onUnresolve(thread) },
-                onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
-                onDelete: { comment in onDelete(thread, comment) },
-                canReply: canReply && thread.viewerCanReply,
-                canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
-                canAddToReview: canAddToReview
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        ForEach(matchedAnnotations) { annotation in
-            DiffInlineAnnotationCard(annotation: annotation)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
     }
 
     @ViewBuilder

@@ -83,6 +83,8 @@ struct ReviewTabView: View {
         .onChange(of: reviewRequest) { _, newValue in
             guard !isWriting else { return }
             localThreads = newValue?.threads ?? []
+            let currentCheckIDs = Set(newValue?.checks.map { $0.id } ?? [])
+            annotations = annotations.filter { currentCheckIDs.contains($0.checkRunID) }
         }
     }
 

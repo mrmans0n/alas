@@ -609,6 +609,19 @@ struct GitLabCLIProvider: CodeHostProvider {
     ) async throws {
         let comments = pendingComments.store.removeValue(forKey: reviewID) ?? []
 
+        // Track how many have been successfully posted so unposted ones can be
+        // restored to the buffer on partial failure (avoids duplication on retry).
+        var postedCount = 0
+        var submitSucceeded = false
+        defer {
+            if !submitSucceeded {
+                let unposted = Array(comments[postedCount...])
+                if !unposted.isEmpty {
+                    pendingComments.store[reviewID] = unposted
+                }
+            }
+        }
+
         // Fetch diff refs once if we have any inline (file-positioned) comments
         let hasInlineComments = comments.contains { $0.filePath != nil && $0.line != nil }
         let diffRefs: GitLabDiffRefs? = hasInlineComments
@@ -707,6 +720,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                     throw CodeHostProviderError.commandFailed(command: "glab api post note", stderr: result.stderr)
                 }
             }
+            postedCount += 1
         }
 
         // Post summary note if body is non-empty
@@ -749,6 +763,8 @@ struct GitLabCLIProvider: CodeHostProvider {
                 throw CodeHostProviderError.commandFailed(command: "glab mr approve", stderr: result.stderr)
             }
         }
+
+        submitSucceeded = true
     }
 
     private func currentUserUsername(
