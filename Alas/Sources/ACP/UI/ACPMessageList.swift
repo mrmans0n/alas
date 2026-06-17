@@ -538,7 +538,8 @@ struct ACPMessageList: View {
         let isHeadPaginationDriven = ACPUserScrollEvent.isHeadPaginationDriven(
             currentEventType,
             previousMinY: previousMinY,
-            newMinY: newMinY
+            newMinY: newMinY,
+            isScrollbarTrackHit: ACPUserScrollEvent.isScrollbarTrackMouseDown(NSApp.currentEvent)
         )
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
@@ -925,16 +926,39 @@ enum ACPUserScrollEvent {
     static func isHeadPaginationDriven(
         _ type: NSEvent.EventType?,
         previousMinY: CGFloat? = nil,
-        newMinY: CGFloat? = nil
+        newMinY: CGFloat? = nil,
+        isScrollbarTrackHit: Bool = false
     ) -> Bool {
         guard let type else { return false }
         if isUserDriven(type) { return true }
         // Track-click paging arrives as a plain mouse-down. Keep that out of
-        // tail-follow pause detection, and require actual upward geometry
-        // movement so top-row control clicks that only change content height do
-        // not reveal older rows.
-        guard type == .leftMouseDown, let previousMinY, let newMinY else { return false }
+        // tail-follow pause detection, and require both scrollbar provenance
+        // and actual upward geometry movement so tab/content clicks cannot
+        // reveal older rows during restore or layout.
+        guard type == .leftMouseDown, isScrollbarTrackHit, let previousMinY, let newMinY else {
+            return false
+        }
         return newMinY < previousMinY - ACPScrollDirectionClassifier.upwardEpsilon
+    }
+
+    static func isScrollbarTrackMouseDown(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .leftMouseDown, let contentView = event.window?.contentView else {
+            return false
+        }
+        return isScrollbarView(contentView.hitTest(event.locationInWindow))
+    }
+
+    private static func isScrollbarView(_ view: NSView?) -> Bool {
+        var current = view
+        while let view = current {
+            if view is NSScroller { return true }
+            let className = NSStringFromClass(type(of: view)).lowercased()
+            if className.contains("scroller") || className.contains("scrollbar") {
+                return true
+            }
+            current = view.superview
+        }
+        return false
     }
 }
 

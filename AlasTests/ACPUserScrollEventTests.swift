@@ -29,7 +29,8 @@ struct ACPUserScrollEventTests {
         #expect(ACPUserScrollEvent.isHeadPaginationDriven(
             .leftMouseDown,
             previousMinY: 240,
-            newMinY: 40
+            newMinY: 40,
+            isScrollbarTrackHit: true
         ))
     }
 
@@ -37,12 +38,23 @@ struct ACPUserScrollEventTests {
         #expect(!ACPUserScrollEvent.isHeadPaginationDriven(
             .leftMouseDown,
             previousMinY: 40,
-            newMinY: 40
+            newMinY: 40,
+            isScrollbarTrackHit: true
         ))
         #expect(!ACPUserScrollEvent.isHeadPaginationDriven(
             .leftMouseDown,
             previousMinY: 40,
-            newMinY: 240
+            newMinY: 240,
+            isScrollbarTrackHit: true
+        ))
+    }
+
+    @Test func plainMouseDownAwayFromScrollbarDoesNotDriveHeadPagination() {
+        #expect(!ACPUserScrollEvent.isHeadPaginationDriven(
+            .leftMouseDown,
+            previousMinY: 240,
+            newMinY: 40,
+            isScrollbarTrackHit: false
         ))
     }
 
