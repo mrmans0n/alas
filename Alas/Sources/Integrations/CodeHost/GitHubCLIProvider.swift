@@ -718,6 +718,22 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
+    func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation] {
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "api",
+                "/repos/\(remote.owner)/\(remote.repository)/check-runs/\(check.id)/annotations",
+                "--paginate",
+            ],
+            cwd: cwd
+        )
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api check-runs annotations", stderr: result.stderr)
+        }
+        return try Self.parseCheckAnnotations(result.stdout, check: check)
+    }
+
     func submitReview(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -747,6 +763,32 @@ struct GitHubCLIProvider: CodeHostProvider {
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+    }
+
+    static func parseCheckAnnotations(_ json: String, check: ReviewCheck) throws -> [CheckAnnotation] {
+        let data = Data(json.utf8)
+        let items: [GitHubAnnotationResponse]
+        do {
+            items = try JSONDecoder().decode([GitHubAnnotationResponse].self, from: data)
+        } catch {
+            throw CodeHostProviderError.malformedOutput("Unable to parse gh check-run annotations output")
+        }
+
+        return items.compactMap { item in
+            guard let level = CheckAnnotation.AnnotationLevel(rawValue: item.annotation_level.lowercased()) else {
+                return nil
+            }
+            return CheckAnnotation(
+                checkRunID: check.id,
+                checkName: check.name,
+                path: item.path,
+                startLine: item.start_line,
+                endLine: item.end_line,
+                level: level,
+                message: item.message,
+                rawDetails: item.raw_details
+            )
         }
     }
 
@@ -1669,6 +1711,15 @@ private struct AddPullRequestReviewPayload: Decodable {
 }
 private struct ReviewNodeID: Decodable {
     let id: String
+}
+
+private struct GitHubAnnotationResponse: Decodable {
+    let path: String
+    let start_line: Int
+    let end_line: Int
+    let annotation_level: String
+    let message: String
+    let raw_details: String?
 }
 
 private extension URL {

@@ -160,6 +160,33 @@ struct ReviewCheck: Identifiable, Equatable, Sendable {
     let completedAt: Date?
 }
 
+struct CheckAnnotation: Identifiable, Equatable, Sendable {
+    var id: String { "\(checkRunID)-\(path)-\(startLine)" }
+    let checkRunID: String
+    let checkName: String
+    let path: String
+    let startLine: Int
+    let endLine: Int
+    let level: AnnotationLevel
+    let message: String
+    let rawDetails: String?
+
+    enum AnnotationLevel: String, Equatable, Sendable, Decodable {
+        case failure, warning, notice
+    }
+
+    static func == (lhs: CheckAnnotation, rhs: CheckAnnotation) -> Bool {
+        lhs.checkRunID == rhs.checkRunID &&
+        lhs.checkName == rhs.checkName &&
+        lhs.path == rhs.path &&
+        lhs.startLine == rhs.startLine &&
+        lhs.endLine == rhs.endLine &&
+        lhs.level == rhs.level &&
+        lhs.message == rhs.message &&
+        lhs.rawDetails == rhs.rawDetails
+    }
+}
+
 struct ReviewComment: Identifiable, Equatable, Sendable {
     let id: String
     let author: String?

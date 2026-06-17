@@ -1523,6 +1523,68 @@ struct GitHubCLIProviderTests {
         #expect(error.errorDescription == "gh pr create failed: GraphQL: Head sha can't be blank")
     }
 
+    @Test func parsesCheckAnnotations() async throws {
+        let check = ReviewCheck(
+            id: "run-99",
+            name: "SwiftLint",
+            workflow: "CI",
+            bucket: .fail,
+            detailURL: nil,
+            completedAt: nil
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.checkAnnotationsOutput, stderr: ""),
+        ])
+
+        let annotations = try await GitHubCLIProvider(runner: runner).checkAnnotations(
+            remote: Self.remote,
+            check: check,
+            cwd: Self.cwd
+        )
+
+        #expect(annotations.count == 2)
+        #expect(annotations[0].level == .failure)
+        #expect(annotations[0].checkRunID == "run-99")
+        #expect(annotations[0].checkName == "SwiftLint")
+        #expect(annotations[0].path == "Sources/App.swift")
+        #expect(annotations[0].startLine == 10)
+        #expect(annotations[0].endLine == 10)
+        #expect(annotations[0].message == "Line length violation")
+        #expect(annotations[0].rawDetails == "Line is 120 characters long")
+        #expect(annotations[1].level == .warning)
+        #expect(annotations[1].path == "Sources/Model.swift")
+        #expect(annotations[1].rawDetails == nil)
+
+        let command = try #require(await runner.commands.first)
+        #expect(command.executable == "gh")
+        #expect(command.args == [
+            "api",
+            "/repos/mrmans0n/alas/check-runs/run-99/annotations",
+            "--paginate",
+        ])
+    }
+
+    private static let checkAnnotationsOutput = """
+    [
+      {
+        "path": "Sources/App.swift",
+        "start_line": 10,
+        "end_line": 10,
+        "annotation_level": "failure",
+        "message": "Line length violation",
+        "raw_details": "Line is 120 characters long"
+      },
+      {
+        "path": "Sources/Model.swift",
+        "start_line": 25,
+        "end_line": 30,
+        "annotation_level": "warning",
+        "message": "Cyclomatic complexity violation",
+        "raw_details": null
+      }
+    ]
+    """
+
     private static let remote = CodeHostRemote(
         kind: .github,
         host: "github.com",

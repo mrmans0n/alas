@@ -152,6 +152,8 @@ protocol CodeHostProvider: Sendable {
         body: String,
         cwd: URL
     ) async throws
+
+    func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation]
 }
 
 extension CodeHostProvider {
@@ -295,6 +297,10 @@ extension CodeHostProvider {
         body: String,
         cwd: URL
     ) async throws {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation] {
         throw CodeHostProviderError.unsupportedProvider(kind)
     }
 }
