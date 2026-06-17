@@ -70,7 +70,7 @@ struct ReviewTabView: View {
         }
         .task(id: loadKey) {
             if pendingReview == nil {
-                pendingReview = PendingReview(worktreePath: worktree.path)
+                pendingReview = PendingReview(worktreePath: worktree.path, prNumber: reviewRequest?.number)
             }
             await loadSession()
             localThreads = reviewRequest?.threads ?? []
@@ -265,6 +265,7 @@ struct ReviewTabView: View {
                     threadID: nil,
                     filePath: anchor.path,
                     line: anchor.line,
+                    side: anchor.side,
                     body: body,
                     suggestion: nil
                 ))
@@ -302,6 +303,7 @@ struct ReviewTabView: View {
                     threadID: inlineThread.id,
                     filePath: inlineThread.filePath,
                     line: inlineThread.newLine,
+                    side: inlineThread.isOldSide ? .old : .new,
                     body: body,
                     suggestion: nil
                 ))
@@ -530,19 +532,21 @@ struct ReviewTabView: View {
         }
 
         do {
-            var loaded = try await loader.load(worktreePath: worktree.path)
-            guard
-                requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
-                !Task.isCancelled
-            else { return }
-
-            // If the working tree is clean but we have a PR, fall back to the PR base..head diff
-            if loaded.files.isEmpty, let prSession = try await loadPRDiffSession() {
+            // Prefer the PR base..head diff; server thread line numbers are relative to it.
+            // Fall back to the working-tree diff when no PR session is available.
+            var loaded: ReviewChangesLoadedSession
+            if let prSession = try await loadPRDiffSession() {
                 guard
                     requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                     !Task.isCancelled
                 else { return }
                 loaded = prSession
+            } else {
+                loaded = try await loader.load(worktreePath: worktree.path)
+                guard
+                    requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
+                    !Task.isCancelled
+                else { return }
             }
 
             session = loaded
@@ -606,7 +610,11 @@ struct ReviewTabView: View {
                     body: body,
                     cwd: worktree.path
                 )
-                for comment in stagedComments where comment.threadID != nil {
+                // Review submitted — remove inline comments from pending so retries don't duplicate.
+                // Thread replies are still pending; remove them individually after each succeeds.
+                let replies = stagedComments.filter { $0.threadID != nil }
+                pr.clear()
+                for comment in replies {
                     if let existingThread = localThreads.first(where: { $0.id == comment.threadID }) {
                         _ = try await provider.replyToThread(
                             remote: remote,
@@ -617,7 +625,6 @@ struct ReviewTabView: View {
                         )
                     }
                 }
-                pr.clear()
             } catch {
                 showError(error.localizedDescription)
             }

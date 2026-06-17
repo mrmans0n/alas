@@ -5,12 +5,13 @@ import Testing
 @MainActor
 struct PendingReviewTests {
     @Test func stagingAddsToList() {
-        let pr = PendingReview(worktreePath: .temporaryDirectory.appending(path: UUID().uuidString))
+        let pr = PendingReview(worktreePath: .temporaryDirectory.appending(path: UUID().uuidString), prNumber: 1)
         let comment = StagedComment(
             id: UUID(),
             threadID: "t1",
             filePath: "Sources/Foo.swift",
             line: 42,
+            side: .new,
             body: "Looks good",
             suggestion: nil
         )
@@ -20,9 +21,9 @@ struct PendingReviewTests {
     }
 
     @Test func removeByIDDropsEntry() {
-        let pr = PendingReview(worktreePath: .temporaryDirectory.appending(path: UUID().uuidString))
-        let c1 = StagedComment(id: UUID(), threadID: nil, filePath: "A.swift", line: 1, body: "c1", suggestion: nil)
-        let c2 = StagedComment(id: UUID(), threadID: nil, filePath: "B.swift", line: 2, body: "c2", suggestion: nil)
+        let pr = PendingReview(worktreePath: .temporaryDirectory.appending(path: UUID().uuidString), prNumber: nil)
+        let c1 = StagedComment(id: UUID(), threadID: nil, filePath: "A.swift", line: 1, side: .new, body: "c1", suggestion: nil)
+        let c2 = StagedComment(id: UUID(), threadID: nil, filePath: "B.swift", line: 2, side: .new, body: "c2", suggestion: nil)
         pr.stage(c1)
         pr.stage(c2)
         pr.remove(id: c1.id)
@@ -31,8 +32,8 @@ struct PendingReviewTests {
     }
 
     @Test func clearEmptiesList() {
-        let pr = PendingReview(worktreePath: .temporaryDirectory.appending(path: UUID().uuidString))
-        pr.stage(StagedComment(id: UUID(), threadID: nil, filePath: "A.swift", line: 1, body: "x", suggestion: nil))
+        let pr = PendingReview(worktreePath: .temporaryDirectory.appending(path: UUID().uuidString), prNumber: nil)
+        pr.stage(StagedComment(id: UUID(), threadID: nil, filePath: "A.swift", line: 1, side: .new, body: "x", suggestion: nil))
         pr.clear()
         #expect(pr.staged.isEmpty)
     }
@@ -42,20 +43,22 @@ struct PendingReviewTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let pr1 = PendingReview(worktreePath: dir)
+        let pr1 = PendingReview(worktreePath: dir, prNumber: 42)
         let comment = StagedComment(
             id: UUID(),
             threadID: "t1",
             filePath: "Sources/Bar.swift",
             line: 10,
+            side: .old,
             body: "Needs a test",
             suggestion: "let x = 1"
         )
         pr1.stage(comment)
 
-        let pr2 = PendingReview(worktreePath: dir)
+        let pr2 = PendingReview(worktreePath: dir, prNumber: 42)
         #expect(pr2.staged.count == 1)
         #expect(pr2.staged[0].body == "Needs a test")
         #expect(pr2.staged[0].suggestion == "let x = 1")
+        #expect(pr2.staged[0].side == .old)
     }
 }

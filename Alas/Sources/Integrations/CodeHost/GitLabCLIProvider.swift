@@ -623,6 +623,18 @@ struct GitLabCLIProvider: CodeHostProvider {
             if let line = comment.line, let refs = diffRefs, !comment.filePath.isEmpty {
                 // Use discussion endpoint to preserve inline position
                 let filePath = comment.filePath
+                let isOldSide = comment.side == .old
+                var positionArgs: [String] = [
+                    "-f", "position[position_type]=text",
+                    "-f", "position[base_sha]=\(refs.baseSHA)",
+                    "-f", "position[start_sha]=\(refs.startSHA)",
+                    "-f", "position[head_sha]=\(refs.headSHA)",
+                ]
+                if isOldSide {
+                    positionArgs += ["-f", "position[old_path]=\(filePath)", "-f", "position[old_line]=\(line)"]
+                } else {
+                    positionArgs += ["-f", "position[new_path]=\(filePath)", "-f", "position[new_line]=\(line)"]
+                }
                 let result = try await runner.run(
                     "glab",
                     args: [
@@ -632,13 +644,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                         "--output", "json",
                         "-X", "POST",
                         "-f", "body=\(noteBody)",
-                        "-f", "position[position_type]=text",
-                        "-f", "position[new_path]=\(filePath)",
-                        "-f", "position[new_line]=\(line)",
-                        "-f", "position[base_sha]=\(refs.baseSHA)",
-                        "-f", "position[start_sha]=\(refs.startSHA)",
-                        "-f", "position[head_sha]=\(refs.headSHA)",
-                    ],
+                    ] + positionArgs,
                     cwd: cwd
                 )
                 guard result.exitCode == 0 else {

@@ -341,6 +341,8 @@ struct DiffPaneView: View {
                         codeFontSize: codeFontSize,
                         theme: theme,
                         lspContext: lspContext,
+                        allowsReviewLineSelection: allowsReviewLineSelection,
+                        onReviewLineSelected: onReviewLineSelected,
                         onContextExpansion: onContextExpansion
                     )
                     .fixedSize(horizontal: false, vertical: true)

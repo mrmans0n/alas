@@ -5,6 +5,7 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
     let threadID: String?
     let filePath: String
     let line: Int?
+    let side: DiffReviewInlineFeedbackSide
     let body: String
     let suggestion: String?
 }
@@ -12,11 +13,11 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
 @MainActor
 @Observable final class PendingReview {
     private(set) var staged: [StagedComment] = []
-    private let worktreePath: URL
+    private let storageURL: URL
 
-    init(worktreePath: URL) {
-        self.worktreePath = worktreePath
-        self.staged = Self.load(from: worktreePath)
+    init(worktreePath: URL, prNumber: Int?) {
+        storageURL = Self.storageURL(worktreePath: worktreePath, prNumber: prNumber)
+        staged = Self.load(from: storageURL)
     }
 
     func stage(_ comment: StagedComment) {
@@ -31,29 +32,37 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
 
     func clear() {
         staged = []
-        let file = worktreePath.appending(path: ".alas/pending-review.json")
-        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: storageURL)
     }
 
     private func save() {
-        let dir = worktreePath.appending(path: ".alas")
-        let file = dir.appending(path: "pending-review.json")
         if staged.isEmpty {
-            try? FileManager.default.removeItem(at: file)
+            try? FileManager.default.removeItem(at: storageURL)
             return
         }
         do {
+            let dir = storageURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(staged)
-            try data.write(to: file, options: .atomic)
+            try data.write(to: storageURL, options: .atomic)
         } catch {
             // Non-fatal: persistence is best-effort
         }
     }
 
-    private static func load(from worktreePath: URL) -> [StagedComment] {
-        let file = worktreePath.appending(path: ".alas/pending-review.json")
-        guard let data = try? Data(contentsOf: file) else { return [] }
+    private static func load(from url: URL) -> [StagedComment] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
         return (try? JSONDecoder().decode([StagedComment].self, from: data)) ?? []
+    }
+
+    private static func storageURL(worktreePath: URL, prNumber: Int?) -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appending(path: "Library/Application Support")
+        let base = appSupport.appending(path: "Alas/pending-reviews")
+        let pathHash = worktreePath.path.data(using: .utf8).map {
+            $0.reduce(UInt64(14695981039346656037)) { acc, byte in (acc ^ UInt64(byte)) &* 1099511628211 }
+        } ?? 0
+        let prSuffix = prNumber.map { "-pr\($0)" } ?? ""
+        return base.appending(path: "\(pathHash)\(prSuffix).json")
     }
 }

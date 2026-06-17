@@ -26,6 +26,7 @@ struct DiffInlineCommentThread: Identifiable, Equatable {
     let id: String
     let filePath: String
     let newLine: Int
+    var isOldSide: Bool = false
     let isResolved: Bool
     let isOutdated: Bool
     let comments: [DiffInlineComment]
@@ -84,7 +85,13 @@ enum DiffInlineCommentLayout {
         // A thread matches the first row where row.new?.anchor.newLine == thread.newLine.
         var threadsByRowIndex: [Int: [DiffInlineCommentThread]] = [:]
         for thread in threads {
-            if let rowIndex = visibleRows.firstIndex(where: { $0.new?.anchor.newLine == thread.newLine }) {
+            let rowIndex: Int?
+            if thread.isOldSide {
+                rowIndex = visibleRows.firstIndex { $0.old?.anchor.newLine == thread.newLine }
+            } else {
+                rowIndex = visibleRows.firstIndex { $0.new?.anchor.newLine == thread.newLine }
+            }
+            if let rowIndex {
                 threadsByRowIndex[rowIndex, default: []].append(thread)
             }
             // threads with no matching row are dropped

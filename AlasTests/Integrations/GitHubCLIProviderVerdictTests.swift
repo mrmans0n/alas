@@ -52,6 +52,7 @@ struct GitHubCLIProviderVerdictTests {
             threadID: nil,
             filePath: "Sources/Foo.swift",
             line: 10,
+            side: .new,
             body: "Please rename this variable.",
             suggestion: nil
         )
@@ -83,6 +84,7 @@ struct GitHubCLIProviderVerdictTests {
             threadID: nil,
             filePath: "Sources/Bar.swift",
             line: 20,
+            side: .new,
             body: "Use this instead:",
             suggestion: "let x = 42"
         )

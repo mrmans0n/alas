@@ -105,6 +105,8 @@ struct DiffPaneSegmentView: NSViewRepresentable {
     let codeFontSize: CGFloat
     let theme: Theme
     let lspContext: DiffPaneLSPContext?
+    var allowsReviewLineSelection: Bool = true
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     let onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
 
     func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
@@ -121,6 +123,8 @@ struct DiffPaneSegmentView: NSViewRepresentable {
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme,
             lspContext: lspContext,
+            allowsReviewLineSelection: allowsReviewLineSelection,
+            onReviewLineSelected: onReviewLineSelected,
             onContextExpansion: onContextExpansion
         )
     }
@@ -337,8 +341,16 @@ final class DiffPaneTextDocumentContainerView: NSView {
         font: NSFont,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
+        allowsReviewLineSelection: Bool = true,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     ) {
+        oldPane.allowsReviewLineSelection = allowsReviewLineSelection
+        newPane.allowsReviewLineSelection = allowsReviewLineSelection
+        stackedPane.allowsReviewLineSelection = allowsReviewLineSelection
+        oldPane.onReviewLineSelected = onReviewLineSelected
+        newPane.onReviewLineSelected = onReviewLineSelected
+        stackedPane.onReviewLineSelected = onReviewLineSelected
         oldPane.onContextExpansion = onContextExpansion
         newPane.onContextExpansion = onContextExpansion
         stackedPane.onContextExpansion = onContextExpansion

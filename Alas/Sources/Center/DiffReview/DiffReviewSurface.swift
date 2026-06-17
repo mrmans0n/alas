@@ -509,11 +509,13 @@ struct DiffReviewSurface: View {
         threads
             .filter { $0.path == filePath && !$0.isFileLevel && !$0.isOutdated }
             .compactMap { thread in
-                guard let line = thread.line else { return nil }
+                let isOldSide = thread.line == nil && thread.originalLine != nil
+                guard let line = thread.line ?? thread.originalLine else { return nil }
                 return DiffInlineCommentThread(
                     id: thread.id,
                     filePath: thread.path ?? "",
                     newLine: line,
+                    isOldSide: isOldSide,
                     isResolved: thread.isResolved,
                     isOutdated: thread.isOutdated,
                     comments: thread.comments.map { c in

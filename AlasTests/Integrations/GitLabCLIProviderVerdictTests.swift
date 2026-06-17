@@ -37,6 +37,7 @@ struct GitLabCLIProviderVerdictTests {
                 threadID: nil,
                 filePath: "Sources/Foo.swift",
                 line: 10,
+                side: .new,
                 body: "Nice change",
                 suggestion: nil
             ),
@@ -73,6 +74,7 @@ struct GitLabCLIProviderVerdictTests {
                 threadID: nil,
                 filePath: "Sources/Bar.swift",
                 line: 5,
+                side: .new,
                 body: "Consider renaming this",
                 suggestion: nil
             ),

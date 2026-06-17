@@ -161,7 +161,7 @@ struct ReviewCheck: Identifiable, Equatable, Sendable {
 }
 
 struct CheckAnnotation: Identifiable, Equatable, Sendable {
-    var id: String { "\(checkRunID)-\(path)-\(startLine)" }
+    var id: String { "\(checkRunID)-\(path)-\(startLine)-\(endLine)-\(level.rawValue)-\(message.hashValue)" }
     let checkRunID: String
     let checkName: String
     let path: String

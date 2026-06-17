@@ -191,13 +191,13 @@ struct GitHubCLIProvider: CodeHostProvider {
     """
 
     static let addPullRequestReviewCommentMutation = """
-    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $body: String!) {
+    mutation($prId: ID!, $reviewId: ID!, $path: String!, $line: Int!, $side: PullRequestReviewThreadSubjectType!, $body: String!) {
       addPullRequestReviewThread(input: {
         pullRequestId: $prId,
         pullRequestReviewId: $reviewId,
         path: $path,
         line: $line,
-        side: RIGHT,
+        side: $side,
         body: $body
       }) {
         thread {
@@ -976,6 +976,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         } else {
             body = comment.body
         }
+        let side = comment.side == .old ? "LEFT" : "RIGHT"
         let result = try await runner.run(
             "gh",
             args: [
@@ -986,6 +987,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "-f", "reviewId=\(reviewID)",
                 "-f", "path=\(comment.filePath)",
                 "-F", "line=\(line)",
+                "-f", "side=\(side)",
                 "-f", "body=\(body)",
             ],
             cwd: cwd
