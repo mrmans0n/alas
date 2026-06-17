@@ -579,13 +579,24 @@ struct ReviewTabView: View {
             do {
                 let reviewID = try await provider.startReview(remote: remote, request: request, cwd: worktree.path)
                 for comment in stagedComments {
-                    try await provider.addReviewComment(
-                        remote: remote,
-                        request: request,
-                        reviewID: reviewID,
-                        comment: comment,
-                        cwd: worktree.path
-                    )
+                    if let threadID = comment.threadID,
+                       let existingThread = localThreads.first(where: { $0.id == threadID }) {
+                        _ = try await provider.replyToThread(
+                            remote: remote,
+                            request: request,
+                            thread: existingThread,
+                            body: comment.body,
+                            cwd: worktree.path
+                        )
+                    } else {
+                        try await provider.addReviewComment(
+                            remote: remote,
+                            request: request,
+                            reviewID: reviewID,
+                            comment: comment,
+                            cwd: worktree.path
+                        )
+                    }
                 }
                 try await provider.submitReview(
                     remote: remote,

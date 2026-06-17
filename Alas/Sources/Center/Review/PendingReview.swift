@@ -31,12 +31,17 @@ struct StagedComment: Identifiable, Equatable, Codable, Sendable {
 
     func clear() {
         staged = []
-        save()
+        let file = worktreePath.appending(path: ".alas/pending-review.json")
+        try? FileManager.default.removeItem(at: file)
     }
 
     private func save() {
         let dir = worktreePath.appending(path: ".alas")
         let file = dir.appending(path: "pending-review.json")
+        if staged.isEmpty {
+            try? FileManager.default.removeItem(at: file)
+            return
+        }
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(staged)

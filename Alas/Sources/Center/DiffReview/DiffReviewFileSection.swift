@@ -360,7 +360,7 @@ struct DiffReviewFileSection: View {
             placement: placement,
             pendingAnchor: pendingDraftAnchor
         )
-        if segments.containsLocalAccessories {
+        if segments.containsLocalAccessories && threads.isEmpty && annotations.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 segmentedHunkHeader(group)
                 ForEach(segments.items) { segment in
