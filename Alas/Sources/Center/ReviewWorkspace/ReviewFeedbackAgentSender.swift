@@ -26,6 +26,11 @@ enum ReviewFeedbackAgentTarget: Codable, Equatable, Hashable, Identifiable, Send
             return title
         }
     }
+
+    var isNewChat: Bool {
+        if case .newChat = self { return true }
+        return false
+    }
 }
 
 @MainActor
@@ -37,10 +42,6 @@ struct ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender(
             availableTargets: {
                 var targets: [ReviewFeedbackAgentTarget] = []
-                let agentID = appState.config.changes.aiToolId
-                if agentID != "none", appState.agent(id: agentID) != nil {
-                    targets.append(.newChat(agentID: agentID, title: "New chat"))
-                }
 
                 let sessionTargets = appState.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ReviewFeedbackAgentTarget? in
                     guard case .acpSession(let state) = tab,
@@ -54,6 +55,11 @@ struct ReviewFeedbackAgentSender {
                     )
                 }
                 targets.append(contentsOf: sessionTargets)
+
+                let agentID = appState.config.changes.aiToolId
+                if agentID != "none", appState.agent(id: agentID) != nil {
+                    targets.append(.newChat(agentID: agentID, title: "New chat"))
+                }
                 return targets
             },
             send: { prompt, target, completion in
