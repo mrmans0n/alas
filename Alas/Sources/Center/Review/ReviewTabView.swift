@@ -5,6 +5,8 @@ struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
     let appState: AppState
+    // Loads the working-tree diff (same as ReviewChangesTabView). To show PR base..head diff
+    // instead, inject a PR-diff loader here when that loader exists.
     var loader: ReviewChangesLoader = ReviewChangesLoader()
 
     @Environment(\.theme) private var theme
@@ -51,7 +53,7 @@ struct ReviewTabView: View {
     }
 
     private var activeThreads: [ReviewThread] {
-        (reviewRequest?.threads ?? []).filter { !$0.isFileLevel && !$0.isOutdated }
+        reviewRequest?.threads ?? []
     }
 
     // MARK: - Load key (mirrors ReviewChangesTabView)
