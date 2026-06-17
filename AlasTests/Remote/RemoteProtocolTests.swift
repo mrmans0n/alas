@@ -63,7 +63,8 @@ struct RemoteProtocolTests {
             title: "Build feature",
             agentId: "claude",
             status: "idle",
-            canDrive: true
+            canDrive: true,
+            isActive: false
         )
         #expect(try roundTrip(summary) == summary)
     }
@@ -178,6 +179,13 @@ struct RemoteProtocolTests {
         let json = #"{"id":"s1","title":"T","agentId":"codex","status":"idle","canDrive":false}"#
         let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: Data(json.utf8))
         #expect(decoded == RemoteSessionSummary(id: "s1", title: "T", agentId: "codex", status: "idle", canDrive: false))
+        #expect(decoded.isActive)
+    }
+
+    @Test func sessionSummaryDecodesInactivePayload() throws {
+        let json = #"{"id":"s1","title":"T","agentId":"codex","status":"idle","canDrive":false,"isActive":false}"#
+        let decoded = try JSONDecoder().decode(RemoteSessionSummary.self, from: Data(json.utf8))
+        #expect(decoded == RemoteSessionSummary(id: "s1", title: "T", agentId: "codex", status: "idle", canDrive: false, isActive: false))
     }
 
     @Test func transcriptDeltaRoundTrips() throws {

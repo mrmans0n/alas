@@ -139,6 +139,33 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.count == 1)
         #expect(summaries.first?.id == tab.sessionId)
         #expect(summaries.first?.title == "Actual Remote Title")
+        #expect(summaries.first?.isActive == true)
+    }
+
+    @Test func remoteSessionSummariesMarkStoredRowsWithoutTabsInactive() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        try seedStoredSession(
+            id: "historical-\(UUID().uuidString)",
+            title: "Historical",
+            titleSource: .manual,
+            in: manager
+        )
+
+        let summaries = await state.sessionSummaries()
+        let historical = try #require(summaries.first { $0.title == "Historical" })
+
+        #expect(!historical.isActive)
     }
 
     @Test func remoteSessionSummariesPreferLivePlaceholderOverStoredDuplicate() async throws {
@@ -257,7 +284,7 @@ struct RemoteAppStateAccessTests {
         }
     }
 
-    @Test func remoteRenameSessionUpdatesNonLiveRecentSession() throws {
+    @Test func remoteRenameSessionUpdatesNonLiveRecentSession() async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId {
@@ -281,6 +308,8 @@ struct RemoteAppStateAccessTests {
             let session = try #require(manager.liveSession(for: sessionId))
             #expect(session.title == "Recent Remote")
             #expect(session.titleSource == .manual)
+            let summaries = await state.sessionSummaries()
+            #expect(summaries.first(where: { $0.id == sessionId })?.isActive == false)
         }
         do {
             let store = try ACPSessionStore(path: Paths.acpSessionsDB(forWorktreeId: worktreeId).path)
