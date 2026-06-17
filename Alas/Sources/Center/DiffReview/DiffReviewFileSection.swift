@@ -1202,7 +1202,7 @@ enum DiffReviewInlineFeedbackMarkdown {
     }
 }
 
-private struct ReviewDraftCommentCard: View {
+struct ReviewDraftCommentCard: View {
     let comment: ReviewDraftComment
     let file: DiffReviewFileSummary
     let isFocused: Bool
@@ -1519,7 +1519,7 @@ private extension DiffReviewLineAnchor {
     }
 }
 
-private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
+struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
     let identifier: String
     let label: String
     var isEnabled = true
@@ -1546,7 +1546,7 @@ private struct ReviewDraftCommentActionPressMarker: NSViewRepresentable {
     }
 }
 
-private final class ReviewDraftCommentActionPressView: NSView {
+final class ReviewDraftCommentActionPressView: NSView {
     var isEnabled = true
     var action: () -> Void = {}
 
