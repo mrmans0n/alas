@@ -25,6 +25,7 @@ struct DiffReviewFileSection: View {
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
     var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var allowsDraftCommentCreation: Bool = true
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
 
@@ -369,10 +370,10 @@ struct DiffReviewFileSection: View {
                             codeFontSize: codeFontSize,
                             theme: theme,
                             lspContext: lspContext,
-                            onReviewLineSelected: { anchor in
+                            onReviewLineSelected: allowsDraftCommentCreation ? { anchor in
                                 pendingDraftAnchor = anchor
                                 pendingDraftBody = ""
-                            },
+                            } : { _ in },
                             onContextExpansion: loadContextAndExpand
                         )
                         .fixedSize(horizontal: false, vertical: true)
@@ -404,10 +405,10 @@ struct DiffReviewFileSection: View {
                 showsToolbar: false,
                 verticalScrollMode: .staticHeight,
                 lspContext: lspContext,
-                onReviewLineSelected: { anchor in
+                onReviewLineSelected: allowsDraftCommentCreation ? { anchor in
                     pendingDraftAnchor = anchor
                     pendingDraftBody = ""
-                },
+                } : { _ in },
                 onContextExpansion: loadContextAndExpand,
                 hunkActions: { hunk in
                     let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false

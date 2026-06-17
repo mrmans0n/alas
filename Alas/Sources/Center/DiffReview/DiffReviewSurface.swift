@@ -13,6 +13,7 @@ struct DiffReviewSurface: View {
     var showsSourceBadges: Bool = true
     var showsRailDisplayControls: Bool = false
     var showsDraftSummaryRail: Bool = false
+    var allowsDraftCommentCreation: Bool = true
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     var focusedFeedbackID: String? = nil
@@ -50,6 +51,7 @@ struct DiffReviewSurface: View {
         showsSourceBadges: Bool = true,
         showsRailDisplayControls: Bool = false,
         showsDraftSummaryRail: Bool = false,
+        allowsDraftCommentCreation: Bool = true,
         lspContextForFile: @escaping (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil },
         inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:],
         focusedFeedbackID: String? = nil,
@@ -76,6 +78,7 @@ struct DiffReviewSurface: View {
         self.showsSourceBadges = showsSourceBadges
         self.showsRailDisplayControls = showsRailDisplayControls
         self.showsDraftSummaryRail = showsDraftSummaryRail
+        self.allowsDraftCommentCreation = allowsDraftCommentCreation
         self.lspContextForFile = lspContextForFile
         self.inlineFeedbackByFileID = inlineFeedbackByFileID
         self.focusedFeedbackID = focusedFeedbackID
@@ -282,6 +285,7 @@ struct DiffReviewSurface: View {
                 onSaveDraftComment: { anchor, body in
                     onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
                 },
+                allowsDraftCommentCreation: allowsDraftCommentCreation,
                 onContextExpansionActivated: {
                     contextExpandedFileIDs.insert(file.id)
                 },

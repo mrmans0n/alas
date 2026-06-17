@@ -34,7 +34,10 @@ struct DraftCommitTabView: View {
         subject.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var hasStaged: Bool { (stagedSession?.summary.fileCount ?? 0) > 0 }
+    private var hasStaged: Bool {
+        guard let rps = appState.rightPaneStore.activeState(worktreeId: worktreeId) else { return false }
+        return rps.changes.contains { $0.stage == .staged }
+    }
     private var canCommit: Bool { hasStaged && !trimmedSubject.isEmpty && !busy }
 
     /// A key that changes whenever the staged set changes in the sidebar.
@@ -156,7 +159,8 @@ struct DraftCommitTabView: View {
                 codeFontFamily: appState.config.code.fontFamily,
                 codeFontSize: CGFloat(appState.config.code.fontSize),
                 showsSourceBadges: false,
-                showsRailDisplayControls: true
+                showsRailDisplayControls: true,
+                allowsDraftCommentCreation: false
             )
         } else {
             Text("No staged changes yet.\nStage files from the sidebar to start a commit.")
