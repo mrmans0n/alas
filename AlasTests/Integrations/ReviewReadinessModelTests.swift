@@ -116,7 +116,14 @@ struct ReviewReadinessModelTests {
         let capabilities = CodeHostProviderCapabilities(
             canCreateReviewRequest: true,
             canRerunFailedChecks: false,
-            canOpenReviewRequest: true
+            canOpenReviewRequest: true,
+            canReply: true,
+            canResolve: true,
+            canComment: true,
+            canSubmitReview: true,
+            canFetchAnnotations: false,
+            canEditComment: true,
+            canDeleteComment: true
         )
 
         let model = ReviewReadinessModel(
@@ -196,13 +203,31 @@ struct ReviewReadinessModelTests {
     }
 
     @Test func actionableReviewThreadExposesInspect() {
-        let thread = ReviewThreadSummary(
+        let thread = ReviewThread(
             id: "thread-1",
-            author: "reviewer",
-            body: "Please adjust this",
-            url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1"),
+            path: nil,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
             isResolved: false,
-            isActionable: true
+            isOutdated: false,
+            isFileLevel: true,
+            comments: [
+                ReviewComment(
+                    id: "thread-1",
+                    author: "reviewer",
+                    body: "Please adjust this",
+                    url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1"),
+                    createdAt: nil,
+                    viewerCanUpdate: false,
+                    viewerCanDelete: false,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: false,
+            viewerCanReply: false,
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/428#discussion_r1")
         )
         let request = Self.makeReviewRequest(threads: [thread])
         let model = ReviewReadinessModel(
@@ -349,7 +374,7 @@ struct ReviewReadinessModelTests {
         reviewDecision: ReviewDecision = .reviewRequired,
         mergeState: ReviewMergeState = .blocked,
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = []
+        threads: [ReviewThread] = []
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,

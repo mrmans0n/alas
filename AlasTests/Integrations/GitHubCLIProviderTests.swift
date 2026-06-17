@@ -100,7 +100,7 @@ struct GitHubCLIProviderTests {
                 "completedAt": "2026-06-01T12:34:56Z",
                 "description": "a",
                 "event": "b|c",
-                "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/2",
+                "link": "https://github.com/mrmans0n/alas/actions/runs/1/job/3",
                 "name": "test",
                 "startedAt": "2026-06-01T12:30:00Z",
                 "state": "SUCCESS",
@@ -319,8 +319,7 @@ struct GitHubCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable == true)
-        #expect(threads[0].providerThreadID == "thread-1")
-        #expect(threads[0].providerCommentID == "comment-1")
+        #expect(threads[0].comments.first?.id == "comment-1")
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable == false)
     }
@@ -698,7 +697,7 @@ struct GitHubCLIProviderTests {
 
         let replyResult = try await provider.mutateReviewThread(ProviderThreadMutation(
             remote: Self.remote,
-            reviewRequest: Self.makeRequest(threads: [thread]),
+            reviewRequest: Self.makeRequest(),
             thread: thread,
             kind: .reply,
             bodyMarkdown: "Thanks, fixed.",
@@ -706,7 +705,7 @@ struct GitHubCLIProviderTests {
         ))
         let resolveResult = try await provider.mutateReviewThread(ProviderThreadMutation(
             remote: Self.remote,
-            reviewRequest: Self.makeRequest(threads: [thread]),
+            reviewRequest: Self.makeRequest(),
             thread: thread,
             kind: .resolve,
             bodyMarkdown: nil,
@@ -791,7 +790,7 @@ struct GitHubCLIProviderTests {
             providerThreadID: "PRRT_thread_1",
             providerCommentID: "PRRC_comment_1"
         )
-        let originalRequest = Self.makeRequest(threads: [thread])
+        let originalRequest = Self.makeRequest()
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
             ProcessResult(exitCode: 1, stdout: "", stderr: "temporary API failure"),
@@ -856,10 +855,9 @@ struct GitHubCLIProviderTests {
             """
         )
 
-        #expect(threads.first?.location?.path == "Sources/App.swift")
-        #expect(threads.first?.location?.line == 56)
-        #expect(threads.first?.location?.side == .new)
-        #expect(threads.first?.location?.providerPosition == "PRRT_kwDO")
+        #expect(threads.first?.path == "Sources/App.swift")
+        #expect(threads.first?.line == 56)
+        #expect(threads.first?.id == "PRRT_kwDO")
     }
 
     @Test func reviewThreadsJSONIgnoresMalformedLocationMetadata() throws {
@@ -902,7 +900,8 @@ struct GitHubCLIProviderTests {
 
         #expect(threads.map(\.id) == ["PRRT_malformed"])
         #expect(threads.first?.body == "Keep this feedback.")
-        #expect(threads.first?.location == nil)
+        #expect(threads.first?.path == nil)
+        #expect(threads.first?.line == nil)
     }
 
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
@@ -1312,6 +1311,206 @@ struct GitHubCLIProviderTests {
         }
     }
 
+    @Test func replyToThreadReturnsNewComment() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.replyToThreadOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let comment = try await provider.replyToThread(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            thread: Self.unresolvedThread,
+            body: "Reply body.",
+            cwd: Self.cwd
+        )
+
+        #expect(comment.body == "Reply body.")
+        #expect(comment.author == "author")
+        #expect(comment.viewerCanUpdate == true)
+        #expect(comment.viewerCanDelete == true)
+
+        let command = try #require(await runner.commands.first)
+        #expect(command.executable == "gh")
+        #expect(command.args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(command.stdin?.contains("addPullRequestReviewThreadReply") == true)
+        #expect(command.stdin?.contains("\"threadId\":\"thread-1\"") == true)
+        #expect(command.stdin?.contains("\"body\":\"Reply body.\"") == true)
+    }
+
+    @Test func resolveThreadUpdatesResolvedFlag() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.resolveThreadOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let thread = try await provider.resolveThread(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            thread: Self.unresolvedThread,
+            cwd: Self.cwd
+        )
+
+        #expect(thread.isResolved == true)
+        #expect(thread.isOutdated == Self.unresolvedThread.isOutdated)
+        #expect(thread.id == Self.unresolvedThread.id)
+        #expect(thread.comments == Self.unresolvedThread.comments)
+    }
+
+    @Test func unresolveThreadUpdatesResolvedFlag() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.unresolveThreadOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let resolvedThread = ReviewThread(
+            id: "thread-1",
+            path: "Sources/Foo.swift",
+            line: 10,
+            startLine: nil,
+            originalLine: 8,
+            diffHunk: "@@ -8,3 +8,3 @@",
+            isResolved: true,
+            isOutdated: false,
+            isFileLevel: false,
+            comments: [],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+        let thread = try await provider.unresolveThread(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            thread: resolvedThread,
+            cwd: Self.cwd
+        )
+
+        #expect(thread.isResolved == false)
+        #expect(thread.id == resolvedThread.id)
+        #expect(thread.path == resolvedThread.path)
+    }
+
+    @Test func editCommentReturnsUpdatedComment() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.editCommentOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let comment = ReviewComment(
+            id: "comment-1",
+            author: "author",
+            body: "Original body.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+            createdAt: nil,
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: false
+        )
+        let updated = try await provider.editComment(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            comment: comment,
+            newBody: "Updated body.",
+            cwd: Self.cwd
+        )
+
+        #expect(updated.body == "Updated body.")
+        #expect(updated.author == "author")
+        #expect(updated.viewerCanUpdate == true)
+        #expect(updated.viewerCanDelete == true)
+    }
+
+    @Test func deleteCommentSucceedsOnZeroExit() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.deleteCommentOutput, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let comment = ReviewComment(
+            id: "comment-1",
+            author: "author",
+            body: "Body.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+            createdAt: nil,
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: false
+        )
+
+        try await provider.deleteComment(
+            remote: Self.remote,
+            request: Self.makeRequest(),
+            comment: comment,
+            cwd: Self.cwd
+        )
+
+        let command = try #require(await runner.commands.first)
+        let queryArg = try #require(command.args.first { $0.hasPrefix("query=") })
+        #expect(queryArg.contains("deletePullRequestReviewComment"))
+    }
+
+    @Test func writeFailureThrowsCommandFailed() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "permission denied"),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+
+        do {
+            _ = try await provider.replyToThread(
+                remote: Self.remote,
+                request: Self.makeRequest(),
+                thread: Self.unresolvedThread,
+                body: "Reply body.",
+                cwd: Self.cwd
+            )
+            Issue.record("Expected commandFailed")
+        } catch CodeHostProviderError.commandFailed(let command, let stderr) {
+            #expect(command == "gh api graphql")
+            #expect(stderr == "permission denied")
+        }
+    }
+
+    @Test func parsesRichReviewThreadFields() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.richReviewThreadsOutput, stderr: ""),
+        ])
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider",
+            headOwner: nil, baseBranch: "main", cwd: Self.cwd)
+        let thread = try #require(request?.threads.first)
+        #expect(thread.path == "Sources/Foo.swift")
+        #expect(thread.line == 42)
+        #expect(thread.originalLine == 40)
+        #expect(thread.diffHunk == "@@ -40,3 +40,3 @@")
+        #expect(thread.viewerCanResolve == true)
+        #expect(thread.comments.first?.id == "c1")
+        #expect(thread.comments.first?.viewerCanUpdate == false)
+        #expect(thread.isFileLevel == false)
+    }
+
+    @Test func parsesFileLevelReviewThread() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.fileLevelReviewThreadOutput, stderr: ""),
+        ])
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider",
+            headOwner: nil, baseBranch: "main", cwd: Self.cwd)
+        let thread = try #require(request?.threads.first)
+        #expect(thread.isFileLevel == true)
+        #expect(thread.line == nil)
+    }
+
+    @Test func reviewThreadsFilterEmptyBodiedCommentsAndDropEmptyThreads() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.emptyCommentReviewThreadsOutput, stderr: ""),
+        ])
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote, branch: "feature/github-provider",
+            headOwner: nil, baseBranch: "main", cwd: Self.cwd)
+        let threads = try #require(request?.threads)
+        #expect(threads.count == 1)
+        #expect(threads[0].id == "thread-kept")
+        #expect(threads[0].comments.map(\.body) == ["keep me"])
+    }
+
     @Test func commandFailureDescriptionIncludesStderr() {
         let error = CodeHostProviderError.commandFailed(
             command: "gh pr create",
@@ -1320,6 +1519,72 @@ struct GitHubCLIProviderTests {
 
         #expect(error.errorDescription == "gh pr create failed: GraphQL: Head sha can't be blank")
     }
+
+    @Test func parsesCheckAnnotations() async throws {
+        let check = ReviewCheck(
+            id: "run-99",
+            name: "SwiftLint",
+            workflow: "CI",
+            bucket: .fail,
+            detailURL: nil,
+            completedAt: nil
+        )
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.checkAnnotationsOutput, stderr: ""),
+        ])
+
+        let annotations = try await GitHubCLIProvider(runner: runner).checkAnnotations(
+            remote: Self.remote,
+            check: check,
+            cwd: Self.cwd
+        )
+
+        #expect(annotations.count == 2)
+        #expect(annotations[0].level == .failure)
+        #expect(annotations[0].checkRunID == "run-99")
+        #expect(annotations[0].checkName == "SwiftLint")
+        #expect(annotations[0].path == "Sources/App.swift")
+        #expect(annotations[0].startLine == 10)
+        #expect(annotations[0].endLine == 10)
+        #expect(annotations[0].message == "Line length violation")
+        #expect(annotations[0].rawDetails == "Line is 120 characters long")
+        #expect(annotations[1].level == .warning)
+        #expect(annotations[1].path == "Sources/Model.swift")
+        #expect(annotations[1].rawDetails == nil)
+
+        let command = try #require(await runner.commands.first)
+        #expect(command.executable == "gh")
+        #expect(command.args == [
+            "api",
+            "--hostname", "github.com",
+            "/repos/mrmans0n/alas/check-runs/run-99/annotations",
+            "--paginate",
+            "--slurp",
+        ])
+    }
+
+    private static let checkAnnotationsOutput = """
+    [
+      [
+        {
+          "path": "Sources/App.swift",
+          "start_line": 10,
+          "end_line": 10,
+          "annotation_level": "failure",
+          "message": "Line length violation",
+          "raw_details": "Line is 120 characters long"
+        },
+        {
+          "path": "Sources/Model.swift",
+          "start_line": 25,
+          "end_line": 30,
+          "annotation_level": "warning",
+          "message": "Cyclomatic complexity violation",
+          "raw_details": null
+        }
+      ]
+    ]
+    """
 
     private static let remote = CodeHostRemote(
         kind: .github,
@@ -1334,7 +1599,7 @@ struct GitHubCLIProviderTests {
 
     private static func makeRequest(
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = [],
+        threads: [ReviewThread] = [],
         reviewDecision: ReviewDecision = .approved
     ) -> ReviewRequest {
         ReviewRequest(
@@ -1670,6 +1935,192 @@ struct GitHubCLIProviderTests {
               }
             }
           }
+        }
+      }
+    }
+    """
+
+    private static let richReviewThreadsOutput = """
+    {
+      "data": { "repository": { "pullRequest": { "reviewThreads": {
+        "nodes": [
+          {
+            "id": "thread-1", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Foo.swift", "line": 42, "startLine": null,
+            "originalLine": 40,
+            "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "c1", "body": "rename this",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
+                "createdAt": "2026-06-16T10:00:00Z", "diffHunk": "@@ -40,3 +40,3 @@",
+                "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }}}}
+    }
+    """
+
+    private static let fileLevelReviewThreadOutput = """
+    {
+      "data": { "repository": { "pullRequest": { "reviewThreads": {
+        "nodes": [
+          {
+            "id": "thread-file-1", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Bar.swift", "line": null, "startLine": null,
+            "originalLine": null,
+            "subjectType": "FILE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "cf1", "body": "file-level comment",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r10",
+                "createdAt": "2026-06-16T11:00:00Z", "diffHunk": null,
+                "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }}}}
+    }
+    """
+
+    private static let emptyCommentReviewThreadsOutput = """
+    {
+      "data": { "repository": { "pullRequest": { "reviewThreads": {
+        "nodes": [
+          {
+            "id": "thread-kept", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Foo.swift", "line": 10, "startLine": null,
+            "originalLine": 8,
+            "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "c-empty", "body": "   ",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
+                "createdAt": "2026-06-16T10:00:00Z", "diffHunk": "@@ -8,3 +8,3 @@",
+                "author": { "login": "reviewer" },
+                "viewerDidAuthor": false },
+              { "id": "c-keep", "body": "keep me",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r2",
+                "createdAt": "2026-06-16T10:01:00Z", "diffHunk": "@@ -8,3 +8,3 @@",
+                "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          },
+          {
+            "id": "thread-dropped", "isResolved": false, "isOutdated": false,
+            "path": "Sources/Bar.swift", "line": 20, "startLine": null,
+            "originalLine": 18,
+            "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
+            "comments": { "nodes": [
+              { "id": "c-only-empty", "body": "",
+                "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r3",
+                "createdAt": "2026-06-16T10:02:00Z", "diffHunk": "@@ -18,3 +18,3 @@",
+                "author": { "login": "reviewer" },
+                "viewerDidAuthor": false }
+            ] }
+          }
+        ],
+        "pageInfo": { "hasNextPage": false, "endCursor": null }
+      }}}}
+    }
+    """
+
+    private static let unresolvedThread = ReviewThread(
+        id: "thread-1",
+        path: "Sources/Foo.swift",
+        line: 10,
+        startLine: nil,
+        originalLine: 8,
+        diffHunk: "@@ -8,3 +8,3 @@",
+        isResolved: false,
+        isOutdated: false,
+        isFileLevel: false,
+        comments: [
+            ReviewComment(
+                id: "c1",
+                author: "reviewer",
+                body: "Original comment.",
+                url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1"),
+                createdAt: nil,
+                viewerCanUpdate: false,
+                viewerCanDelete: false,
+                isPending: false
+            )
+        ],
+        viewerCanResolve: true,
+        viewerCanReply: true,
+        url: URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r1")
+    )
+
+    private static let replyToThreadOutput = """
+    {
+      "data": {
+        "addPullRequestReviewThreadReply": {
+          "comment": {
+            "id": "reply-1",
+            "body": "Reply body.",
+            "url": "https://github.com/mrmans0n/alas/pull/42#discussion_rreply",
+            "createdAt": "2026-06-16T12:00:00Z",
+            "author": { "login": "author" },
+            "viewerDidAuthor": true
+          }
+        }
+      }
+    }
+    """
+
+    private static let resolveThreadOutput = """
+    {
+      "data": {
+        "resolveReviewThread": {
+          "thread": {
+            "id": "thread-1",
+            "isResolved": true,
+            "isOutdated": false
+          }
+        }
+      }
+    }
+    """
+
+    private static let unresolveThreadOutput = """
+    {
+      "data": {
+        "unresolveReviewThread": {
+          "thread": {
+            "id": "thread-1",
+            "isResolved": false,
+            "isOutdated": false
+          }
+        }
+      }
+    }
+    """
+
+    private static let editCommentOutput = """
+    {
+      "data": {
+        "updatePullRequestReviewComment": {
+          "pullRequestReviewComment": {
+            "id": "comment-1",
+            "body": "Updated body.",
+            "url": "https://github.com/mrmans0n/alas/pull/42#discussion_r1",
+            "createdAt": "2026-06-16T12:00:00Z",
+            "author": { "login": "author" },
+            "viewerDidAuthor": true
+          }
+        }
+      }
+    }
+    """
+
+    private static let deleteCommentOutput = """
+    {
+      "data": {
+        "deletePullRequestReviewComment": {
+          "clientMutationId": "comment-1"
         }
       }
     }

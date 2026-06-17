@@ -95,6 +95,41 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     }
 }
 
+struct DiffPaneSegmentView: NSViewRepresentable {
+    let rows: [DiffDisplayRow]
+    let layoutMode: DiffLayoutMode
+    let wrapLines: Bool
+    let showWhitespace: Bool
+    let fileExtension: String
+    let codeFontFamily: String
+    let codeFontSize: CGFloat
+    let theme: Theme
+    let lspContext: DiffPaneLSPContext?
+    var allowsReviewLineSelection: Bool = true
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    let onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
+
+    func makeNSView(context: Context) -> DiffPaneTextDocumentContainerView {
+        DiffPaneTextDocumentContainerView()
+    }
+
+    func updateNSView(_ nsView: DiffPaneTextDocumentContainerView, context: Context) {
+        nsView.update(
+            rows: rows,
+            layoutMode: layoutMode,
+            wrapLines: wrapLines,
+            showWhitespace: showWhitespace,
+            fileExtension: fileExtension,
+            font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
+            theme: theme,
+            lspContext: lspContext,
+            allowsReviewLineSelection: allowsReviewLineSelection,
+            onReviewLineSelected: onReviewLineSelected,
+            onContextExpansion: onContextExpansion
+        )
+    }
+}
+
 final class DiffPaneTextDocumentContainerView: NSView {
     private let oldPane = DiffPaneTextScrollView()
     private let newPane = DiffPaneTextScrollView()
@@ -104,6 +139,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
     private var layoutMode: DiffLayoutMode = .split
     private var measuredHeight: CGFloat = 0
     private var lastUpdateSignature: UpdateSignature?
+    private var lastRowsUpdateSignature: RowsUpdateSignature?
 
     private let dividerWidth: CGFloat = 1
 
@@ -296,6 +332,110 @@ final class DiffPaneTextDocumentContainerView: NSView {
         attributedString.string.components(separatedBy: "\n")
     }
 
+    func update(
+        rows: [DiffDisplayRow],
+        layoutMode: DiffLayoutMode,
+        wrapLines: Bool,
+        showWhitespace: Bool,
+        fileExtension: String,
+        font: NSFont,
+        theme: Theme,
+        lspContext: DiffPaneLSPContext?,
+        allowsReviewLineSelection: Bool = true,
+        onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
+        onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    ) {
+        oldPane.allowsReviewLineSelection = allowsReviewLineSelection
+        newPane.allowsReviewLineSelection = allowsReviewLineSelection
+        stackedPane.allowsReviewLineSelection = allowsReviewLineSelection
+        oldPane.onReviewLineSelected = onReviewLineSelected
+        newPane.onReviewLineSelected = onReviewLineSelected
+        stackedPane.onReviewLineSelected = onReviewLineSelected
+        oldPane.onContextExpansion = onContextExpansion
+        newPane.onContextExpansion = onContextExpansion
+        stackedPane.onContextExpansion = onContextExpansion
+
+        let signature = RowsUpdateSignature(
+            rows: rows,
+            layoutMode: layoutMode,
+            wrapLines: wrapLines,
+            showWhitespace: showWhitespace,
+            fileExtension: fileExtension,
+            fontName: font.fontName,
+            fontSize: font.pointSize,
+            theme: theme,
+            lspContext: lspContext.map(UpdateSignature.LSPContextSignature.init)
+        )
+        guard signature != lastRowsUpdateSignature else {
+            needsLayout = true
+            return
+        }
+        lastRowsUpdateSignature = signature
+
+        self.layoutMode = layoutMode
+        layer?.backgroundColor = NSColor(theme.color("bg-1")).cgColor
+        dividerView.wantsLayer = true
+        dividerView.layer?.backgroundColor = NSColor(theme.color("line")).cgColor
+
+        switch layoutMode {
+        case .split:
+            let result = DiffPaneTextDocumentBuilder.buildSplit(
+                rows: rows,
+                fileExtension: fileExtension,
+                font: font,
+                showWhitespace: showWhitespace,
+                theme: theme
+            )
+            oldPane.update(
+                document: result.oldCode,
+                lineLabels: lineLabels(from: result.oldGutter),
+                wraps: wrapLines,
+                font: font,
+                theme: theme,
+                lspContext: nil,
+                allowedLSPSide: .new,
+                onContextExpansion: onContextExpansion
+            )
+            newPane.update(
+                document: result.newCode,
+                lineLabels: lineLabels(from: result.newGutter),
+                wraps: wrapLines,
+                font: font,
+                theme: theme,
+                lspContext: lspContext,
+                allowedLSPSide: .new,
+                onContextExpansion: onContextExpansion
+            )
+            stackedPane.clearLSPContext()
+            measuredHeight = max(oldPane.documentHeight, newPane.documentHeight)
+        case .stacked:
+            let result = DiffPaneTextDocumentBuilder.buildStacked(
+                rows: rows,
+                fileExtension: fileExtension,
+                font: font,
+                showWhitespace: showWhitespace,
+                theme: theme
+            )
+            stackedPane.update(
+                document: result.code,
+                lineLabels: lineLabels(from: result.gutter),
+                wraps: wrapLines,
+                font: font,
+                theme: theme,
+                lspContext: lspContext,
+                allowedLSPSide: .new,
+                onContextExpansion: onContextExpansion
+            )
+            oldPane.clearLSPContext()
+            newPane.clearLSPContext()
+            measuredHeight = stackedPane.documentHeight
+        }
+
+        updateVisibility()
+        needsLayout = true
+        invalidateIntrinsicContentSize()
+    }
+
     private struct UpdateSignature: Equatable {
         let group: DiffDisplayGroup
         let expandedCollapsedRowIDs: Set<String>
@@ -321,6 +461,18 @@ final class DiffPaneTextDocumentContainerView: NSView {
                 lsp = ObjectIdentifier(context.lsp)
             }
         }
+    }
+
+    private struct RowsUpdateSignature: Equatable {
+        let rows: [DiffDisplayRow]
+        let layoutMode: DiffLayoutMode
+        let wrapLines: Bool
+        let showWhitespace: Bool
+        let fileExtension: String
+        let fontName: String
+        let fontSize: CGFloat
+        let theme: Theme
+        let lspContext: UpdateSignature.LSPContextSignature?
     }
 }
 

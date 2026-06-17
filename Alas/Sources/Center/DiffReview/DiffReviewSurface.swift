@@ -27,6 +27,17 @@ struct DiffReviewSurface: View {
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
     var onSaveDraftComment: (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
+    var threads: [ReviewThread] = []
+    var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var annotations: [CheckAnnotation] = []
+    var canReply: Bool = false
+    var canResolve: Bool = false
+    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -64,7 +75,18 @@ struct DiffReviewSurface: View {
         draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil,
         draftCommentActions: ReviewDraftCommentActions = ReviewDraftCommentActions(),
         onSelectDraftComment: @escaping (ReviewDraftComment) -> Void = { _ in },
-        onSaveDraftComment: @escaping (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
+        onSaveDraftComment: @escaping (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in },
+        threads: [ReviewThread] = [],
+        onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        onResolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onUnresolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onEdit: @escaping (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in },
+        onDelete: @escaping (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in },
+        annotations: [CheckAnnotation] = [],
+        canReply: Bool = false,
+        canResolve: Bool = false,
+        onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        canAddToReview: Bool = false
     ) {
         self.session = session
         self._selectedFileID = selectedFileID
@@ -92,6 +114,17 @@ struct DiffReviewSurface: View {
         self.draftCommentActions = draftCommentActions
         self.onSelectDraftComment = onSelectDraftComment
         self.onSaveDraftComment = onSaveDraftComment
+        self.threads = threads
+        self.onReply = onReply
+        self.onResolve = onResolve
+        self.onUnresolve = onUnresolve
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self.annotations = annotations
+        self.canReply = canReply
+        self.canResolve = canResolve
+        self.onStageReply = onStageReply
+        self.canAddToReview = canAddToReview
     }
 
     private var fileIDs: [DiffReviewFileID] {
@@ -178,6 +211,7 @@ struct DiffReviewSurface: View {
                     wrapLines: $wrapLines,
                     showWhitespace: $showWhitespace
                 ) : nil,
+                threads: threads,
                 onSelectFile: scrollToFile
             )
             mainReviewStream(session, firstFileID: firstFileID)
@@ -289,7 +323,18 @@ struct DiffReviewSurface: View {
                 onContextExpansionActivated: {
                     contextExpandedFileIDs.insert(file.id)
                 },
-                reviewFeedbackTarget: effectiveReviewFeedbackTarget
+                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+                threads: inlineThreads(for: file.summary.path),
+                annotations: inlineAnnotations(for: file.summary.path),
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                canReply: canReply,
+                canResolve: canResolve,
+                onStageReply: onStageReply,
+                canAddToReview: canAddToReview
             )
         } else {
             DiffReviewFileSectionPlaceholder(
@@ -453,6 +498,46 @@ struct DiffReviewSurface: View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             programmaticScroll.finishProgrammaticScroll(token)
         }
+    }
+
+    private func inlineAnnotations(for filePath: String) -> [DiffInlineAnnotation] {
+        annotations
+            .filter { $0.path == filePath }
+            .map { DiffInlineAnnotation.from($0) }
+    }
+
+    private func inlineThreads(for filePath: String) -> [DiffInlineCommentThread] {
+        threads
+            .filter { $0.path == filePath && !$0.isFileLevel && !$0.isOutdated }
+            .compactMap { thread in
+                let isOldSide: Bool
+                if let side = thread.diffSide {
+                    isOldSide = side.uppercased() == "LEFT"
+                } else {
+                    isOldSide = thread.line == nil && thread.originalLine != nil
+                }
+                guard let line = thread.line ?? thread.originalLine else { return nil }
+                return DiffInlineCommentThread(
+                    id: thread.id,
+                    filePath: thread.path ?? "",
+                    newLine: line,
+                    isOldSide: isOldSide,
+                    isResolved: thread.isResolved,
+                    isOutdated: thread.isOutdated,
+                    comments: thread.comments.map { c in
+                        DiffInlineComment(
+                            id: c.id,
+                            author: c.author ?? "unknown",
+                            body: c.body,
+                            viewerCanUpdate: c.viewerCanUpdate,
+                            viewerCanDelete: c.viewerCanDelete
+                        )
+                    },
+                    viewerCanReply: thread.viewerCanReply,
+                    viewerCanResolve: thread.viewerCanResolve,
+                    viewerCanUnresolve: thread.viewerCanUnresolve
+                )
+            }
     }
 }
 

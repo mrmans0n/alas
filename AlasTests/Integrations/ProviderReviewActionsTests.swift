@@ -77,25 +77,25 @@ struct ProviderReviewActionsTests {
     }
 
     @Test func providerCapabilitiesExposeWriteActions() {
-        #expect(CodeHostProviderCapabilities.githubCLI.canPublishReviewComments)
-        #expect(CodeHostProviderCapabilities.githubCLI.canReplyToReviewThreads)
-        #expect(CodeHostProviderCapabilities.githubCLI.canResolveReviewThreads)
-        #expect(CodeHostProviderCapabilities.githubCLI.canUnresolveReviewThreads)
-        #expect(CodeHostProviderCapabilities.githubCLI.canApproveReview)
-        #expect(CodeHostProviderCapabilities.githubCLI.canRequestChanges)
+        #expect(CodeHostProviderCapabilities.githubCLI.canComment)
+        #expect(CodeHostProviderCapabilities.githubCLI.canReply)
+        #expect(CodeHostProviderCapabilities.githubCLI.canResolve)
+        #expect(CodeHostProviderCapabilities.githubCLI.canEditComment)
+        #expect(CodeHostProviderCapabilities.githubCLI.canDeleteComment)
+        #expect(CodeHostProviderCapabilities.githubCLI.canSubmitReview)
 
-        #expect(CodeHostProviderCapabilities.gitlabCLI.canPublishReviewComments)
-        #expect(CodeHostProviderCapabilities.gitlabCLI.canReplyToReviewThreads)
-        #expect(CodeHostProviderCapabilities.gitlabCLI.canResolveReviewThreads)
-        #expect(!CodeHostProviderCapabilities.gitlabCLI.canUnresolveReviewThreads)
-        #expect(CodeHostProviderCapabilities.gitlabCLI.canApproveReview)
-        #expect(CodeHostProviderCapabilities.gitlabCLI.canRequestChanges)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canComment)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canReply)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canResolve)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canEditComment)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canDeleteComment)
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canSubmitReview)
 
-        #expect(!CodeHostProviderCapabilities.readOnly.canPublishReviewComments)
-        #expect(!CodeHostProviderCapabilities.readOnly.canReplyToReviewThreads)
-        #expect(!CodeHostProviderCapabilities.readOnly.canResolveReviewThreads)
-        #expect(!CodeHostProviderCapabilities.readOnly.canUnresolveReviewThreads)
-        #expect(!CodeHostProviderCapabilities.readOnly.canApproveReview)
-        #expect(!CodeHostProviderCapabilities.readOnly.canRequestChanges)
+        #expect(!CodeHostProviderCapabilities.readOnly.canComment)
+        #expect(!CodeHostProviderCapabilities.readOnly.canReply)
+        #expect(!CodeHostProviderCapabilities.readOnly.canResolve)
+        #expect(!CodeHostProviderCapabilities.readOnly.canEditComment)
+        #expect(!CodeHostProviderCapabilities.readOnly.canDeleteComment)
+        #expect(!CodeHostProviderCapabilities.readOnly.canSubmitReview)
     }
 }

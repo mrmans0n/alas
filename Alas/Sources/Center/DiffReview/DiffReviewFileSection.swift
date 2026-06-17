@@ -28,6 +28,17 @@ struct DiffReviewFileSection: View {
     var allowsDraftCommentCreation: Bool = true
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
+    var threads: [DiffInlineCommentThread] = []
+    var annotations: [DiffInlineAnnotation] = []
+    var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var canReply: Bool = false
+    var canResolve: Bool = false
+    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var canAddToReview: Bool = false
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -354,30 +365,67 @@ struct DiffReviewFileSection: View {
                 segmentedHunkHeader(group)
                 ForEach(segments.items) { segment in
                     if !segment.rows.isEmpty {
-                        DiffPaneTextDocumentView(
-                            group: DiffDisplayGroup(
-                                id: segment.id,
-                                header: group.header,
-                                sourceHunk: group.sourceHunk,
-                                rows: segment.rows
-                            ),
-                            expandedCollapsedRowIDs: expandedCollapsedRowIDs,
-                            layoutMode: layoutMode,
-                            wrapLines: wrapLines,
-                            showWhitespace: showWhitespace,
-                            fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                            codeFontFamily: codeFontFamily,
-                            codeFontSize: codeFontSize,
-                            theme: theme,
-                            lspContext: lspContext,
-                            allowsReviewLineSelection: allowsDraftCommentCreation,
-                            onReviewLineSelected: { anchor in
-                                pendingDraftAnchor = anchor
-                                pendingDraftBody = ""
-                            },
-                            onContextExpansion: loadContextAndExpand
+                        let matchedThreads = threads.filter { thread in
+                            segment.rows.contains {
+                                thread.isOldSide
+                                    ? $0.old?.anchor.oldLine == thread.newLine
+                                    : $0.new?.anchor.newLine == thread.newLine
+                            }
+                        }
+                        let matchedAnnotations = annotations.filter { annotation in
+                            segment.rows.contains { $0.new?.anchor.newLine == annotation.newLine }
+                        }
+                        let blocks = DiffInlineCommentLayout.blocks(
+                            visibleRows: segment.rows,
+                            threads: matchedThreads,
+                            annotations: matchedAnnotations
                         )
-                        .fixedSize(horizontal: false, vertical: true)
+                        ForEach(blocks) { block in
+                            switch block {
+                            case .rows(let rowSeg):
+                                DiffPaneTextDocumentView(
+                                    group: DiffDisplayGroup(
+                                        id: "\(segment.id)-\(rowSeg.id)",
+                                        header: group.header,
+                                        sourceHunk: group.sourceHunk,
+                                        rows: rowSeg.rows
+                                    ),
+                                    expandedCollapsedRowIDs: expandedCollapsedRowIDs,
+                                    layoutMode: layoutMode,
+                                    wrapLines: wrapLines,
+                                    showWhitespace: showWhitespace,
+                                    fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                                    codeFontFamily: codeFontFamily,
+                                    codeFontSize: codeFontSize,
+                                    theme: theme,
+                                    lspContext: lspContext,
+                                    allowsReviewLineSelection: allowsDraftCommentCreation,
+                                    onReviewLineSelected: { anchor in
+                                        pendingDraftAnchor = anchor
+                                        pendingDraftBody = ""
+                                    },
+                                    onContextExpansion: loadContextAndExpand
+                                )
+                                .fixedSize(horizontal: false, vertical: true)
+                            case .thread(let thread):
+                                DiffInlineCommentCard(
+                                    thread: thread,
+                                    onReply: { body in onReply(thread, body) },
+                                    onStageReply: { body in onStageReply(thread, body) },
+                                    onResolve: { onResolve(thread) },
+                                    onUnresolve: { onUnresolve(thread) },
+                                    onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
+                                    onDelete: { comment in onDelete(thread, comment) },
+                                    canReply: canReply && thread.viewerCanReply,
+                                    canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+                                    canAddToReview: canAddToReview
+                                )
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            case .annotation(let annotation):
+                                DiffInlineAnnotationCard(annotation: annotation)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                     }
                     if !segment.draftComments.isEmpty {
                         draftCommentStack(segment.draftComments)
@@ -412,6 +460,17 @@ struct DiffReviewFileSection: View {
                     pendingDraftBody = ""
                 },
                 onContextExpansion: loadContextAndExpand,
+                threads: threads,
+                annotations: annotations,
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                canReply: canReply,
+                canResolve: canResolve,
+                onStageReply: onStageReply,
+                canAddToReview: canAddToReview,
                 hunkActions: { hunk in
                     let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
                     return DiffPaneHunkActions(

@@ -137,15 +137,13 @@ struct GitLabCLIProviderTests {
         #expect(threads[0].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_501"))
         #expect(threads[0].isResolved == false)
         #expect(threads[0].isActionable)
-        #expect(threads[0].providerThreadID == "discussion-1")
-        #expect(threads[0].providerCommentID == "501")
+        #expect(threads[0].comments.first?.id == "501")
         #expect(threads[1].id == "discussion-2")
         #expect(threads[1].author == "maintainer")
         #expect(threads[1].url == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_503"))
         #expect(threads[1].isResolved == false)
         #expect(threads[1].isActionable)
-        #expect(threads[1].providerThreadID == "discussion-2")
-        #expect(threads[1].providerCommentID == "503")
+        #expect(threads[1].comments.first?.id == "503")
     }
 
     @Test func discussionsJSONPreservesLocationMetadata() throws {
@@ -176,11 +174,9 @@ struct GitLabCLIProviderTests {
             requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
         )
 
-        #expect(threads.first?.location?.path == "Sources/App.swift")
-        #expect(threads.first?.location?.originalPath == "Sources/OldApp.swift")
-        #expect(threads.first?.location?.line == 24)
-        #expect(threads.first?.location?.side == .new)
-        #expect(threads.first?.location?.providerPosition == "100")
+        #expect(threads.first?.path == "Sources/App.swift")
+        #expect(threads.first?.line == 24)
+        #expect(threads.first?.comments.first?.id == "100")
     }
 
     @Test func discussionsJSONIgnoresMalformedPositionMetadata() throws {
@@ -227,7 +223,7 @@ struct GitLabCLIProviderTests {
 
         #expect(threads.map(\.id) == ["discussion-malformed", "discussion-position-string"])
         #expect(threads.first?.body == "Keep this discussion.")
-        #expect(threads.allSatisfy { $0.location == nil })
+        #expect(threads.allSatisfy { $0.path == nil })
     }
 
     @Test func discussionsJSONSkipsSystemOnlyDiscussions() throws {
@@ -641,6 +637,8 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
         ])
 
         let request = try await GitLabCLIProvider(runner: runner).currentReviewRequest(
@@ -655,7 +653,7 @@ struct GitLabCLIProviderTests {
         #expect(request?.headSHA == "head123")
         #expect(request?.threads.map(\.id) == ["discussion-1", "discussion-2"])
         #expect(request?.hasActionableFeedback == true)
-        #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr", "ci"])
+        #expect(await runner.commands.map(\.args.first) == ["mr", "mr", "mr", "api", "ci"])
         #expect(await runner.commands.first == FakeRunner.Command(
             executable: "glab",
             args: [
@@ -684,6 +682,11 @@ struct GitLabCLIProviderTests {
             cwd: Self.cwd
         ))
         #expect(await runner.commands[3] == FakeRunner.Command(
+            executable: "glab",
+            args: ["api", "user", "--hostname", "gitlab.example.com", "--output", "json"],
+            cwd: Self.cwd
+        ))
+        #expect(await runner.commands[4] == FakeRunner.Command(
             executable: "glab",
             args: [
                 "ci", "get",
@@ -740,6 +743,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.approveOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
         let provider = GitLabCLIProvider(runner: runner)
@@ -780,6 +784,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/approve"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         let discussionPayload = try Self.jsonObject(from: commands[1].stdin)
@@ -907,6 +912,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -930,6 +936,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         let statusNotePayload = try Self.jsonObject(from: commands[2].stdin)
@@ -941,6 +948,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -962,6 +970,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/notes"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         let statusNotePayload = try Self.jsonObject(from: commands[0].stdin)
@@ -1073,6 +1082,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -1095,6 +1105,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         #expect(result.published.map(\.localDraftID) == ["draft-1"])
@@ -1110,6 +1121,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -1132,6 +1144,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         #expect(result.published.map(\.localDraftID) == ["draft-1"])
@@ -1145,10 +1158,12 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.createNoteOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.resolveDiscussionOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.userOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
         let thread = ReviewThreadSummary(
@@ -1190,14 +1205,14 @@ struct GitLabCLIProviderTests {
             "--hostname", "gitlab.example.com",
             "--input", "-",
         ])
-        #expect(commands[4].args == [
+        #expect(commands[5].args == [
             "api",
             "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1",
             "--method", "PUT",
             "--hostname", "gitlab.example.com",
             "--input", "-",
         ])
-        #expect(try Self.jsonObject(from: commands[4].stdin)["resolved"] as? Bool == true)
+        #expect(try Self.jsonObject(from: commands[5].stdin)["resolved"] as? Bool == true)
     }
 
     @Test func gitLabMergeRequestAPIPathUsesSelectedRemoteProjectPath() {
@@ -1277,6 +1292,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: #"{"path_with_namespace":"nacho/alas"}"#, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.forkMRViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineOutput, stderr: ""),
         ])
 
@@ -1295,6 +1311,7 @@ struct GitLabCLIProviderTests {
             ["api", "projects/1002"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
         #expect(await runner.commands[1] == FakeRunner.Command(
@@ -1615,6 +1632,7 @@ struct GitLabCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.mrListOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.mrViewOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.discussionsOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"username":"viewer"}"#, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.pipelineWithJobsOutput, stderr: ""),
         ])
 
@@ -1631,6 +1649,7 @@ struct GitLabCLIProviderTests {
             ["mr", "list"],
             ["mr", "view"],
             ["mr", "note"],
+            ["api", "user"],
             ["ci", "get"],
         ])
     }
@@ -1744,6 +1763,529 @@ struct GitLabCLIProviderTests {
         #expect(args.contains("--draft"))
     }
 
+    private static let discussionsWithPositionOutput = """
+    [
+      { "id": "disc-1", "resolved": false, "notes": [
+        { "id": 101, "system": false, "body": "tighten this",
+          "author": { "username": "reviewer" },
+          "position": { "new_path": "src/foo.rb", "new_line": 12, "old_line": null } }
+      ]}
+    ]
+    """
+
+    @Test func parsesDiscussionPosition() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.discussionsWithPositionOutput,
+            requestURL: URL(string: "https://gitlab.com/group/proj/-/merge_requests/7")!)
+        let thread = try #require(threads.first)
+        #expect(thread.path == "src/foo.rb")
+        #expect(thread.line == 12)
+        #expect(thread.comments.first?.id == "101")
+    }
+
+    @Test func parsesDiscussionWithoutPositionIsFileLevel() throws {
+        let output = """
+        [
+          {
+            "id": "disc-no-pos",
+            "resolved": false,
+            "notes": [
+              {
+                "id": 201,
+                "system": false,
+                "body": "General file comment, no position.",
+                "author": { "username": "reviewer" }
+              }
+            ]
+          }
+        ]
+        """
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            output,
+            requestURL: URL(string: "https://gitlab.com/group/proj/-/merge_requests/7")!)
+        let thread = try #require(threads.first)
+        #expect(thread.isFileLevel == true)
+        #expect(thread.line == nil)
+    }
+
+    @Test func discussionsMarksCurrentUserCommentsAsEditableAndDeletable() throws {
+        let output = """
+        [
+          {
+            "id": "discussion-1",
+            "notes": [
+              {
+                "id": 501,
+                "body": "Please surface this unresolved note.",
+                "system": false,
+                "resolvable": true,
+                "resolved": false,
+                "author": { "username": "viewer" }
+              }
+            ]
+          }
+        ]
+        """
+
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            output,
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!,
+            currentUserUsername: "viewer"
+        )
+
+        let comment = try #require(threads.first?.comments.first)
+        #expect(comment.viewerCanUpdate == true)
+        #expect(comment.viewerCanDelete == true)
+    }
+
+    @Test func discussionsMarksOtherUserCommentsAsNotEditable() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            Self.discussionsOutput,
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!,
+            currentUserUsername: "viewer"
+        )
+
+        #expect(threads[0].comments[0].viewerCanUpdate == false)
+        #expect(threads[0].comments[0].viewerCanDelete == false)
+    }
+
+    @Test func urlEncodedProjectSlugPercentEncodesPathSegments() {
+        let forkRemote = CodeHostRemote(
+            kind: .gitlab,
+            host: "gitlab.example.com",
+            owner: "platform/mobile",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
+        )
+
+        #expect(GitLabCLIProvider.urlEncodedProjectSlug(forkRemote) == "platform%2Fmobile%2Falas")
+    }
+
+    @Test func noteIDRequiresNumericCommentID() throws {
+        let comment = ReviewComment(
+            id: "123",
+            author: nil,
+            body: "note",
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: false
+        )
+
+        #expect(try GitLabCLIProvider.noteID(from: comment) == 123)
+        #expect(throws: CodeHostProviderError.malformedOutput("Unable to parse note id")) {
+            _ = try GitLabCLIProvider.noteID(from: ReviewComment(
+                id: "not-a-number",
+                author: nil,
+                body: "note",
+                url: nil,
+                createdAt: nil,
+                viewerCanUpdate: false,
+                viewerCanDelete: false,
+                isPending: false
+            ))
+        }
+    }
+
+    @Test func noteIDFromThreadRequiresFirstCommentID() throws {
+        let thread = ReviewThread(
+            id: "discussion-1",
+            path: nil,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: false,
+            isOutdated: false,
+            isFileLevel: true,
+            comments: [
+                ReviewComment(
+                    id: "501",
+                    author: nil,
+                    body: "first",
+                    url: nil,
+                    createdAt: nil,
+                    viewerCanUpdate: false,
+                    viewerCanDelete: false,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+
+        #expect(try GitLabCLIProvider.noteID(from: thread) == 501)
+
+        let emptyThread = ReviewThread(
+            id: "discussion-2",
+            path: nil,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: false,
+            isOutdated: false,
+            isFileLevel: true,
+            comments: [],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+
+        #expect(throws: CodeHostProviderError.malformedOutput("Unable to determine discussion note id")) {
+            _ = try GitLabCLIProvider.noteID(from: emptyThread)
+        }
+    }
+
+    @Test func parseCurrentUserUsernameRequiresUsernameField() throws {
+        #expect(try GitLabCLIProvider.parseCurrentUserUsername(#"{"username":"viewer"}"#) == "viewer")
+        #expect(throws: CodeHostProviderError.malformedOutput("glab api user output is missing username")) {
+            _ = try GitLabCLIProvider.parseCurrentUserUsername(#"{"id":1}"#)
+        }
+        #expect(throws: CodeHostProviderError.malformedOutput("Unable to parse glab api user output")) {
+            _ = try GitLabCLIProvider.parseCurrentUserUsername("not json")
+        }
+    }
+
+    @Test func parseNoteResponseReturnsReviewComment() throws {
+        let json = """
+        {
+          "id": 601,
+          "body": "reply body",
+          "author": { "username": "viewer" },
+          "created_at": "2026-06-01T12:00:00Z",
+          "web_url": "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42#note_601"
+        }
+        """
+
+        let comment = try GitLabCLIProvider.parseNoteResponse(
+            json,
+            requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
+        )
+
+        #expect(comment.id == "601")
+        #expect(comment.body == "reply body")
+        #expect(comment.author == "viewer")
+        #expect(comment.viewerCanUpdate == true)
+        #expect(comment.viewerCanDelete == true)
+    }
+
+    @Test func parseNoteResponseFailsMissingID() {
+        #expect(throws: CodeHostProviderError.malformedOutput("glab note response is missing a note id")) {
+            _ = try GitLabCLIProvider.parseNoteResponse(
+                #"{"body":"no id"}"#,
+                requestURL: URL(string: "https://gitlab.example.com/platform/mobile/alas/-/merge_requests/42")!
+            )
+        }
+    }
+
+    @Test func replyToThreadCallsDiscussionNotesEndpoint() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(
+                exitCode: 0,
+                stdout: #"{"id": 601, "body": "Thanks for the feedback.", "author": {"username": "viewer"}}"#,
+                stderr: ""
+            ),
+        ])
+        let request = Self.makeRequest()
+        let thread = ReviewThread(
+            id: "discussion-1",
+            path: nil,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: false,
+            isOutdated: false,
+            isFileLevel: true,
+            comments: [
+                ReviewComment(
+                    id: "501",
+                    author: "reviewer",
+                    body: "Please surface this unresolved note.",
+                    url: nil,
+                    createdAt: nil,
+                    viewerCanUpdate: false,
+                    viewerCanDelete: false,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+
+        let comment = try await GitLabCLIProvider(runner: runner).replyToThread(
+            remote: Self.remote,
+            request: request,
+            thread: thread,
+            body: "Thanks for the feedback.",
+            cwd: Self.cwd
+        )
+
+        #expect(comment.id == "601")
+        #expect(comment.body == "Thanks for the feedback.")
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1/notes",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                    "-X", "POST",
+                    "-f", "body=Thanks for the feedback.",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func resolveThreadCallsDiscussionResolveEndpoint() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let request = Self.makeRequest()
+        let thread = Self.makeThread()
+
+        let resolved = try await GitLabCLIProvider(runner: runner).resolveThread(
+            remote: Self.remote,
+            request: request,
+            thread: thread,
+            cwd: Self.cwd
+        )
+
+        #expect(resolved.isResolved == true)
+        #expect(resolved.id == thread.id)
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1?resolved=true",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                    "-X", "PUT",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func unresolveThreadCallsDiscussionUnresolveEndpoint() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let request = Self.makeRequest()
+        let thread = Self.makeThread(isResolved: true)
+
+        let unresolved = try await GitLabCLIProvider(runner: runner).unresolveThread(
+            remote: Self.remote,
+            request: request,
+            thread: thread,
+            cwd: Self.cwd
+        )
+
+        #expect(unresolved.isResolved == false)
+        #expect(unresolved.id == thread.id)
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/discussions/discussion-1?resolved=false",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                    "-X", "PUT",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func resolveThreadThrowsOnNonzeroExit() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "not authorized"),
+        ])
+        let request = Self.makeRequest()
+        let thread = Self.makeThread()
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab api resolve discussion", stderr: "not authorized")) {
+            _ = try await GitLabCLIProvider(runner: runner).resolveThread(
+                remote: Self.remote,
+                request: request,
+                thread: thread,
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    @Test func editCommentCallsNotesUpdateEndpoint() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(
+                exitCode: 0,
+                stdout: #"{"id": 501, "body": "Updated text.", "author": {"username": "viewer"}}"#,
+                stderr: ""
+            ),
+        ])
+        let request = Self.makeRequest()
+        let comment = ReviewComment(
+            id: "501",
+            author: "viewer",
+            body: "Please surface this unresolved note.",
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: false
+        )
+
+        let updated = try await GitLabCLIProvider(runner: runner).editComment(
+            remote: Self.remote,
+            request: request,
+            comment: comment,
+            newBody: "Updated text.",
+            cwd: Self.cwd
+        )
+
+        #expect(updated.id == "501")
+        #expect(updated.body == "Updated text.")
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/notes/501",
+                    "--hostname", "gitlab.example.com",
+                    "--output", "json",
+                    "-X", "PUT",
+                    "-f", "body=Updated text.",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func editCommentThrowsForNonNumericCommentID() async throws {
+        let runner = FakeRunner(results: [])
+        let request = Self.makeRequest()
+        let comment = ReviewComment(
+            id: "not-a-number",
+            author: nil,
+            body: "note",
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: false,
+            viewerCanDelete: false,
+            isPending: false
+        )
+
+        await #expect(throws: CodeHostProviderError.malformedOutput("Unable to parse note id")) {
+            _ = try await GitLabCLIProvider(runner: runner).editComment(
+                remote: Self.remote,
+                request: request,
+                comment: comment,
+                newBody: "new",
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    @Test func deleteCommentCallsNotesDeleteEndpoint() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let request = Self.makeRequest()
+        let comment = ReviewComment(
+            id: "501",
+            author: "viewer",
+            body: "Please surface this unresolved note.",
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: false
+        )
+
+        try await GitLabCLIProvider(runner: runner).deleteComment(
+            remote: Self.remote,
+            request: request,
+            comment: comment,
+            cwd: Self.cwd
+        )
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "api",
+                    "projects/platform%2Fmobile%2Falas/merge_requests/42/notes/501",
+                    "--hostname", "gitlab.example.com",
+                    "-X", "DELETE",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func deleteCommentThrowsOnNonzeroExit() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 1, stdout: "", stderr: "forbidden"),
+        ])
+        let request = Self.makeRequest()
+        let comment = ReviewComment(
+            id: "501",
+            author: nil,
+            body: "note",
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: false,
+            viewerCanDelete: false,
+            isPending: false
+        )
+
+        await #expect(throws: CodeHostProviderError.commandFailed(command: "glab api delete note", stderr: "forbidden")) {
+            try await GitLabCLIProvider(runner: runner).deleteComment(
+                remote: Self.remote,
+                request: request,
+                comment: comment,
+                cwd: Self.cwd
+            )
+        }
+    }
+
+    private static func makeThread(isResolved: Bool = false) -> ReviewThread {
+        ReviewThread(
+            id: "discussion-1",
+            path: nil,
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: isResolved,
+            isOutdated: false,
+            isFileLevel: true,
+            comments: [
+                ReviewComment(
+                    id: "501",
+                    author: "reviewer",
+                    body: "Please surface this unresolved note.",
+                    url: nil,
+                    createdAt: nil,
+                    viewerCanUpdate: false,
+                    viewerCanDelete: false,
+                    isPending: false
+                ),
+            ],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+    }
+
     private static let remote = CodeHostRemote(
         kind: .gitlab,
         host: "gitlab.example.com",
@@ -1758,7 +2300,7 @@ struct GitLabCLIProviderTests {
     private static func makeRequest(
         headSHA: String = "head123",
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = []
+        threads: [ReviewThread] = []
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,
@@ -2046,6 +2588,13 @@ struct GitLabCLIProviderTests {
       "web_url": "https://gitlab.example.com/platform/mobile/alas/-/pipelines/777",
       "updated_at": "2026-06-01T12:36:56Z",
       "jobs": []
+    }
+    """
+
+    private static let userOutput = """
+    {
+      "id": 9001,
+      "username": "viewer"
     }
     """
 

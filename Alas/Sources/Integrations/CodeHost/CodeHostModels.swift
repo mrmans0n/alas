@@ -56,70 +56,58 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
     let canCreateReviewRequest: Bool
     let canRerunFailedChecks: Bool
     let canOpenReviewRequest: Bool
-    let canPublishReviewComments: Bool
-    let canReplyToReviewThreads: Bool
-    let canResolveReviewThreads: Bool
-    let canUnresolveReviewThreads: Bool
-    let canApproveReview: Bool
-    let canRequestChanges: Bool
-
-    init(
-        canCreateReviewRequest: Bool,
-        canRerunFailedChecks: Bool,
-        canOpenReviewRequest: Bool,
-        canPublishReviewComments: Bool = false,
-        canReplyToReviewThreads: Bool = false,
-        canResolveReviewThreads: Bool = false,
-        canUnresolveReviewThreads: Bool = false,
-        canApproveReview: Bool = false,
-        canRequestChanges: Bool = false
-    ) {
-        self.canCreateReviewRequest = canCreateReviewRequest
-        self.canRerunFailedChecks = canRerunFailedChecks
-        self.canOpenReviewRequest = canOpenReviewRequest
-        self.canPublishReviewComments = canPublishReviewComments
-        self.canReplyToReviewThreads = canReplyToReviewThreads
-        self.canResolveReviewThreads = canResolveReviewThreads
-        self.canUnresolveReviewThreads = canUnresolveReviewThreads
-        self.canApproveReview = canApproveReview
-        self.canRequestChanges = canRequestChanges
-    }
+    let canReply: Bool
+    let canResolve: Bool
+    let canComment: Bool
+    let canSubmitReview: Bool
+    let canFetchAnnotations: Bool
+    let canEditComment: Bool
+    let canDeleteComment: Bool
 
     static let readOnly = CodeHostProviderCapabilities(
         canCreateReviewRequest: false,
         canRerunFailedChecks: false,
         canOpenReviewRequest: true,
-        canPublishReviewComments: false,
-        canReplyToReviewThreads: false,
-        canResolveReviewThreads: false,
-        canUnresolveReviewThreads: false,
-        canApproveReview: false,
-        canRequestChanges: false
+        canReply: false,
+        canResolve: false,
+        canComment: false,
+        canSubmitReview: false,
+        canFetchAnnotations: false,
+        canEditComment: false,
+        canDeleteComment: false
     )
 
     static let githubCLI = CodeHostProviderCapabilities(
         canCreateReviewRequest: true,
         canRerunFailedChecks: true,
         canOpenReviewRequest: true,
-        canPublishReviewComments: true,
-        canReplyToReviewThreads: true,
-        canResolveReviewThreads: true,
-        canUnresolveReviewThreads: true,
-        canApproveReview: true,
-        canRequestChanges: true
+        canReply: true,
+        canResolve: true,
+        canComment: true,
+        canSubmitReview: true,
+        canFetchAnnotations: true,
+        canEditComment: true,
+        canDeleteComment: true
     )
 
     static let gitlabCLI = CodeHostProviderCapabilities(
         canCreateReviewRequest: true,
         canRerunFailedChecks: true,
         canOpenReviewRequest: true,
-        canPublishReviewComments: true,
-        canReplyToReviewThreads: true,
-        canResolveReviewThreads: true,
-        canUnresolveReviewThreads: false,
-        canApproveReview: true,
-        canRequestChanges: true
+        canReply: true,
+        canResolve: true,
+        canComment: true,
+        canSubmitReview: true,
+        canFetchAnnotations: false,
+        canEditComment: true,
+        canDeleteComment: true
     )
+}
+
+enum ReviewVerdict: String, Codable, Equatable, Sendable {
+    case approve
+    case requestChanges
+    case comment
 }
 
 enum ReviewRequestState: String, Codable, Equatable, Sendable {
@@ -172,6 +160,44 @@ struct ReviewCheck: Identifiable, Equatable, Sendable {
     let completedAt: Date?
 }
 
+struct CheckAnnotation: Identifiable, Equatable, Sendable {
+    var id: String { "\(checkRunID)-\(path)-\(startLine)-\(endLine)-\(level.rawValue)-\(message.hashValue)" }
+    let checkRunID: String
+    let checkName: String
+    let path: String
+    let startLine: Int
+    let endLine: Int
+    let level: AnnotationLevel
+    let message: String
+    let rawDetails: String?
+
+    enum AnnotationLevel: String, Equatable, Sendable, Decodable {
+        case failure, warning, notice
+    }
+
+    static func == (lhs: CheckAnnotation, rhs: CheckAnnotation) -> Bool {
+        lhs.checkRunID == rhs.checkRunID &&
+        lhs.checkName == rhs.checkName &&
+        lhs.path == rhs.path &&
+        lhs.startLine == rhs.startLine &&
+        lhs.endLine == rhs.endLine &&
+        lhs.level == rhs.level &&
+        lhs.message == rhs.message &&
+        lhs.rawDetails == rhs.rawDetails
+    }
+}
+
+struct ReviewComment: Identifiable, Equatable, Sendable {
+    let id: String
+    let author: String?
+    let body: String
+    let url: URL?
+    let createdAt: Date?
+    let viewerCanUpdate: Bool
+    let viewerCanDelete: Bool
+    let isPending: Bool
+}
+
 enum ReviewThreadSide: String, Codable, Equatable, Sendable {
     case old
     case new
@@ -220,6 +246,111 @@ struct ReviewThreadSummary: Identifiable, Equatable, Sendable {
     }
 }
 
+struct ReviewThread: Identifiable, Equatable, Sendable {
+    let id: String
+    let path: String?
+    let line: Int?
+    let startLine: Int?
+    let originalLine: Int?
+    let diffHunk: String?
+    let diffSide: String?
+    let isResolved: Bool
+    let isOutdated: Bool
+    let isFileLevel: Bool
+    let comments: [ReviewComment]
+    let viewerCanResolve: Bool
+    let viewerCanUnresolve: Bool
+    let viewerCanReply: Bool
+    let url: URL?
+
+    init(
+        id: String,
+        path: String?,
+        line: Int?,
+        startLine: Int?,
+        originalLine: Int?,
+        diffHunk: String?,
+        diffSide: String? = nil,
+        isResolved: Bool,
+        isOutdated: Bool,
+        isFileLevel: Bool,
+        comments: [ReviewComment],
+        viewerCanResolve: Bool,
+        viewerCanUnresolve: Bool? = nil,
+        viewerCanReply: Bool,
+        url: URL?
+    ) {
+        self.id = id
+        self.path = path
+        self.line = line
+        self.startLine = startLine
+        self.originalLine = originalLine
+        self.diffHunk = diffHunk
+        self.diffSide = diffSide
+        self.isResolved = isResolved
+        self.isOutdated = isOutdated
+        self.isFileLevel = isFileLevel
+        self.comments = comments
+        self.viewerCanResolve = viewerCanResolve
+        self.viewerCanUnresolve = viewerCanUnresolve ?? viewerCanResolve
+        self.viewerCanReply = viewerCanReply
+        self.url = url
+    }
+
+    private var headComment: ReviewComment? {
+        comments.first { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    var author: String? { headComment?.author }
+    var body: String { headComment?.body ?? "" }
+
+    var isActionable: Bool { !isResolved && !isOutdated }
+
+    func addingReply(_ comment: ReviewComment) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments + [comment],
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
+        )
+    }
+
+    func withResolved(_ resolved: Bool) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            isResolved: resolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments,
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
+        )
+    }
+
+    func replacingComment(id commentID: String, with replacement: ReviewComment) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments.map { $0.id == commentID ? replacement : $0 },
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
+        )
+    }
+
+    func removingComment(id commentID: String) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments.filter { $0.id != commentID },
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
+        )
+    }
+}
+
 struct ReviewRequest: Identifiable, Equatable, Sendable {
     var id: String { "\(provider.rawValue)-\(remote.host)-\(remote.repositorySlug)-\(number)" }
     let remote: CodeHostRemote
@@ -234,7 +365,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
-    let threads: [ReviewThreadSummary]
+    let threads: [ReviewThread]
 
     var provider: CodeHostKind { remote.kind }
 
@@ -253,7 +384,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         reviewDecision: ReviewDecision,
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
-        threads: [ReviewThreadSummary]
+        threads: [ReviewThread]
     ) {
         self.remote = remote
         self.number = number
@@ -275,7 +406,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     }
 
     var hasActionableFeedback: Bool {
-        reviewDecision == .changesRequested || threads.contains { !$0.isResolved && $0.isActionable }
+        reviewDecision == .changesRequested || threads.contains { $0.isActionable }
     }
 
     static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {

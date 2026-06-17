@@ -280,16 +280,31 @@ struct ReviewSessionLoaderTests {
                 mergeState: .clean,
                 checks: [],
                 threads: [
-                    ReviewThreadSummary(
+                    ReviewThread(
                         id: "thread-1",
-                        author: "reviewer",
-                        body: "Please adjust this.",
-                        url: URL(string: "https://github.com/mrmans0n/alas/pull/\(number)#discussion_r1"),
+                        path: "Sources/App.swift",
+                        line: 1,
+                        startLine: nil,
+                        originalLine: nil,
+                        diffHunk: nil,
                         isResolved: false,
-                        isActionable: true,
-                        location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 1, side: .new, providerPosition: nil),
-                        providerThreadID: "thread-provider-1",
-                        providerCommentID: "comment-provider-1"
+                        isOutdated: false,
+                        isFileLevel: false,
+                        comments: [
+                            ReviewComment(
+                                id: "comment-provider-1",
+                                author: "reviewer",
+                                body: "Please adjust this.",
+                                url: URL(string: "https://github.com/mrmans0n/alas/pull/\(number)#discussion_r1"),
+                                createdAt: nil,
+                                viewerCanUpdate: true,
+                                viewerCanDelete: true,
+                                isPending: false
+                            ),
+                        ],
+                        viewerCanResolve: true,
+                        viewerCanReply: true,
+                        url: URL(string: "https://github.com/mrmans0n/alas/pull/\(number)#discussion_r1")
                     ),
                 ]
             )

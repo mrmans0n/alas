@@ -143,7 +143,7 @@ enum ReviewEvidenceCIActivityMapper {
 
 enum ReviewEvidenceInlineFeedbackMapper {
     static func feedbackByFileID(
-        threads: [ReviewThreadSummary],
+        threads: [ReviewThread],
         files: [DiffReviewFileSummary],
         providerName: String
     ) -> [DiffReviewFileID: [DiffReviewInlineFeedback]] {
@@ -151,12 +151,10 @@ enum ReviewEvidenceInlineFeedbackMapper {
         let fileMatcher = InlineFeedbackFileMatcher(files: files)
 
         for thread in threads where !thread.isResolved && thread.isActionable {
-            guard let location = thread.location,
-                  let file = fileMatcher.file(for: location)
+            guard let path = thread.path,
+                  let file = fileMatcher.file(forPath: path)
             else { continue }
 
-            let side = DiffReviewInlineFeedbackSide(location.side)
-            let anchorPath = anchorPath(for: location, matchedFile: file)
             let feedback = DiffReviewInlineFeedback(
                 id: thread.id,
                 providerName: providerName,
@@ -165,9 +163,9 @@ enum ReviewEvidenceInlineFeedbackMapper {
                 status: .actionable,
                 providerURL: thread.url,
                 anchor: DiffReviewInlineFeedbackAnchor(
-                    path: anchorPath,
-                    line: location.line,
-                    side: side
+                    path: path,
+                    line: thread.line,
+                    side: .unknown
                 ),
                 evidenceItemID: thread.id
             )
@@ -192,15 +190,6 @@ enum ReviewEvidenceInlineFeedbackMapper {
             }
         }
     }
-
-    private static func anchorPath(for location: ReviewThreadLocation, matchedFile file: DiffReviewFileSummary) -> String {
-        switch location.side {
-        case .old:
-            location.originalPath ?? file.originalPath ?? location.path
-        case .new, .unknown:
-            location.path
-        }
-    }
 }
 
 private struct InlineFeedbackFileMatcher {
@@ -212,6 +201,10 @@ private struct InlineFeedbackFileMatcher {
         self.filesByOriginalPath = Self.uniqueFiles(files.compactMap { file in
             file.originalPath == nil ? nil : file
         }, keyedBy: \.originalPath)
+    }
+
+    func file(forPath path: String) -> DiffReviewFileSummary? {
+        filesByPath[path] ?? filesByOriginalPath[path]
     }
 
     func file(for location: ReviewThreadLocation) -> DiffReviewFileSummary? {

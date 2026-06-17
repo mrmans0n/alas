@@ -224,18 +224,6 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(draftState.id)
-                    case .reviewEvidence(let evidenceState):
-                        let _ = state.rightPaneStore.state(
-                            for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch,
-                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
-                        )
-                        ReviewEvidenceTabView(
-                            worktreePath: worktree.path,
-                            tabState: evidenceState,
-                            appState: state
-                        )
-                        .id(evidenceState.id)
                     case .reviewChanges(let reviewState):
                         let _ = state.rightPaneStore.state(
                             for: worktree,
@@ -248,13 +236,25 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(reviewState.id)
-                    case .reviewSession(let reviewSessionState):
-                        ReviewSessionTabView(
+                    case .reviewPR(let prState):
+                        let _ = state.rightPaneStore.state(
+                            for: worktree,
+                            baseBranch: state.config.worktrees.baseBranch,
+                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
+                        )
+                        ReviewTabView(
                             worktree: worktree,
-                            tabState: reviewSessionState,
+                            tabState: prState,
                             appState: state
                         )
-                        .id(reviewSessionState.id)
+                        .id(prState.id)
+                    case .reviewSession(let sessionState):
+                        ReviewSessionTabView(
+                            worktree: worktree,
+                            tabState: sessionState,
+                            appState: state
+                        )
+                        .id(sessionState.id)
                     case .imagePreview(let s):
                         ImagePreviewTabView(worktreePath: worktree.path,
                                              relativePath: s.relativePath,

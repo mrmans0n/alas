@@ -118,6 +118,17 @@ struct DiffPaneView: View {
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var threads: [DiffInlineCommentThread] = []
+    var annotations: [DiffInlineAnnotation] = []
+    var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var canReply: Bool = false
+    var canResolve: Bool = false
+    var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var canAddToReview: Bool = false
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -137,6 +148,17 @@ struct DiffPaneView: View {
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
+        threads: [DiffInlineCommentThread] = [],
+        annotations: [DiffInlineAnnotation] = [],
+        onReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        onResolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onUnresolve: @escaping (DiffInlineCommentThread) -> Void = { _ in },
+        onEdit: @escaping (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in },
+        onDelete: @escaping (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in },
+        canReply: Bool = false,
+        canResolve: Bool = false,
+        onStageReply: @escaping (DiffInlineCommentThread, String) -> Void = { _, _ in },
+        canAddToReview: Bool = false,
         hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
     ) {
         self.model = model
@@ -152,6 +174,17 @@ struct DiffPaneView: View {
         self.allowsReviewLineSelection = allowsReviewLineSelection
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
+        self.threads = threads
+        self.annotations = annotations
+        self.onReply = onReply
+        self.onResolve = onResolve
+        self.onUnresolve = onUnresolve
+        self.onEdit = onEdit
+        self.onDelete = onDelete
+        self.canReply = canReply
+        self.canResolve = canResolve
+        self.onStageReply = onStageReply
+        self.canAddToReview = canAddToReview
         self.hunkActions = hunkActions
     }
 
@@ -277,24 +310,65 @@ struct DiffPaneView: View {
     }
 
     private func hunk(_ group: DiffDisplayGroup) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let visibleRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
+        let hunkThreads = threads.filter { t in
+            visibleRows.contains {
+                t.isOldSide
+                    ? $0.old?.anchor.oldLine == t.newLine
+                    : $0.new?.anchor.newLine == t.newLine
+            }
+        }
+        let hunkAnnotations = annotations.filter { a in
+            visibleRows.contains { $0.new?.anchor.newLine == a.newLine }
+        }
+        let blocks = DiffInlineCommentLayout.blocks(
+            visibleRows: visibleRows,
+            threads: hunkThreads,
+            annotations: hunkAnnotations
+        )
+
+        return VStack(alignment: .leading, spacing: 0) {
             hunkHeader(group)
-            DiffPaneTextDocumentView(
-                group: group,
-                expandedCollapsedRowIDs: expandedCollapsedRowIDs,
-                layoutMode: layoutMode,
-                wrapLines: wrapLines,
-                showWhitespace: showWhitespace,
-                fileExtension: fileExtension,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                theme: theme,
-                lspContext: lspContext,
-                allowsReviewLineSelection: allowsReviewLineSelection,
-                onReviewLineSelected: onReviewLineSelected,
-                onContextExpansion: onContextExpansion
-            )
-            .fixedSize(horizontal: false, vertical: true)
+            ForEach(blocks) { block in
+                switch block {
+                case .rows(let segment):
+                    DiffPaneSegmentView(
+                        rows: segment.rows,
+                        layoutMode: layoutMode,
+                        wrapLines: wrapLines,
+                        showWhitespace: showWhitespace,
+                        fileExtension: fileExtension,
+                        codeFontFamily: codeFontFamily,
+                        codeFontSize: codeFontSize,
+                        theme: theme,
+                        lspContext: lspContext,
+                        allowsReviewLineSelection: allowsReviewLineSelection,
+                        onReviewLineSelected: onReviewLineSelected,
+                        onContextExpansion: onContextExpansion
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                case .thread(let t):
+                    DiffInlineCommentCard(
+                        thread: t,
+                        onReply: { body in onReply(t, body) },
+                        onStageReply: { body in onStageReply(t, body) },
+                        onResolve: { onResolve(t) },
+                        onUnresolve: { onUnresolve(t) },
+                        onEdit: { comment, newBody in onEdit(t, comment, newBody) },
+                        onDelete: { comment in onDelete(t, comment) },
+                        canReply: canReply && t.viewerCanReply,
+                        canResolve: canResolve && (t.viewerCanResolve || t.viewerCanUnresolve),
+                        canAddToReview: canAddToReview
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                case .annotation(let a):
+                    DiffInlineAnnotationCard(annotation: a)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 7))

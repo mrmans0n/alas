@@ -1,0 +1,131 @@
+import SwiftUI
+
+struct OutdatedThreadsDrawer: View {
+    let threads: [ReviewThread]  // already filtered: isFileLevel || isOutdated
+    @State private var isExpanded = false
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        if threads.isEmpty {
+            EmptyView()
+        } else {
+            VStack(spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(theme.color("fg-dim"))
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .animation(.easeInOut(duration: 0.18), value: isExpanded)
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-dim"))
+                        Text("Outdated & file-level (\(threads.count))")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(theme.color("fg-dim"))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                if isExpanded {
+                    Divider().overlay(theme.color("line"))
+                    VStack(spacing: 0) {
+                        ForEach(threads) { thread in
+                            OutdatedThreadRow(thread: thread)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .background(theme.color("bg-2"))
+            .overlay(alignment: .bottom) {
+                Divider().overlay(theme.color("line"))
+            }
+        }
+    }
+}
+
+private struct OutdatedThreadRow: View {
+    let thread: ReviewThread
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if thread.isOutdated {
+                    Text("Outdated")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(theme.color("fg-dim").opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                if thread.isFileLevel {
+                    Text("File-level")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(theme.color("fg-dim").opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                if let path = thread.path {
+                    Text(path)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                if let url = thread.url {
+                    Button {
+                        NSWorkspace.shared.open(url)
+                    } label: {
+                        Image(systemName: "arrow.up.right.square")
+                            .font(.system(size: 10))
+                            .foregroundColor(theme.color("fg-dim"))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open in browser")
+                }
+            }
+            if let hunk = thread.diffHunk {
+                Text(hunk)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .padding(6)
+                    .background(theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            let body = thread.body
+            if !body.isEmpty {
+                if let author = thread.author {
+                    Text(author)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(theme.color("accent"))
+                }
+                Text(body)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg"))
+                    .lineLimit(4)
+                    .truncationMode(.tail)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        Divider().overlay(theme.color("line").opacity(0.5))
+    }
+}

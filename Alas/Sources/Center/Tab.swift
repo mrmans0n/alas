@@ -10,12 +10,12 @@ enum Tab: Codable, Equatable, Identifiable {
     case commitEditor(CommitEditorTabState)
     case draftCommit(DraftCommitTabState)
     case draftReviewRequest(DraftReviewRequestTabState)
-    case reviewEvidence(ReviewEvidenceTabState)
     case reviewChanges(ReviewChangesTabState)
     case reviewSession(ReviewSessionTabState)
     case imagePreview(ImagePreviewTabState)
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
+    case reviewPR(ReviewPRTabState)
 
     var id: TabID {
         switch self {
@@ -26,12 +26,12 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commitEditor(let s): return s.id
         case .draftCommit(let s):  return s.id
         case .draftReviewRequest(let s): return s.id
-        case .reviewEvidence(let s): return s.id
         case .reviewChanges(let s): return s.id
         case .reviewSession(let s): return s.id
         case .imagePreview(let s): return s.id
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
+        case .reviewPR(let s):     return s.id
         }
     }
 
@@ -44,12 +44,12 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commitEditor(let s): return s.title
         case .draftCommit:         return "Draft commit"
         case .draftReviewRequest(let s): return s.displayTitle
-        case .reviewEvidence(let s): return s.displayTitle
         case .reviewChanges:       return "Review Changes"
         case .reviewSession(let s): return s.title
         case .imagePreview(let s): return s.title
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
+        case .reviewPR(let s):     return s.displayTitle
         }
     }
 
@@ -62,12 +62,12 @@ enum Tab: Codable, Equatable, Identifiable {
         case .commitEditor: return "commit"
         case .draftCommit:  return "commit"
         case .draftReviewRequest: return "pull-request"
-        case .reviewEvidence: return "doc.text.magnifyingglass"
         case .reviewChanges: return "diff"
         case .reviewSession: return "text.badge.checkmark"
         case .imagePreview: return "image"
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
+        case .reviewPR:     return "list.bullet.rectangle.portrait.fill"
         }
     }
 
@@ -78,16 +78,6 @@ enum Tab: Codable, Equatable, Identifiable {
         case .mergeConflict(let s): return s.relativePath
         default:                   return nil
         }
-    }
-}
-
-struct ReviewChangesTabState: Codable, Equatable, Identifiable {
-    let id: TabID
-    let worktreeId: String
-
-    init(worktreeId: String) {
-        self.id = "review-changes:\(worktreeId)"
-        self.worktreeId = worktreeId
     }
 }
 
@@ -109,7 +99,17 @@ struct ReviewSessionTabState: Codable, Equatable, Identifiable {
     }
 }
 
-struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
+struct ReviewChangesTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+
+    init(worktreeId: String) {
+        self.id = "review-changes:\(worktreeId)"
+        self.worktreeId = worktreeId
+    }
+}
+
+struct ReviewPRTabState: Codable, Equatable, Identifiable {
     let id: TabID
     let worktreeId: String
     let provider: CodeHostKind
@@ -117,18 +117,12 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
     let number: Int
     var url: URL
     var title: String
-    var selectedSection: ReviewEvidenceSection
-    var selectedItemID: String?
 
     var displayTitle: String {
-        "\(provider.reviewRequestLabel) evidence"
+        "\(provider.reviewRequestLabel) Review"
     }
 
-    init(
-        worktreeId: String,
-        snapshot: ReviewLoopSnapshot,
-        initialSection: ReviewEvidenceSection?
-    ) {
+    init(worktreeId: String, snapshot: ReviewLoopSnapshot) {
         let request = snapshot.reviewRequest
         let remote = request?.remote ?? snapshot.remote
         self.worktreeId = worktreeId
@@ -137,11 +131,9 @@ struct ReviewEvidenceTabState: Codable, Equatable, Identifiable {
         self.number = request?.number ?? 0
         self.url = request?.url ?? remote?.webURL ?? URL(fileURLWithPath: "/")
         self.title = request?.title ?? ""
-        self.selectedSection = initialSection ?? .files
-        self.selectedItemID = nil
         let host = remote?.host ?? self.url.host ?? ""
         self.id = [
-            "review-evidence",
+            "review-pr",
             worktreeId,
             provider.rawValue,
             host,

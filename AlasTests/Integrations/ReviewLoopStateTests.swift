@@ -902,13 +902,31 @@ struct ReviewLoopStateTests {
             mergeState: .clean,
             checks: checks,
             threads: [
-                ReviewThreadSummary(
+                ReviewThread(
                     id: "thread-1",
-                    author: "reviewer",
-                    body: "Please update this.",
-                    url: nil,
+                    path: nil,
+                    line: nil,
+                    startLine: nil,
+                    originalLine: nil,
+                    diffHunk: nil,
                     isResolved: false,
-                    isActionable: true
+                    isOutdated: false,
+                    isFileLevel: true,
+                    comments: [
+                        ReviewComment(
+                            id: "thread-1",
+                            author: "reviewer",
+                            body: "Please update this.",
+                            url: nil,
+                            createdAt: nil,
+                            viewerCanUpdate: false,
+                            viewerCanDelete: false,
+                            isPending: false
+                        ),
+                    ],
+                    viewerCanResolve: false,
+                    viewerCanReply: false,
+                    url: nil
                 ),
             ]
         )

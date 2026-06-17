@@ -47,14 +47,8 @@ struct ReviewLoopHandoffBuilderTests {
                 ),
             ],
             threads: [
-                ReviewThreadSummary(
-                    id: "thread-1",
-                    author: "reviewer",
-                    body: "Please address this feedback.",
-                    url: nil,
-                    isResolved: false,
-                    isActionable: true
-                ),
+                makeThread(id: "thread-1", author: "reviewer", body: "Please address this feedback.",
+                           isResolved: false, isOutdated: false),
             ]
         )
 
@@ -84,38 +78,14 @@ struct ReviewLoopHandoffBuilderTests {
         let request = Self.makeReviewRequest(
             reviewDecision: .changesRequested,
             threads: [
-                ReviewThreadSummary(
-                    id: "thread-2",
-                    author: "reviewer",
-                    body: "Resolved already.",
-                    url: nil,
-                    isResolved: true,
-                    isActionable: true
-                ),
-                ReviewThreadSummary(
-                    id: "thread-3",
-                    author: nil,
-                    body: "FYI only.",
-                    url: nil,
-                    isResolved: false,
-                    isActionable: false
-                ),
-                ReviewThreadSummary(
-                    id: "thread-4",
-                    author: "reviewer",
-                    body: "Also FYI only.",
-                    url: nil,
-                    isResolved: false,
-                    isActionable: false
-                ),
-                ReviewThreadSummary(
-                    id: "thread-1",
-                    author: "reviewer",
-                    body: "Please simplify this.",
-                    url: nil,
-                    isResolved: false,
-                    isActionable: true
-                ),
+                makeThread(id: "thread-2", author: "reviewer", body: "Resolved already.",
+                           isResolved: true, isOutdated: false),
+                makeThread(id: "thread-3", author: nil, body: "FYI only.",
+                           isResolved: false, isOutdated: true),
+                makeThread(id: "thread-4", author: "reviewer", body: "Also FYI only.",
+                           isResolved: false, isOutdated: true),
+                makeThread(id: "thread-1", author: "reviewer", body: "Please simplify this.",
+                           isResolved: false, isOutdated: false),
             ]
         )
         let prompt = ReviewLoopHandoffBuilder.build(
@@ -212,14 +182,8 @@ struct ReviewLoopHandoffBuilderTests {
             title: title,
             reviewDecision: .changesRequested,
             threads: [
-                ReviewThreadSummary(
-                    id: "thread-1",
-                    author: "reviewer",
-                    body: "Please update this.",
-                    url: nil,
-                    isResolved: false,
-                    isActionable: true
-                ),
+                makeThread(id: "thread-1", author: "reviewer", body: "Please update this.",
+                           isResolved: false, isOutdated: false),
             ]
         )
 
@@ -263,7 +227,7 @@ struct ReviewLoopHandoffBuilderTests {
         url: URL? = nil,
         reviewDecision: ReviewDecision = .reviewRequired,
         checks: [ReviewCheck] = [],
-        threads: [ReviewThreadSummary] = []
+        threads: [ReviewThread] = []
     ) -> ReviewRequest {
         return ReviewRequest(
             remote: remote,
@@ -291,4 +255,39 @@ struct ReviewLoopHandoffBuilderTests {
             webURL: URL(string: "https://\(kind.rawValue).com/mrmans0n/alas")!
         )
     }
+}
+
+private func makeThread(
+    id: String,
+    author: String?,
+    body: String,
+    isResolved: Bool,
+    isOutdated: Bool
+) -> ReviewThread {
+    ReviewThread(
+        id: id,
+        path: nil,
+        line: nil,
+        startLine: nil,
+        originalLine: nil,
+        diffHunk: nil,
+        isResolved: isResolved,
+        isOutdated: isOutdated,
+        isFileLevel: true,
+        comments: [
+            ReviewComment(
+                id: id,
+                author: author,
+                body: body,
+                url: nil,
+                createdAt: nil,
+                viewerCanUpdate: false,
+                viewerCanDelete: false,
+                isPending: false
+            ),
+        ],
+        viewerCanResolve: false,
+        viewerCanReply: false,
+        url: nil
+    )
 }
