@@ -37,6 +37,7 @@ struct ChangesPreparationModel: Equatable {
         changes: [ChangedFile],
         hasDraft: Bool,
         draftNonEmpty: Bool,
+        aheadCommitCount: Int = 0,
         readinessActions: [ReviewReadinessModel.Action]
     ) {
         let builtReviewAction: ReviewAction?
@@ -53,7 +54,7 @@ struct ChangesPreparationModel: Equatable {
 
         let stagedChanges = changes.filter { $0.stage == .staged }
         let builtDraftAction: DraftAction?
-        if !stagedChanges.isEmpty || hasDraft {
+        if !stagedChanges.isEmpty || (hasDraft && draftNonEmpty) {
             builtDraftAction = DraftAction(
                 title: hasDraft ? "Open draft" : "Draft commit",
                 stagedCount: stagedChanges.count,
@@ -71,6 +72,11 @@ struct ChangesPreparationModel: Equatable {
         if builtReviewRequestAction?.kind == .refresh,
            builtReviewAction == nil,
            builtDraftAction == nil {
+            reviewRequestAction = nil
+        } else if builtReviewRequestAction?.kind == .pushBranch,
+                  aheadCommitCount == 0,
+                  builtReviewAction == nil,
+                  builtDraftAction == nil {
             reviewRequestAction = nil
         } else {
             reviewRequestAction = builtReviewRequestAction

@@ -279,6 +279,85 @@ struct ReviewChangesModelsTests {
         #expect(!model.isVisible)
     }
 
+    @Test func preparationModelHidesWhenWorktreeIsClean() {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelShowsPushWhenUnpushedCommitsExistEvenWithoutChanges() throws {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 1,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        let request = try #require(model.reviewRequestAction)
+        #expect(request.kind == .pushBranch)
+        #expect(request.title == "Push")
+        #expect(model.isVisible)
+    }
+
+    @Test func preparationModelHidesDraftWhenWorktreeIsCleanAndNoDraftTabExists() {
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        #expect(model.draftAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelStillHidesWhenEmptyDraftTabExistsAndWorktreeIsClean() {
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: true,
+            draftNonEmpty: false,
+            readinessActions: []
+        )
+
+        #expect(model.draftAction == nil)
+        #expect(model.reviewAction == nil)
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
+    @Test func preparationModelShowsDraftWhenDraftTabHasContentAndWorktreeIsClean() throws {
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: true,
+            draftNonEmpty: true,
+            readinessActions: []
+        )
+
+        #expect(model.isVisible)
+        let draft = try #require(model.draftAction)
+        #expect(draft.title == "Open draft")
+        #expect(draft.hasNonEmptyDraft)
+    }
+
     @Test func preparationModelShowsDraftActionForStagedChanges() throws {
         let model = ChangesPreparationModel(
             changes: [
@@ -345,6 +424,7 @@ struct ReviewChangesModelsTests {
             changes: [],
             hasDraft: false,
             draftNonEmpty: false,
+            aheadCommitCount: 1,
             readinessActions: actions
         )
 
