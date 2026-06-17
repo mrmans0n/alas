@@ -1191,14 +1191,15 @@ enum DiffReviewInlineFeedbackDisplayPolicy {
 }
 
 enum DiffReviewInlineFeedbackMarkdown {
-    @MainActor
-    static func render(_ source: String) -> AttributedString {
-        ACPMarkdownText.inlineMarkdown(source)
+    private static let typography = ACPChatTypography(fontFamily: "", fontSize: 11)
+
+    static func view(_ source: String) -> some View {
+        ACPMarkdownText(raw: source, typography: typography)
     }
 
     @MainActor
     static func plainText(_ source: String) -> String {
-        NSAttributedString(render(source)).string
+        NSAttributedString(ACPMarkdownText.inlineMarkdown(source)).string
     }
 }
 
@@ -1298,10 +1299,7 @@ private struct ReviewDraftCommentCard: View {
                     )
                     .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
                 } else {
-                    Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
-                        .font(.system(size: 11.5))
-                        .foregroundColor(theme.color("fg"))
-                        .fixedSize(horizontal: false, vertical: true)
+                    DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1607,10 +1605,7 @@ private struct DiffReviewInlineFeedbackCard: View {
                         }
                         .lineLimit(1)
 
-                        Text(DiffReviewInlineFeedbackMarkdown.render(item.bodyPreview))
-                            .font(.system(size: 11.5))
-                            .foregroundColor(theme.color("fg"))
-                            .fixedSize(horizontal: false, vertical: true)
+                        DiffReviewInlineFeedbackMarkdown.view(item.bodyPreview)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
 
