@@ -533,13 +533,14 @@ struct ACPMessageList: View {
     ) {
         // Tail-follow pause/resume — reuse the shared classifier so the rules
         // match the legacy observer exactly.
+        let isUserDriven = ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
         let decision = ACPScrollDirectionClassifier.decide(
             previousOffsetY: previousMinY,
             newOffsetY: newMinY,
             viewportHeight: viewportHeight,
             contentHeight: contentHeight,
             isRestoring: isRestoringTail,
-            isUserDriven: ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type)
+            isUserDriven: isUserDriven
         )
         switch decision {
         case .userScrolledUp: setFollowsTranscriptTail(false)
@@ -556,15 +557,35 @@ struct ACPMessageList: View {
             scrollToTail(proxy: proxy, animated: false)
             return
         }
-        // Head-step pagination: reveal an older chunk as the viewport nears the
-        // top of the content. When restored to the tail, `newMinY` is large, so
-        // the threshold check alone keeps this from firing prematurely.
-        guard transcript.visibleHead > 0, !isRestoringTail else { return }
-        guard newMinY < headStepScrollThreshold else { return }
+        // Head-step pagination: reveal older messages only while a live scroll
+        // gesture is driving the viewport near the top. Initial post-restore
+        // geometry can briefly report top-like offsets before tail restoration
+        // settles; geometry alone must not page the transcript upward.
+        guard Self.shouldStepHeadBackFromGeometry(
+            visibleHead: transcript.visibleHead,
+            isRestoring: isRestoringTail,
+            isUserDriven: isUserDriven,
+            newMinY: newMinY,
+            threshold: headStepScrollThreshold
+        ) else { return }
         let now = Date()
         guard now.timeIntervalSince(lastHeadStepAt) > headStepDebounceInterval else { return }
         lastHeadStepAt = now
         stepHeadBackPreservingScroll(proxy: proxy)
+    }
+
+    nonisolated static func shouldStepHeadBackFromGeometry(
+        visibleHead: Int,
+        isRestoring: Bool,
+        isUserDriven: Bool,
+        newMinY: CGFloat,
+        threshold: CGFloat
+    ) -> Bool {
+        guard visibleHead > 0 else { return false }
+        guard !isRestoring else { return false }
+        guard isUserDriven else { return false }
+        guard newMinY < threshold else { return false }
+        return true
     }
 
     /// Reveal an older chunk while keeping the viewport anchored to the same
