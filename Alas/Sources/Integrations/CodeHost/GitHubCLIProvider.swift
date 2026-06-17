@@ -991,6 +991,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "api",
                 "/repos/\(remote.owner)/\(remote.repository)/check-runs/\(check.id)/annotations",
                 "--paginate",
+                "--slurp",
             ],
             cwd: cwd
         )
@@ -1034,9 +1035,11 @@ struct GitHubCLIProvider: CodeHostProvider {
 
     static func parseCheckAnnotations(_ json: String, check: ReviewCheck) throws -> [CheckAnnotation] {
         let data = Data(json.utf8)
+        // --paginate --slurp wraps pages into a JSON array of arrays: [[item, ...], [item, ...]]
         let items: [GitHubAnnotationResponse]
         do {
-            items = try JSONDecoder().decode([GitHubAnnotationResponse].self, from: data)
+            let pages = try JSONDecoder().decode([[GitHubAnnotationResponse]].self, from: data)
+            items = pages.flatMap { $0 }
         } catch {
             throw CodeHostProviderError.malformedOutput("Unable to parse gh check-run annotations output")
         }

@@ -605,7 +605,13 @@ struct GitLabCLIProvider: CodeHostProvider {
     ) async throws {
         let comments = pendingComments.store.removeValue(forKey: reviewID) ?? []
 
-        // Post each staged comment as a MR note
+        // Fetch diff refs once if we have any inline (file-positioned) comments
+        let hasInlineComments = comments.contains { $0.filePath != nil && $0.line != nil }
+        let diffRefs: GitLabDiffRefs? = hasInlineComments
+            ? (try? await mergeRequestDiffRefs(remote: remote, request: request, cwd: cwd))
+            : nil
+
+        // Post each staged comment as either an inline discussion or a top-level MR note
         for comment in comments {
             let noteBody: String
             if let suggestion = comment.suggestion {
@@ -613,20 +619,48 @@ struct GitLabCLIProvider: CodeHostProvider {
             } else {
                 noteBody = comment.body
             }
-            let result = try await runner.run(
-                "glab",
-                args: [
-                    "api",
-                    "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/notes",
-                    "--hostname", remote.host,
-                    "--output", "json",
-                    "-X", "POST",
-                    "-f", "body=\(noteBody)",
-                ],
-                cwd: cwd
-            )
-            guard result.exitCode == 0 else {
-                throw CodeHostProviderError.commandFailed(command: "glab api post note", stderr: result.stderr)
+
+            if let line = comment.line, let refs = diffRefs, !comment.filePath.isEmpty {
+                // Use discussion endpoint to preserve inline position
+                let filePath = comment.filePath
+                let result = try await runner.run(
+                    "glab",
+                    args: [
+                        "api",
+                        "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/discussions",
+                        "--hostname", remote.host,
+                        "--output", "json",
+                        "-X", "POST",
+                        "-f", "body=\(noteBody)",
+                        "-f", "position[position_type]=text",
+                        "-f", "position[new_path]=\(filePath)",
+                        "-f", "position[new_line]=\(line)",
+                        "-f", "position[base_sha]=\(refs.baseSHA)",
+                        "-f", "position[start_sha]=\(refs.startSHA)",
+                        "-f", "position[head_sha]=\(refs.headSHA)",
+                    ],
+                    cwd: cwd
+                )
+                guard result.exitCode == 0 else {
+                    throw CodeHostProviderError.commandFailed(command: "glab api post discussion", stderr: result.stderr)
+                }
+            } else {
+                // Fall back to a top-level MR note
+                let result = try await runner.run(
+                    "glab",
+                    args: [
+                        "api",
+                        "projects/\(Self.urlEncodedProjectSlug(remote))/merge_requests/\(request.number)/notes",
+                        "--hostname", remote.host,
+                        "--output", "json",
+                        "-X", "POST",
+                        "-f", "body=\(noteBody)",
+                    ],
+                    cwd: cwd
+                )
+                guard result.exitCode == 0 else {
+                    throw CodeHostProviderError.commandFailed(command: "glab api post note", stderr: result.stderr)
+                }
             }
         }
 

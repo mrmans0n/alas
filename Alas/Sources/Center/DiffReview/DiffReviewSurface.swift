@@ -322,7 +322,18 @@ struct DiffReviewSurface: View {
                 onContextExpansionActivated: {
                     contextExpandedFileIDs.insert(file.id)
                 },
-                reviewFeedbackTarget: effectiveReviewFeedbackTarget
+                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+                threads: inlineThreads(for: file.summary.path),
+                annotations: inlineAnnotations(for: file.summary.path),
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                canReply: canReply,
+                canResolve: canResolve,
+                onStageReply: onStageReply,
+                canAddToReview: canAddToReview
             )
         } else {
             DiffReviewFileSectionPlaceholder(

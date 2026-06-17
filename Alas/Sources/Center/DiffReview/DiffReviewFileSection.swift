@@ -320,31 +320,17 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private var content: some View {
-        if let displayModel = file.displayModel {
-            DiffPaneView(
-                model: displayModel,
-                fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
-                layoutMode: $layoutMode,
-                wrapLines: $wrapLines,
-                showWhitespace: $showWhitespace,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                showsToolbar: false,
-                verticalScrollMode: .staticHeight,
-                lspContext: lspContext,
-                threads: threads,
-                annotations: annotations,
-                onReply: onReply,
-                onResolve: onResolve,
-                onUnresolve: onUnresolve,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                canReply: canReply,
-                canResolve: canResolve,
-                onStageReply: onStageReply,
-                canAddToReview: canAddToReview,
-                hunkActions: { _ in DiffPaneHunkActions() }
-            )
+        if let displayModel = file.displayModel, let groups = derivedDisplayGroups {
+            let inlinePlacement = inlineFeedbackPlacement
+            let draftPlacement = draftCommentPlacement
+            VStack(spacing: 0) {
+                ForEach(groups) { group in
+                    if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
+                        inlineFeedbackStack(groupFeedback, file: file.summary)
+                    }
+                    reviewGroup(group, displayModel: displayModel, placement: draftPlacement)
+                }
+            }
         } else {
             let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
             Text(message)
@@ -437,6 +423,17 @@ struct DiffReviewFileSection: View {
                     pendingDraftBody = ""
                 },
                 onContextExpansion: loadContextAndExpand,
+                threads: threads,
+                annotations: annotations,
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                canReply: canReply,
+                canResolve: canResolve,
+                onStageReply: onStageReply,
+                canAddToReview: canAddToReview,
                 hunkActions: { hunk in
                     let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
                     return DiffPaneHunkActions(

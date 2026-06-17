@@ -519,11 +519,21 @@ struct ReviewTabView: View {
         }
 
         do {
-            let loaded = try await loader.load(worktreePath: worktree.path)
+            var loaded = try await loader.load(worktreePath: worktree.path)
             guard
                 requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
                 !Task.isCancelled
             else { return }
+
+            // If the working tree is clean but we have a PR, fall back to the PR base..head diff
+            if loaded.files.isEmpty, let prSession = try await loadPRDiffSession() {
+                guard
+                    requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID),
+                    !Task.isCancelled
+                else { return }
+                loaded = prSession
+            }
+
             session = loaded
             selectedFileID = selectedFileID.flatMap { selected in
                 loaded.summary.files.contains { $0.id == selected } ? selected : loaded.summary.files.first?.id
@@ -536,6 +546,16 @@ struct ReviewTabView: View {
             else { return }
             loadError = error.localizedDescription
         }
+    }
+
+    @MainActor
+    private func loadPRDiffSession() async throws -> ReviewChangesLoadedSession? {
+        guard let provider,
+              let remote = matchedSnapshot?.remote,
+              let request = reviewRequest
+        else { return nil }
+        let diffLoader = ReviewRequestDiffLoader(provider: provider)
+        return try await diffLoader.load(remote: remote, request: request, cwd: worktree.path)
     }
 
     private var diffPreferences: DiffPreferenceBindings {
