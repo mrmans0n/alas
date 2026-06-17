@@ -1763,6 +1763,98 @@ let second = true
         #expect(abs(point.y - anchorRect.midY) < 0.5)
     }
 
+    @Test func containerViewUpdateRowsProducesPositiveHeightForOneRow() throws {
+        let rows = try [#require(model().groups.first?.rows.first)]
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+
+        let nsView = DiffPaneTextDocumentContainerView()
+        nsView.update(
+            rows: rows,
+            layoutMode: .split,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: font,
+            theme: theme,
+            lspContext: nil
+        )
+        nsView.setFrameSize(NSSize(width: 800, height: 1))
+        nsView.layout()
+
+        #expect(nsView.intrinsicContentSize.height > 0)
+    }
+
+    @Test func containerViewUpdateRowsProducesPositiveHeightForThreeRows() throws {
+        let group = try #require(model().groups.first)
+        let rows = Array(group.rows.prefix(3))
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+
+        let nsView = DiffPaneTextDocumentContainerView()
+        nsView.update(
+            rows: rows,
+            layoutMode: .split,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: font,
+            theme: theme,
+            lspContext: nil
+        )
+        nsView.setFrameSize(NSSize(width: 800, height: 1))
+        nsView.layout()
+
+        #expect(nsView.intrinsicContentSize.height > 0)
+    }
+
+    @Test func containerViewUpdateRowsStackedModeProducesPositiveHeight() throws {
+        let rows = Array(try #require(model().groups.first).rows)
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+
+        let nsView = DiffPaneTextDocumentContainerView()
+        nsView.update(
+            rows: rows,
+            layoutMode: .stacked,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: font,
+            theme: theme,
+            lspContext: nil
+        )
+        nsView.setFrameSize(NSSize(width: 800, height: 1))
+        nsView.layout()
+
+        #expect(nsView.intrinsicContentSize.height > 0)
+    }
+
+    @Test func diffPaneSegmentViewHostsContainerViewWithoutCrashing() throws {
+        let rows = Array(try #require(model().groups.first).rows)
+        let theme = theme()
+
+        let view = DiffPaneSegmentView(
+            rows: rows,
+            layoutMode: .split,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            theme: theme,
+            lspContext: nil
+        )
+
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 800, height: 400)
+        controller.view.layoutSubtreeIfNeeded()
+
+        let containerViews = allSubviews(of: controller.view)
+            .compactMap { $0 as? DiffPaneTextDocumentContainerView }
+        #expect(!containerViews.isEmpty)
+    }
+
     private func makeDiffPaneCodeTextView(string: String) -> DiffPaneCodeTextView {
         let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 120), textContainer: NSTextContainer())
         textView.textContainerInset = NSSize(width: 10, height: 8)
