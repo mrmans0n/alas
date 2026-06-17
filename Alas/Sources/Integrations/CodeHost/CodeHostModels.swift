@@ -194,6 +194,46 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     var body: String { headComment?.body ?? "" }
 
     var isActionable: Bool { !isResolved && !isOutdated }
+
+    func addingReply(_ comment: ReviewComment) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk,
+            isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments + [comment],
+            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+        )
+    }
+
+    func withResolved(_ resolved: Bool) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk,
+            isResolved: resolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments,
+            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+        )
+    }
+
+    func replacingComment(id commentID: String, with replacement: ReviewComment) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk,
+            isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments.map { $0.id == commentID ? replacement : $0 },
+            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+        )
+    }
+
+    func removingComment(id commentID: String) -> ReviewThread {
+        ReviewThread(
+            id: id, path: path, line: line, startLine: startLine,
+            originalLine: originalLine, diffHunk: diffHunk,
+            isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
+            comments: comments.filter { $0.id != commentID },
+            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+        )
+    }
 }
 
 struct ReviewRequest: Identifiable, Equatable, Sendable {

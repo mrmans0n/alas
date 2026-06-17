@@ -17,6 +17,9 @@ struct ReviewTabView: View {
     @State private var railCollapsed = false
     @State private var activeLoadKey: String?
     @State private var activeLoadID = UUID()
+    @State private var localThreads: [ReviewThread] = []
+    @State private var isWriting = false
+    @State private var errorMessage: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,8 +31,27 @@ struct ReviewTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
+        .overlay(alignment: .bottom) {
+            if let msg = errorMessage {
+                Text(msg)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.red.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.2), value: errorMessage)
+            }
+        }
         .task(id: loadKey) {
             await loadSession()
+            localThreads = reviewRequest?.threads ?? []
+        }
+        .onChange(of: reviewRequest) { _, newValue in
+            guard !isWriting else { return }
+            localThreads = newValue?.threads ?? []
         }
     }
 
@@ -48,12 +70,17 @@ struct ReviewTabView: View {
         matchedSnapshot?.reviewRequest
     }
 
-    private var outdatedAndFileLevelThreads: [ReviewThread] {
-        (reviewRequest?.threads ?? []).filter { $0.isFileLevel || $0.isOutdated }
+    private var provider: (any CodeHostProvider)? {
+        guard let remote = reviewRequest?.remote else { return nil }
+        return CodeHostProviderRegistry.live().provider(for: remote.kind)
     }
 
-    private var activeThreads: [ReviewThread] {
-        reviewRequest?.threads ?? []
+    private var capabilities: CodeHostProviderCapabilities {
+        matchedSnapshot?.providerCapabilities ?? .readOnly
+    }
+
+    private var outdatedAndFileLevelThreads: [ReviewThread] {
+        localThreads.filter { $0.isFileLevel || $0.isOutdated }
     }
 
     // MARK: - Load key (mirrors ReviewChangesTabView)
@@ -205,8 +232,145 @@ struct ReviewTabView: View {
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
-            threads: activeThreads
+            threads: localThreads,
+            onReply: { inlineThread, body in
+                guard let t = localThreads.first(where: { $0.id == inlineThread.id }) else { return }
+                replyAction(thread: t, body: body)
+            },
+            onResolve: { inlineThread in
+                guard let t = localThreads.first(where: { $0.id == inlineThread.id }) else { return }
+                resolveAction(thread: t)
+            },
+            onUnresolve: { inlineThread in
+                guard let t = localThreads.first(where: { $0.id == inlineThread.id }) else { return }
+                unresolveAction(thread: t)
+            },
+            onEdit: { inlineThread, inlineComment, newBody in
+                guard let t = localThreads.first(where: { $0.id == inlineThread.id }),
+                      let c = t.comments.first(where: { $0.id == inlineComment.id }) else { return }
+                editAction(thread: t, comment: c, newBody: newBody)
+            },
+            onDelete: { inlineThread, inlineComment in
+                guard let t = localThreads.first(where: { $0.id == inlineThread.id }),
+                      let c = t.comments.first(where: { $0.id == inlineComment.id }) else { return }
+                deleteAction(thread: t, comment: c)
+            },
+            canReply: capabilities.canReply,
+            canResolve: capabilities.canResolve
         )
+    }
+
+    // MARK: - Write actions
+
+    private func showError(_ message: String) {
+        errorMessage = message
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if errorMessage == message {
+                errorMessage = nil
+            }
+        }
+    }
+
+    private func replyAction(thread: ReviewThread, body: String) {
+        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        let optimisticComment = ReviewComment(
+            id: UUID().uuidString,
+            author: nil,
+            body: body,
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: true,
+            viewerCanDelete: true,
+            isPending: true
+        )
+        isWriting = true
+        localThreads = localThreads.map { $0.id == thread.id ? $0.addingReply(optimisticComment) : $0 }
+        Task { @MainActor in
+            defer { isWriting = false }
+            do {
+                let newComment = try await provider.replyToThread(
+                    remote: remote, request: request, thread: thread, body: body, cwd: worktree.path
+                )
+                localThreads = localThreads.map {
+                    $0.id == thread.id ? $0.replacingComment(id: optimisticComment.id, with: newComment) : $0
+                }
+            } catch {
+                localThreads = localThreads.map {
+                    $0.id == thread.id ? $0.removingComment(id: optimisticComment.id) : $0
+                }
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func resolveAction(thread: ReviewThread) {
+        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        isWriting = true
+        localThreads = localThreads.map { $0.id == thread.id ? $0.withResolved(true) : $0 }
+        Task { @MainActor in
+            defer { isWriting = false }
+            do {
+                let updatedThread = try await provider.resolveThread(remote: remote, request: request, thread: thread, cwd: worktree.path)
+                localThreads = localThreads.map { $0.id == updatedThread.id ? updatedThread : $0 }
+            } catch {
+                localThreads = localThreads.map { $0.id == thread.id ? thread : $0 }
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func unresolveAction(thread: ReviewThread) {
+        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        isWriting = true
+        localThreads = localThreads.map { $0.id == thread.id ? $0.withResolved(false) : $0 }
+        Task { @MainActor in
+            defer { isWriting = false }
+            do {
+                let updatedThread = try await provider.unresolveThread(remote: remote, request: request, thread: thread, cwd: worktree.path)
+                localThreads = localThreads.map { $0.id == updatedThread.id ? updatedThread : $0 }
+            } catch {
+                localThreads = localThreads.map { $0.id == thread.id ? thread : $0 }
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func editAction(thread: ReviewThread, comment: ReviewComment, newBody: String) {
+        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        let original = comment
+        let optimistic = ReviewComment(
+            id: comment.id, author: comment.author, body: newBody, url: comment.url,
+            createdAt: comment.createdAt, viewerCanUpdate: comment.viewerCanUpdate,
+            viewerCanDelete: comment.viewerCanDelete, isPending: comment.isPending
+        )
+        isWriting = true
+        localThreads = localThreads.map { $0.id == thread.id ? $0.replacingComment(id: comment.id, with: optimistic) : $0 }
+        Task { @MainActor in
+            defer { isWriting = false }
+            do {
+                let updated = try await provider.editComment(remote: remote, request: request, comment: comment, newBody: newBody, cwd: worktree.path)
+                localThreads = localThreads.map { $0.id == thread.id ? $0.replacingComment(id: comment.id, with: updated) : $0 }
+            } catch {
+                localThreads = localThreads.map { $0.id == thread.id ? $0.replacingComment(id: comment.id, with: original) : $0 }
+                showError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func deleteAction(thread: ReviewThread, comment: ReviewComment) {
+        guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
+        isWriting = true
+        localThreads = localThreads.map { $0.id == thread.id ? $0.removingComment(id: comment.id) : $0 }
+        Task { @MainActor in
+            defer { isWriting = false }
+            do {
+                try await provider.deleteComment(remote: remote, request: request, comment: comment, cwd: worktree.path)
+            } catch {
+                localThreads = reviewRequest?.threads ?? localThreads
+                showError(error.localizedDescription)
+            }
+        }
     }
 
     private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {

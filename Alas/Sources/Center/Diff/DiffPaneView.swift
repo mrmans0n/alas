@@ -119,6 +119,13 @@ struct DiffPaneView: View {
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     var threads: [DiffInlineCommentThread] = []
+    var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var canReply: Bool = false
+    var canResolve: Bool = false
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -307,8 +314,17 @@ struct DiffPaneView: View {
                     )
                     .fixedSize(horizontal: false, vertical: true)
                 case .thread(let t):
-                    DiffInlineCommentCard(thread: t)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    DiffInlineCommentCard(
+                        thread: t,
+                        onReply: { body in onReply(t, body) },
+                        onResolve: { onResolve(t) },
+                        onUnresolve: { onUnresolve(t) },
+                        onEdit: { comment, newBody in onEdit(t, comment, newBody) },
+                        onDelete: { comment in onDelete(t, comment) },
+                        canReply: canReply,
+                        canResolve: canResolve
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

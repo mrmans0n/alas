@@ -16,6 +16,13 @@ struct DiffReviewSurface: View {
     var allowsDraftCommentCreation: Bool = true
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
     var threads: [ReviewThread] = []
+    var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var canReply: Bool = false
+    var canResolve: Bool = false
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -182,6 +189,7 @@ struct DiffReviewSurface: View {
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     ForEach(session.files) { file in
+                        let fileThreads = inlineThreads(for: file.summary.path)
                         DiffReviewFileSection(
                             file: file,
                             layoutMode: $layoutMode,
@@ -191,7 +199,14 @@ struct DiffReviewSurface: View {
                             codeFontSize: codeFontSize,
                             showsSourceBadge: showsSourceBadges,
                             lspContext: lspContextForFile(file),
-                            threads: inlineThreads(for: file.summary.path)
+                            threads: fileThreads,
+                            onReply: { t, body in onReply(t, body) },
+                            onResolve: { t in onResolve(t) },
+                            onUnresolve: { t in onUnresolve(t) },
+                            onEdit: { t, c, newBody in onEdit(t, c, newBody) },
+                            onDelete: { t, c in onDelete(t, c) },
+                            canReply: canReply,
+                            canResolve: canResolve
                         )
                     }
                     if let command = inlineFeedbackScrollCommand {

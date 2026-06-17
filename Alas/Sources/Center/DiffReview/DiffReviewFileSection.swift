@@ -29,6 +29,13 @@ struct DiffReviewFileSection: View {
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
     var threads: [DiffInlineCommentThread] = []
+    var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
+    var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
+    var onEdit: (DiffInlineCommentThread, DiffInlineComment, String) -> Void = { _, _, _ in }
+    var onDelete: (DiffInlineCommentThread, DiffInlineComment) -> Void = { _, _ in }
+    var canReply: Bool = false
+    var canResolve: Bool = false
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -323,6 +330,13 @@ struct DiffReviewFileSection: View {
                 verticalScrollMode: .staticHeight,
                 lspContext: lspContext,
                 threads: threads,
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                canReply: canReply,
+                canResolve: canResolve,
                 hunkActions: { _ in DiffPaneHunkActions() }
             )
         } else {
