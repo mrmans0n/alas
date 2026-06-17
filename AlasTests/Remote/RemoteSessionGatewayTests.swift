@@ -191,6 +191,25 @@ struct RemoteSessionGatewayTests {
         #expect(sent == [.sessionList(sessions: provider.summaries)])
     }
 
+    @Test func listSessionsPreservesIsActiveFlag() async {
+        let provider = FakeSessionsProvider()
+        let active = RemoteSessionSummary(id: "active", title: "Active", agentId: "claude", status: "idle", canDrive: true, isActive: true)
+        let inactive = RemoteSessionSummary(id: "inactive", title: "Inactive", agentId: "codex", status: "idle", canDrive: false, isActive: false)
+        provider.summaries = [active, inactive]
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.listSessions)
+        await Task.yield()
+        #expect(provider.sessionSummariesCallCount == 1)
+        guard case .sessionList(let sessions)? = sent.first else {
+            Issue.record("expected sessionList, got \(sent)")
+            return
+        }
+        #expect(sessions.count == 2)
+        #expect(sessions.first { $0.id == "active" }?.isActive == true)
+        #expect(sessions.first { $0.id == "inactive" }?.isActive == false)
+    }
+
     @Test func listWorktreesEmitsWorktreeList() async {
         let provider = FakeSessionsProvider()
         provider.worktrees = [

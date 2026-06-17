@@ -3481,7 +3481,7 @@ extension AppState: RemoteSessionsProvider {
                     row: effectiveRow,
                     status: state.map(RemoteSessionGateway.stateString) ?? "idle",
                     hasRunner: state != nil,
-                    isLive: liveSession != nil,
+                    isActive: hasOpenACPSessionTab(worktreeId: mgr.worktreeId, sessionId: row.id),
                     canDrive: mgr.isWriter(for: row.id),
                     worktree: worktreeSummary
                 )
@@ -3497,6 +3497,15 @@ extension AppState: RemoteSessionsProvider {
         return identities.compactMap { summariesByIdentity[$0]?.summary }
     }
 
+    private func hasOpenACPSessionTab(worktreeId: String, sessionId: ACPSession.ID) -> Bool {
+        tabs.tabs(forWorktree: worktreeId).contains { tab in
+            if case .acpSession(let state) = tab {
+                return state.sessionId == sessionId
+            }
+            return false
+        }
+    }
+
     private func remoteSessionListIdentity(worktreeId: String, row: ACPSessionRow) -> String {
         if let remoteSessionId = row.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !remoteSessionId.isEmpty {
@@ -3510,7 +3519,7 @@ extension AppState: RemoteSessionsProvider {
         var displayRow: ACPSessionRow
         var status: String
         var hasRunner: Bool
-        var isLive: Bool
+        var isActive: Bool
         var canDrive: Bool
         let worktree: RemoteWorktreeSummary?
 
@@ -3518,7 +3527,7 @@ extension AppState: RemoteSessionsProvider {
             row: ACPSessionRow,
             status: String,
             hasRunner: Bool,
-            isLive: Bool,
+            isActive: Bool,
             canDrive: Bool,
             worktree: RemoteWorktreeSummary?
         ) {
@@ -3526,7 +3535,7 @@ extension AppState: RemoteSessionsProvider {
             self.displayRow = row
             self.status = status
             self.hasRunner = hasRunner
-            self.isLive = isLive
+            self.isActive = isActive
             self.canDrive = canDrive
             self.worktree = worktree
         }
@@ -3538,6 +3547,7 @@ extension AppState: RemoteSessionsProvider {
                 agentId: operationalRow.agentId,
                 status: status,
                 canDrive: canDrive,
+                isActive: isActive,
                 worktree: worktree
             )
         }
@@ -3548,7 +3558,7 @@ extension AppState: RemoteSessionsProvider {
                 merged.operationalRow = other.operationalRow
                 merged.status = other.status
                 merged.hasRunner = other.hasRunner
-                merged.isLive = other.isLive
+                merged.isActive = other.isActive
                 merged.canDrive = other.canDrive
             }
             if Self.isBetterDisplayRow(other.displayRow, than: merged.displayRow) {
@@ -3560,7 +3570,7 @@ extension AppState: RemoteSessionsProvider {
         private func isBetterOperationalRow(than other: RemoteSessionSummaryCandidate) -> Bool {
             if canDrive != other.canDrive { return canDrive }
             if hasRunner != other.hasRunner { return hasRunner }
-            if isLive != other.isLive { return isLive }
+            if isActive != other.isActive { return isActive }
             if operationalRow.lastOpenedAt != other.operationalRow.lastOpenedAt {
                 return operationalRow.lastOpenedAt > other.operationalRow.lastOpenedAt
             }

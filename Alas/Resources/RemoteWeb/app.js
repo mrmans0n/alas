@@ -207,14 +207,24 @@ function handle(msg) {
 function renderSessions(sessions) {
   const list = $("session-list"); list.innerHTML = "";
   sessionTitles = new Map(sessions.map(s => [s.id, s.title]));
-  sessions.forEach(s => list.appendChild(renderSessionRow(s)));
+  sortedSessions(sessions).forEach(s => list.appendChild(renderSessionRow(s)));
   if (currentSession) setDetailTitle(currentSession);
+}
+
+function sortedSessions(sessions) {
+  return [...sessions].sort((a, b) => Number(sessionIsActive(b)) - Number(sessionIsActive(a)));
+}
+
+function sessionIsActive(session) {
+  return session.isActive !== false;
 }
 
 function renderSessionRow(s) {
   const row = document.createElement("div");
   row.dataset.sessionId = s.id;
   row.className = "session-row";
+  const active = sessionIsActive(s);
+  row.classList.add(active ? "session-row-active" : "session-row-inactive");
 
   const open = document.createElement("button");
   open.type = "button";
@@ -223,8 +233,9 @@ function renderSessionRow(s) {
 
   const head = el("div", "session-head");
   const title = el("span", "session-title", s.title);
+  const state = el("span", active ? "session-state session-state-active" : "session-state session-state-inactive", active ? "Active" : "Closed");
   const status = el("span", "status", s.status);
-  head.append(title, status);
+  head.append(title, state, status);
   open.append(head);
 
   const rename = el("button", "rename-btn", "✎");

@@ -48,11 +48,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=46"#))
-        #expect(html.contains(#"/style.css?v=31"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v22";"#))
-        #expect(sw.contains(#""/app.js?v=46""#))
-        #expect(sw.contains(#""/style.css?v=31""#))
+        #expect(html.contains(#"/app.js?v=47"#))
+        #expect(html.contains(#"/style.css?v=32"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v23";"#))
+        #expect(sw.contains(#""/app.js?v=47""#))
+        #expect(sw.contains(#""/style.css?v=32""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -79,12 +79,22 @@ struct RemoteWebAssetTests {
 
         #expect(app.contains("function sessionMetaParts"))
         #expect(app.contains("function renderSessionRow"))
+        #expect(app.contains("function sortedSessions"))
+        #expect(app.contains("function sessionIsActive"))
+        #expect(app.contains(#""session-row-active""#))
+        #expect(app.contains(#""session-row-inactive""#))
+        #expect(app.contains(#""Active""#))
+        #expect(app.contains(#""Closed""#))
         #expect(app.contains(#""changes unavailable""#))
         #expect(app.contains(#""clean""#))
         #expect(css.contains(".session-row-card"))
+        #expect(css.contains(".session-row-active"))
+        #expect(css.contains(".session-row-inactive"))
+        #expect(css.contains(".session-state-active"))
+        #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=46"))
-        #expect(html.contains("/style.css?v=31"))
+        #expect(html.contains("/app.js?v=47"))
+        #expect(html.contains("/style.css?v=32"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -109,8 +119,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=46""#))
-        #expect(sw.contains(#""/style.css?v=31""#))
+        #expect(sw.contains(#""/app.js?v=47""#))
+        #expect(sw.contains(#""/style.css?v=32""#))
     }
 
     @Test func remoteWebIncludesNewSessionControls() throws {

@@ -50,12 +50,13 @@ enum RemoteCreateSessionResult: Equatable, Sendable {
     case failure(String)
 }
 
-struct RemoteSessionSummary: Codable, Equatable, Sendable {
+struct RemoteSessionSummary: Equatable, Sendable {
     let id: String
     let title: String
     let agentId: String
     let status: String       // "idle" | "streaming" | "awaitingPermission" | "awaitingInput"
     let canDrive: Bool       // this remote-host instance currently holds the writer lease
+    let isActive: Bool       // still backed by an open Alas tab
     let worktree: RemoteWorktreeSummary?
 
     init(
@@ -64,6 +65,7 @@ struct RemoteSessionSummary: Codable, Equatable, Sendable {
         agentId: String,
         status: String,
         canDrive: Bool,
+        isActive: Bool = true,
         worktree: RemoteWorktreeSummary? = nil
     ) {
         self.id = id
@@ -71,7 +73,38 @@ struct RemoteSessionSummary: Codable, Equatable, Sendable {
         self.agentId = agentId
         self.status = status
         self.canDrive = canDrive
+        self.isActive = isActive
         self.worktree = worktree
+    }
+}
+
+extension RemoteSessionSummary: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id, title, agentId, status, canDrive, isActive, worktree
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(String.self, forKey: .id),
+            title: try c.decode(String.self, forKey: .title),
+            agentId: try c.decode(String.self, forKey: .agentId),
+            status: try c.decode(String.self, forKey: .status),
+            canDrive: try c.decode(Bool.self, forKey: .canDrive),
+            isActive: try c.decodeIfPresent(Bool.self, forKey: .isActive) ?? true,
+            worktree: try c.decodeIfPresent(RemoteWorktreeSummary.self, forKey: .worktree)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encode(agentId, forKey: .agentId)
+        try c.encode(status, forKey: .status)
+        try c.encode(canDrive, forKey: .canDrive)
+        try c.encode(isActive, forKey: .isActive)
+        try c.encodeIfPresent(worktree, forKey: .worktree)
     }
 }
 
