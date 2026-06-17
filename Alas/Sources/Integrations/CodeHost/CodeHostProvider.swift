@@ -136,6 +136,13 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws -> String
 
+    func cancelReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        cwd: URL
+    ) async throws
+
     func addReviewComment(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -281,6 +288,13 @@ extension CodeHostProvider {
     ) async throws -> String {
         throw CodeHostProviderError.unsupportedProvider(kind)
     }
+
+    func cancelReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        cwd: URL
+    ) async throws {}
 
     func addReviewComment(
         remote: CodeHostRemote,

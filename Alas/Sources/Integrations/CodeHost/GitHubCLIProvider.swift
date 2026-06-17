@@ -170,6 +170,14 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
     """
 
+    static let deletePullRequestReviewMutation = """
+    mutation($reviewId: ID!) {
+      deletePullRequestReview(input: {pullRequestReviewId: $reviewId}) {
+        clientMutationId
+      }
+    }
+    """
+
     static let prNodeIDQuery = """
     query($owner: String!, $repo: String!, $number: Int!) {
       repository(owner: $owner, name: $repo) {
@@ -996,6 +1004,28 @@ struct GitHubCLIProvider: CodeHostProvider {
             args += ["-F", "startLine=\(line)", "-f", "startSide=\(side)"]
         }
         let result = try await runner.run("gh", args: args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
+        }
+    }
+
+    func cancelReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        cwd: URL
+    ) async throws {
+        _ = request
+        let result = try await runner.run(
+            "gh",
+            args: [
+                "api", "graphql",
+                "--hostname", remote.host,
+                "-f", "query=\(Self.deletePullRequestReviewMutation)",
+                "-F", "reviewId=\(reviewID)",
+            ],
+            cwd: cwd
+        )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api graphql", stderr: result.stderr)
         }

@@ -359,8 +359,8 @@ struct DiffPaneView: View {
                         onUnresolve: { onUnresolve(t) },
                         onEdit: { comment, newBody in onEdit(t, comment, newBody) },
                         onDelete: { comment in onDelete(t, comment) },
-                        canReply: canReply,
-                        canResolve: canResolve,
+                        canReply: canReply && t.viewerCanReply,
+                        canResolve: canResolve && t.viewerCanResolve,
                         canAddToReview: canAddToReview
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)

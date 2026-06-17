@@ -527,7 +527,9 @@ struct DiffReviewSurface: View {
                             viewerCanUpdate: c.viewerCanUpdate,
                             viewerCanDelete: c.viewerCanDelete
                         )
-                    }
+                    },
+                    viewerCanReply: thread.viewerCanReply,
+                    viewerCanResolve: thread.viewerCanResolve
                 )
             }
     }

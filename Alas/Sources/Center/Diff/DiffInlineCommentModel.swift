@@ -30,6 +30,8 @@ struct DiffInlineCommentThread: Identifiable, Equatable {
     let isResolved: Bool
     let isOutdated: Bool
     let comments: [DiffInlineComment]
+    var viewerCanReply: Bool = true
+    var viewerCanResolve: Bool = true
 }
 
 struct DiffInlineComment: Identifiable, Equatable {

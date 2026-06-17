@@ -597,8 +597,10 @@ struct ReviewTabView: View {
         showVerdictSheet = false
 
         Task { @MainActor in
+            var createdReviewID: String?
             do {
                 let reviewID = try await provider.startReview(remote: remote, request: request, cwd: worktree.path)
+                createdReviewID = reviewID
                 for comment in stagedComments where comment.threadID == nil {
                     try await provider.addReviewComment(
                         remote: remote,
@@ -616,6 +618,7 @@ struct ReviewTabView: View {
                     body: body,
                     cwd: worktree.path
                 )
+                createdReviewID = nil
                 // Remove inline comments after submitReview so providers that buffer
                 // (e.g. GitLab) don't lose drafts if the submit step fails.
                 for comment in stagedComments where comment.threadID == nil {
@@ -634,6 +637,10 @@ struct ReviewTabView: View {
                     }
                 }
             } catch {
+                if let reviewID = createdReviewID {
+                    try? await provider.cancelReview(
+                        remote: remote, request: request, reviewID: reviewID, cwd: worktree.path)
+                }
                 showError(error.localizedDescription)
             }
         }
