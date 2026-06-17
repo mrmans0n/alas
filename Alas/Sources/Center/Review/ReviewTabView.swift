@@ -285,7 +285,7 @@ struct ReviewTabView: View {
             isPending: true
         )
         isWriting = true
-        localThreads = localThreads.map { $0.id == thread.id ? $0.addingReply(optimisticComment) : $0 }
+        localThreads = ReviewThreadMutations.applyReply(to: localThreads, threadID: thread.id, comment: optimisticComment)
         Task { @MainActor in
             defer { isWriting = false }
             do {
@@ -307,7 +307,7 @@ struct ReviewTabView: View {
     private func resolveAction(thread: ReviewThread) {
         guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
-        localThreads = localThreads.map { $0.id == thread.id ? $0.withResolved(true) : $0 }
+        localThreads = ReviewThreadMutations.applyResolve(to: localThreads, threadID: thread.id)
         Task { @MainActor in
             defer { isWriting = false }
             do {
@@ -323,7 +323,7 @@ struct ReviewTabView: View {
     private func unresolveAction(thread: ReviewThread) {
         guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
-        localThreads = localThreads.map { $0.id == thread.id ? $0.withResolved(false) : $0 }
+        localThreads = ReviewThreadMutations.applyUnresolve(to: localThreads, threadID: thread.id)
         Task { @MainActor in
             defer { isWriting = false }
             do {
@@ -339,13 +339,8 @@ struct ReviewTabView: View {
     private func editAction(thread: ReviewThread, comment: ReviewComment, newBody: String) {
         guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         let original = comment
-        let optimistic = ReviewComment(
-            id: comment.id, author: comment.author, body: newBody, url: comment.url,
-            createdAt: comment.createdAt, viewerCanUpdate: comment.viewerCanUpdate,
-            viewerCanDelete: comment.viewerCanDelete, isPending: comment.isPending
-        )
         isWriting = true
-        localThreads = localThreads.map { $0.id == thread.id ? $0.replacingComment(id: comment.id, with: optimistic) : $0 }
+        localThreads = ReviewThreadMutations.applyEdit(to: localThreads, threadID: thread.id, commentID: comment.id, newBody: newBody)
         Task { @MainActor in
             defer { isWriting = false }
             do {
@@ -361,7 +356,7 @@ struct ReviewTabView: View {
     private func deleteAction(thread: ReviewThread, comment: ReviewComment) {
         guard let provider, let request = reviewRequest, let remote = reviewRequest?.remote else { return }
         isWriting = true
-        localThreads = localThreads.map { $0.id == thread.id ? $0.removingComment(id: comment.id) : $0 }
+        localThreads = ReviewThreadMutations.applyDelete(to: localThreads, threadID: thread.id, commentID: comment.id)
         Task { @MainActor in
             defer { isWriting = false }
             do {
