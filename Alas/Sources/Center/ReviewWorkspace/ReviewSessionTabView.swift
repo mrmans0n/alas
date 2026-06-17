@@ -709,8 +709,8 @@ struct ReviewSessionTabView: View {
                 providerURL: thread.url,
                 anchor: DiffReviewInlineFeedbackAnchor(
                     path: path,
-                    line: thread.line,
-                    side: .unknown
+                    line: thread.line ?? thread.originalLine,
+                    side: thread.line != nil ? .new : thread.originalLine != nil ? .old : .unknown
                 ),
                 evidenceItemID: thread.id
             )
