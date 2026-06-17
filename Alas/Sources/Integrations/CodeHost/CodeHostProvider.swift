@@ -129,6 +129,29 @@ protocol CodeHostProvider: Sendable {
         comment: ReviewComment,
         cwd: URL
     ) async throws
+
+    func startReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> String
+
+    func addReviewComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        comment: StagedComment,
+        cwd: URL
+    ) async throws
+
+    func submitReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        verdict: ReviewVerdict,
+        body: String,
+        cwd: URL
+    ) async throws
 }
 
 extension CodeHostProvider {
@@ -241,6 +264,35 @@ extension CodeHostProvider {
         remote: CodeHostRemote,
         request: ReviewRequest,
         comment: ReviewComment,
+        cwd: URL
+    ) async throws {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func startReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async throws -> String {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func addReviewComment(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        comment: StagedComment,
+        cwd: URL
+    ) async throws {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func submitReview(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        reviewID: String,
+        verdict: ReviewVerdict,
+        body: String,
         cwd: URL
     ) async throws {
         throw CodeHostProviderError.unsupportedProvider(kind)
