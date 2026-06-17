@@ -633,6 +633,19 @@ private struct DiffReviewFileSectionPlaceholder: View {
                 Text("-\(file.summary.deletions)")
                     .foregroundColor(theme.color("del"))
             }
+            if let unstageFile = file.stagedMutationActions?.unstageFile {
+                Button("Unstage") {
+                    unstageFile()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("diff-review-unstage-file-\(file.id.rawValue)")
+            }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))
         .padding(.horizontal, 14)
