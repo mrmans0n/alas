@@ -38,6 +38,12 @@ struct DiffTabView: View {
     @State private var isFileDeleted: Bool = false
     @State private var imagePair: ImageDiffPair?
     @State private var imagePairLoaded: Bool = false
+    @State private var draftCommentController: ReviewDraftCommentController?
+    @State private var loadedDraftSessionID: ReviewDraftSessionID?
+    @State private var pendingDraftAnchor: DiffReviewLineAnchor?
+    @State private var pendingDraftBody = ""
+    @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
+    @FocusState private var draftComposerFocused: Bool
 
     private let git = GitService()
 
@@ -114,20 +120,7 @@ struct DiffTabView: View {
             } else if diff.hunks.isEmpty {
                 Text("No changes for \(relativePath)").foregroundColor(theme.color("fg-dim")).padding()
             } else if let displayModel {
-                DiffPaneView(
-                    model: displayModel,
-                    fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
-                    layoutMode: diffPreferences.layoutMode,
-                    wrapLines: diffPreferences.wrapLines,
-                    showWhitespace: diffPreferences.showWhitespace,
-                    codeFontFamily: codeFontFamily,
-                    codeFontSize: codeFontSize,
-                    lspContext: lspContext,
-                    hunkActions: { hunk in
-                        let actions = stagedHunkActions(hunk: hunk)
-                        return DiffPaneHunkActions(stage: actions.stage, discard: actions.discard)
-                    }
-                )
+                reviewDiffBody(model: displayModel)
             } else {
                 Spinner()
                     .frame(width: 16, height: 16)
@@ -136,6 +129,11 @@ struct DiffTabView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
+        .onChange(of: loadKey, initial: true) { _, _ in loadDraftCommentController() }
+        .onChange(of: pendingDraftAnchor) { _, anchor in
+            guard anchor != nil else { return }
+            Task { @MainActor in draftComposerFocused = true }
+        }
         .task(id: loadKey) { await load() }
         .alert(
             "Discard this hunk in \u{201C}\((relativePath as NSString).lastPathComponent)\u{201D}?",
@@ -274,6 +272,7 @@ struct DiffTabView: View {
         totalAdd = 0
         totalDel = 0
         error = nil
+        clearPendingDraft()
 
         do {
             let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
@@ -418,6 +417,371 @@ struct DiffTabView: View {
             // Fall through to default.
         }
         return HunkPatchBuilder.defaultUntrackedMode
+    }
+
+    // MARK: - Local review
+
+    private var fileID: DiffReviewFileID {
+        DiffReviewFileID(namespace: staged ? "staged" : "unstaged", path: relativePath)
+    }
+
+    private var draftSessionID: ReviewDraftSessionID {
+        ReviewDraftSessionID.localChanges(
+            worktreeID: worktreeId,
+            worktreePath: worktreePath,
+            scope: .all
+        )
+    }
+
+    private var reviewFeedbackTarget: ReviewFeedbackTarget {
+        ReviewFeedbackTarget(
+            title: (relativePath as NSString).lastPathComponent,
+            repositoryPath: worktreePath.path,
+            providerDescription: nil,
+            sourceDescription: staged ? "Staged changes" : "Unstaged changes"
+        )
+    }
+
+    private var fileSummary: DiffReviewFileSummary {
+        DiffReviewFileSummary(
+            path: relativePath,
+            namespace: staged ? "staged" : "unstaged",
+            groupID: nil,
+            groupTitle: nil,
+            status: .modified,
+            additions: totalAdd,
+            deletions: totalDel,
+            isRenderable: true
+        )
+    }
+
+    private func makeDraftCommentActions() -> ReviewDraftCommentActions {
+        ReviewDraftWorkspaceActions.make(
+            controller: draftCommentController,
+            sender: ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId)
+        )
+    }
+
+    private func loadDraftCommentController() {
+        let sessionID = draftSessionID
+        if loadedDraftSessionID != sessionID {
+            draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
+            loadedDraftSessionID = sessionID
+        }
+        try? draftCommentController?.load()
+    }
+
+    private func savePendingDraft() {
+        guard let anchor = pendingDraftAnchor,
+              let model = displayModel else { return }
+        let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        let validKeys = Set(model.groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
+        guard validKeys.contains(ReviewDraftCommentPlacement.RowKey(side: anchor.side, line: anchor.line)) else {
+            clearPendingDraft()
+            return
+        }
+        try? draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+        clearPendingDraft()
+    }
+
+    private func clearPendingDraft() {
+        pendingDraftAnchor = nil
+        pendingDraftBody = ""
+    }
+
+    @ViewBuilder
+    private func reviewDiffBody(model: DiffDisplayModel) -> some View {
+        let currentFileID = fileID
+        let comments = (draftCommentController?.comments ?? []).filter { $0.fileID == currentFileID }
+        let placement = ReviewDraftCommentPlacement.position(comments, in: model.groups)
+        VStack(spacing: 0) {
+            reviewDiffToolbar
+            GeometryReader { proxy in
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        let fileLevel = placement.fileLevel
+                        if !fileLevel.isEmpty {
+                            reviewDraftCommentStack(fileLevel)
+                                .padding(.bottom, 10)
+                        }
+                        ForEach(model.groups) { group in
+                            reviewDiffGroup(group, model: model, placement: placement)
+                        }
+                    }
+                    .padding(10)
+                    .frame(minWidth: proxy.size.width, alignment: .topLeading)
+                }
+                .defaultScrollAnchor(.topLeading)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-1"))
+    }
+
+    private var reviewDiffToolbar: some View {
+        HStack(spacing: 8) {
+            reviewLayoutSwitcher
+            Spacer()
+            reviewToolbarToggle(
+                systemName: diffPreferences.wrapLines.wrappedValue ? "text.justify.left" : "text.alignleft",
+                tooltip: "Wrap lines",
+                isActive: diffPreferences.wrapLines.wrappedValue
+            ) {
+                diffPreferences.wrapLines.wrappedValue = !diffPreferences.wrapLines.wrappedValue
+            }
+            reviewToolbarToggle(
+                systemName: "paragraphsign",
+                tooltip: "Show whitespace",
+                isActive: diffPreferences.showWhitespace.wrappedValue
+            ) {
+                diffPreferences.showWhitespace.wrappedValue = !diffPreferences.showWhitespace.wrappedValue
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 9)
+        .background(theme.color("bg-1"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+    }
+
+    private var reviewLayoutSwitcher: some View {
+        let currentMode = diffPreferences.layoutMode.wrappedValue
+        return HStack(spacing: 0) {
+            reviewLayoutModeButton(.split, systemName: "rectangle.split.2x1", currentMode: currentMode)
+            reviewLayoutModeButton(.stacked, systemName: "rectangle.split.1x2", currentMode: currentMode)
+        }
+        .padding(3)
+        .background(theme.color("bg-3"))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.color("line"), lineWidth: 0.75))
+    }
+
+    private func reviewLayoutModeButton(
+        _ mode: DiffLayoutMode,
+        systemName: String,
+        currentMode: DiffLayoutMode
+    ) -> some View {
+        let active = currentMode == mode
+        return Button {
+            diffPreferences.layoutMode.wrappedValue = mode
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: systemName).font(.system(size: 11, weight: .semibold))
+                Text(mode.title).font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundColor(active ? theme.color("fg") : theme.color("fg-muted"))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(active ? theme.color("bg-1") : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(mode.title)
+    }
+
+    private func reviewToolbarToggle(
+        systemName: String,
+        tooltip: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(isActive ? theme.color("accent") : theme.color("fg-muted"))
+                .frame(width: 24, height: 22)
+                .background(isActive ? theme.color("accent-soft") : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+    }
+
+    @ViewBuilder
+    private func reviewDiffGroup(
+        _ group: DiffDisplayGroup,
+        model: DiffDisplayModel,
+        placement: ReviewDraftCommentPlacement.Result
+    ) -> some View {
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: pendingDraftAnchor
+        )
+        if segments.containsLocalAccessories {
+            VStack(alignment: .leading, spacing: 0) {
+                reviewHunkHeader(group)
+                ForEach(segments.items) { segment in
+                    if !segment.rows.isEmpty {
+                        DiffPaneTextDocumentView(
+                            group: DiffDisplayGroup(
+                                id: segment.id,
+                                header: group.header,
+                                sourceHunk: group.sourceHunk,
+                                rows: segment.rows
+                            ),
+                            expandedCollapsedRowIDs: reviewExpandedCollapsedRowIDs,
+                            layoutMode: diffPreferences.layoutMode.wrappedValue,
+                            wrapLines: diffPreferences.wrapLines.wrappedValue,
+                            showWhitespace: diffPreferences.showWhitespace.wrappedValue,
+                            fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize,
+                            theme: theme,
+                            lspContext: lspContext,
+                            onReviewLineSelected: { anchor in
+                                pendingDraftAnchor = anchor
+                                pendingDraftBody = ""
+                            }
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !segment.draftComments.isEmpty {
+                        reviewDraftCommentStack(segment.draftComments)
+                    }
+                    if segment.showsComposer {
+                        reviewDraftComposer
+                    }
+                }
+            }
+            .background(theme.color("bg-1"))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(theme.color("line"), lineWidth: 0.75))
+            .padding(.bottom, 10)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                reviewHunkHeader(group)
+                DiffPaneTextDocumentView(
+                    group: group,
+                    expandedCollapsedRowIDs: reviewExpandedCollapsedRowIDs,
+                    layoutMode: diffPreferences.layoutMode.wrappedValue,
+                    wrapLines: diffPreferences.wrapLines.wrappedValue,
+                    showWhitespace: diffPreferences.showWhitespace.wrappedValue,
+                    fileExtension: LanguageRegistry.highlighterExtension(forPath: relativePath),
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    theme: theme,
+                    lspContext: lspContext,
+                    onReviewLineSelected: { anchor in
+                        pendingDraftAnchor = anchor
+                        pendingDraftBody = ""
+                    }
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .background(theme.color("bg-1"))
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(RoundedRectangle(cornerRadius: 7).stroke(theme.color("line"), lineWidth: 0.75))
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func reviewHunkHeader(_ group: DiffDisplayGroup) -> some View {
+        let actions = stagedHunkActions(hunk: group.sourceHunk)
+        return HStack(spacing: 8) {
+            Text(group.header)
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 1))
+                .foregroundColor(theme.color("fg-muted"))
+                .lineLimit(1)
+            Spacer(minLength: 12)
+            if !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty {
+                let expanded = DiffCollapsedContextController.isExpanded(
+                    group, expandedIDs: reviewExpandedCollapsedRowIDs
+                )
+                reviewHunkActionButton(
+                    systemName: expanded ? "minus.square" : "plus.square",
+                    tooltip: expanded ? "Collapse context" : "Expand context"
+                ) {
+                    reviewExpandedCollapsedRowIDs = DiffCollapsedContextController.toggled(
+                        group, expandedIDs: reviewExpandedCollapsedRowIDs
+                    )
+                }
+            }
+            if let stage = actions.stage {
+                reviewHunkActionButton(systemName: "plus.square", tooltip: "Stage hunk", action: stage)
+            }
+            if let discard = actions.discard {
+                reviewHunkActionButton(systemName: "trash", tooltip: "Discard hunk", action: discard)
+            }
+        }
+        .padding(.horizontal, 13).padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+    }
+
+    private func reviewHunkActionButton(
+        systemName: String,
+        tooltip: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(theme.color("fg-muted"))
+                .frame(width: 22, height: 20)
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+    }
+
+    @ViewBuilder
+    private func reviewDraftCommentStack(_ comments: [ReviewDraftComment]) -> some View {
+        if !comments.isEmpty {
+            let actions = makeDraftCommentActions()
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(comments) { comment in
+                    ReviewDraftCommentCard(
+                        comment: comment,
+                        file: fileSummary,
+                        isFocused: false,
+                        actions: actions,
+                        reviewFeedbackTarget: reviewFeedbackTarget,
+                        onSelect: { _ in }
+                    )
+                    .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: fileID))
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(theme.color("bg-1"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        }
+    }
+
+    private var reviewDraftComposer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextEditor(text: $pendingDraftBody)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .frame(minHeight: 64, maxHeight: 90)
+                .background(theme.color("bg-2"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
+                .focused($draftComposerFocused)
+                .accessibilityIdentifier("diff-review-draft-composer")
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                Button("Cancel") { clearPendingDraft() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .padding(.horizontal, 8)
+                    .frame(height: 24)
+                    .background(theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .accessibilityIdentifier("diff-review-draft-composer-cancel")
+                Button("Save") { savePendingDraft() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(theme.color("bg-1"))
+                    .padding(.horizontal, 9)
+                    .frame(height: 24)
+                    .background(theme.color("accent"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .accessibilityIdentifier("diff-review-draft-composer-save")
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(theme.color("bg-1"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
     }
 }
 
