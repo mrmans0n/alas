@@ -15,18 +15,7 @@ struct DiffReviewSurface: View {
     var showsDraftSummaryRail: Bool = false
     var allowsDraftCommentCreation: Bool = true
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
-    var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
-    var focusedFeedbackID: String? = nil
-    var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand? = nil
-    var inlineFeedbackActions = DiffReviewInlineFeedbackActions()
-    var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
-    var reviewFeedbackTargetOverride: ReviewFeedbackTarget? = nil
-    var draftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] = [:]
-    var focusedDraftCommentID: String? = nil
-    var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand? = nil
-    var draftCommentActions = ReviewDraftCommentActions()
-    var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
-    var onSaveDraftComment: (DiffReviewFileID, String?, DiffReviewLineAnchor, String) -> Void = { _, _, _, _ in }
+    var threads: [ReviewThread] = []
 
     @Environment(\.theme) private var theme
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
@@ -196,43 +185,19 @@ struct DiffReviewSurface: View {
 
     private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
         GeometryReader { viewport in
-            ScrollViewReader { scrollProxy in
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        let renderedIDs = effectiveRenderedFileIDs(firstFileID: firstFileID)
-                        ForEach(session.files) { file in
-                            fileSection(file, isRendered: renderedIDs.contains(file.id))
-                                .id(file.summary.id.rawValue)
-                                .background(sectionFrameReader(for: file.summary.id))
-                        }
-                    }
-                    .padding(16)
-                }
-                .coordinateSpace(name: Self.scrollCoordinateSpace)
-                .onPreferenceChange(DiffReviewSectionFramePreferenceKey.self) { frames in
-                    updateSelectedFileFromScroll(frames: frames, viewportHeight: viewport.size.height)
-                    updateRenderedFileIDs(
-                        frames: frames,
-                        viewportHeight: viewport.size.height,
-                        firstFileID: firstFileID
-                    )
-                }
-                .onChange(of: scrollCommand) { _, command in
-                    guard let command else { return }
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                    }
-                    scrollCommand = DiffReviewScrollCommandConsumption.consume(
-                        current: scrollCommand,
-                        consumed: command
-                    )
-                }
-                .onAppear {
-                    if let command = scrollCommand {
-                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                        scrollCommand = DiffReviewScrollCommandConsumption.consume(
-                            current: scrollCommand,
-                            consumed: command
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(session.files) { file in
+                        DiffReviewFileSection(
+                            file: file,
+                            layoutMode: $layoutMode,
+                            wrapLines: $wrapLines,
+                            showWhitespace: $showWhitespace,
+                            codeFontFamily: codeFontFamily,
+                            codeFontSize: codeFontSize,
+                            showsSourceBadge: showsSourceBadges,
+                            lspContext: lspContextForFile(file),
+                            threads: inlineThreads(for: file.summary.path)
                         )
                     }
                     if let command = inlineFeedbackScrollCommand {
@@ -453,6 +418,24 @@ struct DiffReviewSurface: View {
             try? await Task.sleep(nanoseconds: 250_000_000)
             programmaticScroll.finishProgrammaticScroll(token)
         }
+    }
+
+    private func inlineThreads(for filePath: String) -> [DiffInlineCommentThread] {
+        threads
+            .filter { $0.path == filePath && !$0.isFileLevel && !$0.isOutdated }
+            .compactMap { thread in
+                guard let line = thread.line else { return nil }
+                return DiffInlineCommentThread(
+                    id: thread.id,
+                    filePath: thread.path ?? "",
+                    newLine: line,
+                    isResolved: thread.isResolved,
+                    isOutdated: thread.isOutdated,
+                    comments: thread.comments.map { c in
+                        DiffInlineComment(id: c.id, author: c.author ?? "unknown", body: c.body)
+                    }
+                )
+            }
     }
 }
 

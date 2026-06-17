@@ -28,6 +28,7 @@ struct DiffReviewFileSection: View {
     var allowsDraftCommentCreation: Bool = true
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
+    var threads: [DiffInlineCommentThread] = []
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -309,17 +310,21 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private var content: some View {
-        if let displayModel = file.displayModel, let groups = derivedDisplayGroups {
-            let inlinePlacement = inlineFeedbackPlacement
-            let draftPlacement = draftCommentPlacement
-            VStack(spacing: 0) {
-                ForEach(groups) { group in
-                    if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
-                        inlineFeedbackStack(groupFeedback, file: file.summary)
-                    }
-                    reviewGroup(group, displayModel: displayModel, placement: draftPlacement)
-                }
-            }
+        if let displayModel = file.displayModel {
+            DiffPaneView(
+                model: displayModel,
+                fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
+                layoutMode: $layoutMode,
+                wrapLines: $wrapLines,
+                showWhitespace: $showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsToolbar: false,
+                verticalScrollMode: .staticHeight,
+                lspContext: lspContext,
+                threads: threads,
+                hunkActions: { _ in DiffPaneHunkActions() }
+            )
         } else {
             let message = file.placeholderMessage ?? "This file cannot be rendered in the review view."
             Text(message)

@@ -118,6 +118,7 @@ struct DiffPaneView: View {
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var threads: [DiffInlineCommentThread] = []
     let hunkActions: (ParsedDiff.Hunk) -> DiffPaneHunkActions
 
     @Environment(\.theme) private var theme
@@ -137,6 +138,7 @@ struct DiffPaneView: View {
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
+        threads: [DiffInlineCommentThread] = [],
         hunkActions: @escaping (ParsedDiff.Hunk) -> DiffPaneHunkActions
     ) {
         self.model = model
@@ -152,6 +154,7 @@ struct DiffPaneView: View {
         self.allowsReviewLineSelection = allowsReviewLineSelection
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
+        self.threads = threads
         self.hunkActions = hunkActions
     }
 
@@ -277,24 +280,37 @@ struct DiffPaneView: View {
     }
 
     private func hunk(_ group: DiffDisplayGroup) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let visibleRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
+        let hunkThreads = threads.filter { t in
+            visibleRows.contains { $0.new?.anchor.newLine == t.newLine }
+        }
+        let blocks = DiffInlineCommentLayout.blocks(visibleRows: visibleRows, threads: hunkThreads)
+
+        return VStack(alignment: .leading, spacing: 0) {
             hunkHeader(group)
-            DiffPaneTextDocumentView(
-                group: group,
-                expandedCollapsedRowIDs: expandedCollapsedRowIDs,
-                layoutMode: layoutMode,
-                wrapLines: wrapLines,
-                showWhitespace: showWhitespace,
-                fileExtension: fileExtension,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                theme: theme,
-                lspContext: lspContext,
-                allowsReviewLineSelection: allowsReviewLineSelection,
-                onReviewLineSelected: onReviewLineSelected,
-                onContextExpansion: onContextExpansion
-            )
-            .fixedSize(horizontal: false, vertical: true)
+            ForEach(blocks) { block in
+                switch block {
+                case .rows(let segment):
+                    DiffPaneSegmentView(
+                        rows: segment.rows,
+                        layoutMode: layoutMode,
+                        wrapLines: wrapLines,
+                        showWhitespace: showWhitespace,
+                        fileExtension: fileExtension,
+                        codeFontFamily: codeFontFamily,
+                        codeFontSize: codeFontSize,
+                        theme: theme,
+                        lspContext: lspContext
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                case .thread(let t):
+                    DiffInlineCommentCard(thread: t)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 7))
