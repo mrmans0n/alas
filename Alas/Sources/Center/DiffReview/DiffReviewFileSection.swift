@@ -1199,7 +1199,16 @@ enum DiffReviewInlineFeedbackMarkdown {
 
     @MainActor
     static func plainText(_ source: String) -> String {
-        NSAttributedString(ACPMarkdownText.inlineMarkdown(source)).string
+        ACPMarkdownText.parse(source).compactMap { block -> String? in
+            switch block {
+            case .heading(_, let text), .paragraph(let text), .quote(let text):
+                return NSAttributedString(ACPMarkdownText.inlineMarkdown(text)).string
+            case .code(_, let body):
+                return body
+            case .table(let header, let rows):
+                return ([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " ")
+            }
+        }.joined(separator: " ")
     }
 }
 
