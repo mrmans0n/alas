@@ -43,6 +43,7 @@ struct DiffTabView: View {
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
+    @FocusState private var draftComposerFocused: Bool
 
     private let git = GitService()
 
@@ -129,6 +130,10 @@ struct DiffTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
         .onChange(of: loadKey, initial: true) { _, _ in loadDraftCommentController() }
+        .onChange(of: pendingDraftAnchor) { _, anchor in
+            guard anchor != nil else { return }
+            Task { @MainActor in draftComposerFocused = true }
+        }
         .task(id: loadKey) { await load() }
         .alert(
             "Discard this hunk in \u{201C}\((relativePath as NSString).lastPathComponent)\u{201D}?",
@@ -750,6 +755,7 @@ struct DiffTabView: View {
                 .background(theme.color("bg-2"))
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
+                .focused($draftComposerFocused)
                 .accessibilityIdentifier("diff-review-draft-composer")
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
