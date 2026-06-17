@@ -20,6 +20,8 @@ struct ReviewTabView: View {
     @State private var localThreads: [ReviewThread] = []
     @State private var isWriting = false
     @State private var errorMessage: String? = nil
+    @State private var pendingReview: PendingReview?
+    @State private var showVerdictSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,7 +47,17 @@ struct ReviewTabView: View {
                     .animation(.easeInOut(duration: 0.2), value: errorMessage)
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            if let pr = pendingReview, !pr.staged.isEmpty {
+                PendingReviewTray(pendingReview: pr) {
+                    showVerdictSheet = true
+                }
+            }
+        }
         .task(id: loadKey) {
+            if pendingReview == nil {
+                pendingReview = PendingReview(worktreePath: worktree.path)
+            }
             await loadSession()
             localThreads = reviewRequest?.threads ?? []
         }
@@ -256,7 +268,19 @@ struct ReviewTabView: View {
                 deleteAction(thread: t, comment: c)
             },
             canReply: capabilities.canReply,
-            canResolve: capabilities.canResolve
+            canResolve: capabilities.canResolve,
+            onStageReply: { inlineThread, body in
+                guard let pr = pendingReview else { return }
+                pr.stage(StagedComment(
+                    id: UUID(),
+                    threadID: inlineThread.id,
+                    filePath: inlineThread.filePath,
+                    line: inlineThread.newLine,
+                    body: body,
+                    suggestion: nil
+                ))
+            },
+            canAddToReview: capabilities.canSubmitReview
         )
     }
 
