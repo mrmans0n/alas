@@ -54,6 +54,17 @@ struct ReviewTabView: View {
                 }
             }
         }
+        .sheet(isPresented: $showVerdictSheet) {
+            VerdictSheet(
+                pendingCount: pendingReview?.staged.count ?? 0,
+                onSubmit: { verdict, body in
+                    submitReviewAction(verdict: verdict, body: body)
+                },
+                onCancel: {
+                    showVerdictSheet = false
+                }
+            )
+        }
         .task(id: loadKey) {
             if pendingReview == nil {
                 pendingReview = PendingReview(worktreePath: worktree.path)
@@ -509,5 +520,45 @@ struct ReviewTabView: View {
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(appState: appState)
+    }
+
+    // MARK: - Verdict submission
+
+    @MainActor
+    private func submitReviewAction(verdict: ReviewVerdict, body: String) {
+        guard let pr = pendingReview,
+              let provider,
+              let request = reviewRequest,
+              let remote = reviewRequest?.remote
+        else { return }
+
+        let stagedComments = pr.staged
+        showVerdictSheet = false
+
+        Task { @MainActor in
+            do {
+                let reviewID = try await provider.startReview(remote: remote, request: request, cwd: worktree.path)
+                for comment in stagedComments {
+                    try await provider.addReviewComment(
+                        remote: remote,
+                        request: request,
+                        reviewID: reviewID,
+                        comment: comment,
+                        cwd: worktree.path
+                    )
+                }
+                try await provider.submitReview(
+                    remote: remote,
+                    request: request,
+                    reviewID: reviewID,
+                    verdict: verdict,
+                    body: body,
+                    cwd: worktree.path
+                )
+                pr.clear()
+            } catch {
+                showError(error.localizedDescription)
+            }
+        }
     }
 }
