@@ -251,4 +251,79 @@ struct DiffInlineCommentModelTests {
         let blocks = DiffInlineCommentLayout.blocks(visibleRows: [], threads: [])
         #expect(blocks.isEmpty)
     }
+
+    @Test func annotationAndThreadOnSameLineEmitsBothBlocks() {
+        let rows = [
+            makeRow(id: "r0", new: makeNewLine(newLine: 1, rowIndex: 0)),
+            makeRow(id: "r1", new: makeNewLine(newLine: 5, rowIndex: 1)),
+            makeRow(id: "r2", new: makeNewLine(newLine: 9, rowIndex: 2)),
+        ]
+        let thread = makeThread(id: "t1", newLine: 5)
+        let annotation = DiffInlineAnnotation(
+            id: "a1",
+            checkName: "SwiftLint",
+            newLine: 5,
+            level: .failure,
+            message: "Line too long",
+            rawDetails: nil
+        )
+
+        let blocks = DiffInlineCommentLayout.blocks(
+            visibleRows: rows,
+            threads: [thread],
+            annotations: [annotation]
+        )
+
+        // Expected: seg[r0, r1], thread(t1), annotation(a1), seg[r2]
+        #expect(blocks.count == 4)
+        if case .rows(let seg) = blocks[0] {
+            #expect(seg.rows.count == 2)
+        } else {
+            Issue.record("Block 0 should be .rows")
+        }
+        if case .thread(let t) = blocks[1] {
+            #expect(t.id == "t1")
+        } else {
+            Issue.record("Block 1 should be .thread")
+        }
+        if case .annotation(let a) = blocks[2] {
+            #expect(a.id == "a1")
+        } else {
+            Issue.record("Block 2 should be .annotation")
+        }
+        if case .rows(let seg) = blocks[3] {
+            #expect(seg.rows.count == 1)
+            #expect(seg.rows[0].id == "r2")
+        } else {
+            Issue.record("Block 3 should be .rows")
+        }
+    }
+
+    @Test func annotationWithUnmatchedLineIsDropped() {
+        let rows = [
+            makeRow(id: "r0", new: makeNewLine(newLine: 1, rowIndex: 0)),
+            makeRow(id: "r1", new: makeNewLine(newLine: 2, rowIndex: 1)),
+        ]
+        let annotation = DiffInlineAnnotation(
+            id: "aX",
+            checkName: "CI",
+            newLine: 99,
+            level: .warning,
+            message: "Some warning",
+            rawDetails: nil
+        )
+
+        let blocks = DiffInlineCommentLayout.blocks(
+            visibleRows: rows,
+            threads: [],
+            annotations: [annotation]
+        )
+
+        #expect(blocks.count == 1)
+        if case .rows(let seg) = blocks[0] {
+            #expect(seg.rows.count == 2)
+        } else {
+            Issue.record("Expected single .rows block")
+        }
+    }
 }

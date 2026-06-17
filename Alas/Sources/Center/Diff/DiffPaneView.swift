@@ -119,6 +119,7 @@ struct DiffPaneView: View {
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
     var threads: [DiffInlineCommentThread] = []
+    var annotations: [DiffInlineAnnotation] = []
     var onReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var onResolve: (DiffInlineCommentThread) -> Void = { _ in }
     var onUnresolve: (DiffInlineCommentThread) -> Void = { _ in }
@@ -296,7 +297,14 @@ struct DiffPaneView: View {
         let hunkThreads = threads.filter { t in
             visibleRows.contains { $0.new?.anchor.newLine == t.newLine }
         }
-        let blocks = DiffInlineCommentLayout.blocks(visibleRows: visibleRows, threads: hunkThreads)
+        let hunkAnnotations = annotations.filter { a in
+            visibleRows.contains { $0.new?.anchor.newLine == a.newLine }
+        }
+        let blocks = DiffInlineCommentLayout.blocks(
+            visibleRows: visibleRows,
+            threads: hunkThreads,
+            annotations: hunkAnnotations
+        )
 
         return VStack(alignment: .leading, spacing: 0) {
             hunkHeader(group)
@@ -329,6 +337,9 @@ struct DiffPaneView: View {
                         canAddToReview: canAddToReview
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
+                case .annotation(let a):
+                    DiffInlineAnnotationCard(annotation: a)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

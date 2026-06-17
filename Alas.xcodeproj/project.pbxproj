@@ -385,6 +385,7 @@
 		9A3CBA47A658472FB2EDBCF5 /* DiffInlineCommentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2CD2914A9484519A75D4B3B /* DiffInlineCommentModel.swift */; };
 		20077B4BAEAF4AB98283676F /* DiffInlineCommentCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52B4733ED90549858F4068DF /* DiffInlineCommentCard.swift */; };
 		A1B2C3D4E5F601020304A001 /* CIStatusStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B001 /* CIStatusStrip.swift */; };
+		A1B2C3D4E5F601020304A004 /* DiffInlineAnnotationCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B004 /* DiffInlineAnnotationCard.swift */; };
 		A1B2C3D4E5F601020304A002 /* OutdatedThreadsDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B002 /* OutdatedThreadsDrawer.swift */; };
 		A1B2C3D4E5F601020304A003 /* ReviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F601020304B003 /* ReviewTabView.swift */; };
 		DD2B810881F34CCE9A4B5571 /* ReviewThreadMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7553D42D8FB54E098DB4A642 /* ReviewThreadMutations.swift */; };
@@ -1718,6 +1719,7 @@
 		E2CD2914A9484519A75D4B3B /* DiffInlineCommentModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineCommentModel.swift; sourceTree = "<group>"; };
 		52B4733ED90549858F4068DF /* DiffInlineCommentCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineCommentCard.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F601020304B001 /* CIStatusStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CIStatusStrip.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F601020304B004 /* DiffInlineAnnotationCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffInlineAnnotationCard.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F601020304B002 /* OutdatedThreadsDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutdatedThreadsDrawer.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F601020304B003 /* ReviewTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewTabView.swift; sourceTree = "<group>"; };
 		7553D42D8FB54E098DB4A642 /* ReviewThreadMutations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewThreadMutations.swift; sourceTree = "<group>"; };
@@ -3690,6 +3692,7 @@
 			children = (
 				52B4733ED90549858F4068DF /* DiffInlineCommentCard.swift */,
 				A1B2C3D4E5F601020304B001 /* CIStatusStrip.swift */,
+				A1B2C3D4E5F601020304B004 /* DiffInlineAnnotationCard.swift */,
 				A1B2C3D4E5F601020304B002 /* OutdatedThreadsDrawer.swift */,
 				A1B2C3D4E5F601020304B003 /* ReviewTabView.swift */,
 				7553D42D8FB54E098DB4A642 /* ReviewThreadMutations.swift */,
@@ -4477,6 +4480,7 @@
 				9A3CBA47A658472FB2EDBCF5 /* DiffInlineCommentModel.swift in Sources */,
 				20077B4BAEAF4AB98283676F /* DiffInlineCommentCard.swift in Sources */,
 				A1B2C3D4E5F601020304A001 /* CIStatusStrip.swift in Sources */,
+				A1B2C3D4E5F601020304A004 /* DiffInlineAnnotationCard.swift in Sources */,
 				A1B2C3D4E5F601020304A002 /* OutdatedThreadsDrawer.swift in Sources */,
 				A1B2C3D4E5F601020304A003 /* ReviewTabView.swift in Sources */,
 				DD2B810881F34CCE9A4B5571 /* ReviewThreadMutations.swift in Sources */,
