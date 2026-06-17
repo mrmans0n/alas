@@ -77,7 +77,7 @@ struct DraftCommitTabView: View {
                     unstageHunk(path: model.summary.path, hunk: hunk)
                 },
                 isHunkUnstageEnabled: { hunk in
-                    !busy && model.summary.status == .modified && !hunk.lines.isEmpty
+                    !busy && model.summary.gitStatus == "M" && !hunk.lines.isEmpty
                 }
             )
             return m

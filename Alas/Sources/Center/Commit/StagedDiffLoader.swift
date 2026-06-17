@@ -52,7 +52,8 @@ struct StagedDiffLoader {
             additions: counts.additions,
             deletions: counts.deletions,
             isRenderable: canRender,
-            originalPath: file.originalPath
+            originalPath: file.originalPath,
+            gitStatus: file.status
         )
 
         return DiffReviewFileSectionModel(
