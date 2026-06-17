@@ -6,9 +6,24 @@ struct DiffReviewRail: View {
     @Binding var selectedFileID: DiffReviewFileID
     @Binding var collapsed: Bool
     var displayControls: DiffReviewDisplayControlBindings? = nil
+    var threads: [ReviewThread] = []
     let onSelectFile: (DiffReviewFileID) -> Void
 
     @Environment(\.theme) private var theme
+
+    // MARK: - Thread counts
+
+    private func openThreadCount(for path: String) -> Int {
+        threads.filter { $0.path == path && !$0.isResolved && !$0.isOutdated }.count
+    }
+
+    private var openThreadTotal: Int {
+        threads.filter { !$0.isResolved && !$0.isOutdated }.count
+    }
+
+    private var resolvedThreadTotal: Int {
+        threads.filter { $0.isResolved }.count
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +61,36 @@ struct DiffReviewRail: View {
                     }
                 }
             }
+            if openThreadTotal > 0 || resolvedThreadTotal > 0 {
+                threadSummaryStrip
+            }
+        }
+    }
+
+    private var threadSummaryStrip: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "bubble.left")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(theme.color("fg-faint"))
+            Text(threadSummaryLabel)
+                .font(.caption)
+                .foregroundColor(theme.color("fg-muted"))
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(theme.color("bg-2"))
+        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .top)
+    }
+
+    private var threadSummaryLabel: String {
+        switch (openThreadTotal, resolvedThreadTotal) {
+        case (let o, 0):
+            return "\(o) open"
+        case (0, let r):
+            return "\(r) resolved"
+        case (let o, let r):
+            return "\(o) open · \(r) resolved"
         }
     }
 
@@ -209,6 +254,10 @@ struct DiffReviewRail: View {
                     }
                 }
                 Spacer(minLength: 4)
+                let openCount = openThreadCount(for: file.path)
+                if openCount > 0 {
+                    threadBadge(openCount)
+                }
                 changeSummary(file)
             }
             .padding(
@@ -306,6 +355,13 @@ struct DiffReviewRail: View {
         .help(file.path)
     }
 
+    private func threadBadge(_ count: Int) -> some View {
+        Label("\(count)", systemImage: "bubble.left")
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(theme.color("fg-muted"))
+            .labelStyle(ThreadBadgeLabelStyle())
+    }
+
     private func changeSummary(_ file: DiffReviewFileSummary) -> some View {
         HStack(spacing: 5) {
             if file.additions > 0 {
@@ -332,6 +388,15 @@ struct DiffReviewRail: View {
             theme.color("warn")
         case .modified, .unknown:
             theme.color("fg-dim")
+        }
+    }
+}
+
+struct ThreadBadgeLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 2) {
+            configuration.icon
+            configuration.title
         }
     }
 }

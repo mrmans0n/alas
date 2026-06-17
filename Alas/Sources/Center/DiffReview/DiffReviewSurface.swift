@@ -157,27 +157,21 @@ struct DiffReviewSurface: View {
             set: { selectedFileID = $0 }
         )
 
-        return HStack(spacing: 0) {
-            DiffReviewRail(
-                session: session.summary,
-                selectedFileID: selectedBinding,
-                collapsed: $railCollapsed,
-                displayControls: showsRailDisplayControls ? DiffReviewDisplayControlBindings(
-                    layoutMode: $layoutMode,
-                    wrapLines: $wrapLines,
-                    showWhitespace: $showWhitespace
-                ) : nil,
-                onSelectFile: scrollToFile
-            )
-            mainReviewStream(session, firstFileID: firstFileID)
-            if shouldShowReviewSummaryRail {
-                ReviewDraftSummaryRail(
-                    comments: allDraftComments,
-                    bundle: reviewFeedbackBundle,
-                    collapsed: $reviewSummaryCollapsed,
-                    focusedDraftCommentID: focusedDraftCommentID,
-                    draftCommentActions: draftCommentActions,
-                    onSelectDraftComment: onSelectDraftComment
+        return ScrollViewReader { scrollProxy in
+            HStack(spacing: 0) {
+                DiffReviewRail(
+                    session: session.summary,
+                    selectedFileID: selectedBinding,
+                    collapsed: $railCollapsed,
+                    displayControls: showsRailDisplayControls ? DiffReviewDisplayControlBindings(
+                        layoutMode: $layoutMode,
+                        wrapLines: $wrapLines,
+                        showWhitespace: $showWhitespace
+                    ) : nil,
+                    threads: threads,
+                    onSelectFile: { id in
+                        scrollToFile(id, proxy: scrollProxy)
+                    }
                 )
             }
         }
