@@ -543,11 +543,9 @@ struct ReviewDraftSummaryRail: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                     .accessibilityIdentifier("review-draft-summary-editor-\(comment.id)")
             } else {
-                Text(DiffReviewInlineFeedbackMarkdown.render(comment.bodyMarkdown))
-                    .font(.system(size: 11.5))
-                    .foregroundColor(theme.color("fg"))
-                    .lineLimit(4)
-                    .fixedSize(horizontal: false, vertical: true)
+                DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
+                    .frame(maxHeight: 80, alignment: .top)
+                    .clipped()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

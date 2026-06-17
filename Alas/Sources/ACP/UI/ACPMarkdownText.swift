@@ -14,6 +14,7 @@ struct ACPMarkdownText: View {
     let raw: String
     var cache: ACPMarkdownBlockCache? = nil
     var typography: ACPChatTypography = .default
+    var showsCodeBlockCopyButton: Bool = true
     @Environment(\.theme) private var theme
 
     var body: some View {
@@ -69,7 +70,7 @@ struct ACPMarkdownText: View {
                 Spacer(minLength: 0)
             }
         case .code(let lang, let body):
-            CodeBlockView(language: lang, code: body, typography: typography)
+            CodeBlockView(language: lang, code: body, typography: typography, showsCopyButton: showsCodeBlockCopyButton)
         case .table(let header, let rows):
             tableView(header: header, rows: rows)
         }
@@ -334,6 +335,7 @@ private struct CodeBlockView: View {
     let language: String?
     let code: String
     let typography: ACPChatTypography
+    var showsCopyButton: Bool = true
     @Environment(\.theme) private var theme
     @State private var copied = false
 
@@ -372,7 +374,9 @@ private struct CodeBlockView: View {
                 Color.clear.frame(height: 1)
             }
             Spacer(minLength: 0)
-            copyButton
+            if showsCopyButton {
+                copyButton
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .frame(maxWidth: .infinity)
