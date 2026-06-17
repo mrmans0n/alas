@@ -253,13 +253,49 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     let startLine: Int?
     let originalLine: Int?
     let diffHunk: String?
+    let diffSide: String?
     let isResolved: Bool
     let isOutdated: Bool
     let isFileLevel: Bool
     let comments: [ReviewComment]
     let viewerCanResolve: Bool
+    let viewerCanUnresolve: Bool
     let viewerCanReply: Bool
     let url: URL?
+
+    init(
+        id: String,
+        path: String?,
+        line: Int?,
+        startLine: Int?,
+        originalLine: Int?,
+        diffHunk: String?,
+        diffSide: String? = nil,
+        isResolved: Bool,
+        isOutdated: Bool,
+        isFileLevel: Bool,
+        comments: [ReviewComment],
+        viewerCanResolve: Bool,
+        viewerCanUnresolve: Bool? = nil,
+        viewerCanReply: Bool,
+        url: URL?
+    ) {
+        self.id = id
+        self.path = path
+        self.line = line
+        self.startLine = startLine
+        self.originalLine = originalLine
+        self.diffHunk = diffHunk
+        self.diffSide = diffSide
+        self.isResolved = isResolved
+        self.isOutdated = isOutdated
+        self.isFileLevel = isFileLevel
+        self.comments = comments
+        self.viewerCanResolve = viewerCanResolve
+        self.viewerCanUnresolve = viewerCanUnresolve ?? viewerCanResolve
+        self.viewerCanReply = viewerCanReply
+        self.url = url
+    }
 
     private var headComment: ReviewComment? {
         comments.first { !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -273,40 +309,44 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     func addingReply(_ comment: ReviewComment) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
             isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments + [comment],
-            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
         )
     }
 
     func withResolved(_ resolved: Bool) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
             isResolved: resolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments,
-            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
         )
     }
 
     func replacingComment(id commentID: String, with replacement: ReviewComment) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
             isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments.map { $0.id == commentID ? replacement : $0 },
-            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
         )
     }
 
     func removingComment(id commentID: String) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk,
+            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
             isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments.filter { $0.id != commentID },
-            viewerCanResolve: viewerCanResolve, viewerCanReply: viewerCanReply, url: url
+            viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
+            viewerCanReply: viewerCanReply, url: url
         )
     }
 }

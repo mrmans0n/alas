@@ -78,7 +78,9 @@ struct GitHubCLIProvider: CodeHostProvider {
               startLine
               originalLine
               subjectType
+              diffSide
               viewerCanResolve
+              viewerCanUnresolve
               viewerCanReply
               comments(first: 50) {
                 nodes {
@@ -1389,11 +1391,13 @@ struct GitHubCLIProvider: CodeHostProvider {
                 startLine: node.startLine,
                 originalLine: node.originalLine,
                 diffHunk: node.comments.nodes.first?.diffHunk,
+                diffSide: node.diffSide,
                 isResolved: node.isResolved,
                 isOutdated: node.isOutdated,
                 isFileLevel: (node.subjectType ?? "").uppercased() == "FILE",
                 comments: comments,
                 viewerCanResolve: node.viewerCanResolve ?? false,
+                viewerCanUnresolve: node.viewerCanUnresolve ?? false,
                 viewerCanReply: node.viewerCanReply ?? false,
                 url: comments.first?.url
             )
@@ -1444,11 +1448,13 @@ struct GitHubCLIProvider: CodeHostProvider {
             startLine: thread.startLine,
             originalLine: thread.originalLine,
             diffHunk: thread.diffHunk,
+            diffSide: thread.diffSide,
             isResolved: mutated.isResolved,
             isOutdated: mutated.isOutdated,
             isFileLevel: thread.isFileLevel,
             comments: thread.comments,
             viewerCanResolve: thread.viewerCanResolve,
+            viewerCanUnresolve: thread.viewerCanUnresolve,
             viewerCanReply: thread.viewerCanReply,
             url: thread.url
         )
@@ -1919,7 +1925,9 @@ private struct ReviewThreadNode: Decodable {
     let startLine: Int?
     let originalLine: Int?
     let subjectType: String?
+    let diffSide: String?
     let viewerCanResolve: Bool?
+    let viewerCanUnresolve: Bool?
     let viewerCanReply: Bool?
     let comments: ReviewThreadCommentsConnection
 
@@ -1933,7 +1941,9 @@ private struct ReviewThreadNode: Decodable {
         self.startLine = try? container.decode(Int.self, forKey: .startLine)
         self.originalLine = try? container.decode(Int.self, forKey: .originalLine)
         self.subjectType = try? container.decode(String.self, forKey: .subjectType)
+        self.diffSide = try? container.decode(String.self, forKey: .diffSide)
         self.viewerCanResolve = try? container.decode(Bool.self, forKey: .viewerCanResolve)
+        self.viewerCanUnresolve = try? container.decode(Bool.self, forKey: .viewerCanUnresolve)
         self.viewerCanReply = try? container.decode(Bool.self, forKey: .viewerCanReply)
         self.comments = try container.decode(ReviewThreadCommentsConnection.self, forKey: .comments)
     }
@@ -1947,7 +1957,9 @@ private struct ReviewThreadNode: Decodable {
         case startLine
         case originalLine
         case subjectType
+        case diffSide
         case viewerCanResolve
+        case viewerCanUnresolve
         case viewerCanReply
         case comments
     }

@@ -190,18 +190,16 @@ struct DiffInlineCommentCard: View {
                         .foregroundColor(.accentColor)
                 }
 
-                if canResolve {
-                    if !thread.isResolved {
-                        Button("Resolve") { onResolve() }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    } else {
-                        Button("Unresolve") { onUnresolve() }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
+                if canResolve && !thread.isResolved {
+                    Button("Resolve") { onResolve() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else if canResolve && thread.isResolved && thread.viewerCanUnresolve {
+                    Button("Unresolve") { onUnresolve() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
                 }
 
                 Spacer(minLength: 0)

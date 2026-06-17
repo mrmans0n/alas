@@ -472,11 +472,13 @@ struct GitLabCLIProvider: CodeHostProvider {
             startLine: thread.startLine,
             originalLine: thread.originalLine,
             diffHunk: thread.diffHunk,
+            diffSide: thread.diffSide,
             isResolved: true,
             isOutdated: thread.isOutdated,
             isFileLevel: thread.isFileLevel,
             comments: thread.comments,
             viewerCanResolve: thread.viewerCanResolve,
+            viewerCanUnresolve: thread.viewerCanUnresolve,
             viewerCanReply: thread.viewerCanReply,
             url: thread.url
         )
@@ -510,11 +512,13 @@ struct GitLabCLIProvider: CodeHostProvider {
             startLine: thread.startLine,
             originalLine: thread.originalLine,
             diffHunk: thread.diffHunk,
+            diffSide: thread.diffSide,
             isResolved: false,
             isOutdated: thread.isOutdated,
             isFileLevel: thread.isFileLevel,
             comments: thread.comments,
             viewerCanResolve: thread.viewerCanResolve,
+            viewerCanUnresolve: thread.viewerCanUnresolve,
             viewerCanReply: thread.viewerCanReply,
             url: thread.url
         )
@@ -1164,6 +1168,7 @@ struct GitLabCLIProvider: CodeHostProvider {
                 comments: comments,
                 // glab does not report per-thread viewer capabilities; assume true (real availability is gated by provider capabilities).
                 viewerCanResolve: true,
+                viewerCanUnresolve: true,
                 viewerCanReply: true,
                 url: firstURL
             )

@@ -710,7 +710,12 @@ struct ReviewSessionTabView: View {
                 anchor: DiffReviewInlineFeedbackAnchor(
                     path: path,
                     line: thread.line ?? thread.originalLine,
-                    side: thread.line != nil ? .new : thread.originalLine != nil ? .old : .unknown
+                    side: {
+                        if let side = thread.diffSide {
+                            return side.uppercased() == "LEFT" ? .old : .new
+                        }
+                        return thread.line != nil ? .new : thread.originalLine != nil ? .old : .unknown
+                    }()
                 ),
                 evidenceItemID: thread.id
             )

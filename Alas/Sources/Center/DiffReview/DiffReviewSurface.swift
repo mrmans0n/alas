@@ -510,7 +510,12 @@ struct DiffReviewSurface: View {
         threads
             .filter { $0.path == filePath && !$0.isFileLevel && !$0.isOutdated }
             .compactMap { thread in
-                let isOldSide = thread.line == nil && thread.originalLine != nil
+                let isOldSide: Bool
+                if let side = thread.diffSide {
+                    isOldSide = side.uppercased() == "LEFT"
+                } else {
+                    isOldSide = thread.line == nil && thread.originalLine != nil
+                }
                 guard let line = thread.line ?? thread.originalLine else { return nil }
                 return DiffInlineCommentThread(
                     id: thread.id,
@@ -529,7 +534,8 @@ struct DiffReviewSurface: View {
                         )
                     },
                     viewerCanReply: thread.viewerCanReply,
-                    viewerCanResolve: thread.viewerCanResolve
+                    viewerCanResolve: thread.viewerCanResolve,
+                    viewerCanUnresolve: thread.viewerCanUnresolve
                 )
             }
     }
