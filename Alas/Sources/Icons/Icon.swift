@@ -18,6 +18,15 @@ struct Icon: View {
                 ))
                 .foregroundColor(resolved)
                 .frame(width: size, height: size)
+        } else if name == "github" || name == "gitlab" {
+            // Vendor brand marks live in `CodeHostLogos/` as template SVGs so
+            // they tint with the resolved color like the rest of the glyphs.
+            Image(name)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .foregroundColor(resolved)
+                .frame(width: size, height: size)
         } else {
             Image(systemName: Self.symbol(for: name))
                 .font(.system(size: size))
@@ -47,7 +56,6 @@ struct Icon: View {
         case "split-down": return "rectangle.split.1x2"
         case "palette":    return "paintpalette"
         case "keyboard":   return "keyboard"
-        case "github":     return "circle.hexagongrid"
         case "alert":      return "exclamationmark.triangle"
         case "sparkle":    return "sparkles"
         default:           return name

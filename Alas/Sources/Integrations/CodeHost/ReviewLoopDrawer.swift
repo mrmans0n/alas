@@ -27,6 +27,7 @@ struct ReviewLoopDrawer: View {
                 collapsedRow(model: model)
             }
             .buttonStyle(.plain)
+            .focusEffectDisabled()
 
             if state.isExpanded {
                 expandedBody(model: model)

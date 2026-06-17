@@ -18,6 +18,14 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
         }
     }
 
+    /// Asset name of the vendor brand mark in `CodeHostLogos/`.
+    var iconName: String {
+        switch self {
+        case .github: "github"
+        case .gitlab: "gitlab"
+        }
+    }
+
     var reviewRequestNumberPrefix: String {
         switch self {
         case .github: "#"

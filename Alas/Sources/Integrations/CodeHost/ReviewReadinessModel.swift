@@ -64,6 +64,9 @@ struct ReviewReadinessModel: Equatable, Sendable {
     }
 
     let identity: String
+    /// Glyph for the section header: the vendor brand mark when a host is
+    /// known, otherwise the generic branch icon.
+    let iconName: String
     let title: String?
     let chips: [Chip]
     let facts: [Fact]
@@ -73,6 +76,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
     init(snapshot: ReviewLoopSnapshot?, lastError: String?, canOpenAgentHandoff: Bool) {
         guard let snapshot else {
             identity = "Review readiness"
+            iconName = "branch"
             title = nil
             chips = [Chip(id: "loading", title: "Checking", tone: .accent)]
             facts = []
@@ -87,6 +91,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
         let requestLabel = kind?.reviewRequestLabel ?? "review request"
 
         identity = request?.displayIdentity ?? kind?.displayName ?? "Review readiness"
+        iconName = kind?.iconName ?? "branch"
         title = request?.title
         blockingText = lastError ?? snapshot.errorMessage ?? Self.providerBlockingText(snapshot) ?? Self.localBlockingText(snapshot)
 
