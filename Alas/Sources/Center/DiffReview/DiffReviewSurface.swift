@@ -13,6 +13,7 @@ struct DiffReviewSurface: View {
     var showsSourceBadges: Bool = true
     var showsRailDisplayControls: Bool = false
     var showsDraftSummaryRail: Bool = false
+    var allowsDraftCommentCreation: Bool = true
     var lspContextForFile: (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil }
     var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
     var focusedFeedbackID: String? = nil
@@ -50,6 +51,7 @@ struct DiffReviewSurface: View {
         showsSourceBadges: Bool = true,
         showsRailDisplayControls: Bool = false,
         showsDraftSummaryRail: Bool = false,
+        allowsDraftCommentCreation: Bool = true,
         lspContextForFile: @escaping (DiffReviewFileSectionModel) -> DiffPaneLSPContext? = { _ in nil },
         inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:],
         focusedFeedbackID: String? = nil,
@@ -76,6 +78,7 @@ struct DiffReviewSurface: View {
         self.showsSourceBadges = showsSourceBadges
         self.showsRailDisplayControls = showsRailDisplayControls
         self.showsDraftSummaryRail = showsDraftSummaryRail
+        self.allowsDraftCommentCreation = allowsDraftCommentCreation
         self.lspContextForFile = lspContextForFile
         self.inlineFeedbackByFileID = inlineFeedbackByFileID
         self.focusedFeedbackID = focusedFeedbackID
@@ -282,6 +285,7 @@ struct DiffReviewSurface: View {
                 onSaveDraftComment: { anchor, body in
                     onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
                 },
+                allowsDraftCommentCreation: allowsDraftCommentCreation,
                 onContextExpansionActivated: {
                     contextExpandedFileIDs.insert(file.id)
                 },
@@ -628,6 +632,19 @@ private struct DiffReviewFileSectionPlaceholder: View {
             if file.summary.deletions > 0 {
                 Text("-\(file.summary.deletions)")
                     .foregroundColor(theme.color("del"))
+            }
+            if let unstageFile = file.stagedMutationActions?.unstageFile {
+                Button("Unstage") {
+                    unstageFile()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("diff-review-unstage-file-\(file.id.rawValue)")
             }
         }
         .font(.system(size: 11, weight: .medium, design: .monospaced))

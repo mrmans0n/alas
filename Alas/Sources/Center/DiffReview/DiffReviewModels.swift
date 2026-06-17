@@ -94,6 +94,7 @@ struct DiffReviewFileSummary: Codable, Equatable, Identifiable {
     let deletions: Int
     let isRenderable: Bool
     var originalPath: String? = nil
+    var gitStatus: String? = nil
 
     init(
         path: String,
@@ -104,7 +105,8 @@ struct DiffReviewFileSummary: Codable, Equatable, Identifiable {
         additions: Int,
         deletions: Int,
         isRenderable: Bool,
-        originalPath: String? = nil
+        originalPath: String? = nil,
+        gitStatus: String? = nil
     ) {
         self.id = DiffReviewFileID(namespace: namespace, path: path)
         self.path = path
@@ -116,6 +118,7 @@ struct DiffReviewFileSummary: Codable, Equatable, Identifiable {
         self.deletions = deletions
         self.isRenderable = isRenderable
         self.originalPath = originalPath
+        self.gitStatus = gitStatus
     }
 
     enum CodingKeys: String, CodingKey {
@@ -171,6 +174,12 @@ struct DiffReviewFileSummary: Codable, Equatable, Identifiable {
     }
 }
 
+struct DiffReviewStagedMutationActions {
+    var unstageFile: (() -> Void)? = nil
+    var unstageHunk: ((ParsedDiff.Hunk) -> Void)? = nil
+    var isHunkUnstageEnabled: ((ParsedDiff.Hunk) -> Bool)? = nil
+}
+
 struct DiffReviewFileSectionModel: Identifiable {
     var id: DiffReviewFileID { summary.id }
 
@@ -180,6 +189,7 @@ struct DiffReviewFileSectionModel: Identifiable {
     let placeholderMessage: String?
     let openFile: (() -> Void)?
     let contextProvider: DiffReviewContextProvider?
+    var stagedMutationActions: DiffReviewStagedMutationActions? = nil
 }
 
 struct DiffReviewSourceGroup: Equatable, Identifiable {

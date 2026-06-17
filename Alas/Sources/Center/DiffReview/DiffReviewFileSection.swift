@@ -25,6 +25,7 @@ struct DiffReviewFileSection: View {
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
     var onSaveDraftComment: (DiffReviewLineAnchor, String) -> Void = { _, _ in }
+    var allowsDraftCommentCreation: Bool = true
     var onContextExpansionActivated: () -> Void = {}
     var reviewFeedbackTarget: ReviewFeedbackTarget?
 
@@ -138,6 +139,19 @@ struct DiffReviewFileSection: View {
                 .help(openFileTitle)
                 .accessibilityIdentifier("diff-review-open-file-\(file.id.rawValue)")
                 .accessibilityLabel(openFileTitle)
+            }
+            if let unstageFile = file.stagedMutationActions?.unstageFile {
+                Button("Unstage") {
+                    unstageFile()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(theme.color("fg-muted"))
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("diff-review-unstage-file-\(file.id.rawValue)")
             }
         }
         .padding(.horizontal, 14)
@@ -356,6 +370,7 @@ struct DiffReviewFileSection: View {
                             codeFontSize: codeFontSize,
                             theme: theme,
                             lspContext: lspContext,
+                            allowsReviewLineSelection: allowsDraftCommentCreation,
                             onReviewLineSelected: { anchor in
                                 pendingDraftAnchor = anchor
                                 pendingDraftBody = ""
@@ -391,12 +406,18 @@ struct DiffReviewFileSection: View {
                 showsToolbar: false,
                 verticalScrollMode: .staticHeight,
                 lspContext: lspContext,
+                allowsReviewLineSelection: allowsDraftCommentCreation,
                 onReviewLineSelected: { anchor in
                     pendingDraftAnchor = anchor
                     pendingDraftBody = ""
                 },
                 onContextExpansion: loadContextAndExpand,
-                hunkActions: { _ in DiffPaneHunkActions() }
+                hunkActions: { hunk in
+                    let enabled = file.stagedMutationActions?.isHunkUnstageEnabled?(hunk) ?? false
+                    return DiffPaneHunkActions(
+                        dropFromCommit: enabled ? { file.stagedMutationActions?.unstageHunk?(hunk) } : nil
+                    )
+                }
             )
         }
     }
