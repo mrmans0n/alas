@@ -64,6 +64,10 @@ final class ACPSessionRunner {
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
+    private var pendingStreamingPersistIndices: Set<Int> = []
+    private var pendingStreamingPersistSnapshots: [Int: StreamingPersistSnapshot] = [:]
+    private var streamingPersistTask: Task<Void, Never>?
+    private let streamingPersistDebounceNanos: UInt64
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
     private var observedUpdateCount = 0
@@ -74,6 +78,12 @@ final class ACPSessionRunner {
     /// the redirect is in flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
 
+    private struct StreamingPersistSnapshot {
+        let kind: String
+        let payload: Data
+        let basePayload: Data?
+    }
+
     init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
          sessionId: String, worktreePath: String,
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
@@ -83,6 +93,7 @@ final class ACPSessionRunner {
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
+         streamingPersistDebounceNanos: UInt64 = 250_000_000,
          ownerInstanceId: String? = nil)
     {
         self.session = session
@@ -94,6 +105,7 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
@@ -129,8 +141,14 @@ final class ACPSessionRunner {
                         }
                         return
                     }
+                    let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                     let dirty = self.session.apply(u.update)
-                    self.persistIndices(dirty)
+                    if shouldBatchStreamingPersist {
+                        self.scheduleStreamingPersist(dirty)
+                    } else {
+                        self.flushStreamingPersist()
+                        self.persistIndices(dirty)
+                    }
                     if self.applyPendingCompletedOutputBoundaryIfReady() {
                         self.flushQueueIfIdle()
                     }
@@ -286,6 +304,7 @@ final class ACPSessionRunner {
     }
 
     func stop() {
+        flushStreamingPersistOnStop()
         updatesTask?.cancel()
         permissionsTask?.cancel()
         questionsTask?.cancel()
@@ -563,6 +582,7 @@ final class ACPSessionRunner {
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
         await MainActor.run {
+            flushStreamingPersist()
             if let promptID = intended.promptID {
                 // Only clear activePromptID if it's still ours — a
                 // natural completion + queued promotion during the
@@ -1078,6 +1098,7 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
+                        self.flushStreamingPersist()
                         let authReason = wasCancelled ? nil : ACPAuthFailure.message(from: error)
                         let errorMessage = authReason ?? error.localizedDescription
                         if queuedItemId != nil, !wasCancelled, authReason == nil {
@@ -1163,6 +1184,7 @@ extension ACPSessionRunner {
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
+                        self.flushStreamingPersist()
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
                     }
@@ -1220,6 +1242,7 @@ extension ACPSessionRunner {
               appliedUpdateCount >= target
         else { return false }
         pendingCompletedOutputBoundaryUpdateCount = nil
+        flushStreamingPersist()
         session.markCompletedOutputBoundary()
         guard activePromptID == nil else { return false }
         session.transcript.streamingState = .idle
@@ -1252,15 +1275,124 @@ extension ACPSessionRunner {
         return (try? store.loadLease(sessionId: sessionId))?.ownerInstance == ownerInstanceId
     }
 
+    private func shouldBatchStreamingPersist(for update: ACPSessionUpdate) -> Bool {
+        guard activePromptID != nil else { return false }
+        switch session.transcript.streamingState {
+        case .sending, .streaming:
+            break
+        case .idle, .awaitingPermission, .awaitingInput:
+            return false
+        }
+        switch update {
+        case .agentMessageChunk, .agentThoughtChunk, .toolCallUpdate:
+            return true
+        case .userMessageChunk, .toolCall, .plan, .availableModelsUpdate,
+             .currentModeUpdate, .currentModelUpdate,
+             .sessionConfigOptionsUpdate, .availableCommandsUpdate,
+             .usageUpdate, .unknown:
+            return false
+        }
+    }
+
+    private func scheduleStreamingPersist(_ indices: Set<Int>) {
+        guard !indices.isEmpty else { return }
+        snapshotStreamingPersistPayloads(for: indices)
+        pendingStreamingPersistIndices.formUnion(indices)
+        guard streamingPersistTask == nil else { return }
+        streamingPersistTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: self.streamingPersistDebounceNanos)
+            guard !Task.isCancelled else { return }
+            self.flushStreamingPersist()
+        }
+    }
+
+    private func flushStreamingPersist() {
+        flushStreamingPersist(requiresLease: true)
+    }
+
+    private func flushStreamingPersistOnStop() {
+        // During takeover, the lease row may already point at the new owner
+        // by the time stand-down stops this runner. The pending rows here are
+        // snapshots captured while this runner still held the lease; flush
+        // them once so the debounce buffer is not the only copy.
+        flushStreamingPersist(requiresLease: false)
+    }
+
+    private func flushStreamingPersist(requiresLease: Bool) {
+        streamingPersistTask?.cancel()
+        streamingPersistTask = nil
+        guard !pendingStreamingPersistIndices.isEmpty else { return }
+        if !requiresLease {
+            persistStreamingPersistSnapshots()
+            return
+        }
+        let indices = pendingStreamingPersistIndices
+        if persistIndices(indices, requiresLease: requiresLease) {
+            pendingStreamingPersistIndices.subtract(indices)
+            for i in indices {
+                pendingStreamingPersistSnapshots.removeValue(forKey: i)
+            }
+        }
+    }
+
+    private func snapshotStreamingPersistPayloads(for indices: Set<Int>) {
+        guard holdsLeaseForWrite() else { return }
+        let messages = session.transcript.messages
+        for i in indices {
+            guard i >= 0, i < messages.count else { continue }
+            let message = messages[i]
+            guard let payload = try? ACPMessageCodec.encode(message) else { continue }
+            let id = "msg-\(sessionId)-\(i)"
+            let basePayload = i < persistedMessageCount ? try? store.loadMessagePayload(id: id) : nil
+            if i < persistedMessageCount, basePayload == nil { continue }
+            pendingStreamingPersistSnapshots[i] = .init(kind: message.kind, payload: payload, basePayload: basePayload)
+        }
+    }
+
+    private func persistStreamingPersistSnapshots() {
+        guard !pendingStreamingPersistSnapshots.isEmpty else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        let snapshots = pendingStreamingPersistSnapshots
+        for i in snapshots.keys.sorted() {
+            guard let snapshot = snapshots[i] else { continue }
+            let id = "msg-\(sessionId)-\(i)"
+            if i < persistedMessageCount {
+                guard let basePayload = snapshot.basePayload,
+                      (try? store.updateMessagePayloadIfUnchanged(
+                        id: id,
+                        payload: snapshot.payload,
+                        expectedPayload: basePayload
+                      )) == true else {
+                    continue
+                }
+            } else {
+                do {
+                    try store.appendMessage(sessionId: sessionId, id: id, kind: snapshot.kind,
+                                            seq: Int64(i), payload: snapshot.payload, createdAt: now)
+                    persistedMessageCount = max(persistedMessageCount, i + 1)
+                } catch {
+                    continue
+                }
+            }
+            pendingStreamingPersistIndices.remove(i)
+            pendingStreamingPersistSnapshots.removeValue(forKey: i)
+        }
+        onPersist?()
+    }
+
     /// Persist the specific message rows touched by an `apply()` call.
     /// Use this instead of `persistFromIndex` when the caller can name
     /// exactly which indices changed — a plan or tool-call update may
     /// mutate a row anywhere in the transcript, not just the trailing
     /// one, so the count-delta heuristic in `persistFromIndex` would
     /// write back the wrong row.
-    func persistIndices(_ indices: Set<Int>) {
-        guard holdsLeaseForWrite() else { return }
-        guard !indices.isEmpty else { return }
+    @discardableResult
+    func persistIndices(_ indices: Set<Int>, requiresLease: Bool = true) -> Bool {
+        streamingPersistTask?.cancel()
+        streamingPersistTask = nil
+        guard !requiresLease || holdsLeaseForWrite() else { return false }
+        guard !indices.isEmpty else { return true }
         let messages = session.transcript.messages
         let now = Int64(Date().timeIntervalSince1970)
         for i in indices.sorted() {
@@ -1276,11 +1408,14 @@ extension ACPSessionRunner {
                                             seq: Int64(i), payload: payload, createdAt: now)
                     persistedMessageCount = max(persistedMessageCount, i + 1)
                 } catch {
-                    continue
+                    if (try? store.updateMessageRow(id: id, kind: m.kind, seq: Int64(i), payload: payload)) == true {
+                        persistedMessageCount = max(persistedMessageCount, i + 1)
+                    }
                 }
             }
         }
         onPersist?()
+        return true
     }
 
     /// Persist messages from the apply() boundary. Three cases:
@@ -1295,6 +1430,7 @@ extension ACPSessionRunner {
     /// text was visible in memory but never written, so reopening a
     /// session lost most of the conversation.
     func persistFromIndex(_ from: Int) {
+        flushStreamingPersist()
         guard holdsLeaseForWrite() else { return }
         let messages = session.transcript.messages
         guard messages.count > 0 else { return }
@@ -1324,7 +1460,9 @@ extension ACPSessionRunner {
                                             seq: Int64(i), payload: payload, createdAt: now)
                     persistedMessageCount = max(persistedMessageCount, i + 1)
                 } catch {
-                    continue
+                    if (try? store.updateMessageRow(id: id, kind: m.kind, seq: Int64(i), payload: payload)) == true {
+                        persistedMessageCount = max(persistedMessageCount, i + 1)
+                    }
                 }
             }
         }

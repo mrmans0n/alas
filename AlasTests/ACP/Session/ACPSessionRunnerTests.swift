@@ -471,10 +471,281 @@ struct ACPSessionRunnerTests {
         // Allow the actor hop
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        #expect(session.transcript.messages.count == 1)
+        let inMemoryAgentMessages = session.transcript.messages.filter {
+            if case .agent = $0 { return true }
+            return false
+        }
+        #expect(inMemoryAgentMessages.count == 1)
         let rows = try store.loadMessages(sessionId: "s")
         #expect(rows.count == 1)
         #expect(rows[0].kind == "agent")
+    }
+
+    @Test("streaming chunks are persisted in a batch when streaming ends")
+    func streamingChunksPersistAsBatchOnIdle() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let inMemoryAgentMessages = session.transcript.messages.filter {
+            if case .agent = $0 { return true }
+            return false
+        }
+        #expect(inMemoryAgentMessages.count == 1)
+        let rowsBeforeCompletion = try store.loadMessages(sessionId: "s")
+        #expect(!rowsBeforeCompletion.contains { $0.kind == "agent" })
+
+        await mock.finishPrompt()
+        #expect(await completed.value)
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
+        guard case .agent(_, let text) = decoded else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "hello world")
+    }
+
+    @Test("streaming chunks flush periodically before the stream goes quiet")
+    func streamingChunksPersistBeforeQuietPeriod() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 100_000_000
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        let emitter = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+                mock.emitAgentChunk("x")
+            }
+        }
+        defer { emitter.cancel() }
+
+        try await waitUntil(timeoutNanoseconds: 600_000_000) {
+            ((try? store.loadMessages(sessionId: "s").contains { $0.kind == "agent" }) ?? false)
+        }
+
+        await mock.finishPrompt()
+        #expect(await completed.value)
+    }
+
+    @Test("stop flushes pending streamed chunks during takeover")
+    func stopFlushesPendingStreamingChunksDuringTakeover() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let rowsBeforeTakeover = try store.loadMessages(sessionId: sid)
+        #expect(!rowsBeforeTakeover.contains { $0.kind == "agent" })
+
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
+        guard case .agent(_, let text) = decoded else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "hello world")
+    }
+
+    @Test("takeover flush excludes chunks received after lease loss")
+    func takeoverFlushExcludesChunksReceivedAfterLeaseLoss() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        mock.emitAgentChunk(" after")
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
+        guard case .agent(_, let text) = decoded else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "hello world")
+    }
+
+    @Test("takeover flush does not overwrite rows changed by new writer")
+    func takeoverFlushDoesNotOverwriteRowsChangedByNewWriter() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.persistIndices([1])
+
+        mock.emitAgentChunk(" before")
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let newWriterPayload = try ACPMessageCodec.encode(.agent(id: UUID(), StreamingText("new writer")))
+        try store.updateMessagePayload(id: "msg-\(sid)-1", payload: newWriterPayload)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
+        guard case .agent(_, let text) = decoded else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "new writer")
     }
 
     @Test("in-place plan update persists to disk even when plan is not the trailing message")
@@ -657,6 +928,49 @@ struct ACPSessionRunnerTests {
         session.appendSystemNotice("hello")
         runner.persistIndices([0])
         #expect(posts >= 1)
+    }
+
+    @Test("persistIndices updates deterministic row kind that appeared after runner initialization")
+    func persistIndicesUpdatesLateDeterministicRowCollisionKind() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-persist-collision-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        let stale = ACPMessage.agent(id: UUID(), StreamingText("stale"))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "msg-s-0",
+            kind: stale.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(stale),
+            createdAt: 0
+        )
+
+        session.appendSystemNotice("fresh")
+        runner.persistIndices([0])
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.id == "msg-s-0" }))
+        #expect(row.kind == "system")
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .systemNotice(_, let text) = decoded else {
+            Issue.record("expected system notice")
+            return
+        }
+        #expect(text == "fresh")
     }
 
     @Test("onPersist fires on stop()")
@@ -1026,6 +1340,64 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {}
 
+    func shutdown() async {
+        updatesCont.finish()
+    }
+}
+
+private final class StreamingBatchACPClient: ACPClient {
+    private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
+    private let chunksEmitted = AsyncGate()
+    private let promptCanFinish = AsyncGate()
+
+    let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
+    let permissionRequests = AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { $0.finish() }
+    let fileRequests = AsyncStream<ACPFileRequest> { $0.finish() }
+    let terminalRequests = AsyncStream<ACPTerminalRequest> { $0.finish() }
+    let questionRequests = AsyncStream<ACPQuestionRequest> { $0.finish() }
+    var yieldedUpdateCount: Int { 2 }
+
+    init() {
+        var updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation!
+        incomingUpdates = AsyncStream { updatesCont = $0 }
+        self.updatesCont = updatesCont
+    }
+
+    func send(_ request: ACPRequest) async throws -> ACPResponse {
+        guard request.method == "session/prompt" else {
+            throw ACPClientError.noScript(method: request.method)
+        }
+        updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("hello "))))
+        updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("world"))))
+        await chunksEmitted.open()
+        await promptCanFinish.wait()
+        return ACPResponse(body: Data("{}".utf8))
+    }
+
+    func waitForChunks() async {
+        await chunksEmitted.wait()
+    }
+
+    func finishPrompt() async {
+        await promptCanFinish.open()
+    }
+
+    func emitUsageUpdate() {
+        updatesCont.yield(.init(
+            sessionId: "s",
+            update: .usageUpdate(.init(used: 1, size: 100, cost: nil))
+        ))
+    }
+
+    func emitAgentChunk(_ text: String) {
+        updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text(text))))
+    }
+
+    func notify(_ request: ACPRequest) async throws {}
+    func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse) {}
+    func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
+    func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {}
+    func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse) {}
     func shutdown() async {
         updatesCont.finish()
     }

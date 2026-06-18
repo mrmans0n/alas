@@ -285,6 +285,42 @@ struct ACPSessionStoreCRUDTests {
         #expect(loaded[0].payload == m1)
     }
 
+    @Test("message row updates report whether a row existed")
+    func updateMessageRowReportsChanges() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            titleSource: .placeholder,
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m1",
+            kind: "agent",
+            seq: 1,
+            payload: Data("old".utf8),
+            createdAt: 1
+        )
+
+        #expect(try store.updateMessageRow(
+            id: "m1",
+            kind: "user",
+            seq: 0,
+            payload: Data("new".utf8)
+        ))
+        #expect(try store.updateMessageRow(
+            id: "missing",
+            kind: "agent",
+            seq: 2,
+            payload: Data("ignored".utf8)
+        ) == false)
+
+        let loaded = try store.loadMessages(sessionId: "s")
+        #expect(loaded.map(\.id) == ["m1"])
+        #expect(loaded[0].kind == "user")
+        #expect(loaded[0].seq == 0)
+        #expect(loaded[0].payload == Data("new".utf8))
+    }
+
     @Test("message count uses a narrow aggregate query")
     func messageCount() throws {
         let store = try tmp()

@@ -313,6 +313,26 @@ extension ACPSessionStore {
         try db.exec("UPDATE messages SET payload = ? WHERE id = ?", bindings: [payload, id])
     }
 
+    func updateMessageRow(id: String, kind: String, seq: Int64, payload: Data) throws -> Bool {
+        try db.execChanges(
+            "UPDATE messages SET kind = ?, seq = ?, payload = ? WHERE id = ?",
+            bindings: [kind, seq, payload, id]
+        ) > 0
+    }
+
+    func updateMessagePayloadIfUnchanged(id: String, payload: Data, expectedPayload: Data) throws -> Bool {
+        try db.execChanges("""
+        UPDATE messages
+        SET payload = ?
+        WHERE id = ? AND payload = ?
+        """, bindings: [payload, id, expectedPayload]) > 0
+    }
+
+    func loadMessagePayload(id: String) throws -> Data? {
+        let rows = try db.query("SELECT payload FROM messages WHERE id = ?", bindings: [id])
+        return rows.first?["payload"] as? Data
+    }
+
     func messageCount(sessionId: String) throws -> Int {
         let rows = try db.query("""
         SELECT COUNT(*) AS count
