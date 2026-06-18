@@ -18,6 +18,7 @@ final class ReviewLoopState {
     private(set) var isRefreshing: Bool = false
     private(set) var isExpanded: Bool = false
     private(set) var lastError: String?
+    private(set) var inFlightAction: ReviewReadinessActionKind?
 
     init(
         worktreePath: URL,
@@ -60,6 +61,17 @@ final class ReviewLoopState {
                 errorMessage: snapshot?.errorMessage
             )
         }
+    }
+
+    func beginAction(_ action: ReviewReadinessActionKind) -> Bool {
+        guard inFlightAction == nil else { return false }
+        inFlightAction = action
+        return true
+    }
+
+    func endAction(_ action: ReviewReadinessActionKind) {
+        guard inFlightAction == action else { return }
+        inFlightAction = nil
     }
 
     func beginLocalInspection() -> ReviewLoopRefreshAttempt {

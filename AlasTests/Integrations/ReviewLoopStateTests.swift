@@ -5,6 +5,23 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct ReviewLoopStateTests {
+    @Test func inFlightActionRejectsConcurrentReviewActions() {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main"
+        )
+
+        #expect(state.beginAction(.pushBranch))
+        #expect(state.inFlightAction == .pushBranch)
+        #expect(!state.beginAction(.rerunFailedChecks))
+
+        state.endAction(.rerunFailedChecks)
+        #expect(state.inFlightAction == .pushBranch)
+
+        state.endAction(.pushBranch)
+        #expect(state.inFlightAction == nil)
+    }
+
     @Test func refreshBuildsInstallProviderActionWhenProviderIsMissing() async throws {
         let local = Self.makeLocal()
         let state = ReviewLoopState(
