@@ -296,4 +296,3 @@ final class LSPInstaller {
 }
 
 struct InstallerBusy: Error {}
-
