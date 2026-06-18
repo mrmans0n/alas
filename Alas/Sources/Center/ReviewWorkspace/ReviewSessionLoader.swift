@@ -86,6 +86,7 @@ struct ReviewSessionLoader {
         let changesLoader = ReviewChangesLoader()
         let git = GitService()
         let commitLoader = CommitReviewLoader(git: git)
+        let rangeLoader = RangeReviewLoader(git: git)
 
         return ReviewSessionLoader(
             localChanges: { target in
@@ -115,6 +116,34 @@ struct ReviewSessionLoader {
                             worktreePath: target.repositoryPath,
                             relativePath: path
                         )
+                    }
+                )
+            },
+            commitRange: { target in
+                guard case .commitRange(let base, let head) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let files = try await git.rangeChangedFiles(at: target.repositoryPath, base: base, head: head, threeDot: false)
+                return try await rangeLoader.load(
+                    worktreePath: target.repositoryPath,
+                    base: base, head: head, threeDot: false,
+                    files: files,
+                    openFileForPath: { path in
+                        openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
+                    }
+                )
+            },
+            branch: { target in
+                guard case .branch(let base, let head) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let files = try await git.rangeChangedFiles(at: target.repositoryPath, base: base, head: head, threeDot: true)
+                return try await rangeLoader.load(
+                    worktreePath: target.repositoryPath,
+                    base: base, head: head, threeDot: true,
+                    files: files,
+                    openFileForPath: { path in
+                        openFileAction(appState: appState, worktreeID: target.worktreeID, worktreePath: target.repositoryPath, relativePath: path)
                     }
                 )
             },

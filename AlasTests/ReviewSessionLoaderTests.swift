@@ -171,75 +171,23 @@ struct ReviewSessionLoaderTests {
         #expect(loaded.session.summary.files.map(\.namespace) == [summary.namespace])
     }
 
-    @MainActor
-    @Test func productionLoaderRejectsBranchTargetUntilStoredDiffLoadingIsWired() async throws {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
+    @Test func routesCommitRangeTargetToInjectedLoader() async throws {
+        let path = URL(fileURLWithPath: "/tmp/repo")
+        let expected = DiffReviewLoadedSession(files: [], summary: DiffReviewSessionModel(files: [], groupsEnabled: false))
+        let loader = ReviewSessionLoader(commitRange: { _ in expected })
+        let target = ReviewSessionTarget.commitRange(worktreeID: "wt", repositoryPath: path, base: "aaa", head: "bbb")
 
-        let worktree = Worktree(
-            id: Worktree.makeId(path: repo),
-            projectId: "project-1",
-            name: "main",
-            branch: "main",
-            path: repo,
-            status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 1)
-        )
-        let target = ReviewSessionTarget.branch(
-            worktreeID: worktree.id,
-            repositoryPath: repo,
-            base: "main",
-            head: "feature"
-        )
-        let loader = ReviewSessionLoader.production(
-            appState: AppState(store: MemoryStore()),
-            worktree: worktree
-        )
+        let context = try await loader.load(target: target)
 
-        do {
-            _ = try await loader.load(target: target)
-            Issue.record("Expected branch targets to stay unsupported until stored diff loading is wired")
-        } catch let error as ReviewSessionLoaderError {
-            #expect(error == .unsupportedTarget)
-        }
+        #expect(context.session.files.isEmpty)
     }
 
-    @MainActor
-    @Test func productionLoaderRejectsCommitRangeTargetUntilStoredDiffLoadingIsWired() async throws {
-        let repo = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-review-session-loader-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: repo) }
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: repo)
-
-        let worktree = Worktree(
-            id: Worktree.makeId(path: repo),
-            projectId: "project-1",
-            name: "main",
-            branch: "main",
-            path: repo,
-            status: .clean,
-            lastActivity: Date(timeIntervalSince1970: 1)
-        )
-        let target = ReviewSessionTarget.commitRange(
-            worktreeID: worktree.id,
-            repositoryPath: repo,
-            base: "main",
-            head: "HEAD"
-        )
-        let loader = ReviewSessionLoader.production(
-            appState: AppState(store: MemoryStore()),
-            worktree: worktree
-        )
-
-        do {
+    @Test func defaultBranchLoaderThrowsUnsupportedTarget() async throws {
+        let path = URL(fileURLWithPath: "/tmp/repo")
+        let loader = ReviewSessionLoader()
+        let target = ReviewSessionTarget.branch(worktreeID: "wt", repositoryPath: path, base: "main", head: "HEAD")
+        await #expect(throws: ReviewSessionLoaderError.unsupportedTarget) {
             _ = try await loader.load(target: target)
-            Issue.record("Expected commit-range targets to stay unsupported until stored diff loading is wired")
-        } catch let error as ReviewSessionLoaderError {
-            #expect(error == .unsupportedTarget)
         }
     }
 
