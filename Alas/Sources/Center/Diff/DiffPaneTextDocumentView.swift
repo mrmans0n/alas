@@ -851,6 +851,7 @@ final class DiffPaneCodeTextView: NSTextView {
     var allowedLSPSide: DiffLineSide = .new
     var hasLSPContextForTesting: Bool { lspContext != nil }
     var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
+    private var scrollBoundsObserver: NSObjectProtocol?
     var theme: Theme? {
         didSet { needsDisplay = true }
     }
@@ -874,7 +875,11 @@ final class DiffPaneCodeTextView: NSTextView {
 
     deinit {
         let lspController = lspController
+        let observer = scrollBoundsObserver
         Task { @MainActor in
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+            }
             lspController?.tearDown()
         }
     }
@@ -1069,12 +1074,37 @@ final class DiffPaneCodeTextView: NSTextView {
         guard let lspContext else {
             lspController?.tearDown()
             lspController = nil
+            removeScrollBoundsObserver()
             return
         }
         if lspController == nil {
             lspController = DiffPaneLSPController(textView: self)
+            installScrollBoundsObserver()
         }
         lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
+    }
+
+    private func installScrollBoundsObserver() {
+        guard scrollBoundsObserver == nil,
+              let scrollView = enclosingScrollView else { return }
+        let clipView = scrollView.contentView
+        clipView.postsBoundsChangedNotifications = true
+        scrollBoundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: clipView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.lspController?.notifyScrolled()
+            }
+        }
+    }
+
+    private func removeScrollBoundsObserver() {
+        if let token = scrollBoundsObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
+        scrollBoundsObserver = nil
     }
 
     func reviewLineAnchor(atRow row: Int) -> DiffReviewLineAnchor? {

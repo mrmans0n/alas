@@ -366,6 +366,44 @@ struct DiffPaneLSPLineMapTests {
     }
 
     @MainActor
+    @Test func notifyScrolledDismissesHoverAndDefinitionPopover() throws {
+        let textView = DiffPaneCodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 80),
+            textContainer: NSTextContainer()
+        )
+        let renderedLine = DiffDisplayLine(
+            id: "file:new:0:0",
+            anchor: DiffLineAnchor(filePath: "Sources/App.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 1),
+            text: "let value = 1",
+            lineNumber: 1,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        textView.lineMetadata = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .add,
+                range: NSRange(location: 0, length: 13),
+                tone: .add,
+                sourceLine: renderedLine
+            ),
+        ]
+        textView.theme = try! ThemeStore().current
+        let controller = DiffPaneLSPController(textView: textView)
+        controller.update(context: nil, allowedSide: .new)
+
+        let popover = NSPopover()
+        controller.showDefinitionPopoverForTesting(popover)
+        #expect(controller.isDefinitionPopoverShownForTesting)
+
+        controller.notifyScrolled()
+
+        #expect(!controller.isDefinitionPopoverShownForTesting)
+        #expect(!controller.isHoverVisibleForTesting)
+        controller.tearDown()
+    }
+
+    @MainActor
     @Test func controllerRejectsSourceLineShiftedByOpenEditorBuffer() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-lsp-dirty-editor-\(UUID().uuidString)")
         let source = root.appendingPathComponent("Sources/App.swift")
