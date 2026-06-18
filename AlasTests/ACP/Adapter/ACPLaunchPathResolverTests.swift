@@ -29,7 +29,8 @@ struct ACPLaunchPathResolverTests {
 
     @Test("npm-global binary beats a PATH shadow")
     func npmGlobalWinsOverShadow() async throws {
-        let pathDir = tmp(); let npmBinDir = tmp()
+        let pathDir = tmp()
+        let npmBinDir = tmp()
         let shadow = try makeExecutable(named: "codex-acp", inDir: pathDir)
         let owned = try makeExecutable(named: "codex-acp", inDir: npmBinDir)
         defer {
