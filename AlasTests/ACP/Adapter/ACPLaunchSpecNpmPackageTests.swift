@@ -49,7 +49,7 @@ struct ACPLaunchSpecNpmPackageTests {
     func catalogCoverage() {
         let byID = Dictionary(uniqueKeysWithValues: ACPLaunchCatalog.specs.map { ($0.agentID, $0) })
         #expect(byID["claude"]?.npmPackageName == "@agentclientprotocol/claude-agent-acp")
-        #expect(byID["codex"]?.npmPackageName == "@zed-industries/codex-acp")
+        #expect(byID["codex"]?.npmPackageName == "@agentclientprotocol/codex-acp")
         #expect(byID["pi"]?.npmPackageName == "pi-acp")
     }
 }

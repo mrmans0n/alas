@@ -12,11 +12,11 @@ struct CodexACPInstaller: ACPAdapterInstaller {
         await ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             .evaluate(.binaryOnPathOrNpmPackage(
                 binary: "codex-acp",
-                npmPackage: "@zed-industries/codex-acp"))
+                npmPackage: "@agentclientprotocol/codex-acp"))
     }
 
     func install() async throws {
-        let (status, stderr) = try await runner("npm", ["install", "-g", "@zed-industries/codex-acp"])
+        let (status, stderr) = try await runner("npm", ["install", "-g", "@agentclientprotocol/codex-acp"])
         if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }
     }
 }
