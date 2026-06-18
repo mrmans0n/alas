@@ -27,6 +27,8 @@ struct ChangesTabView: View {
             changes: rps.changes,
             hasDraft: hasDraftTab,
             draftNonEmpty: draftNonEmpty,
+            aheadCommitCount: rps.commits.count,
+            local: rps.reviewLoop.snapshot?.local,
             readinessActions: readiness.actions
         )
     }
