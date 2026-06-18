@@ -41,6 +41,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
     @Published var currentModel: String?
+    @Published var contextUsage: ACPUsageInfo?
     @Published var currentMode: String?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false
@@ -91,6 +92,13 @@ final class ACPSession: ObservableObject, Identifiable {
 
     var imageInputSupported: Bool { promptCapabilities.image }
     var embeddedContextSupported: Bool { promptCapabilities.embeddedContext }
+
+    /// Display name for the active model: resolves `currentModel` (an id) against
+    /// `availableModels`, falling back to the raw id when unknown.
+    var currentModelDisplayName: String? {
+        guard let id = currentModel else { return nil }
+        return availableModels.first { $0.id == id }?.name ?? id
+    }
 
     enum AgentState: Equatable {
         case idle
@@ -319,7 +327,9 @@ final class ACPSession: ObservableObject, Identifiable {
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds
             return []
-        case .usageUpdate:
+        case .usageUpdate(let info):
+            // size <= 0 is unusable (divide-by-zero); treat as "no data".
+            contextUsage = (info.size > 0) ? info : nil
             return []
         case .unknown:
             return []
