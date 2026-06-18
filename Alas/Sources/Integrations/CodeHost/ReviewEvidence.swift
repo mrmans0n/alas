@@ -71,10 +71,14 @@ struct ReviewEvidenceDetail: Codable, Equatable, Sendable {
             )
         }
 
-        let prefixLength = max(0, maxLength - marker.count)
+        let suffixLength = max(0, maxLength - marker.count)
+        var truncatedBody = marker + String(body.suffix(suffixLength))
+        if let url = item.providerURL {
+            truncatedBody += "\n\n[Open full log in browser.](\(url.absoluteString))"
+        }
         return ReviewEvidenceDetail(
             item: item,
-            body: String(body.prefix(prefixLength)) + marker,
+            body: truncatedBody,
             filePath: filePath,
             line: line,
             isTruncated: true
