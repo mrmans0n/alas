@@ -2,6 +2,12 @@ import SwiftUI
 
 struct DiffPreferenceBindings {
     let appState: AppState
+    private let showWhitespaceStorage: Binding<Bool>
+
+    init(appState: AppState, showWhitespace: Binding<Bool>) {
+        self.appState = appState
+        self.showWhitespaceStorage = showWhitespace
+    }
 
     var layoutMode: Binding<DiffLayoutMode> {
         Binding(
@@ -26,13 +32,6 @@ struct DiffPreferenceBindings {
     }
 
     var showWhitespace: Binding<Bool> {
-        Binding(
-            get: { appState.config.changes.diffShowWhitespace },
-            set: { newValue in
-                guard appState.config.changes.diffShowWhitespace != newValue else { return }
-                appState.config.changes.diffShowWhitespace = newValue
-                appState.saveConfig()
-            }
-        )
+        showWhitespaceStorage
     }
 }

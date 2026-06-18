@@ -23,6 +23,7 @@ struct ReviewTabView: View {
     @State private var errorMessage: String? = nil
     @State private var pendingReview: PendingReview?
     @State private var showVerdictSheet = false
+    @State private var showWhitespace = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -582,7 +583,7 @@ struct ReviewTabView: View {
     }
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState)
+        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
     }
 
     // MARK: - Verdict submission
