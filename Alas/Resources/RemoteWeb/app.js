@@ -1532,6 +1532,13 @@ function singleLine(value) {
   return (value || "").replace(/\s+/g, " ").trim();
 }
 
+function handleCardToggleKeydown(event) {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  const card = event.currentTarget.closest(".m-collapsible");
+  if (card) setCardOpen(card, !card.classList.contains("is-open"));
+}
+
 function toolGlyph(verb) {
   const v = (verb || "").toLowerCase();
   if (v === "read") return "□";
@@ -1543,20 +1550,22 @@ function toolGlyph(verb) {
 
 function structCard(verb, name, body, preview) {
   const d = el("div", "msg m-tool m-collapsible");
-  const button = el("button", "tool-toggle");
-  button.type = "button";
-  button.dataset.cardToggle = "true";
-  button.setAttribute("aria-expanded", "false");
-  button.append(el("span", "tool-glyph", toolGlyph(verb)));
-  button.append(el("span", "tool-verb", verb));
-  button.append(el("span", "tool-name", name || ""));
-  button.append(el("span", "tool-preview", preview || ""));
-  button.append(el("span", "tool-chev", "⌄"));
+  const toggle = el("div", "tool-toggle");
+  toggle.dataset.cardToggle = "true";
+  toggle.setAttribute("role", "button");
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.tabIndex = 0;
+  toggle.append(el("span", "tool-glyph", toolGlyph(verb)));
+  toggle.append(el("span", "tool-verb", verb));
+  toggle.append(el("span", "tool-name", name || ""));
+  toggle.append(el("span", "tool-preview", preview || ""));
+  toggle.append(el("span", "tool-chev", "⌄"));
   const content = el("pre", "tool-body", body || "");
   content.dataset.cardBody = "true";
   content.hidden = true;
-  button.onclick = () => setCardOpen(d, !d.classList.contains("is-open"));
-  d.append(button, content);
+  toggle.onclick = () => setCardOpen(d, !d.classList.contains("is-open"));
+  toggle.onkeydown = handleCardToggleKeydown;
+  d.append(toggle, content);
   return d;
 }
 
