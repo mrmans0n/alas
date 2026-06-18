@@ -747,87 +747,7 @@ extension GitService {
         // single invocation, so we run them separately and merge the results.
         let emptyTreeSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         let leftTree = parents.isEmpty ? emptyTreeSha : "\(sha)^1"
-        let rightTree = sha
-
-        // `-c core.quotePath=false` keeps non-ASCII / special characters in
-        // paths emitted as raw UTF-8 instead of git's default backslash-
-        // octal quoting (e.g. `"caf\303\251.txt"`). Without it, the parsed
-        // path is the quoted text — the file list shows the escaped name,
-        // the numstat↔name-status merge misses (key mismatch), and a later
-        // `git diff -- <quoted-path>` finds nothing on disk.
-        async let numstatResult = Process.git(
-            ["-c", "core.quotePath=false",
-             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
-            cwd: worktree
-        )
-        async let nameStatusResult = Process.git(
-            ["-c", "core.quotePath=false",
-             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
-            cwd: worktree
-        )
-        let numstatOut = try await numstatResult
-        let nameStatusOut = try await nameStatusResult
-
-        guard numstatOut.exitCode == 0 else {
-            throw NSError(domain: "GitService.commitDetails", code: Int(numstatOut.exitCode),
-                          userInfo: [NSLocalizedDescriptionKey: numstatOut.stderr])
-        }
-        guard nameStatusOut.exitCode == 0 else {
-            throw NSError(domain: "GitService.commitDetails", code: Int(nameStatusOut.exitCode),
-                          userInfo: [NSLocalizedDescriptionKey: nameStatusOut.stderr])
-        }
-
-        var addByPath: [String: Int] = [:]
-        var delByPath: [String: Int] = [:]
-        var statusByPath: [String: String] = [:]
-        var originalByPath: [String: String] = [:]
-        var ordered: [String] = []
-        var orderedSet: Set<String> = []
-
-        // Parse numstat: "adds \t dels \t path"
-        // With -M/-C, git emits renames as a combined path field in one of two forms:
-        //   simple: "old.txt => new.txt"
-        //   brace:  "prefix/{old => new}/suffix"
-        // Normalize to the new path before keying so the dict aligns with name-status.
-        for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
-            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 3 else { continue }
-            let addStr = parts[0]
-            let delStr = parts[1]
-            let path = Self.numstatNewPath(parts[2])
-            addByPath[path] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
-            delByPath[path] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
-        }
-
-        // Parse name-status: "status[score?] \t [old \t] new"
-        for line in nameStatusOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
-            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count >= 2 else { continue }
-            let statusLetter = String(parts[0].prefix(1))
-            let newPath: String
-            let oldPath: String?
-            if statusLetter == "R" || statusLetter == "C" {
-                guard parts.count >= 3 else { continue }
-                newPath = parts[2]
-                oldPath = parts[1]
-            } else {
-                newPath = parts[1]
-                oldPath = nil
-            }
-            statusByPath[newPath] = statusLetter
-            if let oldPath { originalByPath[newPath] = oldPath }
-            if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
-        }
-
-        let files: [CommitChangedFile] = ordered.map { path in
-            CommitChangedFile(
-                path: path,
-                originalPath: originalByPath[path],
-                status: statusByPath[path] ?? "M",
-                add: addByPath[path] ?? 0,
-                del: delByPath[path] ?? 0
-            )
-        }
+        let files = try await changedFiles(worktree: worktree, leftTree: leftTree, rightTree: sha)
 
         let info = CommitInfo(
             sha: fullSha,
@@ -849,6 +769,89 @@ extension GitService {
             parents: parents,
             files: files
         )
+    }
+
+    /// Lists changed files between two trees using the two diff-tree passes
+    /// (numstat + name-status) merged into ordered `CommitChangedFile`s. Shared
+    /// by `commitDetails` and `rangeChangedFiles`.
+    private func changedFiles(worktree: URL, leftTree: String, rightTree: String) async throws -> [CommitChangedFile] {
+        async let numstatResult = Process.git(
+            ["-c", "core.quotePath=false",
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--numstat", leftTree, rightTree],
+            cwd: worktree
+        )
+        async let nameStatusResult = Process.git(
+            ["-c", "core.quotePath=false",
+             "diff-tree", "--no-commit-id", "-r", "-M", "-C", "--no-color", "--name-status", leftTree, rightTree],
+            cwd: worktree
+        )
+        let numstatOut = try await numstatResult
+        let nameStatusOut = try await nameStatusResult
+
+        guard numstatOut.exitCode == 0 else {
+            throw NSError(domain: "GitService.changedFiles", code: Int(numstatOut.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: numstatOut.stderr])
+        }
+        guard nameStatusOut.exitCode == 0 else {
+            throw NSError(domain: "GitService.changedFiles", code: Int(nameStatusOut.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: nameStatusOut.stderr])
+        }
+
+        var addByPath: [String: Int] = [:]
+        var delByPath: [String: Int] = [:]
+        var statusByPath: [String: String] = [:]
+        var originalByPath: [String: String] = [:]
+        var ordered: [String] = []
+        var orderedSet: Set<String> = []
+
+        for line in numstatOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3 else { continue }
+            let addStr = parts[0]
+            let delStr = parts[1]
+            let path = Self.numstatNewPath(parts[2])
+            addByPath[path] = (addStr == "-") ? 0 : (Int(addStr) ?? 0)
+            delByPath[path] = (delStr == "-") ? 0 : (Int(delStr) ?? 0)
+        }
+
+        for line in nameStatusOut.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else { continue }
+            let statusLetter = String(parts[0].prefix(1))
+            let newPath: String
+            let oldPath: String?
+            if statusLetter == "R" || statusLetter == "C" {
+                guard parts.count >= 3 else { continue }
+                newPath = parts[2]
+                oldPath = parts[1]
+            } else {
+                newPath = parts[1]
+                oldPath = nil
+            }
+            statusByPath[newPath] = statusLetter
+            if let oldPath { originalByPath[newPath] = oldPath }
+            if orderedSet.insert(newPath).inserted { ordered.append(newPath) }
+        }
+
+        return ordered.map { path in
+            CommitChangedFile(
+                path: path,
+                originalPath: originalByPath[path],
+                status: statusByPath[path] ?? "M",
+                add: addByPath[path] ?? 0,
+                del: delByPath[path] ?? 0
+            )
+        }
+    }
+
+    /// Lists changed files for a commit range. Two-dot (`threeDot == false`)
+    /// compares `base` directly against `head`; three-dot uses the merge-base of
+    /// `base` and `head` as the left tree (branch-comparison semantics).
+    func rangeChangedFiles(at worktree: URL, base: String, head: String, threeDot: Bool) async throws -> [CommitChangedFile] {
+        let leftTree = threeDot
+            ? try await mergeBase(worktreePath: worktree, baseRef: base, headRef: head)
+            : base
+        return try await changedFiles(worktree: worktree, leftTree: leftTree, rightTree: head)
     }
 
     /// Given a numstat path field that may describe a rename via `old => new`
