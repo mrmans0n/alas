@@ -38,7 +38,7 @@ struct RemoteWebAssetTests {
         #expect(app.contains(#""toolCallId""#))
         #expect(app.contains(#""rawInput""#))
         #expect(app.contains(#""params""#))
-        #expect(app.contains(#"button.append(el("span", "tool-glyph", toolGlyph(verb)))"#))
+        #expect(app.contains(#"toggle.append(el("span", "tool-glyph", toolGlyph(verb)))"#))
         #expect(app.contains(#"preview || toolCollapsedPreview(tc)"#))
         #expect(css.contains(".tool-glyph"))
         #expect(css.contains(".tool-toggle"))
@@ -48,11 +48,28 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=47"#))
-        #expect(html.contains(#"/style.css?v=32"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v23";"#))
-        #expect(sw.contains(#""/app.js?v=47""#))
-        #expect(sw.contains(#""/style.css?v=32""#))
+        #expect(html.contains(#"/app.js?v=48"#))
+        #expect(html.contains(#"/style.css?v=33"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v24";"#))
+        #expect(sw.contains(#""/app.js?v=48""#))
+        #expect(sw.contains(#""/style.css?v=33""#))
+    }
+
+    @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
+        let app = try asset("app.js")
+        let html = try asset("index.html")
+        let sw = try asset("sw.js")
+
+        #expect(app.contains(#"const toggle = el("div", "tool-toggle")"#))
+        #expect(app.contains(#"toggle.setAttribute("role", "button")"#))
+        #expect(app.contains("toggle.tabIndex = 0"))
+        #expect(app.contains("function handleCardToggleKeydown"))
+        #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
+        #expect(html.contains(#"/app.js?v=48"#))
+        #expect(html.contains(#"/style.css?v=33"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v24";"#))
+        #expect(sw.contains(#""/app.js?v=48""#))
+        #expect(sw.contains(#""/style.css?v=33""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -93,8 +110,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-state-active"))
         #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=47"))
-        #expect(html.contains("/style.css?v=32"))
+        #expect(html.contains("/app.js?v=48"))
+        #expect(html.contains("/style.css?v=33"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -119,8 +136,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=47""#))
-        #expect(sw.contains(#""/style.css?v=32""#))
+        #expect(sw.contains(#""/app.js?v=48""#))
+        #expect(sw.contains(#""/style.css?v=33""#))
     }
 
     @Test func remoteWebIncludesNewSessionControls() throws {
