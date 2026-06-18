@@ -7,6 +7,25 @@ struct ReviewRequestDraftContext: Equatable {
     let diff: String
     let fileDiffsByPath: [String: String]
     let hasUncommittedChanges: Bool
+    let singleCommitBody: String?
+
+    init(
+        commitSubjects: [String],
+        commits: [CommitInfo],
+        changedFiles: [CommitChangedFile],
+        diff: String,
+        fileDiffsByPath: [String: String],
+        hasUncommittedChanges: Bool,
+        singleCommitBody: String? = nil
+    ) {
+        self.commitSubjects = commitSubjects
+        self.commits = commits
+        self.changedFiles = changedFiles
+        self.diff = diff
+        self.fileDiffsByPath = fileDiffsByPath
+        self.hasUncommittedChanges = hasUncommittedChanges
+        self.singleCommitBody = singleCommitBody
+    }
 }
 
 extension GitService {
@@ -36,6 +55,10 @@ extension GitService {
             ["status", "--porcelain"],
             cwd: worktreePath
         )
+        async let commitBodyResult = Process.git(
+            ["log", "\(baseRef)..HEAD", "--pretty=format:%b"],
+            cwd: worktreePath
+        )
 
         let subjects = try await subjectsResult
         let commits = try await commitsResult
@@ -43,6 +66,7 @@ extension GitService {
         let files = try await filesResult
         let names = try await namesResult
         let status = try await statusResult
+        let commitBody = try await commitBodyResult
 
         try Self.assertReviewRequestSuccess(subjects)
         try Self.assertReviewRequestSuccess(commits)
@@ -50,10 +74,15 @@ extension GitService {
         try Self.assertReviewRequestSuccess(files)
         try Self.assertReviewRequestSuccess(names)
         try Self.assertReviewRequestSuccess(status)
+        try Self.assertReviewRequestSuccess(commitBody)
 
         let commitSubjects = subjects.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map(String.init)
+
+        let singleCommitBody = commitSubjects.count == 1
+            ? commitBody.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            : nil
 
         let changedFiles = Self.reviewRequestChangedFiles(numstat: files.stdout, nameStatus: names.stdout)
         var fileDiffsByPath: [String: String] = [:]
@@ -80,7 +109,8 @@ extension GitService {
             changedFiles: changedFiles,
             diff: diff.stdout,
             fileDiffsByPath: fileDiffsByPath,
-            hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            hasUncommittedChanges: !status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            singleCommitBody: singleCommitBody
         )
     }
 
