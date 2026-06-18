@@ -57,16 +57,19 @@ enum ACPLaunchCatalog {
         // claude above: `@zed-industries/codex-acp` is stale and does NOT
         // emit `usage_update`, while `@agentclientprotocol/codex-acp` (active)
         // does, so the context-window indicator only lights up on the latter.
-        // The binary on PATH is still `codex-acp`.
+        // The binary on PATH is still `codex-acp` in both packages — which is
+        // exactly why the setup check is `.npxPackage` (gate on the specific
+        // global package) rather than `.binaryOnPathOrNpmPackage`: a
+        // binary-on-PATH check would pass on a stale `@zed-industries/codex-acp`
+        // install and skip the migration, leaving `usage_update` unavailable.
+        // (The claude rename above didn't need this — its binary name changed.)
         // Requires OPENAI_API_KEY or CODEX_API_KEY in the environment.
         ACPLaunchSpec(
             agentID: "codex",
             command: "codex-acp",
             arguments: [],
             extraEnv: [:],
-            setupCheck: .binaryOnPathOrNpmPackage(
-                binary: "codex-acp",
-                npmPackage: "@agentclientprotocol/codex-acp"),
+            setupCheck: .npxPackage(name: "@agentclientprotocol/codex-acp"),
             supportsModelSelection: false,
             supportsModeSelection: false),
 

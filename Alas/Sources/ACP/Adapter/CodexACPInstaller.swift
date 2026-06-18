@@ -10,9 +10,7 @@ struct CodexACPInstaller: ACPAdapterInstaller {
 
     func installState() async -> ACPSetupResult {
         await ACPSetupChecker(env: ProcessInfo.processInfo.environment)
-            .evaluate(.binaryOnPathOrNpmPackage(
-                binary: "codex-acp",
-                npmPackage: "@agentclientprotocol/codex-acp"))
+            .evaluate(.npxPackage(name: "@agentclientprotocol/codex-acp"))
     }
 
     func install() async throws {
