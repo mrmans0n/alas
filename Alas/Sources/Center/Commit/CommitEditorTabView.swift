@@ -25,13 +25,14 @@ struct CommitEditorTabView: View {
     @State private var error: String?
     @State private var pendingDropFile: PendingCommitFileDrop?
     @State private var pendingDropHunk: PendingCommitHunkDrop?
+    @State private var showWhitespace = false
 
     @Environment(\.theme) private var theme
     private let git = GitService()
 
     private static let minPaneWidth: CGFloat = 140
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState)
+        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
     }
 
     private var dirty: Bool {

@@ -43,6 +43,7 @@ struct DiffTabView: View {
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
+    @State private var showWhitespace = false
     @FocusState private var draftComposerFocused: Bool
 
     private let git = GitService()
@@ -161,7 +162,7 @@ struct DiffTabView: View {
     }
 
     private var diffPreferences: DiffPreferenceBindings {
-        DiffPreferenceBindings(appState: appState)
+        DiffPreferenceBindings(appState: appState, showWhitespace: $showWhitespace)
     }
 
     private var lspContext: DiffPaneLSPContext? {

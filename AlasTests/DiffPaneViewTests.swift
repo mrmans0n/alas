@@ -842,20 +842,31 @@ let second = true
         #expect(scrollView.contentView.frame.minX >= rulerWidth - 0.5)
     }
 
-    @Test func diffPreferenceBindingsPersistChanges() {
+    @Test func diffPreferenceBindingsPersistLayoutAndWrapButKeepWhitespaceLocal() {
         let appState = AppState()
         appState.config.changes.diffLayoutMode = .split
         appState.config.changes.diffWrapLines = false
-        appState.config.changes.diffShowWhitespace = false
+        appState.config.changes.diffShowWhitespace = true
+        var firstWhitespace = false
+        var secondWhitespace = false
 
-        let bindings = DiffPreferenceBindings(appState: appState)
-        bindings.layoutMode.wrappedValue = .stacked
-        bindings.wrapLines.wrappedValue = true
-        bindings.showWhitespace.wrappedValue = true
+        let first = DiffPreferenceBindings(
+            appState: appState,
+            showWhitespace: Binding(get: { firstWhitespace }, set: { firstWhitespace = $0 })
+        )
+        first.layoutMode.wrappedValue = .stacked
+        first.wrapLines.wrappedValue = true
+        first.showWhitespace.wrappedValue = true
+        let second = DiffPreferenceBindings(
+            appState: appState,
+            showWhitespace: Binding(get: { secondWhitespace }, set: { secondWhitespace = $0 })
+        )
 
         #expect(appState.config.changes.diffLayoutMode == .stacked)
         #expect(appState.config.changes.diffWrapLines == true)
         #expect(appState.config.changes.diffShowWhitespace == true)
+        #expect(first.showWhitespace.wrappedValue == true)
+        #expect(second.showWhitespace.wrappedValue == false)
     }
 
     @Test func collapsedContextControllerTogglesHiddenRows() throws {

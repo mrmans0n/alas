@@ -348,17 +348,16 @@ struct ReviewSessionTabView: View {
 
     private var layoutModeBinding: Binding<DiffLayoutMode> {
         guard let appState else { return $localLayoutMode }
-        return DiffPreferenceBindings(appState: appState).layoutMode
+        return DiffPreferenceBindings(appState: appState, showWhitespace: $localShowWhitespace).layoutMode
     }
 
     private var wrapLinesBinding: Binding<Bool> {
         guard let appState else { return $localWrapLines }
-        return DiffPreferenceBindings(appState: appState).wrapLines
+        return DiffPreferenceBindings(appState: appState, showWhitespace: $localShowWhitespace).wrapLines
     }
 
     private var showWhitespaceBinding: Binding<Bool> {
-        guard let appState else { return $localShowWhitespace }
-        return DiffPreferenceBindings(appState: appState).showWhitespace
+        $localShowWhitespace
     }
 
     private func makeLSPContext(_ file: DiffReviewFileSectionModel) -> DiffPaneLSPContext? {
