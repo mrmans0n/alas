@@ -52,17 +52,24 @@ enum ACPLaunchCatalog {
             supportsModelSelection: true,
             supportsModeSelection: true),
 
-        // Codex CLI (OpenAI) has no native ACP support. The Zed adapter
-        // `@zed-industries/codex-acp` bridges Codex to ACP over stdio.
+        // Codex CLI (OpenAI) has no native ACP support; an adapter bridges
+        // Codex to ACP over stdio. The package moved orgs — same story as
+        // claude above: `@zed-industries/codex-acp` is stale and does NOT
+        // emit `usage_update`, while `@agentclientprotocol/codex-acp` (active)
+        // does, so the context-window indicator only lights up on the latter.
+        // The binary on PATH is still `codex-acp` in both packages — which is
+        // exactly why the setup check is `.npxPackage` (gate on the specific
+        // global package) rather than `.binaryOnPathOrNpmPackage`: a
+        // binary-on-PATH check would pass on a stale `@zed-industries/codex-acp`
+        // install and skip the migration, leaving `usage_update` unavailable.
+        // (The claude rename above didn't need this — its binary name changed.)
         // Requires OPENAI_API_KEY or CODEX_API_KEY in the environment.
         ACPLaunchSpec(
             agentID: "codex",
             command: "codex-acp",
             arguments: [],
             extraEnv: [:],
-            setupCheck: .binaryOnPathOrNpmPackage(
-                binary: "codex-acp",
-                npmPackage: "@zed-industries/codex-acp"),
+            setupCheck: .npxPackage(name: "@agentclientprotocol/codex-acp"),
             supportsModelSelection: false,
             supportsModeSelection: false),
 

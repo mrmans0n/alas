@@ -39,4 +39,26 @@ struct ACPSetupCheckerTests {
         let r = await checker.evaluate(.binaryOnPath(name: "codex-acp"))
         #expect(r == .ready)
     }
+
+    // Regression: the codex setup check must NOT be satisfied by a stale
+    // `codex-acp` binary alone. Both the old `@zed-industries/codex-acp` and
+    // the active `@agentclientprotocol/codex-acp` fork ship that binary name,
+    // so gating on the binary would skip migrating users off the package that
+    // lacks `usage_update`. The catalog uses `.npxPackage` to force migration.
+    @Test("codex setup check requires the package, not just a codex-acp binary on PATH")
+    func codexSetupCheckIsPackageSpecific() async throws {
+        let executable = try makeExecutable(named: "codex-acp")
+        defer { try? FileManager.default.removeItem(at: executable.deletingLastPathComponent()) }
+
+        let codexCheck = try #require(ACPLaunchCatalog.spec(for: "codex")?.setupCheck)
+        // PATH carries the fake `codex-acp` but no `npm`, so global-package
+        // resolution deterministically fails — isolating binary-vs-package.
+        let checker = ACPSetupChecker(
+            env: ["PATH": executable.deletingLastPathComponent().path],
+            additionalPathDirectories: [])
+        let r = await checker.evaluate(codexCheck)
+        if case .missing = r {} else {
+            Issue.record("expected .missing — a codex-acp binary alone must not satisfy the codex check")
+        }
+    }
 }
