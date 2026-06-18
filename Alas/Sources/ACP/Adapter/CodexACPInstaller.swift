@@ -14,6 +14,11 @@ struct CodexACPInstaller: ACPAdapterInstaller {
     }
 
     func install() async throws {
+        // The stale `@zed-industries/codex-acp` declares the same global
+        // `codex-acp` bin; npm (v7+) refuses to clobber another package's bin
+        // and fails with EEXIST. Remove the old package first — best-effort,
+        // since it may not be present — then install the active fork.
+        _ = try? await runner("npm", ["uninstall", "-g", "@zed-industries/codex-acp"])
         let (status, stderr) = try await runner("npm", ["install", "-g", "@agentclientprotocol/codex-acp"])
         if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }
     }

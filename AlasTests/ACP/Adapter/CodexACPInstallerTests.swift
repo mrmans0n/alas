@@ -4,17 +4,18 @@ import Testing
 
 @Suite("CodexACPInstaller")
 struct CodexACPInstallerTests {
-    @Test("install runs `npm install -g @agentclientprotocol/codex-acp`")
+    @Test("install removes the stale package, then installs the active fork")
     func install() async {
-        var capturedCommand: [String] = []
+        var calls: [[String]] = []
         let installer = CodexACPInstaller(runner: { cmd, args in
-            capturedCommand = [cmd] + args
+            calls.append([cmd] + args)
             return (status: 0, stderr: "")
         })
         try? await installer.install()
-        #expect(capturedCommand.contains("npm"))
-        #expect(capturedCommand.contains("install"))
-        #expect(capturedCommand.contains("-g"))
-        #expect(capturedCommand.contains("@agentclientprotocol/codex-acp"))
+        // Uninstall the old package first (avoids npm EEXIST on the shared
+        // `codex-acp` bin), then install the active fork.
+        #expect(calls.count == 2)
+        #expect(calls.first == ["npm", "uninstall", "-g", "@zed-industries/codex-acp"])
+        #expect(calls.last == ["npm", "install", "-g", "@agentclientprotocol/codex-acp"])
     }
 }
