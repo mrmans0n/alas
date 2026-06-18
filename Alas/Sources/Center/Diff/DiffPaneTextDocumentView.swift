@@ -853,6 +853,8 @@ final class DiffPaneCodeTextView: NSTextView {
     var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
     private var scrollBoundsObservers: [NSObjectProtocol] = []
     private var observedScrollViews: [NSScrollView] = []
+    private var scheduledRebindWorkItem: DispatchWorkItem?
+
     var theme: Theme? {
         didSet { needsDisplay = true }
     }
@@ -877,12 +879,33 @@ final class DiffPaneCodeTextView: NSTextView {
     deinit {
         let lspController = lspController
         let observers = scrollBoundsObservers
+        let workItem = scheduledRebindWorkItem
         Task { @MainActor in
             for observer in observers {
                 NotificationCenter.default.removeObserver(observer)
             }
+            workItem?.cancel()
             lspController?.tearDown()
         }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scheduleDeferredRebind()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        scheduleDeferredRebind()
+    }
+
+    private func scheduleDeferredRebind() {
+        scheduledRebindWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.installScrollBoundsObserver()
+        }
+        scheduledRebindWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1076,6 +1099,7 @@ final class DiffPaneCodeTextView: NSTextView {
             lspController?.tearDown()
             lspController = nil
             removeScrollBoundsObserver()
+            scheduledRebindWorkItem?.cancel()
             return
         }
         if lspController == nil {
@@ -1085,6 +1109,7 @@ final class DiffPaneCodeTextView: NSTextView {
         // text view to the outer vertical `ScrollView` after the first mount,
         // so the outermost ancestor scroll view can change over time.
         installScrollBoundsObserver()
+        scheduleDeferredRebind()
         lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
     }
 
