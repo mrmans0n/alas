@@ -193,12 +193,29 @@ struct RootView: View {
         .sheet(item: Binding(
             get: { state.updates.presentedUpdate },
             set: { state.updates.presentedUpdate = $0 }
-        )) { info in
+        ), onDismiss: {
+            guard state.pendingSelfUpdate else { return }
+            state.pendingSelfUpdate = false
+            state.presentUpdateProgress = true
+            Task {
+                try? await state.selfUpdater.start(command: .homebrew)
+            }
+        }) { info in
             UpdateAvailableSheet(
                 info: info,
                 source: state.updates.track == .nightly ? .direct : state.updates.source,
-                onDismiss: { state.updates.presentedUpdate = nil }
+                onDismiss: { state.updates.presentedUpdate = nil },
+                onRunUpdate: {
+                    state.pendingSelfUpdate = true
+                    state.updates.presentedUpdate = nil
+                }
             )
+            .environment(\.theme, state.themeStore.current)
+        }
+        .sheet(isPresented: $state.presentUpdateProgress) {
+            UpdateProgressSheet(updater: state.selfUpdater) {
+                state.presentUpdateProgress = false
+            }
             .environment(\.theme, state.themeStore.current)
         }
         .task {

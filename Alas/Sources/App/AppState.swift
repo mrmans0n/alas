@@ -342,6 +342,16 @@ final class AppState {
     // MARK: - LSP installer
 
     let lspInstaller = LSPInstaller()
+
+    // MARK: - Self updater
+
+    let selfUpdater = SelfUpdater()
+    var presentUpdateProgress = false
+    /// Set when the user taps Update in the update sheet; the progress sheet
+    /// is presented from the update sheet's `onDismiss` so the two sheets don't
+    /// conflict while the first one is still animating out.
+    var pendingSelfUpdate = false
+
     private(set) var installerHost: InstallerHost = .detect()
 
     /// Re-detect installers after an install completes so that, e.g., installing
