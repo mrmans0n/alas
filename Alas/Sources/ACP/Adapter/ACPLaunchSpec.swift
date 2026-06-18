@@ -19,4 +19,18 @@ struct ACPLaunchSpec: Equatable {
         case .binaryOnPathOrNpmPackage(_, let npmPackage): return npmPackage
         }
     }
+
+    /// A copy of this spec with `command` replaced and all other fields
+    /// unchanged. Used to launch a resolved absolute path through the
+    /// launcher's existing absolute-path branch.
+    func overridingCommand(_ command: String) -> ACPLaunchSpec {
+        ACPLaunchSpec(
+            agentID: agentID,
+            command: command,
+            arguments: arguments,
+            extraEnv: extraEnv,
+            setupCheck: setupCheck,
+            supportsModelSelection: supportsModelSelection,
+            supportsModeSelection: supportsModeSelection)
+    }
 }

@@ -1375,7 +1375,7 @@ extension ACPSessionManager {
 
         let connection: ACPConnection
         do {
-            connection = try connectionFactory(spec)
+            connection = try connectionFactory(await resolvedLaunchSpec(for: spec))
         } catch {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
@@ -1735,6 +1735,19 @@ extension ACPSessionManager {
             Task { @MainActor in await reattach(to: sessionId) }
             return true
         }
+    }
+
+    /// Swap `spec.command` for the verified absolute launch path when one can
+    /// be resolved (npm-backed adapters); otherwise return `spec` unchanged so
+    /// launch falls back to PATH-based `/usr/bin/env <command>`.
+    private func resolvedLaunchSpec(for spec: ACPLaunchSpec) async -> ACPLaunchSpec {
+        let env = ProcessInfo.processInfo.environment
+        let resolver = ACPLaunchPathResolver(
+            env: env,
+            additionalPathDirectories: AgentPath.wellKnownDirectories,
+            npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
+        guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
+        return spec.overridingCommand(path)
     }
 
     private func handleAuthRequiredRunner(

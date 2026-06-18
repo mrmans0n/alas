@@ -27,6 +27,22 @@ enum AgentPath {
         return augment(base: basePath, wellKnown: wellKnownDirectories)
     }
 
+    /// Absolute path of the first executable named `name` found by scanning
+    /// `augment(base:wellKnown:)`, or nil. Shared by the setup checker and the
+    /// launch-path resolver so both resolve binaries identically.
+    static func resolveExecutable(
+        named name: String,
+        base: String?,
+        wellKnown: [String] = wellKnownDirectories
+    ) -> String? {
+        let pathValue = augment(base: base ?? "", wellKnown: wellKnown)
+        for dir in pathValue.split(separator: ":") {
+            let candidate = "\(dir)/\(name)"
+            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        }
+        return nil
+    }
+
     /// Pure: tilde-expands each `wellKnown` entry, drops those that don't
     /// exist on disk, drops those whose expanded form already appears in
     /// `base`, and appends the rest to `base` in order.
