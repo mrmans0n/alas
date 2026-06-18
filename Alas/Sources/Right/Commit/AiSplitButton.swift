@@ -70,6 +70,7 @@ struct AiSplitButton: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .help("Select AI agent")
         }
         .clipShape(RoundedRectangle(cornerRadius: 4))
     }

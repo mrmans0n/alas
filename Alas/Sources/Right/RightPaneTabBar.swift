@@ -33,7 +33,7 @@ struct RightPaneTabBar: View {
 
             Spacer(minLength: 8)
             trailing
-            ToolbarBtn(icon: "sidebar.right", action: onHidePane)
+            ToolbarBtn(icon: "sidebar.right", tooltip: "Hide changes pane", action: onHidePane)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .overlay(Divider().opacity(0.5), alignment: .bottom)

@@ -75,10 +75,10 @@ private struct SpaceSettingsRow: View {
                     applyChanges()
                 }
                 .accessibilityLabel("Space icon for \(space.name)")
-                SpaceRowIconButton(icon: "checkmark", action: applyChanges)
+                SpaceRowIconButton(icon: "checkmark", tooltip: "Apply changes", action: applyChanges)
                     .disabled(!hasDraftChanges)
                     .accessibilityLabel("Apply changes to \(space.name) space")
-                SpaceRowIconButton(icon: "trash") {
+                SpaceRowIconButton(icon: "trash", tooltip: "Delete space") {
                     isConfirmingDelete = true
                 }
                 .disabled(!canDelete)
@@ -124,6 +124,7 @@ private struct SpaceSettingsRow: View {
 
 private struct SpaceRowIconButton: View {
     let icon: String
+    let tooltip: String
     let action: () -> Void
     @Environment(\.theme) var theme
 
@@ -139,6 +140,7 @@ private struct SpaceRowIconButton: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .help(tooltip)
     }
 }
 

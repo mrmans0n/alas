@@ -69,6 +69,7 @@ struct InstallSplitButton: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(busy)
+        .help("Choose installer")
     }
 
     private func runPrimary() {

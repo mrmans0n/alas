@@ -272,6 +272,7 @@ struct DiffInlineCommentCard: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .help("Edit comment")
                     }
                     if comment.viewerCanDelete {
                         Button {
@@ -282,6 +283,7 @@ struct DiffInlineCommentCard: View {
                                 .foregroundColor(.secondary)
                         }
                         .buttonStyle(.plain)
+                        .help("Delete comment")
                     }
                 }
                 Text(comment.body)
