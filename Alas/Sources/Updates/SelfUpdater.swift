@@ -43,6 +43,11 @@ final class SelfUpdater {
     private var currentProcess: Process?
     private var watchdog: Task<Void, Never>?
     private var cancelRequested = false
+    /// Identity token for the currently-tracked update. Incremented on every
+    /// spawn and on every `reset()`. The readability/termination handlers only
+    /// mutate state/logs if this still matches the spawn-time value —
+    /// otherwise a stale handler from a killed process could corrupt a new run.
+    private var generation: Int = 0
 
     /// Start the update. Requires `.idle`; otherwise throws.
     func start(command: SelfUpdateCommand) async throws {
@@ -89,6 +94,7 @@ final class SelfUpdater {
         watchdog?.cancel()
         watchdog = nil
         cancelRequested = false
+        generation &+= 1
     }
 
     /// Test seam: spawn a command directly without going through `start`.
@@ -122,6 +128,9 @@ final class SelfUpdater {
         let stdinPipe = Pipe()
         process.standardInput = stdinPipe
 
+        generation &+= 1
+        let myGeneration = generation
+
         let buffer = LineBuffer()
         pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -133,7 +142,8 @@ final class SelfUpdater {
             let lines = buffer.feed(chunk)
             if lines.isEmpty { return }
             Task { @MainActor [weak self] in
-                self?.logLines.append(contentsOf: lines)
+                guard let self, self.generation == myGeneration else { return }
+                self.logLines.append(contentsOf: lines)
             }
         }
 
@@ -149,6 +159,7 @@ final class SelfUpdater {
             let finalTrailing = buffer.flush()
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                guard self.generation == myGeneration else { return }
                 if !finalLines.isEmpty {
                     self.logLines.append(contentsOf: finalLines)
                 }
