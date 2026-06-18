@@ -20,7 +20,8 @@ struct ChangesTabView: View {
         let readiness = ReviewReadinessModel(
             snapshot: rps.reviewLoop.snapshot,
             lastError: rps.reviewLoop.lastError,
-            canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState)
+            canOpenAgentHandoff: rps.canOpenReviewLoopHandoff(appState: appState),
+            inFlightAction: rps.reviewLoop.inFlightAction
         )
         return ChangesPreparationModel(
             changes: rps.changes,

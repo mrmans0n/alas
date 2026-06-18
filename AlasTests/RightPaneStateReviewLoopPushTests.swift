@@ -34,6 +34,29 @@ struct RightPaneStateReviewLoopPushTests {
         })
     }
 
+    @Test func createReviewRequestActionNoopsWhileReviewActionIsInFlight() {
+        let worktreeId = "wt-review-request-draft-action-in-flight"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let appState = AppState(store: MemoryStore())
+        let worktree = Worktree(
+            id: worktreeId,
+            projectId: "p1",
+            name: "feature/pr-drafts",
+            branch: "feature/pr-drafts",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.reviewLoop.setSnapshotForTests(Self.makeSnapshot())
+        #expect(state.reviewLoop.beginAction(.pushBranch))
+
+        state.handleReviewReadinessAction(.createReviewRequest, appState: appState)
+
+        #expect(appState.tabs.tabs(forWorktree: worktreeId).isEmpty)
+        #expect(state.reviewLoop.inFlightAction == .pushBranch)
+    }
+
     @Test func inspectReviewEvidenceActionNoopsWithoutReviewRequest() {
         let worktreeId = "wt-review-evidence-no-request"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

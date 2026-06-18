@@ -146,6 +146,7 @@ struct ChangesPreparationCard: View {
             iconName: action.iconName,
             showsDot: action.emphasis == .primary,
             isEnabled: action.isEnabled,
+            isInFlight: action.isInFlight,
             action: { onReviewRequestAction(action.kind) }
         )
         .accessibilityIdentifier("changes-preparation-review-request")
@@ -157,11 +158,18 @@ struct ChangesPreparationCard: View {
         iconName: String,
         showsDot: Bool,
         isEnabled: Bool,
+        isInFlight: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Icon(name: iconName, size: 11, color: theme.color("fg-dim"))
+                if isInFlight {
+                    Spinner(lineWidth: 1.5, duration: 0.7)
+                        .frame(width: 11, height: 11)
+                        .accessibilityHidden(true)
+                } else {
+                    Icon(name: iconName, size: 11, color: theme.color("fg-dim"))
+                }
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
                         Text(title)
@@ -187,7 +195,7 @@ struct ChangesPreparationCard: View {
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .opacity(isEnabled ? 1 : 0.5)
+        .opacity(isEnabled || isInFlight ? 1 : 0.5)
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(theme.color("bg-2").opacity(0.72))

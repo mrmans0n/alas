@@ -249,9 +249,15 @@ final class RightPaneState {
     }
 
     func handleReviewReadinessAction(_ action: ReviewReadinessActionKind, appState: AppState) {
+        guard reviewLoop.inFlightAction == nil else { return }
+
         switch action {
         case .refresh:
-            Task { @MainActor in await refresh() }
+            guard reviewLoop.beginAction(action) else { return }
+            Task { @MainActor in
+                defer { reviewLoop.endAction(action) }
+                await refresh()
+            }
         case .openReviewRequest:
             openReviewLoopProviderPage()
         case .openAgentHandoff:
@@ -267,7 +273,9 @@ final class RightPaneState {
             )
         case .pushBranch, .forcePushBranch:
             guard let snapshot = reviewLoop.snapshot else { return }
+            guard reviewLoop.beginAction(action) else { return }
             Task { @MainActor in
+                defer { reviewLoop.endAction(action) }
                 do {
                     let result = try await Process.git(
                         Self.reviewLoopPushArguments(
@@ -290,7 +298,9 @@ final class RightPaneState {
             appState.tabs.openOrFocusDraftReviewRequest(worktreeId: worktree.id, snapshot: snapshot)
         case .rerunFailedChecks:
             guard let snapshot = reviewLoop.snapshot else { return }
+            guard reviewLoop.beginAction(action) else { return }
             Task { @MainActor in
+                defer { reviewLoop.endAction(action) }
                 if await reviewLoop.rerunFailedChecks(snapshot: snapshot) {
                     await refresh()
                 }

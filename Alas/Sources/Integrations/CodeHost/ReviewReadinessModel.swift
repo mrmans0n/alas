@@ -36,6 +36,19 @@ struct ReviewReadinessModel: Equatable, Sendable {
         let kind: ReviewReadinessActionKind
         let title: String
         let isEnabled: Bool
+        let isInFlight: Bool
+
+        init(
+            kind: ReviewReadinessActionKind,
+            title: String,
+            isEnabled: Bool,
+            isInFlight: Bool = false
+        ) {
+            self.kind = kind
+            self.title = title
+            self.isEnabled = isEnabled
+            self.isInFlight = isInFlight
+        }
 
         var id: ReviewReadinessActionKind { kind }
 
@@ -73,7 +86,12 @@ struct ReviewReadinessModel: Equatable, Sendable {
     let actions: [Action]
     let blockingText: String?
 
-    init(snapshot: ReviewLoopSnapshot?, lastError: String?, canOpenAgentHandoff: Bool) {
+    init(
+        snapshot: ReviewLoopSnapshot?,
+        lastError: String?,
+        canOpenAgentHandoff: Bool,
+        inFlightAction: ReviewReadinessActionKind? = nil
+    ) {
         guard let snapshot else {
             identity = "Review readiness"
             providerIconName = "branch"
@@ -82,7 +100,10 @@ struct ReviewReadinessModel: Equatable, Sendable {
             title = nil
             chips = [Chip(id: "loading", title: "Checking", tone: .accent)]
             facts = []
-            actions = [Action(kind: .refresh, title: "Refresh", isEnabled: true)]
+            actions = Self.actions(
+                [Action(kind: .refresh, title: "Refresh", isEnabled: true)],
+                applying: inFlightAction
+            )
             blockingText = lastError ?? "Review state is still loading."
             return
         }
@@ -102,16 +123,37 @@ struct ReviewReadinessModel: Equatable, Sendable {
         facts = Self.makeFacts(snapshot: snapshot, requestLabel: requestLabel)
         if lastError != nil || snapshot.errorMessage != nil {
             chips = [Chip(id: "error", title: "Needs attention", tone: .warning)]
-            actions = [Action(kind: .refresh, title: "Refresh", isEnabled: true)]
+            actions = Self.actions(
+                [Action(kind: .refresh, title: "Refresh", isEnabled: true)],
+                applying: inFlightAction
+            )
             return
         }
 
         chips = Self.makeChips(snapshot: snapshot, requestLabel: requestLabel)
-        actions = Self.makeActions(
-            snapshot: snapshot,
-            requestLabel: requestLabel,
-            canOpenAgentHandoff: canOpenAgentHandoff
+        actions = Self.actions(
+            Self.makeActions(
+                snapshot: snapshot,
+                requestLabel: requestLabel,
+                canOpenAgentHandoff: canOpenAgentHandoff
+            ),
+            applying: inFlightAction
         )
+    }
+
+    private static func actions(
+        _ actions: [Action],
+        applying inFlightAction: ReviewReadinessActionKind?
+    ) -> [Action] {
+        guard let inFlightAction else { return actions }
+        return actions.map { action in
+            Action(
+                kind: action.kind,
+                title: action.title,
+                isEnabled: false,
+                isInFlight: action.kind == inFlightAction
+            )
+        }
     }
 
     private static func providerBlockingText(_ snapshot: ReviewLoopSnapshot) -> String? {

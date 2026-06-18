@@ -11,7 +11,8 @@ struct ReviewLoopDrawer: View {
         ReviewReadinessModel(
             snapshot: state.snapshot,
             lastError: state.lastError,
-            canOpenAgentHandoff: canOpenAgentHandoff
+            canOpenAgentHandoff: canOpenAgentHandoff,
+            inFlightAction: state.inFlightAction
         )
     }
 
@@ -107,6 +108,8 @@ struct ReviewLoopDrawer: View {
                 }
                 .buttonStyle(.plain)
                 .focusEffectDisabled()
+                .disabled(state.inFlightAction != nil)
+                .opacity(state.inFlightAction == nil ? 1 : 0.5)
                 .help("Open \(model.providerTitle ?? "review") \(requestNumberTitle)")
             }
         }
@@ -234,7 +237,13 @@ private struct ReviewReadinessActionButton: View {
     var body: some View {
         Button(action: onAction) {
             HStack(spacing: 6) {
-                Icon(name: action.iconName, size: iconSize, color: foreground)
+                if action.isInFlight {
+                    Spinner(lineWidth: 1.5, duration: 0.7)
+                        .frame(width: iconSize, height: iconSize)
+                        .accessibilityHidden(true)
+                } else {
+                    Icon(name: action.iconName, size: iconSize, color: foreground)
+                }
                 Text(action.title)
                     .font(.system(size: 11.5, weight: .semibold))
                     .lineLimit(1)
@@ -252,7 +261,7 @@ private struct ReviewReadinessActionButton: View {
         .buttonStyle(.plain)
         .focusEffectDisabled()
         .disabled(!action.isEnabled)
-        .opacity(action.isEnabled ? 1 : 0.5)
+        .opacity(action.isEnabled || action.isInFlight ? 1 : 0.5)
         .help(action.title)
     }
 

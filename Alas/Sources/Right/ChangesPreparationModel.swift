@@ -20,6 +20,7 @@ struct ChangesPreparationModel: Equatable {
         let kind: ReviewReadinessActionKind
         let title: String
         let isEnabled: Bool
+        let isInFlight: Bool
         let iconName: String
         let emphasis: ReviewReadinessModel.Action.Emphasis
     }
@@ -79,12 +80,24 @@ struct ChangesPreparationModel: Equatable {
     private static func compactReviewRequestAction(
         from actions: [ReviewReadinessModel.Action]
     ) -> ReviewRequestAction? {
+        if let action = actions.first(where: { $0.isInFlight }) {
+            return ReviewRequestAction(
+                kind: action.kind,
+                title: action.title,
+                isEnabled: action.isEnabled,
+                isInFlight: action.isInFlight,
+                iconName: action.iconName,
+                emphasis: action.emphasis
+            )
+        }
+
         for kind in compactActionPriority {
             guard let action = actions.first(where: { $0.kind == kind }) else { continue }
             return ReviewRequestAction(
                 kind: action.kind,
                 title: action.title,
                 isEnabled: action.isEnabled,
+                isInFlight: action.isInFlight,
                 iconName: action.iconName,
                 emphasis: action.emphasis
             )

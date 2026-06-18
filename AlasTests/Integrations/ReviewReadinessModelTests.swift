@@ -30,6 +30,20 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.createReviewRequest))
     }
 
+    @Test func inFlightActionDisablesReadinessActionsAndMarksRunningAction() throws {
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: true), reviewRequest: nil),
+            lastError: nil,
+            canOpenAgentHandoff: false,
+            inFlightAction: .pushBranch
+        )
+
+        let push = try #require(model.actions.first { $0.kind == .pushBranch })
+        #expect(push.isInFlight)
+        #expect(!push.isEnabled)
+        #expect(model.actions.allSatisfy { !$0.isEnabled })
+    }
+
     @Test func divergedBranchExposesForcePushInsteadOfNormalPush() {
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(local: Self.makeLocal(needsPush: true, upstreamAheadCommitCount: 3), reviewRequest: nil),

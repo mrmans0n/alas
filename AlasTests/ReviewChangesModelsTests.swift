@@ -353,6 +353,57 @@ struct ReviewChangesModelsTests {
         #expect(reviewRequest.title == "Push")
     }
 
+    @Test func preparationModelPreservesInFlightReviewRequestAction() throws {
+        let actions = [
+            ReviewReadinessModel.Action(
+                kind: .pushBranch,
+                title: "Push",
+                isEnabled: false,
+                isInFlight: true
+            ),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        let reviewRequest = try #require(model.reviewRequestAction)
+        #expect(reviewRequest.kind == .pushBranch)
+        #expect(!reviewRequest.isEnabled)
+        #expect(reviewRequest.isInFlight)
+    }
+
+    @Test func preparationModelPrioritizesInFlightActionOverCompactPriority() throws {
+        let actions = [
+            ReviewReadinessModel.Action(
+                kind: .rerunFailedChecks,
+                title: "Rerun",
+                isEnabled: false,
+                isInFlight: true
+            ),
+            ReviewReadinessModel.Action(
+                kind: .inspectReviewEvidence,
+                title: "Inspect",
+                isEnabled: false
+            ),
+        ]
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            readinessActions: actions
+        )
+
+        let reviewRequest = try #require(model.reviewRequestAction)
+        #expect(reviewRequest.kind == .rerunFailedChecks)
+        #expect(reviewRequest.title == "Rerun")
+        #expect(reviewRequest.isInFlight)
+    }
+
     @Test func preparationModelCanBeBuiltFromReadinessModelActions() throws {
         let readiness = ReviewReadinessModel(
             snapshot: ReviewChangesReadinessFixtures.makeSnapshot(reviewRequest: nil),
