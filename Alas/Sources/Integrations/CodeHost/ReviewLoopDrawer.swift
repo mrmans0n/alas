@@ -66,6 +66,7 @@ struct ReviewLoopDrawer: View {
             toggleExpanded()
         }
         .focusable()
+        .focusEffectDisabled()
         .onKeyPress(.return) {
             toggleExpanded()
             return .handled
