@@ -164,6 +164,19 @@ struct ACPMessageListPaginationTests {
         ) == nil)
     }
 
+    @Test("visible message lookup records ids and transcript indices")
+    func visibleMessageLookupRecordsIdsAndTranscriptIndices() {
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40"),
+            (index: 41, stableId: "message-41")
+        ])
+
+        #expect(lookup.contains("message-40"))
+        #expect(!lookup.contains("message-39"))
+        #expect(lookup.transcriptIndex(for: "message-41") == 41)
+        #expect(lookup.firstStableId == "message-40")
+    }
+
     @Test("visible anchor memory accepts live anchors when the remembered id is stale")
     func visibleAnchorMemoryAcceptsStaleRememberedIDReplacement() {
         #expect(ACPMessageList.shouldRememberVisibleAnchor(

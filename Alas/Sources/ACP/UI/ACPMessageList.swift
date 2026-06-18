@@ -55,10 +55,6 @@ struct ACPMessageList: View {
     /// reset to `max(0, count - tailWindow)` after hydration); the
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
-    private var visibleMessages: [ACPMessage] {
-        visibleRows.map(\.message)
-    }
-
     private var visibleRows: [(index: Int, message: ACPMessage)] {
         let head = min(transcript.visibleHead, transcript.messages.count)
         return (head..<transcript.messages.count).compactMap { index in
@@ -276,7 +272,7 @@ struct ACPMessageList: View {
             return
         }
         guard let anchor = rememberedScrollAnchor(), restoredRememberedAnchor != anchor else { return }
-        guard visibleMessages.contains(where: { $0.stableId == anchor }) else { return }
+        guard visibleMessageLookup.contains(anchor) else { return }
         isRestoringTail = true
         proxy.scrollTo(anchor, anchor: .top)
         restoredRememberedAnchor = anchor
@@ -387,9 +383,10 @@ struct ACPMessageList: View {
         } else {
             pendingTailScrollTask?.cancel()
             pendingTailScrollTask = nil
+            let lookup = visibleMessageLookup
             onRememberScrollAnchor(
                 latestTopVisibleAnchor,
-                transcriptIndex(forStableId: latestTopVisibleAnchor),
+                lookup.transcriptIndex(for: latestTopVisibleAnchor),
                 false
             )
             restoredRememberedAnchor = latestTopVisibleAnchor
@@ -399,6 +396,7 @@ struct ACPMessageList: View {
     private func handleRowFramePreference(_ frames: [String: CGRect], proxy: ScrollViewProxy) {
         restoreRememberedAnchorIfNeeded(proxy: proxy)
         guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
+        let lookup = visibleMessageLookup
         latestTopVisibleAnchor = anchor
         guard !isRestoringTail else { return }
         guard !session.followsTranscriptTail else { return }
@@ -406,24 +404,25 @@ struct ACPMessageList: View {
             anchor,
             rememberedAnchor: rememberedScrollAnchor(),
             restoredRememberedAnchor: restoredRememberedAnchor,
-            visibleMessageIds: Set(visibleMessages.map(\.stableId)),
+            visibleMessageIds: lookup.ids,
             isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
         ) {
             return
         }
-        onRememberScrollAnchor(anchor, transcriptIndex(forStableId: anchor), false)
+        onRememberScrollAnchor(anchor, lookup.transcriptIndex(for: anchor), false)
         restoredRememberedAnchor = anchor
     }
 
     private func handleVisibleTargetIDs(_ ids: [String]) {
+        let lookup = visibleMessageLookup
         guard let anchor = Self.topVisibleScrollTargetID(
             in: ids,
-            visibleMessageIds: Set(visibleMessages.map(\.stableId))
+            visibleMessageIds: lookup.ids
         ) else { return }
         latestTopVisibleAnchor = anchor
         guard !isRestoringTail, !session.followsTranscriptTail else { return }
         guard !transcript.isBackfillingOlderMessages else { return }
-        onRememberScrollAnchor(anchor, transcriptIndex(forStableId: anchor), false)
+        onRememberScrollAnchor(anchor, lookup.transcriptIndex(for: anchor), false)
         restoredRememberedAnchor = anchor
     }
 
@@ -436,9 +435,10 @@ struct ACPMessageList: View {
         }
     }
 
-    private func transcriptIndex(forStableId id: String?) -> Int? {
-        guard let id else { return nil }
-        return transcript.messages.firstIndex(where: { $0.stableId == id })
+    private var visibleMessageLookup: VisibleMessageLookup {
+        Self.visibleMessageLookup(rows: visibleRows.map { row in
+            (index: row.index, stableId: row.message.stableId)
+        })
     }
 
     private var topPaginationSentinel: some View {
@@ -537,6 +537,40 @@ struct ACPMessageList: View {
         visibleMessageIds: Set<String>
     ) -> String? {
         ids.first { visibleMessageIds.contains($0) }
+    }
+
+    struct VisibleMessageLookup {
+        let ids: Set<String>
+        let indexByStableId: [String: Int]
+        let firstStableId: String?
+
+        func contains(_ id: String?) -> Bool {
+            guard let id else { return false }
+            return ids.contains(id)
+        }
+
+        func transcriptIndex(for id: String?) -> Int? {
+            guard let id else { return nil }
+            return indexByStableId[id]
+        }
+    }
+
+    nonisolated static func visibleMessageLookup(
+        rows: [(index: Int, stableId: String)]
+    ) -> VisibleMessageLookup {
+        var ids = Set<String>()
+        ids.reserveCapacity(rows.count)
+        var indexByStableId: [String: Int] = [:]
+        indexByStableId.reserveCapacity(rows.count)
+        for row in rows {
+            ids.insert(row.stableId)
+            indexByStableId[row.stableId] = row.index
+        }
+        return VisibleMessageLookup(
+            ids: ids,
+            indexByStableId: indexByStableId,
+            firstStableId: rows.first?.stableId
+        )
     }
 
     nonisolated static func shouldRememberVisibleAnchor(
@@ -686,7 +720,7 @@ struct ACPMessageList: View {
         // macOS 15+: no reachable NSScrollView. Anchor the row currently at the
         // top of the window and pin it back to the top after the older rows lay
         // out, so the viewport doesn't jump.
-        let anchorId = visibleMessages.first?.stableId
+        let anchorId = visibleMessageLookup.firstStableId
         isRestoringTail = true
         transcript.stepHeadBack()
         DispatchQueue.main.async {
