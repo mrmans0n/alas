@@ -588,6 +588,11 @@ struct DraftReviewRequestTabView: View {
             context = loaded
             loadedContextKey = key
             draftReviewSession = session
+            if loaded.commits.count == 1, title.isEmpty, bodyText.isEmpty,
+               let subject = loaded.commitSubjects.first {
+                title = subject
+                bodyText = loaded.singleCommitBody ?? ""
+            }
             selectedFileID = DraftReviewRequestDiffSessionBuilder.synchronizedSelection(
                 selectedPath: selectedPath,
                 session: session
