@@ -319,6 +319,8 @@ final class ACPSession: ObservableObject, Identifiable {
         case .availableCommandsUpdate(let cmds):
             promptSuggestions = cmds
             return []
+        case .usageUpdate:
+            return []
         case .unknown:
             return []
         }

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		004A8BA5B9353F67AAA3AE83 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2975A1465CA308E9766521F2 /* NotificationService.swift */; };
+		0092774787CA4537B01FF285 /* ACPUsageUpdateDecodeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 413EF1A16EEB4933B3A7BE0B /* ACPUsageUpdateDecodeTests.swift */; };
 		01568CB821D2E938C51BBCAB /* ACPHarnessBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5A3E6B2F9AC2CBB1CDA78E /* ACPHarnessBridgeTests.swift */; };
 		01C919A6F3868980D51539DD /* ACPInitializeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF8B5E766D2B3649D2555ED /* ACPInitializeTests.swift */; };
 		01CBEF6793755D3D9B000BC1 /* CodeLanguageDetailViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91A6AFCC9B3AEFB43D8946F /* CodeLanguageDetailViewTests.swift */; };
@@ -1360,6 +1361,7 @@
 		410A42B1C46E68965FD36793 /* ShortcutChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutChip.swift; sourceTree = "<group>"; };
 		412B2AF1B68E3B56DE21EB91 /* DiagnosticsRangeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsRangeTests.swift; sourceTree = "<group>"; };
 		413CE0B0BBC96D412D048B1D /* .gitkeep */ = {isa = PBXFileReference; path = .gitkeep; sourceTree = "<group>"; };
+		413EF1A16EEB4933B3A7BE0B /* ACPUsageUpdateDecodeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUsageUpdateDecodeTests.swift; sourceTree = "<group>"; };
 		417CDD7CCA0D0A86E9EE281F /* CenterSelectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CenterSelectionState.swift; sourceTree = "<group>"; };
 		41995BCAEF1E2B356E499333 /* ReviewChangesFileSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesFileSection.swift; sourceTree = "<group>"; };
 		419EF533C4D29448483045DA /* ACPChangeNotifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChangeNotifier.swift; sourceTree = "<group>"; };
@@ -2629,6 +2631,7 @@
 				2015944331CE56AEEF534910 /* ACPStdioQuestionDispatchTests.swift */,
 				01DB2EFD475B2D7D5D75B06A /* ACPStdioTerminalDispatchTests.swift */,
 				54897710493742A6DFD6ABF3 /* ACPToolCallContentTests.swift */,
+				413EF1A16EEB4933B3A7BE0B /* ACPUsageUpdateDecodeTests.swift */,
 				4E340D23D2484C570F8E4B7F /* FakeJSONRPCTransport.swift */,
 			);
 			path = Protocol;
@@ -4920,6 +4923,7 @@
 				11827C40372D7209868161C0 /* ACPTerminalHostTests.swift in Sources */,
 				89F58C7178B661EAE0057622 /* ACPTerminalTests.swift in Sources */,
 				E1E4C11CC5BFF761DF397507 /* ACPToolCallContentTests.swift in Sources */,
+				0092774787CA4537B01FF285 /* ACPUsageUpdateDecodeTests.swift in Sources */,
 				4B8BD1280C2DFF3CE1FD3C4B /* ACPTranscriptCurrentPlanTests.swift in Sources */,
 				A8EE9207A828D4D1BAF1C1C1 /* ACPTranscriptLatestPlanTests.swift in Sources */,
 				F1C4DD0D3A95ED5301EE2AC9 /* ACPTranscriptMarkdownCacheEvictionTests.swift in Sources */,
