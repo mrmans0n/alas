@@ -828,6 +828,7 @@ final class DiffPaneCodeTextView: NSTextView {
     private var lspController: DiffPaneLSPController?
     private var cachedRowGeometry: RowGeometry?
     private var rowGeometryComputationCount = 0
+    private var isPointingHandCursor = false
 
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
@@ -928,7 +929,9 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
-        hoverHandler?(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        hoverHandler?(point)
+        updateCursor(at: point)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -950,6 +953,7 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
+        clearPointingHandCursor()
         mouseExitedHandler?()
     }
 
@@ -1217,6 +1221,34 @@ final class DiffPaneCodeTextView: NSTextView {
     func reviewLineRow(at point: NSPoint) -> Int? {
         let rowRects = diffRowRects()
         return rowRects.firstIndex(where: { $0.contains(point) })
+    }
+
+    private func updateCursor(at point: NSPoint) {
+        guard let row = reviewLineRow(at: point),
+              rowShouldUsePointingHandCursor(row)
+        else {
+            clearPointingHandCursor()
+            return
+        }
+        setPointingHandCursor()
+    }
+
+    private func rowShouldUsePointingHandCursor(_ row: Int) -> Bool {
+        guard lineMetadata.indices.contains(row) else { return false }
+        let metadata = lineMetadata[row]
+        return metadata.expansionKey != nil || metadata.sourceLine != nil
+    }
+
+    private func setPointingHandCursor() {
+        guard !isPointingHandCursor else { return }
+        NSCursor.pointingHand.set()
+        isPointingHandCursor = true
+    }
+
+    private func clearPointingHandCursor() {
+        guard isPointingHandCursor else { return }
+        NSCursor.arrow.set()
+        isPointingHandCursor = false
     }
 
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {

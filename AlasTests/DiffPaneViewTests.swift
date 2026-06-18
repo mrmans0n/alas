@@ -1867,13 +1867,158 @@ let second = true
         #expect(!containerViews.isEmpty)
     }
 
-    private func makeDiffPaneCodeTextView(string: String) -> DiffPaneCodeTextView {
+    @Test func diffPaneCodeTextViewShowsPointingHandOverExpandableContextRow() throws {
+        let expansionKey = DiffContextExpansionKey(groupID: "g", boundary: .below)
+        let metadata = DiffPaneTextDocumentBuilder.LineMetadata(
+            kind: .expandableContext,
+            range: NSRange(location: 0, length: 22),
+            expansionKey: expansionKey,
+            expansionBoundary: .below
+        )
+        let textView = makeDiffPaneCodeTextView(
+            string: "      Expand context below\n",
+            metadata: [metadata]
+        )
+        let window = addToWindow(textView)
+
+        let rowRect = try #require(textView.diffRowRects().first)
+        let event = try #require(mouseMovedEvent(in: textView, at: NSPoint(x: rowRect.midX, y: rowRect.midY), window: window))
+
+        NSCursor.arrow.set()
+        textView.mouseMoved(with: event)
+
+        #expect(NSCursor.current == NSCursor.pointingHand)
+    }
+
+    @Test func diffPaneCodeTextViewShowsPointingHandOverSourceCodeRow() throws {
+        let sourceLine = DiffDisplayLine(
+            id: "a.swift:new:0:0",
+            anchor: DiffLineAnchor(filePath: "a.swift", hunkIndex: 0, rowIndex: 0, side: .new, oldLine: nil, newLine: 1),
+            text: "let value = 1",
+            lineNumber: 1,
+            kind: .add,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let metadata = DiffPaneTextDocumentBuilder.LineMetadata(
+            kind: .add,
+            range: NSRange(location: 0, length: 14),
+            tone: .add,
+            sourceLine: sourceLine
+        )
+        let textView = makeDiffPaneCodeTextView(
+            string: "let value = 1\n",
+            metadata: [metadata]
+        )
+        let window = addToWindow(textView)
+
+        let rowRect = try #require(textView.diffRowRects().first)
+        let event = try #require(mouseMovedEvent(in: textView, at: NSPoint(x: rowRect.midX, y: rowRect.midY), window: window))
+
+        NSCursor.arrow.set()
+        textView.mouseMoved(with: event)
+
+        #expect(NSCursor.current == NSCursor.pointingHand)
+    }
+
+    @Test func diffPaneCodeTextViewDoesNotShowPointingHandOverNonInteractiveRow() throws {
+        let metadata = DiffPaneTextDocumentBuilder.LineMetadata(
+            kind: .context,
+            range: NSRange(location: 0, length: 1)
+        )
+        let textView = makeDiffPaneCodeTextView(
+            string: " \n",
+            metadata: [metadata]
+        )
+        let window = addToWindow(textView)
+
+        let rowRect = try #require(textView.diffRowRects().first)
+        let event = try #require(mouseMovedEvent(in: textView, at: NSPoint(x: rowRect.midX, y: rowRect.midY), window: window))
+
+        NSCursor.arrow.set()
+        textView.mouseMoved(with: event)
+
+        #expect(NSCursor.current != NSCursor.pointingHand)
+    }
+
+    @Test func diffPaneCodeTextViewResetsPointingHandOnMouseExit() throws {
+        let expansionKey = DiffContextExpansionKey(groupID: "g", boundary: .below)
+        let metadata = DiffPaneTextDocumentBuilder.LineMetadata(
+            kind: .expandableContext,
+            range: NSRange(location: 0, length: 22),
+            expansionKey: expansionKey,
+            expansionBoundary: .below
+        )
+        let textView = makeDiffPaneCodeTextView(
+            string: "      Expand context below\n",
+            metadata: [metadata]
+        )
+        let window = addToWindow(textView)
+
+        let rowRect = try #require(textView.diffRowRects().first)
+        let movedEvent = try #require(mouseMovedEvent(in: textView, at: NSPoint(x: rowRect.midX, y: rowRect.midY), window: window))
+        let exitEvent = try #require(NSEvent.enterExitEvent(
+            with: .mouseExited,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ))
+
+        NSCursor.arrow.set()
+        textView.mouseMoved(with: movedEvent)
+        #expect(NSCursor.current == NSCursor.pointingHand)
+
+        textView.mouseExited(with: exitEvent)
+        #expect(NSCursor.current != NSCursor.pointingHand)
+    }
+
+    private func makeDiffPaneCodeTextView(string: String, metadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []) -> DiffPaneCodeTextView {
         let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 120), textContainer: NSTextContainer())
         textView.textContainerInset = NSSize(width: 10, height: 8)
         let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
         textView.textStorage?.setAttributedString(NSAttributedString(string: string, attributes: [.font: font]))
+        textView.lineMetadata = metadata
+        textView.lineTones = metadata.map { lineTone(for: $0.kind) }
         textView.layoutManager?.ensureLayout(for: textView.textContainer!)
         return textView
+    }
+
+    private func lineTone(for kind: DiffDisplayRow.Kind) -> DiffPaneLineTone {
+        switch kind {
+        case .add:
+            return .add
+        case .delete:
+            return .delete
+        case .collapsed, .expandableContext:
+            return .collapsed
+        case .context, .expandedContext, .replacement:
+            return .context
+        }
+    }
+
+    private func addToWindow(_ view: NSView) -> NSWindow {
+        let window = NSWindow(contentRect: view.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(view)
+        return window
+    }
+
+    private func mouseMovedEvent(in textView: DiffPaneCodeTextView, at point: NSPoint, window: NSWindow) -> NSEvent? {
+        NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: textView.convert(point, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 0,
+            pressure: 0
+        )
     }
 
     private func firstGlyphRect(in textView: DiffPaneCodeTextView, range: NSRange) throws -> NSRect {
