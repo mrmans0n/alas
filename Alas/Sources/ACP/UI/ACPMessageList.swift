@@ -34,6 +34,7 @@ struct ACPMessageList: View {
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor: String?
     @State private var restoredRememberedAnchor: String?
+    @State private var pendingTailScrollTask: Task<Void, Never>?
 
     /// Height of an invisible spacer at the tail of the VStack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -217,19 +218,35 @@ struct ACPMessageList: View {
                     restoreTailIfNeeded(proxy: proxy, animated: false)
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
+                .onDisappear {
+                    pendingTailScrollTask?.cancel()
+                    pendingTailScrollTask = nil
+                }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
-                        scrollToTail(proxy: proxy, animated: true)
+                        scheduleTailScroll(
+                            proxy: proxy,
+                            animated: Self.shouldAnimateTailScroll(
+                                trigger: .contentSignature,
+                                streamingState: transcript.streamingState
+                            )
+                        )
                     }
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onChange(of: transcript.streamingState) { _, new in
                     if session.followsTranscriptTail && (new == .streaming || new == .sending) {
-                        scrollToTail(proxy: proxy, animated: true)
+                        scheduleTailScroll(
+                            proxy: proxy,
+                            animated: Self.shouldAnimateTailScroll(
+                                trigger: .streamingState,
+                                streamingState: new
+                            )
+                        )
                     }
                 }
                 .onChange(of: transcript.visibleHead) { _, _ in
@@ -269,6 +286,8 @@ struct ACPMessageList: View {
     }
 
     private func scrollToTail(proxy: ScrollViewProxy, animated: Bool) {
+        pendingTailScrollTask?.cancel()
+        pendingTailScrollTask = nil
         isRestoringTail = true
         let scroll = {
             proxy.scrollTo("__composer_spacer__", anchor: .bottom)
@@ -291,6 +310,19 @@ struct ACPMessageList: View {
             DispatchQueue.main.async {
                 releaseRestoring()
             }
+        }
+    }
+
+    private func scheduleTailScroll(proxy: ScrollViewProxy, animated: Bool) {
+        pendingTailScrollTask?.cancel()
+        pendingTailScrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled,
+                  ACPMessageList.shouldRunScheduledTailScroll(
+                    followsTranscriptTail: session.followsTranscriptTail
+                  )
+            else { return }
+            scrollToTail(proxy: proxy, animated: animated)
         }
     }
 
@@ -353,6 +385,8 @@ struct ACPMessageList: View {
         if follows {
             onRememberScrollAnchor(nil, nil, true)
         } else {
+            pendingTailScrollTask?.cancel()
+            pendingTailScrollTask = nil
             onRememberScrollAnchor(
                 latestTopVisibleAnchor,
                 transcriptIndex(forStableId: latestTopVisibleAnchor),
@@ -463,6 +497,28 @@ struct ACPMessageList: View {
         return distanceFromBottom > ACPScrollDirectionClassifier.bottomTolerance
     }
 
+    enum TailScrollTrigger {
+        case contentSignature
+        case streamingState
+        case contentGrowth
+    }
+
+    nonisolated static func shouldAnimateTailScroll(
+        trigger: TailScrollTrigger,
+        streamingState: ACPSession.StreamingState
+    ) -> Bool {
+        switch trigger {
+        case .contentSignature:
+            return streamingState != .sending && streamingState != .streaming
+        case .streamingState, .contentGrowth:
+            return false
+        }
+    }
+
+    nonisolated static func shouldRunScheduledTailScroll(followsTranscriptTail: Bool) -> Bool {
+        followsTranscriptTail
+    }
+
     nonisolated static func topVisibleAnchorID(in frames: [String: CGRect]) -> String? {
         frames
             .filter { _, frame in frame.height > 0 && frame.maxY > 0 }
@@ -565,7 +621,13 @@ struct ACPMessageList: View {
             newMinY: newMinY,
             followsTranscriptTail: session.followsTranscriptTail
         ) {
-            scrollToTail(proxy: proxy, animated: false)
+            scheduleTailScroll(
+                proxy: proxy,
+                animated: Self.shouldAnimateTailScroll(
+                    trigger: .contentGrowth,
+                    streamingState: session.transcript.streamingState
+                )
+            )
             return
         }
         // Head-step pagination: reveal older messages only while a live scroll

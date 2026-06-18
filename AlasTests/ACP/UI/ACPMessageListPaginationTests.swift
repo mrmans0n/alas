@@ -96,6 +96,36 @@ struct ACPMessageListPaginationTests {
         ))
     }
 
+    @Test("streaming tail scrolls do not animate")
+    func streamingTailScrollsDoNotAnimate() {
+        #expect(!ACPMessageList.shouldAnimateTailScroll(
+            trigger: .contentSignature,
+            streamingState: .streaming
+        ))
+        #expect(!ACPMessageList.shouldAnimateTailScroll(
+            trigger: .streamingState,
+            streamingState: .sending
+        ))
+    }
+
+    @Test("non-streaming content tail scrolls keep animation")
+    func nonStreamingContentTailScrollsKeepAnimation() {
+        #expect(ACPMessageList.shouldAnimateTailScroll(
+            trigger: .contentSignature,
+            streamingState: .idle
+        ))
+        #expect(!ACPMessageList.shouldAnimateTailScroll(
+            trigger: .contentGrowth,
+            streamingState: .idle
+        ))
+    }
+
+    @Test("deferred tail scrolls require active tail-follow")
+    func deferredTailScrollsRequireActiveTailFollow() {
+        #expect(ACPMessageList.shouldRunScheduledTailScroll(followsTranscriptTail: true))
+        #expect(!ACPMessageList.shouldRunScheduledTailScroll(followsTranscriptTail: false))
+    }
+
     @Test("top visible anchor prefers the row crossing the viewport top")
     func topVisibleAnchorPrefersRowCrossingTop() {
         let frames: [String: CGRect] = [
