@@ -11,10 +11,10 @@ struct SidebarHeaderView: View {
             TrafficLights()
             Spacer()
             HStack(alignment: .center, spacing: 2) {
-                ToolbarBtn(icon: "search", action: onSearch)
-                ToolbarBtn(icon: "folder-plus", action: onAddProject)
-                ToolbarBtn(icon: "gear", action: onSettings)
-                ToolbarBtn(icon: "sidebar.left", action: onHideSidebar)
+                ToolbarBtn(icon: "search", tooltip: "Search", action: onSearch)
+                ToolbarBtn(icon: "folder-plus", tooltip: "Add repository", action: onAddProject)
+                ToolbarBtn(icon: "gear", tooltip: "Settings", action: onSettings)
+                ToolbarBtn(icon: "sidebar.left", tooltip: "Hide sidebar", action: onHideSidebar)
             }
         }
         .padding(.horizontal, 12)
@@ -25,6 +25,7 @@ struct SidebarHeaderView: View {
 
 struct ToolbarBtn: View {
     let icon: String
+    let tooltip: String
     let action: () -> Void
     @Environment(\.theme) var theme
     @State private var hovering = false
@@ -38,5 +39,6 @@ struct ToolbarBtn: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help(tooltip)
     }
 }
