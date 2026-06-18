@@ -686,6 +686,23 @@ struct GitServiceTests {
         #expect(sha.count == 40)
     }
 
+    @Test func rangeDiffReturnsHunksForChangedFile() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+        let base = try await gitOK(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try writeText("a\nb\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "head"], cwd: repo)
+        let head = try await gitOK(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let diff = try await GitService().rangeDiff(worktreePath: repo, base: base, head: head, threeDot: false, file: "a.txt", originalPath: nil)
+
+        #expect(!diff.hunks.isEmpty)
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "b" } })
+    }
+
     @Test func rangeChangedFilesListsTwoDotFilesInRange() async throws {
         let repo = try await makeContextSnapshotRepo()
         try writeText("a\n", "a.txt", in: repo)

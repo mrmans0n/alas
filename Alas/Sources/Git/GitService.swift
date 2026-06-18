@@ -204,10 +204,12 @@ extension GitService {
         return DiffReviewFileContextSnapshot(old: old, new: new)
     }
 
-    func refContextSnapshot(worktreePath: URL, baseRef: String, headRef: String, file: String, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
+    func refContextSnapshot(worktreePath: URL, baseRef: String, headRef: String, file: String, originalPath: String? = nil, useMergeBase: Bool = true) async throws -> DiffReviewFileContextSnapshot {
         let oldPath = originalPath?.isEmpty == false ? originalPath! : file
-        let mergeBase = try await mergeBase(worktreePath: worktreePath, baseRef: baseRef, headRef: headRef)
-        let old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: mergeBase, path: oldPath)
+        let oldRef = useMergeBase
+            ? try await mergeBase(worktreePath: worktreePath, baseRef: baseRef, headRef: headRef)
+            : baseRef
+        let old = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: oldRef, path: oldPath)
         let new = try await blobLinesOrUnavailable(worktreePath: worktreePath, ref: headRef, path: file)
         return DiffReviewFileContextSnapshot(old: old, new: new)
     }
@@ -342,6 +344,31 @@ extension GitService {
         guard result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.diff(sha:file:)",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: result.stderr]
+            )
+        }
+        let stdout = result.stdout
+        return await Task.detached(priority: .userInitiated) {
+            DiffParser.parse(Self.sliceDiffForFile(stdout, file: file))
+        }.value
+    }
+
+    /// Per-file diff for a commit range. Two-dot (`threeDot == false`) diffs
+    /// `base` against `head`; three-dot diffs the merge-base of `base`/`head`
+    /// against `head`. Mirrors `diff(worktreePath:sha:file:)`: the multi-file
+    /// output (copies) is sliced down to the requested file before parsing.
+    func rangeDiff(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+        let leftTree = threeDot
+            ? try await mergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
+            : base
+        var args: [String] = ["-c", "core.quotePath=false",
+                              "diff", "--no-color", "-M", "-C", leftTree, head, "--", file]
+        if let originalPath { args.append(originalPath) }
+        let result = try await Process.git(args, cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.rangeDiff",
                 code: Int(result.exitCode),
                 userInfo: [NSLocalizedDescriptionKey: result.stderr]
             )
