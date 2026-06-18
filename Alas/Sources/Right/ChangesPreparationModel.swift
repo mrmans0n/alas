@@ -79,7 +79,7 @@ struct ChangesPreparationModel: Equatable {
             reviewRequestAction = nil
         } else if builtReviewRequestAction?.kind == .pushBranch,
                    builtReviewRequestAction?.isInFlight != true,
-                   effectiveAheadCommitCount == 0,
+                   local?.needsPush == false,
                    builtReviewAction == nil,
                    builtDraftAction == nil {
             reviewRequestAction = nil
