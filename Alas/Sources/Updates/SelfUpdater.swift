@@ -8,10 +8,18 @@ struct SelfUpdateCommand: Equatable, Sendable {
     let executable: String
     let arguments: [String]
 
-    static let homebrew = SelfUpdateCommand(
-        executable: "/opt/homebrew/bin/brew",
-        arguments: ["upgrade", "--cask", "alas"]
-    )
+    /// Detects the `brew` executable on the host's PATH so the upgrade
+    /// works on both Apple Silicon (`/opt/homebrew/bin/brew`) and Intel
+    /// (`/usr/local/bin/brew`) Macs. Falls back to the Apple Silicon default
+    /// if brew cannot be found.
+    static var homebrew: SelfUpdateCommand {
+        let host = InstallerHost.detect()
+        let executable = host.detected[.brew]?.executable ?? "/opt/homebrew/bin/brew"
+        return SelfUpdateCommand(
+            executable: executable,
+            arguments: ["upgrade", "--cask", "alas"]
+        )
+    }
 
     var displayCommandLine: String {
         ((executable as NSString).lastPathComponent as String) + " " + arguments.joined(separator: " ")
