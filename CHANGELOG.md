@@ -6,6 +6,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-06-18
+
+### ✨ Features
+
+- Add inline self-update from the update available sheet (#559).
+- Add context window usage indicator in the ACP composer footer (#560).
+- Add review action loading states (#558).
+- Add hover tooltips to all icon-only buttons (#557).
+- Pre-populate draft PR title and description from single commits (#555).
+- Keep diff whitespace hidden by default (#553).
+
+### 🐛 Fixes
+
+- Launch npm-backed ACP adapters from a verified absolute path (#571).
+- Dismiss diff-pane hover and definition popovers on scroll (#568).
+- Hide the prepare action when the Changes tab has no worktree changes (#567).
+- Repoint the Codex ACP adapter to `@agentclientprotocol/codex-acp` (#566).
+- Show the tail of truncated CI logs and link to the full run (#556).
+- Fix remote web tool rows on mobile (#554).
+- Fix stale markdown preview tab content (#552).
+
+### ⚡ Performance
+
+- Scan streaming markdown incrementally (#565).
+- Cache visible ACP anchor lookups (#564).
+- Coalesce streaming tail scrolls (#563).
+- Batch streaming transcript persistence (#562).
+
+### 🏗️ Internal
+
+- Update `actions/checkout` to v7 (#569).
+
 ## [0.8.3] - 2026-06-17
 
 ### ✨ Features
