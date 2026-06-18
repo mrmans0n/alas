@@ -165,6 +165,7 @@ final class DiffPaneLSPController {
     /// can stay stuck on screen until the user scrolls back to the symbol.
     func notifyScrolled() {
         hideHover()
+        cancelDefinitionRequests()
         definitionPopover?.close()
         definitionPopover = nil
     }
@@ -533,6 +534,12 @@ final class DiffPaneLSPController {
         hoverTask?.cancel()
         definitionTask?.cancel()
         hoverTask = nil
+        definitionTask = nil
+    }
+
+    private func cancelDefinitionRequests() {
+        definitionRequestID &+= 1
+        definitionTask?.cancel()
         definitionTask = nil
     }
 

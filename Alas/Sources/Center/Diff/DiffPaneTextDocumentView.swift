@@ -851,7 +851,8 @@ final class DiffPaneCodeTextView: NSTextView {
     var allowedLSPSide: DiffLineSide = .new
     var hasLSPContextForTesting: Bool { lspContext != nil }
     var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
-    private var scrollBoundsObserver: NSObjectProtocol?
+    private var scrollBoundsObservers: [NSObjectProtocol] = []
+    private var observedScrollViews: [NSScrollView] = []
     var theme: Theme? {
         didSet { needsDisplay = true }
     }
@@ -875,9 +876,9 @@ final class DiffPaneCodeTextView: NSTextView {
 
     deinit {
         let lspController = lspController
-        let observer = scrollBoundsObserver
+        let observers = scrollBoundsObservers
         Task { @MainActor in
-            if let observer {
+            for observer in observers {
                 NotificationCenter.default.removeObserver(observer)
             }
             lspController?.tearDown()
@@ -1079,32 +1080,59 @@ final class DiffPaneCodeTextView: NSTextView {
         }
         if lspController == nil {
             lspController = DiffPaneLSPController(textView: self)
-            installScrollBoundsObserver()
         }
+        // Rebind the scroll observer on every update. SwiftUI may attach the
+        // text view to the outer vertical `ScrollView` after the first mount,
+        // so the outermost ancestor scroll view can change over time.
+        installScrollBoundsObserver()
         lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
     }
 
     private func installScrollBoundsObserver() {
-        guard scrollBoundsObserver == nil,
-              let scrollView = enclosingScrollView else { return }
-        let clipView = scrollView.contentView
-        clipView.postsBoundsChangedNotifications = true
-        scrollBoundsObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification,
-            object: clipView,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.lspController?.notifyScrolled()
+        // The diff pane has two scrolling layers: each `DiffPaneTextScrollView`
+        // handles horizontal scrolling of a code pane, and in internal-scroll
+        // mode a SwiftUI `ScrollView(.vertical)` wraps the hunk cards as an
+        // ancestor `NSScrollView`. Observing only one of them can miss the
+        // scroll direction that actually moves the symbol away. Rebind on every
+        // update so we always observe every ancestor scroll view.
+        let scrollViews = ancestorScrollViews()
+        guard scrollViews != observedScrollViews else { return }
+        removeScrollBoundsObserver()
+        for scrollView in scrollViews {
+            let clipView = scrollView.contentView
+            clipView.postsBoundsChangedNotifications = true
+            let token = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.lspController?.notifyScrolled()
+                }
             }
+            scrollBoundsObservers.append(token)
         }
+        observedScrollViews = scrollViews
+    }
+
+    private func ancestorScrollViews() -> [NSScrollView] {
+        var scrollViews: [NSScrollView] = []
+        var current: NSView? = self
+        while let view = current {
+            if let scrollView = view as? NSScrollView {
+                scrollViews.append(scrollView)
+            }
+            current = view.superview
+        }
+        return scrollViews
     }
 
     private func removeScrollBoundsObserver() {
-        if let token = scrollBoundsObserver {
+        for token in scrollBoundsObservers {
             NotificationCenter.default.removeObserver(token)
         }
-        scrollBoundsObserver = nil
+        scrollBoundsObservers.removeAll()
+        observedScrollViews.removeAll()
     }
 
     func reviewLineAnchor(atRow row: Int) -> DiffReviewLineAnchor? {
