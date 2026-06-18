@@ -75,6 +75,22 @@ jobs:
           restore-keys: |
             ghostty-${{ runner.os }}-${{ matrix.arch }}-
 
+      - name: Compute version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Stamp release version
+        run: |
+          ruby -e '
+            version = ENV.fetch("VERSION")
+            path = "project.yml"
+            text = File.read(path)
+            pattern = /(CFBundleShortVersionString:\s*)"[0-9]+\.[0-9]+\.[0-9]+"/
+            count = text.scan(pattern).length
+            abort("expected exactly one CFBundleShortVersionString in #{path}, got #{count}") unless count == 1
+            File.write(path, text.gsub(pattern, "\\1\"#{version}\""))
+          '
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" Alas/Resources/Info.plist
+
       - name: Generate project
         run: xcodegen
 
@@ -100,9 +116,6 @@ jobs:
         # makes package resolution fail or hang before the project cache is
         # populated. The runner is ephemeral, so clearing it is safe.
         run: rm -rf ~/Library/Caches/org.swift.swiftpm
-
-      - name: Compute version from tag
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build Ghostty xcframework (${{ matrix.arch }})
         env:
