@@ -30,14 +30,7 @@ struct ACPSetupChecker {
     }
 
     private func resolve(_ name: String) -> String? {
-        let pathValue = AgentPath.augment(
-            base: env["PATH"] ?? "",
-            wellKnown: additionalPathDirectories)
-        for dir in pathValue.split(separator: ":") {
-            let candidate = "\(dir)/\(name)"
-            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
-        }
-        return nil
+        AgentPath.resolveExecutable(named: name, base: env["PATH"], wellKnown: additionalPathDirectories)
     }
 
     private func npmPackageInstalled(_ name: String) async -> Bool {
