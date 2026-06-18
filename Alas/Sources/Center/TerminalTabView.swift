@@ -26,7 +26,7 @@ struct TerminalTabView: View {
                 TerminalRecoverPlaceholder(state: state, worktreeId: worktreeId, tabId: tabId)
             }
         }
-        .coordinateSpace(name: tabCoordinateSpace)
+        .coordinateSpace(.named(tabCoordinateSpace))
         .onPreferenceChange(LeafFramesKey.self) { frames in
             state.terminalLeafFrames[tabId] = frames
         }

@@ -61,7 +61,7 @@ struct FileSearchDialog: View {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         switch model.kind {
                         case .files:
-                            ForEach(Array(model.results.fileResults.enumerated()), id: \.offset) { idx, r in
+                            ForEach(Array(model.results.fileResults.enumerated()), id: \.element.id) { idx, r in
                                 FileResultRow(
                                     result: r,
                                     isSelected: idx == model.selectedIndex,

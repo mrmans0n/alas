@@ -25,7 +25,7 @@ struct DefinitionPicker: View {
                 .padding(.bottom, 6)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(entries.enumerated()), id: \.offset) { idx, entry in
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { idx, entry in
                         row(idx: idx, entry: entry)
                             .background(idx == selection ? Color.accentColor.opacity(0.18) : Color.clear)
                             .contentShape(Rectangle())

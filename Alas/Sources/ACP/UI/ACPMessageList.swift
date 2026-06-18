@@ -190,7 +190,7 @@ struct ACPMessageList: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .modifier(ACPScrollTargetLayoutTracking())
                 }
-                .coordinateSpace(name: scrollSpaceName)
+                .coordinateSpace(.named(scrollSpaceName))
                 .modifier(ACPTranscriptScrollTracking(
                     isRestoring: { isRestoringTail },
                     onResolveScrollView: { scrollViewRef.scrollView = $0 },
