@@ -166,6 +166,8 @@ struct ACPComposer: View {
             HStack(spacing: 8) {
                 hint
                 Spacer()
+                ACPContextUsageButton(usage: session.contextUsage,
+                                      modelName: session.currentModelDisplayName)
                 attachButton
                 autoRunToggle
                 if let thinking = session.chipState.thinking {
