@@ -551,6 +551,7 @@ final class CodeEditorCoordinator {
                 queue: .main
             ) { [weak self] _ in
                 self?.hover?.notifyScrolled()
+                self?.definition?.notifyScrolled()
             }
             hoverObservers.append(token)
         }
@@ -561,6 +562,7 @@ final class CodeEditorCoordinator {
             queue: .main
         ) { [weak self] _ in
             self?.hover?.notifyCaretChanged()
+            self?.definition?.notifyCaretChanged()
         }
         hoverObservers.append(selectionToken)
 
@@ -577,6 +579,7 @@ final class CodeEditorCoordinator {
                   let window = note.object as? NSWindow,
                   window === self.textView?.window else { return }
             self.hover?.notifyWindowResized()
+            self.definition?.notifyWindowResized()
         }
         hoverObservers.append(resizeToken)
 

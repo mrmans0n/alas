@@ -30,6 +30,17 @@ final class DefinitionFeature {
         textView.commandClickHandler = { [weak self] p in self?.onClick(at: p) }
     }
 
+    func notifyScrolled() { dismiss() }
+    func notifyCaretChanged() { dismiss() }
+    func notifyWindowResized() { dismiss() }
+
+    private func dismiss() {
+        requestID += 1
+        inFlight?.cancel()
+        inFlight = nil
+        popover?.close()
+    }
+
     private func onClick(at point: NSPoint) {
         popover?.close()
         guard let textView, let client = getClient(), let uri = getURI() else { return }

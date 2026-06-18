@@ -158,6 +158,18 @@ final class DiffPaneLSPController {
     private var definitionRequestID: UInt64 = 0
     private var hoverSymbolRange: NSRange?
 
+    /// Dismisses any visible hover panel and definition popover. Called when
+    /// the enclosing diff pane scrolls, because the symbol anchor the popovers
+    /// were anchored to may have moved or left the visible area. Without this,
+    /// a hover panel (which is a child window anchored to screen coordinates)
+    /// can stay stuck on screen until the user scrolls back to the symbol.
+    func notifyScrolled() {
+        hideHover()
+        cancelDefinitionRequests()
+        definitionPopover?.close()
+        definitionPopover = nil
+    }
+
     init(textView: DiffPaneCodeTextView) {
         self.textView = textView
         textView.hoverHandler = { [weak self] point in
@@ -302,6 +314,14 @@ final class DiffPaneLSPController {
         context: DiffPaneLSPContext
     ) async -> Bool {
         await matchesCurrentSource(match, context: context)
+    }
+
+    var isHoverVisibleForTesting: Bool { hoverWindowController.isVisible }
+    var isDefinitionPopoverShownForTesting: Bool { definitionPopover != nil }
+
+    func showDefinitionPopoverForTesting(_ popover: NSPopover) {
+        definitionPopover?.close()
+        definitionPopover = popover
     }
 
     private func matchesCurrentSource(
@@ -514,6 +534,12 @@ final class DiffPaneLSPController {
         hoverTask?.cancel()
         definitionTask?.cancel()
         hoverTask = nil
+        definitionTask = nil
+    }
+
+    private func cancelDefinitionRequests() {
+        definitionRequestID &+= 1
+        definitionTask?.cancel()
         definitionTask = nil
     }
 

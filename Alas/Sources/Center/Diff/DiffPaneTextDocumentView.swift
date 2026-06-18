@@ -851,6 +851,10 @@ final class DiffPaneCodeTextView: NSTextView {
     var allowedLSPSide: DiffLineSide = .new
     var hasLSPContextForTesting: Bool { lspContext != nil }
     var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
+    private var scrollBoundsObservers: [NSObjectProtocol] = []
+    private var observedScrollViewIDs: [ObjectIdentifier] = []
+    private var scheduledRebindWorkItem: DispatchWorkItem?
+
     var theme: Theme? {
         didSet { needsDisplay = true }
     }
@@ -874,9 +878,34 @@ final class DiffPaneCodeTextView: NSTextView {
 
     deinit {
         let lspController = lspController
+        let observers = scrollBoundsObservers
+        let workItem = scheduledRebindWorkItem
         Task { @MainActor in
+            for observer in observers {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            workItem?.cancel()
             lspController?.tearDown()
         }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        scheduleDeferredRebind()
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        scheduleDeferredRebind()
+    }
+
+    private func scheduleDeferredRebind() {
+        scheduledRebindWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.installScrollBoundsObserver()
+        }
+        scheduledRebindWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -1069,12 +1098,67 @@ final class DiffPaneCodeTextView: NSTextView {
         guard let lspContext else {
             lspController?.tearDown()
             lspController = nil
+            removeScrollBoundsObserver()
+            scheduledRebindWorkItem?.cancel()
             return
         }
         if lspController == nil {
             lspController = DiffPaneLSPController(textView: self)
         }
+        // Rebind the scroll observer on every update. SwiftUI may attach the
+        // text view to the outer vertical `ScrollView` after the first mount,
+        // so the outermost ancestor scroll view can change over time.
+        installScrollBoundsObserver()
+        scheduleDeferredRebind()
         lspController?.update(context: lspContext, allowedSide: allowedLSPSide)
+    }
+
+    private func installScrollBoundsObserver() {
+        // The diff pane has two scrolling layers: each `DiffPaneTextScrollView`
+        // handles horizontal scrolling of a code pane, and in internal-scroll
+        // mode a SwiftUI `ScrollView(.vertical)` wraps the hunk cards as an
+        // ancestor `NSScrollView`. Observing only one of them can miss the
+        // scroll direction that actually moves the symbol away. Rebind on every
+        // update so we always observe every ancestor scroll view.
+        let scrollViews = ancestorScrollViews()
+        let scrollViewIDs = scrollViews.map(ObjectIdentifier.init)
+        guard scrollViewIDs != observedScrollViewIDs else { return }
+        removeScrollBoundsObserver()
+        for scrollView in scrollViews {
+            let clipView = scrollView.contentView
+            clipView.postsBoundsChangedNotifications = true
+            let token = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.lspController?.notifyScrolled()
+                }
+            }
+            scrollBoundsObservers.append(token)
+        }
+        observedScrollViewIDs = scrollViewIDs
+    }
+
+    private func ancestorScrollViews() -> [NSScrollView] {
+        var scrollViews: [NSScrollView] = []
+        var current: NSView? = self
+        while let view = current {
+            if let scrollView = view as? NSScrollView {
+                scrollViews.append(scrollView)
+            }
+            current = view.superview
+        }
+        return scrollViews
+    }
+
+    private func removeScrollBoundsObserver() {
+        for token in scrollBoundsObservers {
+            NotificationCenter.default.removeObserver(token)
+        }
+        scrollBoundsObservers.removeAll()
+        observedScrollViewIDs.removeAll()
     }
 
     func reviewLineAnchor(atRow row: Int) -> DiffReviewLineAnchor? {
