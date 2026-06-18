@@ -14,20 +14,38 @@ struct ACPLaunchPathResolver {
     let npmGlobalBinDirectory: () async -> String?
 
     func resolvedLaunchPath(for spec: ACPLaunchSpec) async -> String? {
-        // Scope: only adapters Alas installs via npm have a package to anchor
-        // a verified path to. Binary-only adapters keep launching via PATH.
-        guard spec.npmPackageName != nil else { return nil }
-
-        // Prefer the binary owned by the verified npm global package — this is
-        // what beats a PATH shadow.
-        if let binDir = await npmGlobalBinDirectory() {
-            let candidate = "\(binDir)/\(spec.command)"
-            if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
+        // Mirror the setup check's verification precedence so launch runs
+        // exactly the binary that made setup pass:
+        //  - `.npxPackage`: the package is the only thing verified, so prefer
+        //    the package-owned binary (this is what beats a PATH shadow);
+        //    PATH only as a graceful fallback.
+        //  - `.binaryOnPathOrNpmPackage`: the check resolves the PATH binary
+        //    first, so launch that same binary; the npm-global binary is the
+        //    fallback for when the check passed on the package instead.
+        //  - `.binaryOnPath`: no managed package to anchor to — return nil so
+        //    the caller launches via PATH (`/usr/bin/env <command>`) as today.
+        switch spec.setupCheck {
+        case .npxPackage:
+            if let owned = await npmGlobalCandidate(for: spec) { return owned }
+            return pathCandidate(for: spec)
+        case .binaryOnPathOrNpmPackage:
+            if let onPath = pathCandidate(for: spec) { return onPath }
+            return await npmGlobalCandidate(for: spec)
+        case .binaryOnPath:
+            return nil
         }
+    }
 
-        // Fall back to the PATH-resolved absolute path (graceful — never worse
-        // than today). nil only when nothing resolves.
-        return AgentPath.resolveExecutable(
+    /// The package-owned binary at `<npm global bin>/<command>`, if executable.
+    private func npmGlobalCandidate(for spec: ACPLaunchSpec) async -> String? {
+        guard let binDir = await npmGlobalBinDirectory() else { return nil }
+        let candidate = "\(binDir)/\(spec.command)"
+        return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+    }
+
+    /// The PATH-resolved absolute path of `command`, if any.
+    private func pathCandidate(for spec: ACPLaunchSpec) -> String? {
+        AgentPath.resolveExecutable(
             named: spec.command, base: env["PATH"], wellKnown: additionalPathDirectories)
     }
 
