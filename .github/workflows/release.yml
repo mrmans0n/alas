@@ -32,7 +32,7 @@ jobs:
         arch: [arm64, x86_64]
     steps:
       - name: Checkout (with submodules)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
         with:
           submodules: recursive
 
@@ -187,7 +187,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout (for CHANGELOG.md)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7.0.0
 
       - name: Compute version from tag
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
