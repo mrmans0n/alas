@@ -827,6 +827,7 @@
 		C35CB6B466364169DF2616C3 /* RightPaneSelectionStateResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54635D583B6B308B75ABCE63 /* RightPaneSelectionStateResolverTests.swift */; };
 		C3840EDD0105467D0678B69C /* AppConfigSidebarChromeOverridesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705A47F78FEC16C2CA293BAC /* AppConfigSidebarChromeOverridesTests.swift */; };
 		C3B1121E68B4F36F1540C2E1 /* CommitReviewLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A5CD97B6A04929595B0A9D /* CommitReviewLoaderTests.swift */; };
+		48ABA14A0DC85CE19301F993 /* RangeReviewLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB83B0E479082F170CE86195 /* RangeReviewLoaderTests.swift */; };
 		C3E59948BD9108C1BD3243AD /* RemoteServerPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9126D442E8CDB093FA36BA5 /* RemoteServerPane.swift */; };
 		C4466064F783E6667C5FD25D /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2763F93ADFDCDF6B31D16475 /* UpdateController.swift */; };
 		C45F78462F404C64D02C413B /* LanguageServerRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D238B1262EB2BC6AFCF621 /* LanguageServerRegistry.swift */; };
@@ -1047,6 +1048,7 @@
 		F6C5274BCA0B3068C6C2D36A /* ZmxSunPathBudgetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E5107A10052A150DD8DE02 /* ZmxSunPathBudgetTests.swift */; };
 		F6CC80D1E8D2D36251C83A1D /* ShellEnvResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFEE7C5318AA6D04095403B2 /* ShellEnvResolver.swift */; };
 		F72AFDC819B805B3F1FFFB9A /* CommitReviewLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A240CD3EF074300828A1214 /* CommitReviewLoader.swift */; };
+		C10C84F0932EBACE12F5CEEC /* RangeReviewLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364374946AF8C3330B3515E5 /* RangeReviewLoader.swift */; };
 		F73063B2384B650C227BD09E /* ACPHistorySidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2C5BD0110EB8EDE7BB4ED93 /* ACPHistorySidebar.swift */; };
 		F8143610563C28604A23B89A /* CenterSelectionStateResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A2A074CEB9C9BA2AD34DD7 /* CenterSelectionStateResolverTests.swift */; };
 		F855DEEEE005795EC6B13544 /* AlasFieldTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169FC38D03727F34855EB521 /* AlasFieldTests.swift */; };
@@ -1605,6 +1607,7 @@
 		79DDEA496740F5B0B5EE808B /* Process+Git.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Process+Git.swift"; sourceTree = "<group>"; };
 		79F544A8DC56D0D4166E0A4F /* CommitContextBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitContextBuilderTests.swift; sourceTree = "<group>"; };
 		7A240CD3EF074300828A1214 /* CommitReviewLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitReviewLoader.swift; sourceTree = "<group>"; };
+		364374946AF8C3330B3515E5 /* RangeReviewLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RangeReviewLoader.swift; sourceTree = "<group>"; };
 		7B22D5EBE7EDAC07C943C91D /* WebSocketFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketFrame.swift; sourceTree = "<group>"; };
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7C38FA009B7044E9DC5480A7 /* ACPSessionsButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionsButton.swift; sourceTree = "<group>"; };
@@ -1910,6 +1913,7 @@
 		C7E76CA315A7B08E09A80AA8 /* AlasGhostty.Surface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.Surface.swift; sourceTree = "<group>"; };
 		C8A0A083659269CDD16A6764 /* ACPMessageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageTests.swift; sourceTree = "<group>"; };
 		C8A5CD97B6A04929595B0A9D /* CommitReviewLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitReviewLoaderTests.swift; sourceTree = "<group>"; };
+		AB83B0E479082F170CE86195 /* RangeReviewLoaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RangeReviewLoaderTests.swift; sourceTree = "<group>"; };
 		C9126D442E8CDB093FA36BA5 /* RemoteServerPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteServerPane.swift; sourceTree = "<group>"; };
 		C954F77AD0867F7FD39A5ED7 /* LineBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineBuffer.swift; sourceTree = "<group>"; };
 		C96C5E43E973803E6FD1528C /* CodeHostModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHostModels.swift; sourceTree = "<group>"; };
@@ -2374,6 +2378,7 @@
 				95DA6BFFE45ED25669869C76 /* CommitMessageEditorViewTests.swift */,
 				1E40B5F193E3CB5EB5BA945A /* CommitPromptStatusTests.swift */,
 				C8A5CD97B6A04929595B0A9D /* CommitReviewLoaderTests.swift */,
+				AB83B0E479082F170CE86195 /* RangeReviewLoaderTests.swift */,
 				6D46BDE72E52818061452ECB /* CommitRowTests.swift */,
 				576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */,
 				8673293AD419AA36F7DF02A9 /* CommitsOlderTests.swift */,
@@ -3828,6 +3833,7 @@
 				C432B6C03738D6ACB4293471 /* ReviewDraftSummaryRail.swift */,
 				56E964C72322223859CC6AF8 /* ReviewFeedbackAgentSender.swift */,
 				B0886F9B3096AC1264E3D337 /* ReviewFeedbackBundle.swift */,
+				364374946AF8C3330B3515E5 /* RangeReviewLoader.swift */,
 				2C17465AF6747EDCD8CCE416 /* ReviewSessionLoader.swift */,
 				2F7E37886988A6F285BEA163 /* ReviewSessionModels.swift */,
 				0704EBDA62931ADE79B04F30 /* ReviewSessionStore.swift */,
@@ -4788,6 +4794,7 @@
 				F04E4353813EB99D4459750F /* ReviewRequestDiffLoader.swift in Sources */,
 				CDA1193EF673BA40A6548B2B /* ReviewRequestDraft.swift in Sources */,
 				2D80BC255AB24FA274617553 /* ReviewRequestPromptEditorWindow.swift in Sources */,
+				C10C84F0932EBACE12F5CEEC /* RangeReviewLoader.swift in Sources */,
 				C10DDFA9216B53E3C9527F8C /* ReviewSessionLoader.swift in Sources */,
 				58B2E8C756F6D3CB08FB3B10 /* ReviewSessionModels.swift in Sources */,
 				5723C73E91B9143B73554042 /* ReviewSessionStore.swift in Sources */,
@@ -5074,6 +5081,7 @@
 				7D087329E7B873B1E7A1CE89 /* CommitMessageEditorViewTests.swift in Sources */,
 				AE179E24A9E308150D1FD1D5 /* CommitPromptStatusTests.swift in Sources */,
 				C3B1121E68B4F36F1540C2E1 /* CommitReviewLoaderTests.swift in Sources */,
+				48ABA14A0DC85CE19301F993 /* RangeReviewLoaderTests.swift in Sources */,
 				B35BD3304D3A9EC5BABBC56E /* CommitRowTests.swift in Sources */,
 				363F31C705CF7D17162E2CF6 /* CommitTabStateTests.swift in Sources */,
 				575A4296D86E77D00A1E66A7 /* CommitTabViewTests.swift in Sources */,
