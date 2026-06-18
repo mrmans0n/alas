@@ -15,6 +15,11 @@ final class ACPMarkdownBlockCache {
     private(set) var tailUnparsed: String = ""
     private var stablePrefixLength: Int = 0
     private var lastFullText: String = ""
+    private var promotionScanner = PromotionScanner()
+
+    #if DEBUG
+    private(set) var promotionScanCharacterCountForTests = 0
+    #endif
 
     #if DEBUG
     /// Approximate UTF-8 byte size of the retained text + a small per-stable-block
@@ -26,12 +31,22 @@ final class ACPMarkdownBlockCache {
 
     func update(with full: String) {
         // Detect non-extending updates and reset.
-        if !full.hasPrefix(lastFullText) {
+        let extendsPreviousFullText = full.hasPrefix(lastFullText)
+        if !extendsPreviousFullText {
             stableBlocks = []
             stablePrefixLength = 0
+            promotionScanner.reset()
         }
+        let previousTailLength = tailUnparsed.count
         lastFullText = full
         tailUnparsed = String(full.dropFirst(stablePrefixLength))
+        if extendsPreviousFullText {
+            let appended = tailUnparsed.dropFirst(previousTailLength)
+            scanPromotionTail(String(appended), startingAt: previousTailLength)
+        } else {
+            promotionScanner.reset()
+            scanPromotionTail(tailUnparsed, startingAt: 0)
+        }
         promoteIfPossible()
     }
 
@@ -39,7 +54,7 @@ final class ACPMarkdownBlockCache {
     /// blocks. Everything up to and including that
     /// blank line gets parsed once and frozen.
     private func promoteIfPossible() {
-        guard let safeEnd = ACPMarkdownBlockCache.lastSafePromotionIndex(in: tailUnparsed) else {
+        guard let safeEnd = promotionScanner.lastSafeEnd else {
             return
         }
         let promoted = String(tailUnparsed.prefix(safeEnd))
@@ -47,6 +62,15 @@ final class ACPMarkdownBlockCache {
         stableBlocks.append(contentsOf: newBlocks)
         stablePrefixLength += promoted.count
         tailUnparsed = String(tailUnparsed.dropFirst(safeEnd))
+        promotionScanner.reset()
+        scanPromotionTail(tailUnparsed, startingAt: 0)
+    }
+
+    private func scanPromotionTail(_ text: String, startingAt offset: Int) {
+        #if DEBUG
+        promotionScanCharacterCountForTests += text.count
+        #endif
+        promotionScanner.scan(text, startingAt: offset)
     }
 
     /// Returns the offset (Int count of Characters) just past the last
@@ -54,7 +78,7 @@ final class ACPMarkdownBlockCache {
     /// exists yet. Operates over `text` only — does not see prior
     /// stable prefix; for streaming, "fence at start of tail" implies
     /// the prior stable parse closed any earlier fences.
-    static func lastSafePromotionIndex(in text: String) -> Int? {
+    nonisolated static func lastSafePromotionIndex(in text: String) -> Int? {
         var openingFence: FenceDelimiter?
         var lastSafeEnd: Int? = nil
         var line = ""
@@ -85,7 +109,41 @@ final class ACPMarkdownBlockCache {
         let length: Int
     }
 
-    private static func matchFence(_ line: String) -> FenceDelimiter? {
+    private struct PromotionScanner {
+        private(set) var lastSafeEnd: Int?
+        private var openingFence: FenceDelimiter?
+        private var line = ""
+
+        mutating func reset() {
+            lastSafeEnd = nil
+            openingFence = nil
+            line = ""
+        }
+
+        mutating func scan(_ text: String, startingAt offset: Int) {
+            var idx = offset
+            for ch in text {
+                if ch == "\n" {
+                    if let currentFence = openingFence {
+                        if closesFence(line, currentFence) {
+                            openingFence = nil
+                        }
+                    } else if let fence = matchFence(line) {
+                        openingFence = fence
+                    }
+                    if line.trimmingCharacters(in: .whitespaces).isEmpty && openingFence == nil {
+                        lastSafeEnd = idx + 1 // include the newline
+                    }
+                    line = ""
+                } else {
+                    line.append(ch)
+                }
+                idx += 1
+            }
+        }
+    }
+
+    nonisolated private static func matchFence(_ line: String) -> FenceDelimiter? {
         var index = line.startIndex
         var leadingSpaces = 0
         while index < line.endIndex, line[index] == " " {
@@ -101,7 +159,7 @@ final class ACPMarkdownBlockCache {
         return FenceDelimiter(marker: marker, length: length)
     }
 
-    private static func closesFence(_ line: String, _ openingFence: FenceDelimiter) -> Bool {
+    nonisolated private static func closesFence(_ line: String, _ openingFence: FenceDelimiter) -> Bool {
         var index = line.startIndex
         var leadingSpaces = 0
         while index < line.endIndex, line[index] == " " {
