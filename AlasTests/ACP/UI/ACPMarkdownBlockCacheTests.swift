@@ -59,4 +59,16 @@ struct ACPMarkdownBlockCacheTests {
         // (synthesized; its associated values are String / [String] / Int).
         #expect(cached == direct)
     }
+
+    @Test("streaming updates scan only the appended markdown tail")
+    func streamingUpdatesScanOnlyAppendedTail() async {
+        let cache = ACPMarkdownBlockCache()
+        let longParagraph = String(repeating: "a", count: 10_000)
+        cache.update(with: longParagraph)
+        let afterInitial = cache.promotionScanCharacterCountForTests
+
+        cache.update(with: longParagraph + "b")
+
+        #expect(cache.promotionScanCharacterCountForTests == afterInitial + 1)
+    }
 }
