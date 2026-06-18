@@ -7,6 +7,7 @@ struct UpdateAvailableSheet: View {
     let info: ReleaseInfo
     let source: InstallSource
     let onDismiss: () -> Void
+    let onRunUpdate: () -> Void
     @Environment(\.theme) var theme
 
     private let brewCommand = "brew upgrade --cask alas"
@@ -79,7 +80,8 @@ struct UpdateAvailableSheet: View {
                 AlasButton(title: "Copy", style: .subtle) { Clipboard.copy(brewCommand) }
                 Spacer()
                 AlasButton(title: "View Release", style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
-                AlasButton(title: "Later", style: .primary, action: onDismiss)
+                AlasButton(title: "Update", style: .primary, action: onRunUpdate)
+                AlasButton(title: "Later", style: .subtle, action: onDismiss)
             case .direct:
                 AlasButton(title: viewReleaseLabel, style: .subtle) { NSWorkspace.shared.open(info.htmlURL) }
                 Spacer()

@@ -342,6 +342,12 @@ final class AppState {
     // MARK: - LSP installer
 
     let lspInstaller = LSPInstaller()
+
+    // MARK: - Self updater
+
+    let selfUpdater = SelfUpdater()
+    var presentUpdateProgress = false
+
     private(set) var installerHost: InstallerHost = .detect()
 
     /// Re-detect installers after an install completes so that, e.g., installing
