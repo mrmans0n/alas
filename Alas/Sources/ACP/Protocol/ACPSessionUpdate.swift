@@ -17,6 +17,7 @@ enum ACPSessionUpdate: Codable, Equatable {
     case currentModelUpdate(modelId: String)
     case sessionConfigOptionsUpdate([ACPConfigOption])
     case availableCommandsUpdate([ACPPromptSuggestion])
+    case usageUpdate(ACPUsageInfo)
     case unknown(String)
 
     private enum Keys: String, CodingKey {
@@ -56,6 +57,8 @@ enum ACPSessionUpdate: Codable, Equatable {
                 let cmd = $0.name.hasPrefix("/") ? $0.name : "/" + $0.name
                 return ACPPromptSuggestion(command: cmd, description: $0.description)
             })
+        case "usage_update":
+            self = .usageUpdate(try ACPUsageInfo(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -92,7 +95,7 @@ enum ACPSessionUpdate: Codable, Equatable {
             try c.encode("session_config_options_update", forKey: .sessionUpdate)
             try c.encode(opts, forKey: .configOptions)
         case .availableCommandsUpdate: break // not produced by us
-        case .toolCall, .toolCallUpdate, .unknown: break
+        case .toolCall, .toolCallUpdate, .usageUpdate, .unknown: break
         }
     }
 }
@@ -124,4 +127,34 @@ struct ACPPlanEntry: Codable, Equatable {
     let content: String
     let priority: String?
     let status: String
+}
+
+/// Context-window usage from the ACP `usage_update` notification.
+/// `used`/`size` are token counts; `cost` is cumulative session cost when the
+/// agent reports it. A malformed/partial `cost` must not sink the whole update,
+/// so it is decoded defensively to `nil`.
+struct ACPUsageInfo: Codable, Equatable {
+    let used: Int
+    let size: Int
+    let cost: Cost?
+
+    struct Cost: Codable, Equatable {
+        let amount: Double
+        let currency: String
+    }
+
+    private enum CodingKeys: String, CodingKey { case used, size, cost }
+
+    init(used: Int, size: Int, cost: Cost?) {
+        self.used = used
+        self.size = size
+        self.cost = cost
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        used = try c.decode(Int.self, forKey: .used)
+        size = try c.decode(Int.self, forKey: .size)
+        cost = try? c.decodeIfPresent(Cost.self, forKey: .cost)
+    }
 }
