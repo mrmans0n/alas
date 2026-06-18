@@ -852,7 +852,7 @@ final class DiffPaneCodeTextView: NSTextView {
     var hasLSPContextForTesting: Bool { lspContext != nil }
     var allowedLSPSideForTesting: DiffLineSide { allowedLSPSide }
     private var scrollBoundsObservers: [NSObjectProtocol] = []
-    private var observedScrollViews: [NSScrollView] = []
+    private var observedScrollViewIDs: [ObjectIdentifier] = []
     private var scheduledRebindWorkItem: DispatchWorkItem?
 
     var theme: Theme? {
@@ -1121,7 +1121,8 @@ final class DiffPaneCodeTextView: NSTextView {
         // scroll direction that actually moves the symbol away. Rebind on every
         // update so we always observe every ancestor scroll view.
         let scrollViews = ancestorScrollViews()
-        guard scrollViews != observedScrollViews else { return }
+        let scrollViewIDs = scrollViews.map(ObjectIdentifier.init)
+        guard scrollViewIDs != observedScrollViewIDs else { return }
         removeScrollBoundsObserver()
         for scrollView in scrollViews {
             let clipView = scrollView.contentView
@@ -1137,7 +1138,7 @@ final class DiffPaneCodeTextView: NSTextView {
             }
             scrollBoundsObservers.append(token)
         }
-        observedScrollViews = scrollViews
+        observedScrollViewIDs = scrollViewIDs
     }
 
     private func ancestorScrollViews() -> [NSScrollView] {
@@ -1157,7 +1158,7 @@ final class DiffPaneCodeTextView: NSTextView {
             NotificationCenter.default.removeObserver(token)
         }
         scrollBoundsObservers.removeAll()
-        observedScrollViews.removeAll()
+        observedScrollViewIDs.removeAll()
     }
 
     func reviewLineAnchor(atRow row: Int) -> DiffReviewLineAnchor? {
