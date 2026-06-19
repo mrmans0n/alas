@@ -65,7 +65,7 @@ struct ReviewSessionModelsTests {
 
         #expect(draft.draftSessionID == .draftCommit(worktreeID: "wt-1", repositoryPath: repositoryPath))
         #expect(commit.draftSessionID == .commit(worktreeID: "wt-1", repositoryPath: repositoryPath, sha: "deadbeef"))
-        #expect(range.draftSessionID == .branch(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
+        #expect(range.draftSessionID == .commitRange(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
         #expect(branch.draftSessionID == .branch(worktreeID: "wt-1", repositoryPath: repositoryPath, base: "main", head: "feature"))
         #expect(draft.id.rawValue == "draft-commit\u{1f}wt-1\u{1f}/repo")
         #expect(commit.sourceDescription == "Commit deadbeef")

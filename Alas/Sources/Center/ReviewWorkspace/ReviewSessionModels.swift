@@ -106,7 +106,7 @@ struct ReviewSessionTarget: Codable, Equatable, Hashable, Identifiable, Sendable
             providerDescription: nil,
             providerURL: nil,
             revisionDescription: "\(base)..\(head)",
-            draftSessionID: .branch(worktreeID: worktreeID, repositoryPath: repositoryPath, base: base, head: head),
+            draftSessionID: .commitRange(worktreeID: worktreeID, repositoryPath: repositoryPath, base: base, head: head),
             payload: .commitRange(base: base, head: head)
         )
     }

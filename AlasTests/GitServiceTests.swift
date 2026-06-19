@@ -685,4 +685,153 @@ struct GitServiceTests {
         let sha = try await svc.revParseHEAD(worktreePath: repo)
         #expect(sha.count == 40)
     }
+
+    @Test func rangeDiffReturnsHunksForChangedFile() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+        let base = try await gitOK(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try writeText("a\nb\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "head"], cwd: repo)
+        let head = try await gitOK(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let diff = try await GitService().rangeDiff(worktreePath: repo, base: base, head: head, threeDot: false, file: "a.txt", originalPath: nil)
+
+        #expect(!diff.hunks.isEmpty)
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "b" } })
+    }
+
+    @Test func rangeChangedFilesListsTwoDotFilesInRange() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+        let base = try await gitOK(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        try writeText("a\nb\n", "a.txt", in: repo)
+        try writeText("n\n", "new.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "head"], cwd: repo)
+        let head = try await gitOK(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let files = try await GitService().rangeChangedFiles(at: repo, base: base, head: head, threeDot: false)
+
+        #expect(Set(files.map(\.path)) == ["a.txt", "new.txt"])
+    }
+
+    // MARK: - Root-commit range tests (Fix 1)
+
+    @Test func rangeChangedFilesHandlesRootCommitParentBase() async throws {
+        // Repo with a SINGLE root commit. base = "<rootSHA>^" (no parent).
+        // rangeChangedFiles must not throw and must treat the missing parent
+        // as the canonical empty tree, so all files in the root commit appear.
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-root-range-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await gitOK(["init", "-q", "-b", "main"], cwd: repo)
+        try await gitOK(["config", "user.email", "t@example.com"], cwd: repo)
+        try await gitOK(["config", "user.name", "Test User"], cwd: repo)
+        try writeText("hello\n", "hello.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "root"], cwd: repo)
+        let rootSHA = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let files = try await GitService().rangeChangedFiles(
+            at: repo,
+            base: "\(rootSHA)^",
+            head: rootSHA,
+            threeDot: false
+        )
+
+        #expect(files.map(\.path).contains("hello.txt"))
+    }
+
+    @Test func rangeDiffHandlesRootCommitParentBase() async throws {
+        // Same single-commit repo; rangeDiff must return non-empty hunks
+        // for the file introduced in the root commit.
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-root-rdiff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await gitOK(["init", "-q", "-b", "main"], cwd: repo)
+        try await gitOK(["config", "user.email", "t@example.com"], cwd: repo)
+        try await gitOK(["config", "user.name", "Test User"], cwd: repo)
+        try writeText("world\n", "world.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "root"], cwd: repo)
+        let rootSHA = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let diff = try await GitService().rangeDiff(
+            worktreePath: repo,
+            base: "\(rootSHA)^",
+            head: rootSHA,
+            threeDot: false,
+            file: "world.txt",
+            originalPath: nil
+        )
+
+        #expect(!diff.hunks.isEmpty)
+    }
+
+    @Test func rangeChangedFilesThrowsForStaleNonRootBase() async throws {
+        // A non-root base that no longer resolves (e.g. a stale SHA after a
+        // rebase) must throw rather than silently diffing against the empty
+        // tree and reporting every file in head as newly added.
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "head"], cwd: repo)
+        let head = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // "<bogus-sha>^" — the commit-ish does not resolve, so this is not a
+        // proven root commit and must not fall back to the empty tree.
+        let staleBase = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef^"
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().rangeChangedFiles(
+                at: repo,
+                base: staleBase,
+                head: head,
+                threeDot: false
+            )
+        }
+    }
+
+    // MARK: - headSHA test (Fix 2)
+
+    @Test func headSHAReturnsCurrentHEAD() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let gitSHA = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let svcSHA = try await GitService().headSHA(at: repo)
+
+        #expect(svcSHA == gitSHA)
+        #expect(svcSHA.count == 40)
+    }
+
+    @Test func resolveRevisionResolvesBranchNameToSHA() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "c"], cwd: repo)
+
+        let branchSHA = try await gitOK(["rev-parse", "main"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = try await GitService().resolveRevision(at: repo, ref: "main")
+        #expect(resolved == branchSHA)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().resolveRevision(at: repo, ref: "no-such-branch")
+        }
+    }
 }
