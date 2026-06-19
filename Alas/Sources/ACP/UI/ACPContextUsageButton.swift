@@ -12,11 +12,11 @@ struct ACPContextUsageButton: View {
     var body: some View {
         if let usage {
             let ratio = contextRatio(used: usage.used, size: usage.size)
-            Button { showDetails.toggle() } label: {
-                ACPContextRing(ratio: ratio)
-            }
-            .buttonStyle(.plain)
-            .help("Context: \(contextPercent(ratio: ratio))% used")
+            ACPContextRing(
+                ratio: ratio,
+                help: "Context window: \(contextPercent(ratio: ratio))% in use",
+                action: { showDetails.toggle() }
+            )
             .popover(isPresented: $showDetails, arrowEdge: .top) {
                 details(usage: usage, ratio: ratio)
             }
