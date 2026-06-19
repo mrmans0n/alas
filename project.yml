@@ -203,13 +203,19 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
-        OTHER_LDFLAGS: $(inherited) -lc++
+        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include
+        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/../Frameworks
+        OTHER_LDFLAGS: $(inherited) -lc++ -lfff_c
     preBuildScripts:
       - name: Build GhosttyKit
         script: '"${SRCROOT}/scripts/build-ghostty.sh"'
         basedOnDependencyAnalysis: false
       - name: Build zmx
         script: '"${SRCROOT}/scripts/build-zmx.sh"'
+        basedOnDependencyAnalysis: false
+      - name: Build fff
+        script: '"${SRCROOT}/scripts/build-fff.sh"'
         basedOnDependencyAnalysis: false
     postBuildScripts:
       - name: Embed Ghostty Resources
@@ -233,6 +239,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.tests
         GENERATE_INFOPLIST_FILE: YES
+        HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include
+        LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @loader_path/../Frameworks @executable_path/../Frameworks
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Alas.app/Contents/MacOS/Alas
         BUNDLE_LOADER: $(TEST_HOST)
 

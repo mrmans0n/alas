@@ -2419,11 +2419,12 @@ final class AppState {
     }
 
     private func makeSearchEnvironment() -> SearchEnvironment {
+        let fileSearchBackend = FffFileSearchBackend()
         // Invariant: the two synchronous closures below are only invoked
         // from `SearchModel`, which is `@MainActor` — so `assumeIsolated`
         // is sound. If a future caller invokes them off-main this will
         // trap; keep them on main or convert to async.
-        SearchEnvironment(
+        return SearchEnvironment(
             currentWorktreeId: { [weak self] in
                 MainActor.assumeIsolated { self?.selectedWorktreeId }
             },
@@ -2449,6 +2450,9 @@ final class AppState {
             },
             statuses: { [statusCache] wt in
                 try await statusCache.statuses(forWorktreePath: wt.absolutePath)
+            },
+            fileSearch: { query, wt in
+                try await fileSearchBackend.search(query: query, worktree: wt, limit: 50)
             },
             contentSearch: { [contentSearcher = ContentSearcher()] query, options, targets in
                 contentSearcher.search(query: query, options: options, worktrees: targets)

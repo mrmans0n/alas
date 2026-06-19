@@ -4,3 +4,6 @@
 [submodule "ThirdParty/zmx"]
 	path = ThirdParty/zmx
 	url = https://github.com/neurosnap/zmx
+[submodule "ThirdParty/fff"]
+	path = ThirdParty/fff
+	url = https://github.com/dmtrKovalenko/fff
