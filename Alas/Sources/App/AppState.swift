@@ -959,6 +959,41 @@ final class AppState {
         return optimistic.id
     }
 
+    @MainActor
+    func cliCreateWorktree(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {
+        guard let project = projects.first(where: { $0.id == origin.projectId }) else {
+            return .error("The current worktree's project is no longer available.")
+        }
+        switch GitNameValidator.validateBranchName(branch) {
+        case .valid:
+            break
+        case .invalid(let message):
+            return .error("invalid branch name: \(message)")
+        }
+
+        let destination = WorktreePathTemplateRenderer.render(
+            template: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            return .error("A worktree already exists at this path.")
+        }
+        let id = createWorktree(
+            projectId: project.id,
+            base: base ?? config.worktrees.baseBranch,
+            branch: branch,
+            destination: destination,
+            runStartup: true,
+            launchSurface: .none
+        )
+        guard !id.isEmpty else {
+            return .error("A worktree already exists at this path.")
+        }
+        return .text(["creating \(branch) at \(destination.path)"])
+    }
+
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
         var argv = [agent.resolvedBinary]
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
@@ -1512,6 +1547,14 @@ final class AppState {
             },
             focusWorktree: { [weak self] worktree in
                 self?.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+            },
+            createWorktree: { [weak self] origin, branch, base in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliCreateWorktree(origin: origin, branch: branch, base: base)
+            },
+            deleteWorktree: { [weak self] worktree, force, keepBranch in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliDeleteWorktree(worktree, force: force, keepBranch: keepBranch)
             },
             openReviewChanges: { [weak self] worktree in
                 _ = self?.openReviewChangesTab(for: worktree)
@@ -2797,6 +2840,61 @@ final class AppState {
                 removedIndex: removedIndex
             )
         }
+    }
+
+    @MainActor
+    func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
+        if pendingForceDeleteWorktree?.id == worktree.id {
+            pendingForceDeleteWorktree = nil
+        }
+        if projectsManager.operationState(for: worktree.id) == .deleting {
+            return .ok
+        }
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        if !dirty.isEmpty && !force {
+            return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
+        }
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            return .error("Could not find the project for this worktree.")
+        }
+        if !force {
+            let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
+            if preflight.requiresForce {
+                if preflight.reasons.contains(.dirty) {
+                    return .error("worktree has local changes; rerun with --force to delete")
+                }
+                if preflight.reasons.contains(.containsInitializedSubmodules) {
+                    return .error("worktree contains initialized submodules; rerun with --force to delete")
+                }
+                return .error("worktree requires force delete; rerun with --force to delete")
+            }
+        }
+
+        let repoPath = URL(fileURLWithPath: project.path)
+        let deleteBranch = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: keepBranch
+        )
+        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        projectsManager.setOperationState(id: worktree.id, state: .deleting)
+        Task { @MainActor in
+            await performDeleteWorktree(
+                worktree: worktree,
+                repoPath: repoPath,
+                deleteBranchIfMerged: deleteBranch,
+                force: force,
+                removedIndex: removedIndex
+            )
+            if pendingForceDeleteWorktree?.id == worktree.id {
+                pendingForceDeleteWorktree = nil
+                projectsManager.setOperationState(
+                    id: worktree.id,
+                    state: .deleteFailed(message: "worktree requires force delete; rerun with --force to delete")
+                )
+            }
+        }
+        return .ok
     }
 
     /// Runs the git removal off the main actor, then resumes on MainActor

@@ -449,4 +449,169 @@ struct AppStateCLIRoutingTests {
             return false
         })
     }
+
+    @Test func cliWorktreeSwitchFocusesMatchedWorktree() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "switch")
+        defer { try? FileManager.default.removeItem(at: main.path) }
+        let other = Worktree(
+            id: "other",
+            projectId: project.id,
+            name: "feature/review",
+            branch: "feature/review",
+            path: main.path.deletingLastPathComponent().appendingPathComponent("other"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        state.projectsManager.insertOptimisticWorktree(other)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.switch(target: "feature"))))
+
+        #expect(response == .ok)
+        #expect(state.selectedWorktreeId == other.id)
+    }
+
+    @Test func cliReviewOpensReviewChangesTab() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.localChanges)))
+
+        #expect(response == .ok)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .reviewChanges = $0 { return true }
+            return false
+        })
+    }
+
+    @Test func cliWorktreeNewStartsCreation() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "new")
+        let destinationRoot = main.path.deletingLastPathComponent()
+        let createdPath = destinationRoot.appendingPathComponent("test-feature-cli")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: createdPath)
+        }
+        state.config.worktrees.rootPath = main.path.deletingLastPathComponent().path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "feature/cli", base: "missing-base"))))
+
+        let destination = WorktreePathTemplateRenderer.render(
+            template: state.config.worktrees.pathTemplate,
+            worktreeRoot: state.config.worktrees.rootPath,
+            repoName: project.name,
+            branch: "feature/cli"
+        )
+        let canonicalDestination = destination
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(destination.lastPathComponent)
+        let createdId = Worktree.makeId(path: canonicalDestination)
+        #expect(response == .text(["creating feature/cli at \(destination.path)"]))
+        #expect(state.projectsManager.operationState(for: createdId) == .creating)
+        #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == createdId })
+    }
+
+    @Test func cliWorktreeNewRejectsExistingDestination() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "new-existing")
+        defer { try? FileManager.default.removeItem(at: main.path) }
+        state.config.worktrees.rootPath = main.path.deletingLastPathComponent().path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{branch}"
+        let existingBranch = main.path.lastPathComponent
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: existingBranch, base: "main"))))
+
+        #expect(response == .error("A worktree already exists at this path."))
+        #expect(state.projectsManager.worktrees(projectId: project.id).filter { $0.id == main.id }.count == 1)
+    }
+
+    @Test func cliWorktreeNewRejectsExistingDirectoryOnDisk() async throws {
+        let (state, _, main) = try await makeStateWithWorktree(name: "new-existing-dir")
+        let existingPath = main.path.deletingLastPathComponent().appendingPathComponent("already-there")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: existingPath)
+        }
+        try FileManager.default.createDirectory(at: existingPath, withIntermediateDirectories: true)
+        state.config.worktrees.rootPath = main.path.deletingLastPathComponent().path
+        state.config.worktrees.pathTemplate = "{worktreeRoot}/{branch}"
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "already-there", base: "main"))))
+
+        #expect(response == .error("A worktree already exists at this path."))
+    }
+
+    @Test func cliWorktreeDeleteMarksMatchedWorktreeDeleting() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "delete")
+        let worktreePath = main.path.deletingLastPathComponent().appendingPathComponent("delete-target")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: worktreePath)
+        }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "delete-target", worktreePath.path, "main"], cwd: main.path)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-target" })
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "delete-target", force: false, keepBranch: true))))
+
+        #expect(response == .ok)
+        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+    }
+
+    @Test func cliWorktreeDeleteIsIdempotentWhileDeleting() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "delete-idempotent")
+        let target = Worktree(
+            id: "deleting-target",
+            projectId: project.id,
+            name: "feature/delete",
+            branch: "feature/delete",
+            path: main.path.deletingLastPathComponent().appendingPathComponent("deleting-target"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        defer { try? FileManager.default.removeItem(at: main.path) }
+        state.projectsManager.insertOptimisticWorktree(target)
+        state.projectsManager.setOperationState(id: target.id, state: .deleting)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "feature/delete", force: true, keepBranch: true))))
+
+        #expect(response == .ok)
+        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+    }
+
+    @Test func cliWorktreeDeleteForceClearsStalePendingForceState() async throws {
+        let (state, project, main) = try await makeStateWithWorktree(name: "delete-force")
+        let worktreePath = main.path.deletingLastPathComponent().appendingPathComponent("delete-force-target")
+        defer {
+            try? FileManager.default.removeItem(at: main.path)
+            try? FileManager.default.removeItem(at: worktreePath)
+        }
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "delete-force-target", worktreePath.path, "main"], cwd: main.path)
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-force-target" })
+        state.pendingForceDeleteWorktree = AppState.PendingForceDeleteWorktree(
+            id: target.id,
+            branch: target.branch,
+            projectId: target.projectId,
+            repoPath: main.path,
+            worktreePath: target.path,
+            deleteBranchIfMerged: false,
+            removedIndex: 1,
+            reason: .dirty
+        )
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "delete-force-target", force: true, keepBranch: true))))
+
+        #expect(response == .ok)
+        #expect(state.pendingForceDeleteWorktree == nil)
+        #expect(state.projectsManager.operationState(for: target.id) == .deleting)
+    }
 }
