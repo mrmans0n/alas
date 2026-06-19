@@ -214,14 +214,23 @@ Run from a real worktree with at least one Swift file and one CRLF text file.
 - **Big file responsiveness.** Open a 5 k-line file, type rapidly. No visible flicker. Diagnostics catch up within ~1 s of pause.
 - **Save failure.** `chmod 555` the parent directory, edit, ⌘S. The conflict-banner area shows "Couldn't save: …". Restore perms, ⌘S succeeds.
 
-## `ao` alias
+## Terminal Commands
 
 Inside an Alas-spawned terminal:
 
+- `type alas` reports the script path under Alas's per-user bin dir.
+- `alas open README.md` opens the file in the editor.
+- `alas wt list` prints the visible worktrees and marks the current one.
+- `alas wt switch <name-or-branch>` focuses the matching worktree.
+- `alas wt new manual-test-branch --base main` starts worktree creation and shows progress in the sidebar.
+- On a disposable worktree, `alas wt delete <name-or-branch>` starts deletion; dirty worktrees are rejected unless rerun with `--force`.
+- `alas review` opens the local Changes review tab.
+- In a GitHub- or GitLab-backed worktree, `alas review <number-or-url>` opens the provider PR/MR review session.
 - `type ao` reports the script path under Alas's per-user bin dir (same directory as `alas`).
 - `ao README.md` opens the file in the editor (identical behavior to `alas open README.md`).
 - `ao` with no arguments prints `usage: alas open <path> [path...]` and exits with a non-zero status.
 - Launching a terminal **outside** Alas, `type ao` reports `ao: not found` (or the shell's equivalent).
+- Launching a terminal **outside** Alas, `type alas` reports `alas: not found` (or the shell's equivalent).
 
 ## Review Loop Drawer
 

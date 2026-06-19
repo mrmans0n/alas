@@ -36,7 +36,8 @@ agent session, and diff side-by-side.
 
 - **Parallel worktrees, one window.** Every repo lives in the sidebar with its
   linked worktrees underneath. Switching is instant; terminal sessions, tabs, and
-  scroll positions persist per worktree.
+  scroll positions persist per worktree. Built-in `alas` terminal commands open
+  files, switch/create/delete worktrees, and jump into local or provider reviews.
 
   ![Terminal pane with a live agent run and per-worktree changes](art/alas-terminal.png)
 
