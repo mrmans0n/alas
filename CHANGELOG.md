@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-06-19
+
+### ✨ Features
+
+- Add terminal worktree and review commands (#586).
+- Compact single-child directory chains in the file tree (#585).
+- Highlight inline find matches in the editor (#584).
+- Bundle `fff` for file search (#580).
+- Reveal content search matches in the editor (#578).
+- Stage and unstage folders via checkboxes in the working tree (#582).
+- Add context ring tooltip and click target improvements (#577).
+- Improve the finish inspect pane (#576).
+- Add worktree review scope selection for commits, ranges, and branches (#575).
+
+### 🐛 Fixes
+
+- Fix diff gutter alignment (#583).
+- Discard replay chunks that arrive while the transcript is idle (#581).
+- Improve review pane scrolling performance (#579).
+- Fix SwiftUI row identity issues (#574).
+- Disable the focus ring on the review status footer (#573).
+- Fix diff hover cursors (#572).
+- Fix release workflow version stamping.
+
 ## [0.8.4] - 2026-06-18
 
 ### ✨ Features
