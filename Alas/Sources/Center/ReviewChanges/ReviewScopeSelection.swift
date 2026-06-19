@@ -11,7 +11,8 @@ enum ReviewScopeSelection {
     static func target(
         for choice: ReviewScopeChoice,
         worktreeID: String,
-        repositoryPath: URL
+        repositoryPath: URL,
+        headSHA: String? = nil
     ) -> ReviewSessionTarget {
         switch choice {
         case .workingTree:
@@ -36,7 +37,7 @@ enum ReviewScopeSelection {
                 worktreeID: worktreeID,
                 repositoryPath: repositoryPath,
                 base: name,
-                head: "HEAD",
+                head: headSHA ?? "HEAD",
                 title: "Review HEAD against \(name)"
             )
         }

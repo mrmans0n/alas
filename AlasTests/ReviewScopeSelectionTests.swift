@@ -30,6 +30,34 @@ struct ReviewScopeSelectionTests {
         #expect(target.payload == .branch(base: "main", head: "HEAD"))
     }
 
+    @Test func branchWithHeadSHAEmbedsConcreteSHA() {
+        let target = ReviewScopeSelection.target(
+            for: .branch(name: "main"),
+            worktreeID: "wt",
+            repositoryPath: path,
+            headSHA: "abc1234abc1234abc1234abc1234abc1234abc1234"
+        )
+        #expect(target.kind == .branch)
+        #expect(target.payload == .branch(base: "main", head: "abc1234abc1234abc1234abc1234abc1234abc1234"))
+    }
+
+    @Test func branchTargetIDVariesWithHeadSHA() {
+        let targetA = ReviewScopeSelection.target(
+            for: .branch(name: "main"),
+            worktreeID: "wt",
+            repositoryPath: path,
+            headSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+        let targetB = ReviewScopeSelection.target(
+            for: .branch(name: "main"),
+            worktreeID: "wt",
+            repositoryPath: path,
+            headSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        )
+        #expect(targetA.id != targetB.id)
+        #expect(targetA.draftSessionID != targetB.draftSessionID)
+    }
+
     @Test func filterMatchesShaSubjectAndIsCaseInsensitive() {
         let commits = [info("abc1234", "Fix login"), info("def5678", "Add export")]
         #expect(ReviewScopeSelection.filteredCommits(commits, query: "").map(\.sha) == ["abc1234", "def5678"])

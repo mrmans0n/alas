@@ -94,6 +94,7 @@ struct ReviewChangesTabView: View {
     @State private var showWhitespace = false
     @State private var showScopePicker = false
     @State private var scopeBranches: [String] = []
+    @State private var scopeHeadSHA: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -119,7 +120,8 @@ struct ReviewChangesTabView: View {
                         target: ReviewScopeSelection.target(
                             for: choice,
                             worktreeID: worktree.id,
-                            repositoryPath: worktree.path
+                            repositoryPath: worktree.path,
+                            headSHA: scopeHeadSHA
                         )
                     )
                 },
@@ -127,8 +129,13 @@ struct ReviewChangesTabView: View {
             )
         }
         .task(id: showScopePicker) {
-            guard showScopePicker, scopeBranches.isEmpty else { return }
-            scopeBranches = (try? await GitService().branches(at: worktree.path)) ?? []
+            guard showScopePicker else { return }
+            if scopeBranches.isEmpty {
+                scopeBranches = (try? await GitService().branches(at: worktree.path)) ?? []
+            }
+            if scopeHeadSHA == nil {
+                scopeHeadSHA = try? await GitService().headSHA(at: worktree.path)
+            }
         }
     }
 
