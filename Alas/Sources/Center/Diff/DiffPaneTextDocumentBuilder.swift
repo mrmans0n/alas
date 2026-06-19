@@ -484,14 +484,13 @@ struct DiffPaneTextDocumentBuilder {
         guard row.collapsedLineCount > 0 else {
             return "Expand context \(boundaryText)"
         }
-        return "\(row.collapsedLineCount) unchanged lines \(boundaryText)"
+        return "Expand \(row.collapsedLineCount) unchanged lines \(boundaryText)"
     }
 
     private static func collapsedTextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
         [
             .font: font,
             .foregroundColor: NSColor(theme.color("fg-dim")),
-            .backgroundColor: NSColor(theme.color("bg-2")),
             .paragraphStyle: CenterTypography.paragraphStyle(),
         ]
     }

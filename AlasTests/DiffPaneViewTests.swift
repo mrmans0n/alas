@@ -608,6 +608,47 @@ let second = true
         }
     }
 
+    @Test func longGutterRowsStayAlignedWithActualCodeLineFragments() throws {
+        let theme = theme()
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let lines = (1...80).map { "let value\($0) = \($0)" }
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: text, attributes: [.font: font]),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 360))
+
+        scrollView.update(
+            document: document,
+            lineLabels: lines.indices.map { "\($0 + 1)" },
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRects = codeView.diffRowRects()
+        let firstLineRects = codeView.diffFirstLineFragmentRects()
+
+        #expect(rowRects.count == lines.count)
+        #expect(firstLineRects.count == lines.count)
+        for index in lines.indices {
+            #expect(abs(rowRects[index].midY - firstLineRects[index].midY) < 0.75)
+        }
+    }
+
     @Test func gutterSelectionOutlineWrapsContiguousRows() {
         let rowRects = [
             NSRect(x: 0, y: 8, width: 42, height: 18),
@@ -1384,7 +1425,7 @@ let second = true
 
         #expect(result.oldGutter.string.components(separatedBy: "\n") == ["+"])
         #expect(result.newGutter.string.components(separatedBy: "\n") == [""])
-        #expect(result.oldCode.attributedString.string.components(separatedBy: "\n") == ["9 unchanged lines above"])
+        #expect(result.oldCode.attributedString.string.components(separatedBy: "\n") == ["Expand 9 unchanged lines above"])
         #expect(result.newCode.attributedString.string.components(separatedBy: "\n") == [" "])
         #expect(result.oldCode.lines.count == result.oldGutter.string.components(separatedBy: "\n").count)
         #expect(result.newCode.lines.count == result.newGutter.string.components(separatedBy: "\n").count)
@@ -1405,7 +1446,7 @@ let second = true
         )
 
         #expect(result.gutter.string.components(separatedBy: "\n") == ["+"])
-        #expect(result.code.attributedString.string.components(separatedBy: "\n") == ["7 unchanged lines below"])
+        #expect(result.code.attributedString.string.components(separatedBy: "\n") == ["Expand 7 unchanged lines below"])
         #expect(result.code.lines.count == result.gutter.string.components(separatedBy: "\n").count)
         #expect(result.code.lines.first?.expansionKey == DiffContextExpansionKey(groupID: "hunk-0", boundary: .below))
         #expect(result.code.lines.first?.expansionBoundary == .below)
