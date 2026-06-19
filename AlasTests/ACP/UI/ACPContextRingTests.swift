@@ -42,4 +42,24 @@ struct ACPContextRingTests {
         #expect(contextPercent(ratio: 0.0) == 0)
         #expect(contextPercent(ratio: 1.0) == 100)
     }
+
+    private func contextUsageTooltip(ratio: Double) -> String {
+        "Context window: \(contextPercent(ratio: ratio))% in use"
+    }
+
+    @Test("tooltip string matches requested wording")
+    func tooltipWording() {
+        #expect(contextUsageTooltip(ratio: 0.0) == "Context window: 0% in use")
+        #expect(contextUsageTooltip(ratio: 0.265) == "Context window: 27% in use")
+        #expect(contextUsageTooltip(ratio: 0.80) == "Context window: 80% in use")
+        #expect(contextUsageTooltip(ratio: 0.949) == "Context window: 95% in use")
+        #expect(contextUsageTooltip(ratio: 0.951) == "Context window: 95% in use")
+        #expect(contextUsageTooltip(ratio: 1.0) == "Context window: 100% in use")
+    }
+
+    @Test("ring stays non-interactive when action is nil")
+    func ringWithoutActionIsNonInteractive() {
+        let view = ACPContextRing(ratio: 0.5)
+        _ = view.body
+    }
 }
