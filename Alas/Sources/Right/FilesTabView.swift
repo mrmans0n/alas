@@ -81,8 +81,10 @@ struct FilesTabView: View {
                         if open {
                             for p in chain.chainPaths { openPaths.remove(p) }
                         } else {
-                            for p in chain.chainPaths { openPaths.insert(p) }
-                            onLoadChildren(terminal.path)
+                            for p in chain.chainPaths {
+                                openPaths.insert(p)
+                                onLoadChildren(p)
+                            }
                         }
                     } label: {
                         HStack(spacing: 6) {
