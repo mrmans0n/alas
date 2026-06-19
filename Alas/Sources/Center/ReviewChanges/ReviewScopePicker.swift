@@ -124,18 +124,22 @@ struct ReviewScopePicker: View {
     }
 
     private func select(_ commit: CommitInfo) {
-        if let anchor = rangeAnchor, anchor.id != commit.id {
-            let (older, newer) = orderByPosition(anchor, commit)
-            onSelect(.range(older: older, newer: newer))
+        if let anchor = rangeAnchor, anchor.id != commit.id,
+           let ordered = orderByPosition(anchor, commit) {
+            onSelect(.range(older: ordered.older, newer: ordered.newer))
         } else {
             onSelect(.commit(commit))
         }
     }
 
     // Commits arrive newest-first (git log order). "older" = larger index.
-    private func orderByPosition(_ a: CommitInfo, _ b: CommitInfo) -> (older: CommitInfo, newer: CommitInfo) {
-        let ia = commits.firstIndex(of: a) ?? 0
-        let ib = commits.firstIndex(of: b) ?? 0
+    // Returns nil if either commit is no longer in the list (e.g. a stale
+    // anchor after a refresh), so the caller can fall back to a single-commit
+    // selection rather than emit an arbitrarily ordered range.
+    private func orderByPosition(_ a: CommitInfo, _ b: CommitInfo) -> (older: CommitInfo, newer: CommitInfo)? {
+        guard let ia = commits.firstIndex(of: a),
+              let ib = commits.firstIndex(of: b)
+        else { return nil }
         return ia > ib ? (a, b) : (b, a)
     }
 
