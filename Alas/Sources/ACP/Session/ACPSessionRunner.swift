@@ -71,13 +71,17 @@ final class ACPSessionRunner {
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
     /// True after load-replay suppression ends until the next prompt starts.
-    /// Set when suppression ends AND the previous agent turn was complete.
+    /// Set when suppression ends AND the previous agent turn was complete
+    /// (i.e. completedOutputBoundaryMessageIds is non-empty). Populated either
+    /// from runtime state (network blip / same session object) or from the
+    /// seeded value that ACPSessionManager writes via markCompletedOutputBoundary()
+    /// right after hydration from disk.
     /// While set, all incoming updates are dropped — they are late-arriving
     /// replay updates that slipped past the suppression window, and applying
     /// any of them (including non-streaming ones) could corrupt transcript
     /// state or create duplicate agent message bubbles.
-    /// Not set when the previous turn was still in progress (completedOutputBoundaryMessageIds
-    /// is empty): fresh continuation updates must flow through in that case.
+    /// Not set when completedOutputBoundaryMessageIds is empty (previous turn
+    /// in progress): fresh continuation updates must flow through in that case.
     private var replayBoundaryGuard = false
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's

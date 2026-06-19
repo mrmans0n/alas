@@ -401,6 +401,11 @@ final class ACPSessionManager: ObservableObject {
         }
         session.replaceTranscriptMessages(tail)
         session.transcript.visibleHead = 0
+        // Seed completedOutputBoundaryMessageIds from the loaded messages so
+        // that the load-replay guard in ACPSessionRunner can detect a completed
+        // previous turn even after app restart (when the runtime set would
+        // otherwise be empty). The runner clears the guard at the next prompt.
+        session.markCompletedOutputBoundary()
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
