@@ -980,9 +980,20 @@ final class AppState {
         if FileManager.default.fileExists(atPath: destination.path) {
             return .error("A worktree already exists at this path.")
         }
+        let resolvedBase: String
+        if let base {
+            resolvedBase = base
+        } else {
+            let availableBranches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
+            resolvedBase = NewWorktreeDialog.preferredBaseBranch(
+                availableBranches: availableBranches,
+                configuredDefault: config.worktrees.baseBranch
+            )
+        }
+
         let id = createWorktree(
             projectId: project.id,
-            base: base ?? config.worktrees.baseBranch,
+            base: resolvedBase,
             branch: branch,
             destination: destination,
             runStartup: true,
@@ -1557,7 +1568,9 @@ final class AppState {
                 return await self.cliDeleteWorktree(worktree, force: force, keepBranch: keepBranch)
             },
             openReviewChanges: { [weak self] worktree in
-                _ = self?.openReviewChangesTab(for: worktree)
+                guard let self else { return }
+                self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+                _ = self.openReviewChangesTab(for: worktree)
             },
             openProviderReview: { [weak self] worktree, target in
                 guard let self else { return .error("Alas is not available.") }
