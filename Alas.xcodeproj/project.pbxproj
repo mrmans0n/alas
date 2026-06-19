@@ -82,6 +82,7 @@
 		12035048B950CE0197604F89 /* GitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7CE7B4DAFDB65A79308FB63 /* GitService.swift */; };
 		1298147855092677E3184AC2 /* ACPConfigOption.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C6356C759B509DD81EDEBB /* ACPConfigOption.swift */; };
 		133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01675626CE431DD5867636BF /* RepoGroupViewLayoutTests.swift */; };
+		1339BE8F736D53991DDD19CD /* FileSearchBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */; };
 		13928612F39D3D86ED3313AC /* ReviewChangesModelsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAE8FBBADF986E1E6585941 /* ReviewChangesModelsTests.swift */; };
 		139F45EE390C27342C5DD734 /* CenterPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8685E5E5AC7A77D6D27A847 /* CenterPaneView.swift */; };
 		13E762EA8D84EFE6F0228806 /* AgentTerminalLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11C3EC94DBE871DFC45C7D25 /* AgentTerminalLaunchTests.swift */; };
@@ -1499,6 +1500,7 @@
 		5C96772DABFBCF15691FFB37 /* DiffDisplayPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffDisplayPreferences.swift; sourceTree = "<group>"; };
 		5CC16D06302D9AD3C9F0BE3C /* TreeSitterHighlighter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TreeSitterHighlighter.swift; sourceTree = "<group>"; };
 		5D486FD440D802AEC65D1555 /* MarkdownFileType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileType.swift; sourceTree = "<group>"; };
+		5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSearchBackend.swift; sourceTree = "<group>"; };
 		5DA887927D32EBA2252792D9 /* ReviewChangesTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewChangesTabView.swift; sourceTree = "<group>"; };
 		5DC558BE723378DCC7AA5B55 /* ACPChatTypography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChatTypography.swift; sourceTree = "<group>"; };
 		5DD723B8C15EF2413C5D935D /* BlockedLanguageServerNudgeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedLanguageServerNudgeResolver.swift; sourceTree = "<group>"; };
@@ -3457,6 +3459,7 @@
 			children = (
 				BE7AEB9E8D83B610E291BAE1 /* ContentSearcher.swift */,
 				E1D1797A096A39AE6CB5EA00 /* FileIndex.swift */,
+				5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */,
 				96E7159EED1183F784104B4F /* FuzzyMatch.swift */,
 				4261E417947C1A21E77C1587 /* GitStatusCache.swift */,
 				36B06AE8BA5FBDEAD4586616 /* SearchKind.swift */,
@@ -4137,6 +4140,7 @@
 			buildPhases = (
 				A6E0A5F2849F1349828C2EEF /* Build GhosttyKit */,
 				2A52B3AA269E67D4B89E4A6B /* Build zmx */,
+				4609384BD7FA0393B4CE182E /* Build fff */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
 				BD47E15DBE895A60942DDB48 /* Resources */,
 				65B162623B36E39612A379EA /* Frameworks */,
@@ -4315,6 +4319,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/embed-ghostty-resources.sh\"";
+		};
+		4609384BD7FA0393B4CE182E /* Build fff */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build fff";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/build-fff.sh\"";
 		};
 		A6E0A5F2849F1349828C2EEF /* Build GhosttyKit */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -4613,6 +4636,7 @@
 				58A58A64E7E10EC5A1CC60C5 /* FileDeviceStore.swift in Sources */,
 				3B82344338BD29F6B8B6D8EC /* FileIndex.swift in Sources */,
 				E29D10B84F406C38E2F4C457 /* FileResultRow.swift in Sources */,
+				1339BE8F736D53991DDD19CD /* FileSearchBackend.swift in Sources */,
 				DEBB0627BD0426369D18CAD4 /* FileSearchDialog.swift in Sources */,
 				4B2031FB61782327D5279F98 /* FileTreeBuilder.swift in Sources */,
 				64ADA6AFE69C52F121A163E1 /* FileTypeIconView.swift in Sources */,
@@ -5530,12 +5554,11 @@
 					"$(inherited)",
 					"\".build/ghostty\"",
 				);
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/include";
 				INFOPLIST_FILE = Alas/Resources/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				OTHER_LDFLAGS = "$(inherited) -lc++";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -lfff_c";
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas;
 				PRODUCT_NAME = Alas;
 				SDKROOT = macosx;
@@ -5548,11 +5571,9 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/include";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib";
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas.tests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Alas.app/Contents/MacOS/Alas";
@@ -5572,12 +5593,11 @@
 					"$(inherited)",
 					"\".build/ghostty\"",
 				);
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/include";
 				INFOPLIST_FILE = Alas/Resources/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				OTHER_LDFLAGS = "$(inherited) -lc++";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib";
+				OTHER_LDFLAGS = "$(inherited) -lc++ -lfff_c";
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas;
 				PRODUCT_NAME = Alas;
 				SDKROOT = macosx;
@@ -5590,11 +5610,9 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-					"@loader_path/../Frameworks",
-				);
+				HEADER_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/include";
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @loader_path/../Frameworks @executable_path/../Frameworks";
+				LIBRARY_SEARCH_PATHS = "$(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib";
 				PRODUCT_BUNDLE_IDENTIFIER = io.nlopez.alas.tests;
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Alas.app/Contents/MacOS/Alas";

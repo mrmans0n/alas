@@ -13,6 +13,7 @@ struct SearchModelTests {
         worktrees: [SearchWorktree] = [],
         files: [String: [FileIndex.Entry]] = [:],
         statuses: [String: [String: GitStatusBadge]] = [:],
+        fileSearch: (@Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?)? = nil,
         contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil
     ) -> SearchEnvironment {
         SearchEnvironment(
@@ -20,6 +21,7 @@ struct SearchModelTests {
             allWorktrees: { worktrees },
             entries: { wt in files[wt.id] ?? [] },
             statuses: { wt in statuses[wt.id] ?? [:] },
+            fileSearch: fileSearch ?? { _, _ in nil },
             contentSearch: contentSearch ?? { _, _, _ in AsyncThrowingStream { $0.finish() } }
         )
     }
@@ -46,6 +48,7 @@ struct SearchModelTests {
             allWorktrees: { [] },
             entries: { _ in [] },
             statuses: { _ in [:] },
+            fileSearch: { _, _ in nil },
             contentSearch: { _, _, _ in AsyncThrowingStream { $0.finish() } }
         )
         let model2 = SearchModel(environment: env)
@@ -84,6 +87,122 @@ struct SearchModelTests {
         #expect(paths.contains("tab_bar.rs"))
         #expect(paths.contains("tab_drag.rs"))
         #expect(!paths.contains("main.rs"))
+    }
+
+    @Test func fileSearchUsesBackendResultsWhenAvailable() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [
+                .init(relativePath: "fallback_only.rs", ext: "rs"),
+            ]],
+            statuses: ["a": [
+                "src/backend_result.swift": .modified,
+            ]],
+            fileSearch: { query, _ in
+                guard query == "backend" else { return nil }
+                return [
+                    FileSearchBackendResult(
+                        relativePath: "src/backend_result.swift",
+                        score: 42,
+                        matchIndices: [4, 5, 6]
+                    ),
+                ]
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "backend"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["src/backend_result.swift"])
+        #expect(model.results.fileResults.first?.statusBadge == .modified)
+        #expect(model.results.fileResults.first?.score == 44)
+        #expect(model.results.fileResults.first?.matchIndices == [4, 5, 6])
+    }
+
+    @Test func fileSearchMergesDeletedFallbackRowsWithBackendResults() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [
+                .init(relativePath: "old_file.swift", ext: "swift"),
+                .init(relativePath: "other_file.swift", ext: "swift"),
+            ]],
+            statuses: ["a": [
+                "old_file.swift": .deleted,
+                "other_file.swift": .modified,
+            ]],
+            fileSearch: { query, _ in
+                guard query == "old" else { return nil }
+                return []
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "old"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["old_file.swift"])
+        #expect(model.results.fileResults.first?.statusBadge == .deleted)
+    }
+
+    @Test func fileSearchMergesTrackedFallbackRowsOmittedByBackend() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [
+                .init(relativePath: "ignored/tracked_file.swift", ext: "swift"),
+                .init(relativePath: "src/other_file.swift", ext: "swift"),
+            ]],
+            fileSearch: { query, _ in
+                guard query == "tracked" else { return nil }
+                return []
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "tracked"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["ignored/tracked_file.swift"])
+        #expect(model.results.fileResults.first?.statusBadge == nil)
+    }
+
+    @Test func fileSearchFallsBackWhenBackendIsNotReady() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [
+                .init(relativePath: "src/fallback_result.swift", ext: "swift"),
+            ]],
+            fileSearch: { _, _ in nil }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "fallback"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["src/fallback_result.swift"])
+    }
+
+    @Test func fileSearchKeepsSingleCharacterQueryOnSwiftScorer() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [
+                .init(relativePath: "src/apple.swift", ext: "swift"),
+                .init(relativePath: "src/zoom.swift", ext: "swift"),
+            ]],
+            fileSearch: { _, _ in [
+                FileSearchBackendResult(
+                    relativePath: "src/backend_result.swift",
+                    score: 100,
+                    matchIndices: []
+                ),
+            ] }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "a"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["src/apple.swift"])
     }
 
     @Test func selectionClampsOnResultShrink() async {

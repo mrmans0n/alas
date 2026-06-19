@@ -17,6 +17,7 @@ struct SearchEnvironment: Sendable {
     var allWorktrees: @Sendable () -> [SearchWorktree]
     var entries: @Sendable (SearchWorktree) async throws -> [FileIndex.Entry]
     var statuses: @Sendable (SearchWorktree) async throws -> [String: GitStatusBadge]
+    var fileSearch: @Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?
     var contentSearch: @Sendable (
         String, SearchContentOptions, [SearchWorktree]
     ) -> AsyncThrowingStream<ContentSearchHit, Error>
@@ -200,10 +201,27 @@ final class SearchModel {
         var sinceCancelCheck = 0
         for wt in targets {
             do {
-                async let entriesTask = env.entries(wt)
                 async let statusTask = env.statuses(wt)
-                let entries = try await entriesTask
+                async let candidateRowsTask = fileSearchCandidateRows(query: query, worktree: wt)
+
+                let candidateRows = try await candidateRowsTask
                 let statuses = (try? await statusTask) ?? [:]
+                if case let .backend(backendRows) = candidateRows {
+                    appendBackendRows(backendRows, worktree: wt, statuses: statuses, into: &rows)
+                    try await appendBackendOmittedFallbackRows(
+                        query: query,
+                        backendRows: backendRows,
+                        worktree: wt,
+                        statuses: statuses,
+                        into: &rows,
+                        sinceCancelCheck: &sinceCancelCheck
+                    )
+                    continue
+                }
+
+                guard case let .entries(entries) = candidateRows else {
+                    continue
+                }
                 if Task.isCancelled { return }
 
                 for entry in entries {
@@ -273,6 +291,90 @@ final class SearchModel {
                 ? nil
                 : "Couldn't read files for \(failures.joined(separator: ", "))"
         )
+    }
+
+    private func appendBackendRows(
+        _ backendRows: [FileSearchBackendResult],
+        worktree wt: SearchWorktree,
+        statuses: [String: GitStatusBadge],
+        into rows: inout [FileSearchResult]
+    ) {
+        rows.append(contentsOf: backendRows.map { row in
+            let ext = (row.relativePath as NSString).pathExtension.lowercased()
+            return FileSearchResult(
+                worktreeId: wt.id,
+                projectId: wt.projectId,
+                relativePath: row.relativePath,
+                ext: ext,
+                statusBadge: statuses[row.relativePath],
+                matchIndices: row.matchIndices,
+                score: row.score + (statuses[row.relativePath] != nil ? 2 : 0)
+            )
+        })
+    }
+
+    private func appendBackendOmittedFallbackRows(
+        query: String,
+        backendRows: [FileSearchBackendResult],
+        worktree wt: SearchWorktree,
+        statuses: [String: GitStatusBadge],
+        into rows: inout [FileSearchResult],
+        sinceCancelCheck: inout Int
+    ) async throws {
+        let backendPaths = Set(backendRows.map(\.relativePath))
+        let entries = try await env.entries(wt)
+        for entry in entries where !backendPaths.contains(entry.relativePath) {
+            sinceCancelCheck &+= 1
+            if sinceCancelCheck >= 256 {
+                sinceCancelCheck = 0
+                if Task.isCancelled { return }
+            }
+
+            let badge = statuses[entry.relativePath]
+            if query.isEmpty {
+                rows.append(FileSearchResult(
+                    worktreeId: wt.id,
+                    projectId: wt.projectId,
+                    relativePath: entry.relativePath,
+                    ext: entry.ext,
+                    statusBadge: badge,
+                    matchIndices: [],
+                    score: badge != nil ? 100 : 0
+                ))
+            } else if let match = FuzzyMatch.score(query: query, target: entry.relativePath) {
+                let slash = entry.relativePath.lastIndex(of: "/")
+                let prefixLen = slash.map { entry.relativePath.distance(from: entry.relativePath.startIndex, to: $0) + 1 } ?? 0
+                let inName = match.indices.allSatisfy { $0 >= prefixLen }
+                rows.append(FileSearchResult(
+                    worktreeId: wt.id,
+                    projectId: wt.projectId,
+                    relativePath: entry.relativePath,
+                    ext: entry.ext,
+                    statusBadge: badge,
+                    matchIndices: match.indices,
+                    score: match.score + (inName ? 8 : 0) + (badge != nil ? 2 : 0)
+                ))
+            }
+        }
+    }
+
+    private enum FileSearchCandidateRows {
+        case backend([FileSearchBackendResult])
+        case entries([FileIndex.Entry])
+    }
+
+    private func fileSearchCandidateRows(query: String, worktree wt: SearchWorktree) async throws -> FileSearchCandidateRows {
+        if Self.canUseFileSearchBackend(query: query),
+           let backendRows = try? await env.fileSearch(query, wt) {
+            return .backend(backendRows)
+        }
+        return .entries(try await env.entries(wt))
+    }
+
+    private static func canUseFileSearchBackend(query: String) -> Bool {
+        query
+            .split(whereSeparator: { $0.isWhitespace })
+            .contains { $0.count >= 2 }
     }
 
     private func runContentSearch(query: String, targets: [SearchWorktree]) async {

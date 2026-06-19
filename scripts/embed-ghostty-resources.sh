@@ -45,3 +45,26 @@ else
     echo "embed-ghostty-resources.sh: error: zmx binary not found or not executable at ${zmx_source}" >&2
     exit 1
 fi
+
+# fff search backend dylib. Selection mirrors build-fff.sh.
+if [ -n "${ALAS_FFF_TARGET_ARCH:-}" ]; then
+    fff_arch="${ALAS_FFF_TARGET_ARCH}"
+elif [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
+    fff_arch="universal"
+else
+    fff_arch="${CURRENT_ARCH:-$(uname -m)}"
+fi
+
+fff_source="${SRCROOT}/.build/fff/${fff_arch}/install/lib/libfff_c.dylib"
+fff_destination_dir="${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}"
+fff_destination="${fff_destination_dir}/libfff_c.dylib"
+
+if [ ! -f "${fff_source}" ]; then
+    echo "embed-ghostty-resources.sh: error: fff dylib not found at ${fff_source}" >&2
+    exit 1
+fi
+
+mkdir -p "${fff_destination_dir}"
+rsync -a "${fff_source}" "${fff_destination}"
+install_name_tool -id @rpath/libfff_c.dylib "${fff_destination}"
+codesign --force --sign - "${fff_destination}" >/dev/null
