@@ -155,7 +155,7 @@ struct FilesTabView: View {
                 }
                 .task(id: loadTaskID(for: terminal, open: open)) {
                     if shouldAutoLoadChildren(for: terminal, open: open) {
-                        onLoadChildren(terminal.path)
+                        for p in chain.chainPaths { onLoadChildren(p) }
                     }
                 }
             )
