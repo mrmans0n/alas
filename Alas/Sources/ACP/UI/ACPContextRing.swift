@@ -39,15 +39,21 @@ func formatContextTokens(_ n: Int) -> String {
 func contextPercent(ratio: Double) -> Int { Int((ratio * 100).rounded()) }
 
 /// Thin progress ring. `ratio` is expected pre-clamped (see `contextRatio`).
+///
+/// - `help`: optional tooltip shown on hover.
+/// - `action`: optional tap/click handler; when provided the ring becomes a
+///   plain button with a hit area that exactly matches the ring frame.
 struct ACPContextRing: View {
     let ratio: Double
     var diameter: CGFloat = 16
     var lineWidth: CGFloat = 2.5
+    var help: String? = nil
+    var action: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
 
     var body: some View {
-        ZStack {
+        let ring = ZStack {
             Circle()
                 .stroke(theme.color("line"), lineWidth: lineWidth)
             Circle()
@@ -58,5 +64,32 @@ struct ACPContextRing: View {
         }
         .frame(width: diameter, height: diameter)
         .animation(.easeOut(duration: 0.25), value: ratio)
+
+        labeledRing(ring)
+    }
+
+    @ViewBuilder
+    private func labeledRing(_ ring: some View) -> some View {
+        if let help {
+            ring.help(help)
+                .optionalButton(action: action)
+        } else {
+            ring
+                .optionalButton(action: action)
+        }
+    }
+}
+
+extension View {
+    @ViewBuilder
+    fileprivate func optionalButton(action: (() -> Void)?) -> some View {
+        if let action {
+            Button(action: action) {
+                self
+            }
+            .buttonStyle(.plain)
+        } else {
+            self
+        }
     }
 }
