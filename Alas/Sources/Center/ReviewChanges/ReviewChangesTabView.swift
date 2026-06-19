@@ -92,6 +92,8 @@ struct ReviewChangesTabView: View {
     @State private var activeLoadID = UUID()
     @State private var reviewSessionLaunchError: String?
     @State private var showWhitespace = false
+    @State private var showScopePicker = false
+    @State private var scopeBranches: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -106,6 +108,27 @@ struct ReviewChangesTabView: View {
         }
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
+        }
+        .sheet(isPresented: $showScopePicker) {
+            ReviewScopePicker(
+                commits: scopeCommits,
+                branches: scopeBranches,
+                onSelect: { choice in
+                    showScopePicker = false
+                    openReviewSession(
+                        target: ReviewScopeSelection.target(
+                            for: choice,
+                            worktreeID: worktree.id,
+                            repositoryPath: worktree.path
+                        )
+                    )
+                },
+                onCancel: { showScopePicker = false }
+            )
+        }
+        .task(id: showScopePicker) {
+            guard showScopePicker, scopeBranches.isEmpty else { return }
+            scopeBranches = (try? await GitService().branches(at: worktree.path)) ?? []
         }
     }
 
@@ -139,6 +162,10 @@ struct ReviewChangesTabView: View {
             worktreePath: worktree.path,
             rightPaneState: appState.rightPaneStore.activeState(worktreeId: worktree.id)
         )
+    }
+
+    private var scopeCommits: [CommitInfo] {
+        appState.rightPaneStore.activeState(worktreeId: worktree.id)?.commits ?? []
     }
 
     @ViewBuilder
@@ -183,6 +210,13 @@ struct ReviewChangesTabView: View {
                     .foregroundColor(theme.color("del"))
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+            toolbarButton(
+                systemName: "scope",
+                tooltip: "Choose review scope",
+                isActive: showScopePicker
+            ) {
+                showScopePicker = true
             }
             toolbarButton(
                 systemName: "doc.text.magnifyingglass",
