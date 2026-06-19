@@ -485,6 +485,41 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func cliReviewProviderRejectsUnsupportedTargetBeforeRemoteLookup() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-provider-invalid")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.provider(target: "not-a-review"))))
+
+        #expect(response == .error("unsupported review URL"))
+    }
+
+    @Test func cliReviewProviderReturnsErrorWhenNoCodeHostRemoteExists() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-provider-no-remote")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.provider(target: "123"))))
+
+        #expect(response == .error("no code host remote found for this worktree"))
+    }
+
+    @Test func cliReviewProviderRejectsURLThatDoesNotMatchAnyCodeHostRemote() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "review-provider-mismatch")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        _ = try await Process.git(["remote", "add", "origin", "https://github.com/nacho/alas.git"], cwd: worktree.path)
+
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "s1",
+            command: .review(.provider(target: "https://github.com/mrmans0n/alas/pull/580"))
+        ))
+
+        #expect(response == .error("review URL does not match this worktree's remote"))
+    }
+
     @Test func cliWorktreeNewStartsCreation() async throws {
         let (state, project, main) = try await makeStateWithWorktree(name: "new")
         let destinationRoot = main.path.deletingLastPathComponent()

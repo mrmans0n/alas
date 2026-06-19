@@ -23,6 +23,18 @@ enum CodeHostRemoteDetector {
         supportedKinds: Set<CodeHostKind>? = nil,
         preferredRemoteName: String? = nil
     ) -> CodeHostRemote? {
+        detectAll(
+            from: remotes,
+            supportedKinds: supportedKinds,
+            preferredRemoteName: preferredRemoteName
+        ).first
+    }
+
+    static func detectAll(
+        from remotes: [GitRemote],
+        supportedKinds: Set<CodeHostKind>? = nil,
+        preferredRemoteName: String? = nil
+    ) -> [CodeHostRemote] {
         remotes
             .filter { $0.direction == .fetch }
             .sorted { lhs, rhs in
@@ -33,9 +45,7 @@ enum CodeHostRemoteDetector {
                 }
                 return lhs.name < rhs.name
             }
-            .lazy
             .compactMap { parse(remote: $0, supportedKinds: supportedKinds) }
-            .first
     }
 
     private static func priority(for remoteName: String, preferredRemoteName: String?) -> Int {

@@ -12,7 +12,7 @@ struct TerminalCLIInjectionTests {
         #expect(script.contains(#""kind": "cli""#))
         #expect(script.contains(#""command": command"#))
         #expect(script.contains("os.path.abspath"))
-        #expect(script.contains("/usr/bin/nc -U -w1"))
+        #expect(script.contains(#"/usr/bin/nc -U -w "$timeout""#))
     }
 
     @Test func executableScriptSendsWorktreeAndReviewRequests() {
@@ -23,6 +23,7 @@ struct TerminalCLIInjectionTests {
         #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "new" "$branch" "$base""#))
         #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "delete" "$target" "$force" "$keep_branch""#))
         #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "review""#))
+        #expect(script.contains(#"send_request "$request" 30"#))
         #expect(script.contains(#""keep_branch""#))
     }
 

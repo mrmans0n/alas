@@ -87,7 +87,8 @@ enum TerminalCLIInjection {
         }
 
         send_request() {
-          response=$(printf '%s\n' "$1" | /usr/bin/nc -U -w1 "$ALAS_SOCKET_PATH" 2>/dev/null)
+          timeout="${2:-1}"
+          response=$(printf '%s\n' "$1" | /usr/bin/nc -U -w "$timeout" "$ALAS_SOCKET_PATH" 2>/dev/null)
           alas_status=$?
           if [ "$alas_status" -ne 0 ]; then
             printf '%s\n' 'alas: could not reach Alas' >&2
@@ -243,10 +244,11 @@ enum TerminalCLIInjection {
             fi
             if [ "$#" -eq 0 ]; then
               request=$(build_request "$ALAS_SESSION_ID" "review") || exit 1
+              send_request "$request"
             else
               request=$(build_request "$ALAS_SESSION_ID" "review" "$1") || exit 1
+              send_request "$request" 30
             fi
-            send_request "$request"
             ;;
           *)
             usage_all

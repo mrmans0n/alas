@@ -889,6 +889,7 @@
 		CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29313DDC46A0CCA2FA42CDE9 /* Icon.swift */; };
 		CE24C8CA495726CD294FD223 /* CommitsSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE12732C0D83715FC990A9 /* CommitsSectionView.swift */; };
 		CE43461FCD815780370E90D8 /* SearchKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B06AE8BA5FBDEAD4586616 /* SearchKind.swift */; };
+		CEEDAC1603DF2F3BD9223238 /* AlasCLIReviewTargetResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA0482EAA16C6A9987C16EE8 /* AlasCLIReviewTargetResolverTests.swift */; };
 		CF105C488C01331534C65D88 /* MergeConflictBinaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B7FA3997B6A60397B56CD4 /* MergeConflictBinaryView.swift */; };
 		CF12433D8F30CEA05088FFB0 /* CodeTextViewIndentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECB537B70B998A15B81BCBF7 /* CodeTextViewIndentationTests.swift */; };
 		CF2AD9C6F30BC02C040902A8 /* ShortcutResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E8FA892877AE2FDBCD4C747 /* ShortcutResolverTests.swift */; };
@@ -951,6 +952,7 @@
 		DBE7AD7F869B444A7C48E5B2 /* TreeSitterJava in Frameworks */ = {isa = PBXBuildFile; productRef = 33EB43DCB691861654EC147A /* TreeSitterJava */; };
 		DC0989E32F4B7BF023F784D6 /* StartupScriptInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */; };
 		DC394B7740FAEBD2F8ACB61F /* LSPMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5C6A07D7C67D02C8638D8C1 /* LSPMessages.swift */; };
+		DC8458FA4C5FCC854BB46B96 /* AlasCLIReviewTargetResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 430FCE70CDAB35CB0594CF44 /* AlasCLIReviewTargetResolver.swift */; };
 		DC93AED5844A56C6BA012CC3 /* ProviderReviewActionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 327D6F0E386398E6A512ADDF /* ProviderReviewActionsTests.swift */; };
 		DCACB5B624BFFE7C50DA6C61 /* RightPaneStateSyncStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D3505FB870FA22C9C0FDB26 /* RightPaneStateSyncStatusTests.swift */; };
 		DD18C5FF006D18BC66964D94 /* TerminalTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */; };
@@ -1398,6 +1400,7 @@
 		4246F7A17DCEC4D2A669BC43 /* ImageDiffDifferenceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffDifferenceView.swift; sourceTree = "<group>"; };
 		4261E417947C1A21E77C1587 /* GitStatusCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatusCache.swift; sourceTree = "<group>"; };
 		4306DE43C5ADCC65310C1169 /* ACPQuestionPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPQuestionPrompt.swift; sourceTree = "<group>"; };
+		430FCE70CDAB35CB0594CF44 /* AlasCLIReviewTargetResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIReviewTargetResolver.swift; sourceTree = "<group>"; };
 		435D9E527A76820947F426A8 /* ACPFilesystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFilesystem.swift; sourceTree = "<group>"; };
 		436E8992D7373486BA25D290 /* CodeTextViewCompletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextViewCompletionTests.swift; sourceTree = "<group>"; };
 		43DF691FC778F3A71CE20FBB /* StartupScriptInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupScriptInstallerTests.swift; sourceTree = "<group>"; };
@@ -2144,6 +2147,7 @@
 		F97EB3FA3E3C1206D76A9668 /* FileSearchDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSearchDialog.swift; sourceTree = "<group>"; };
 		F9CA43B30C70A80245BE99CE /* HarnessServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessServiceTests.swift; sourceTree = "<group>"; };
 		F9F85B92952C963DCF136315 /* HarnessDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessDetector.swift; sourceTree = "<group>"; };
+		FA0482EAA16C6A9987C16EE8 /* AlasCLIReviewTargetResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIReviewTargetResolverTests.swift; sourceTree = "<group>"; };
 		FA1EC032FDD03ED4A86B96A8 /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
 		FA486F66BE4CEB2A16EB148B /* HunkPatchBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HunkPatchBuilderTests.swift; sourceTree = "<group>"; };
 		FA730D3A9214ED3ECD15C0ED /* AlasCLIRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasCLIRequestTests.swift; sourceTree = "<group>"; };
@@ -2351,6 +2355,7 @@
 				11C3EC94DBE871DFC45C7D25 /* AgentTerminalLaunchTests.swift */,
 				1FDD958CF56AA9AD319F6C6C /* AlasCLICommandRouterTests.swift */,
 				FA730D3A9214ED3ECD15C0ED /* AlasCLIRequestTests.swift */,
+				FA0482EAA16C6A9987C16EE8 /* AlasCLIReviewTargetResolverTests.swift */,
 				311B7CA55176621C35DE3E92 /* AlasCLIWorktreeResolverTests.swift */,
 				169FC38D03727F34855EB521 /* AlasFieldTests.swift */,
 				69CE1F098A251F24BC352816 /* AlasGhosttySmokeTests.swift */,
@@ -4089,6 +4094,7 @@
 			children = (
 				7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */,
 				1271747193D1594AEA596278 /* AlasCLICommandRouter.swift */,
+				430FCE70CDAB35CB0594CF44 /* AlasCLIReviewTargetResolver.swift */,
 				457858DB2CF0B558A1A490BC /* AlasCLIWorktreeResolver.swift */,
 				942B0DCA09E1297D9380C58C /* AppQuitAction.swift */,
 				17C2AC0F8B3A1B75239995AC /* AppState.swift */,
@@ -4509,6 +4515,7 @@
 				5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */,
 				6AFE04B669CA654D7733F97E /* AlasCLICommandRouter.swift in Sources */,
 				29806D50EECB300991471A7C /* AlasCLIRequest.swift in Sources */,
+				DC8458FA4C5FCC854BB46B96 /* AlasCLIReviewTargetResolver.swift in Sources */,
 				00D95534280A5CED2356D06D /* AlasCLIWorktreeResolver.swift in Sources */,
 				24F8EA15B87C38C319B8A66B /* AlasField.swift in Sources */,
 				9CCB74669051D30EF12FE306 /* AlasGhostty.App.swift in Sources */,
@@ -5084,6 +5091,7 @@
 				C653712419D5B5A78AA53E84 /* AgentsPaneTests.swift in Sources */,
 				026C8FB815E41D31C8E9421B /* AlasCLICommandRouterTests.swift in Sources */,
 				8F4B6B83968BE4C1E6D0D912 /* AlasCLIRequestTests.swift in Sources */,
+				CEEDAC1603DF2F3BD9223238 /* AlasCLIReviewTargetResolverTests.swift in Sources */,
 				4780D23AF088EC5923A17102 /* AlasCLIWorktreeResolverTests.swift in Sources */,
 				F855DEEEE005795EC6B13544 /* AlasFieldTests.swift in Sources */,
 				B7F78A0034B7EC38072C1116 /* AlasGhosttySmokeTests.swift in Sources */,

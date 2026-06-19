@@ -1559,6 +1559,10 @@ final class AppState {
             openReviewChanges: { [weak self] worktree in
                 _ = self?.openReviewChangesTab(for: worktree)
             },
+            openProviderReview: { [weak self] worktree, target in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliOpenProviderReview(worktree: worktree, target: target)
+            },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
             }
@@ -2895,6 +2899,83 @@ final class AppState {
             }
         }
         return .ok
+    }
+
+    @MainActor
+    func cliOpenProviderReview(worktree: Worktree, target: String) async -> AlasCLIResponse {
+        guard let parsed = AlasCLIReviewTargetResolver.parse(target) else {
+            return .error("unsupported review URL")
+        }
+
+        do {
+            let providerRegistry = CodeHostProviderRegistry.live()
+            let remotes = try await GitService().remotes(worktreePath: worktree.path)
+            let supportedRemotes = CodeHostRemoteDetector.detectAll(
+                from: remotes,
+                supportedKinds: providerRegistry.supportedKinds
+            )
+            guard !supportedRemotes.isEmpty else {
+                return .error("no code host remote found for this worktree")
+            }
+
+            let remote: CodeHostRemote
+            let number: Int
+            switch parsed {
+            case .number(let value):
+                remote = supportedRemotes[0]
+                number = value
+            case .url(let host, let repositorySlug, let value):
+                guard let matchingRemote = supportedRemotes.first(where: {
+                    $0.host == host && $0.repositorySlug.lowercased() == repositorySlug.lowercased()
+                }) else {
+                    return .error("review URL does not match this worktree's remote")
+                }
+                remote = matchingRemote
+                number = value
+            }
+
+            guard let provider = providerRegistry.provider(for: remote.kind) else {
+                return .error("\(remote.kind.displayName) is not supported yet.")
+            }
+            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+            let reviewTarget = ReviewSessionTarget.reviewRequest(
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path,
+                provider: request.provider,
+                host: request.remote.host,
+                repositorySlug: request.remote.repositorySlug,
+                number: request.number,
+                url: request.url,
+                title: request.title,
+                headSHA: request.headSHA
+            )
+            let store = ReviewSessionStore()
+            let opened = ReviewSessionLauncher.openOrFocus(
+                target: reviewTarget,
+                findActive: { try store.findActive(targetID: $0) },
+                save: { try store.save($0) },
+                open: { [weak self] record in
+                    _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                }
+            )
+            guard opened else {
+                return .error("could not open review session")
+            }
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+            NSApp.activate(ignoringOtherApps: true)
+            return .ok
+        } catch {
+            return .error(Self.describeCLIError(error))
+        }
+    }
+
+    nonisolated private static func describeCLIError(_ error: any Error) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return String(describing: error)
     }
 
     /// Runs the git removal off the main actor, then resumes on MainActor
