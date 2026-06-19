@@ -17,6 +17,14 @@ struct EditorFindControllerTests {
         return textView
     }
 
+    private func temporaryBackgroundColor(in textView: CodeTextView, at location: Int) -> NSColor? {
+        textView.layoutManager?.temporaryAttribute(
+            .backgroundColor,
+            atCharacterIndex: location,
+            effectiveRange: nil
+        ) as? NSColor
+    }
+
     @Test func replaceCurrentUpdatesText() {
         let textView = makeTextView("hello world")
         let controller = EditorFindController()
@@ -124,6 +132,23 @@ struct EditorFindControllerTests {
 
         #expect(count == 3)
         #expect(controller.matchCount == 3)
+    }
+
+    @Test func countMatchesPreservesActiveMatchFromCurrentSelectionAfterTextShifts() {
+        let textView = makeTextView("cat dog cat")
+        let controller = EditorFindController()
+        controller.textView = textView
+        controller.findString = "cat"
+        controller.refreshMatches(selecting: .first)
+        #expect(controller.selectNext() == true)
+
+        textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 0), with: "big ")
+        textView.setSelectedRange(NSRange(location: 12, length: 3))
+        let count = controller.countMatches()
+
+        #expect(count == 2)
+        #expect(controller.matches.map(\.location) == [4, 12])
+        #expect(controller.activeMatchIndex == 1)
     }
 
     @Test func defaultSearchIsCaseInsensitive() {
@@ -341,5 +366,137 @@ struct EditorFindControllerTests {
 
         #expect(controller.replaceAll() == 0)
         #expect(textView.string == "hello hello")
+    }
+
+    @Test func findHighlightRendererPaintsActiveAndInactiveMatchesDifferently() {
+        let textView = makeTextView("cat dog cat dog cat")
+        let renderer = EditorFindHighlightRenderer()
+        let inactiveColor = NSColor.systemYellow.withAlphaComponent(0.28)
+        let activeColor = NSColor.systemOrange.withAlphaComponent(0.38)
+
+        renderer.attach(textView: textView)
+        renderer.render(
+            matches: [
+                NSRange(location: 0, length: 3),
+                NSRange(location: 8, length: 3),
+                NSRange(location: 16, length: 3),
+            ],
+            activeIndex: 1,
+            inactiveColor: inactiveColor,
+            activeColor: activeColor
+        )
+
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == inactiveColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 8) == activeColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 16) == inactiveColor)
+    }
+
+    @Test func findHighlightRendererClearRemovesOnlyFindOwnedBackgrounds() {
+        let textView = makeTextView("cat dog cat dog")
+        let renderer = EditorFindHighlightRenderer()
+        let unrelatedColor = NSColor.systemBlue
+        let inactiveColor = NSColor.systemYellow.withAlphaComponent(0.28)
+        let activeColor = NSColor.systemOrange.withAlphaComponent(0.38)
+
+        textView.layoutManager?.addTemporaryAttribute(
+            .backgroundColor,
+            value: unrelatedColor,
+            forCharacterRange: NSRange(location: 4, length: 3)
+        )
+
+        renderer.attach(textView: textView)
+        renderer.render(
+            matches: [
+                NSRange(location: 0, length: 3),
+                NSRange(location: 8, length: 3),
+            ],
+            activeIndex: nil,
+            inactiveColor: inactiveColor,
+            activeColor: activeColor
+        )
+
+        renderer.clear()
+
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == nil)
+        #expect(temporaryBackgroundColor(in: textView, at: 4) == unrelatedColor)
+    }
+
+    @Test func findHighlightRendererClearRestoresOverlappingTemporaryBackgrounds() {
+        let textView = makeTextView("cat dog cat")
+        let renderer = EditorFindHighlightRenderer()
+        let unrelatedColor = NSColor.systemBlue
+        let inactiveColor = NSColor.systemYellow.withAlphaComponent(0.28)
+        let activeColor = NSColor.systemOrange.withAlphaComponent(0.38)
+
+        textView.layoutManager?.addTemporaryAttribute(
+            .backgroundColor,
+            value: unrelatedColor,
+            forCharacterRange: NSRange(location: 2, length: 4)
+        )
+
+        renderer.attach(textView: textView)
+        renderer.render(
+            matches: [NSRange(location: 0, length: 7)],
+            activeIndex: nil,
+            inactiveColor: inactiveColor,
+            activeColor: activeColor
+        )
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == inactiveColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 3) == inactiveColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 6) == inactiveColor)
+
+        renderer.clear()
+
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == nil)
+        #expect(temporaryBackgroundColor(in: textView, at: 2) == unrelatedColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 5) == unrelatedColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 6) == nil)
+    }
+
+    @Test func findHighlightRendererClearRemovesHighlightsShiftedByTextEdits() {
+        let textView = makeTextView("prefix cat")
+        let renderer = EditorFindHighlightRenderer()
+        let inactiveColor = NSColor.systemYellow.withAlphaComponent(0.28)
+        let activeColor = NSColor.systemOrange.withAlphaComponent(0.38)
+
+        renderer.attach(textView: textView)
+        renderer.render(
+            matches: [NSRange(location: 7, length: 3)],
+            activeIndex: 0,
+            inactiveColor: inactiveColor,
+            activeColor: activeColor
+        )
+        #expect(temporaryBackgroundColor(in: textView, at: 7) == activeColor)
+
+        textView.textStorage?.replaceCharacters(in: NSRange(location: 0, length: 7), with: "")
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == activeColor)
+
+        renderer.clear()
+
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == nil)
+    }
+
+    @Test func findHighlightRendererIgnoresInvalidRanges() {
+        let textView = makeTextView("cat")
+        let renderer = EditorFindHighlightRenderer()
+        let inactiveColor = NSColor.systemYellow.withAlphaComponent(0.28)
+        let activeColor = NSColor.systemOrange.withAlphaComponent(0.38)
+
+        renderer.attach(textView: textView)
+        renderer.render(
+            matches: [
+                NSRange(location: 0, length: 1),
+                NSRange(location: 1, length: 99),
+                NSRange(location: 99, length: 3),
+                NSRange(location: 1, length: 0),
+                NSRange(location: NSNotFound, length: 1),
+            ],
+            activeIndex: 0,
+            inactiveColor: inactiveColor,
+            activeColor: activeColor
+        )
+
+        #expect(temporaryBackgroundColor(in: textView, at: 0) == activeColor)
+        #expect(temporaryBackgroundColor(in: textView, at: 1) == nil)
     }
 }
