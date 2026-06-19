@@ -38,6 +38,7 @@ struct GitHubCLIProviderVerdictTests {
         let reviewQueryArg = try #require(reviewCmd.args.first { $0.hasPrefix("query=") })
         #expect(reviewQueryArg.contains("addPullRequestReview"))
         #expect(reviewCmd.args.contains("prId=pr-node-42"))
+        #expect(reviewCmd.args.contains("commitOID=head-sha-42"))
     }
 
     // MARK: - addReviewComment
@@ -172,6 +173,7 @@ struct GitHubCLIProviderVerdictTests {
             isDraft: false,
             headRefName: "feature/github-provider",
             baseRefName: "main",
+            headSHA: "head-sha-42",
             reviewDecision: .approved,
             mergeState: .clean,
             checks: [],

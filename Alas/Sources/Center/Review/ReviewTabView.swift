@@ -1,6 +1,22 @@
 import AppKit
 import SwiftUI
 
+enum ReviewTabLoadingPresentation {
+    static func showsBlockingLoader(isLoading: Bool, hasSession: Bool) -> Bool {
+        isLoading && !hasSession
+    }
+}
+
+enum ReviewTabPendingReviewPresentation {
+    static func showsRail(stagedCount: Int) -> Bool {
+        stagedCount > 0
+    }
+
+    static func showsToolbarFinishButton(canSubmitReview: Bool, hasPendingReviewScope: Bool) -> Bool {
+        canSubmitReview && hasPendingReviewScope
+    }
+}
+
 struct ReviewTabView: View {
     let worktree: Worktree
     let tabState: ReviewPRTabState
@@ -22,6 +38,7 @@ struct ReviewTabView: View {
     @State private var isWriting = false
     @State private var errorMessage: String? = nil
     @State private var pendingReview: PendingReview?
+    @State private var pendingReviewRailCollapsed = false
     @State private var showVerdictSheet = false
     @State private var showWhitespace = false
 
@@ -49,13 +66,6 @@ struct ReviewTabView: View {
                     .padding(.bottom, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .animation(.easeInOut(duration: 0.2), value: errorMessage)
-            }
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if let pr = pendingReview {
-                PendingReviewTray(pendingReview: pr) {
-                    showVerdictSheet = true
-                }
             }
         }
         .sheet(isPresented: $showVerdictSheet) {
@@ -131,16 +141,34 @@ struct ReviewTabView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
+        if ReviewTabLoadingPresentation.showsBlockingLoader(isLoading: isLoading, hasSession: session != nil) {
             stateView(title: "Loading changes...", detail: nil, color: theme.color("fg-dim"))
-        } else if let loadError {
-            stateView(title: "Could not load review changes", detail: loadError, color: theme.color("del"))
         } else if let session, session.files.isEmpty {
             stateView(title: "No changes to review", detail: "This worktree has no staged or unstaged file diffs.", color: theme.color("fg-dim"))
         } else if let session {
-            reviewSurface(session)
+            loadedReviewContent {
+                reviewSurface(session)
+            }
+        } else if let loadError {
+            stateView(title: "Could not load review changes", detail: loadError, color: theme.color("del"))
         } else {
             stateView(title: "No changes loaded", detail: nil, color: theme.color("fg-dim"))
+        }
+    }
+
+    private func loadedReviewContent<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 0) {
+            content()
+
+            if let pendingReview,
+               ReviewTabPendingReviewPresentation.showsRail(stagedCount: pendingReview.staged.count) {
+                PendingReviewRail(
+                    pendingReview: pendingReview,
+                    collapsed: $pendingReviewRailCollapsed
+                ) {
+                    showVerdictSheet = true
+                }
+            }
         }
     }
 
@@ -172,6 +200,18 @@ struct ReviewTabView: View {
                 }
             }
             Spacer()
+            if ReviewTabPendingReviewPresentation.showsToolbarFinishButton(
+                canSubmitReview: capabilities.canSubmitReview,
+                hasPendingReviewScope: pendingReview != nil
+            ) {
+                toolbarButton(
+                    systemName: "arrow.up.doc",
+                    tooltip: "Finish review",
+                    isActive: (pendingReview?.staged.isEmpty == false)
+                ) {
+                    showVerdictSheet = true
+                }
+            }
             layoutSwitcher
             toolbarButton(
                 systemName: diffPreferences.wrapLines.wrappedValue ? "text.justify.left" : "text.alignleft",
@@ -532,7 +572,6 @@ struct ReviewTabView: View {
         activeLoadID = requestedLoadToken.id
         isLoading = true
         loadError = nil
-        session = nil
         defer {
             if requestedLoadToken.isActive(activeKey: activeLoadKey, activeID: activeLoadID) {
                 isLoading = false
