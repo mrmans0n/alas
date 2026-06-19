@@ -70,6 +70,10 @@ final class ACPSessionRunner {
     private let streamingPersistDebounceNanos: UInt64
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
+    /// True after load-replay suppression ends until the next prompt starts.
+    /// While set, streaming chunks that would cross a completed output boundary
+    /// are dropped — they are late-arriving replay updates, not fresh content.
+    private var replayBoundaryGuard = false
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so an
@@ -128,12 +132,6 @@ final class ACPSessionRunner {
     }
 
     func start() {
-        if suppressingLoadReplay {
-            // Discard output-boundary markers from the previous session run.
-            // Late-arriving replay updates can't cross a stale boundary and
-            // create duplicate bubbles. sendRecoveryContext re-marks as needed.
-            session.transcript.completedOutputBoundaryMessageIds.removeAll()
-        }
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
@@ -144,8 +142,22 @@ final class ACPSessionRunner {
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
+                            self.replayBoundaryGuard = true
                         }
                         return
+                    }
+                    // Drop streaming chunks that arrive after suppression ends while
+                    // there are still stale output boundaries from the previous run.
+                    // These are late replay updates that slipped past the suppression
+                    // window; letting them cross the boundary creates duplicate bubbles.
+                    if self.replayBoundaryGuard,
+                       !self.session.transcript.completedOutputBoundaryMessageIds.isEmpty {
+                        switch u.update {
+                        case .agentMessageChunk, .agentThoughtChunk:
+                            return
+                        default:
+                            break
+                        }
                     }
                     let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                     let dirty = self.session.apply(u.update)
@@ -306,6 +318,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
+            replayBoundaryGuard = true
         }
     }
 
@@ -1012,6 +1025,7 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
+        replayBoundaryGuard = false
         Task { [weak self, onPromptFinished] in
             guard let self else {
                 await MainActor.run { onPromptFinished?(false) }
@@ -1150,6 +1164,7 @@ extension ACPSessionRunner {
         let promptID = nextPromptID
         nextPromptID += 1
         activePromptID = promptID
+        replayBoundaryGuard = false
         Task { [weak self, onCompleted] in
             guard let self else {
                 await MainActor.run { onCompleted?(false) }
@@ -1160,9 +1175,6 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
-                // Re-mark the output boundary so the recovery response starts a
-                // new message bubble rather than appending to the previous turn.
-                self.session.markCompletedOutputBoundary()
                 self.session.transcript.streamingState = .sending
                 return true
             }
