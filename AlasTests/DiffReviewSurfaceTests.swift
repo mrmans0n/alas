@@ -1930,6 +1930,62 @@ struct DiffReviewSurfaceTests {
         #expect(!result.programmaticScroll.isSuppressing)
     }
 
+    @Test func visibleScrollTargetsSelectFirstVisibleTargetInViewportOrder() {
+        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
+        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
+        let third = DiffReviewFileID(namespace: "commit", path: "Third.swift")
+
+        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
+            current: first,
+            visibleRawIDs: [
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: third),
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: second)
+            ],
+            fileIDs: [first, second, third],
+            programmaticScroll: DiffReviewProgrammaticScrollController()
+        )
+
+        #expect(result == third)
+    }
+
+    @Test func visibleScrollTargetsPreferVisibleFileTopSentinelForHandoff() {
+        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
+        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
+
+        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
+            current: first,
+            visibleRawIDs: [
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: first),
+                DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: second),
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: second)
+            ],
+            fileIDs: [first, second],
+            programmaticScroll: DiffReviewProgrammaticScrollController()
+        )
+
+        #expect(result == second)
+    }
+
+    @Test func visibleScrollTargetsRespectProgrammaticScrollSuppression() {
+        let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
+        let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
+        var controller = DiffReviewProgrammaticScrollController()
+        _ = controller.beginProgrammaticScroll(to: first)
+
+        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
+            current: first,
+            visibleRawIDs: [DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: second)],
+            fileIDs: [first, second],
+            programmaticScroll: controller
+        )
+
+        #expect(result == nil)
+    }
+
+    @Test func visibleScrollTargetsUseIntersectionThresholdForOversizedFiles() {
+        #expect(DiffReviewSurfaceSelectionSync.visibilityThreshold == 0)
+    }
+
     @Test func initialRestoredNonFirstSelectionRequestsScroll() {
         let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
         let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
@@ -1992,58 +2048,6 @@ struct DiffReviewSurfaceTests {
                 consumed: first
             ) == second
         )
-    }
-
-    @Test func renderWindowKeepsSelectedTargetAndNearViewportFiles() {
-        let selected = DiffReviewFileID(namespace: "commit", path: "Selected.swift")
-        let near = DiffReviewFileID(namespace: "commit", path: "Near.swift")
-        let far = DiffReviewFileID(namespace: "commit", path: "Far.swift")
-        let target = DiffReviewFileID(namespace: "commit", path: "Target.swift")
-        let frames = [
-            DiffReviewSectionFrame(id: near, minY: 520, maxY: 820),
-            DiffReviewSectionFrame(id: far, minY: 5_000, maxY: 5_300),
-        ]
-
-        let rendered = DiffReviewRenderWindow.renderedFileIDs(
-            current: [far],
-            frames: frames,
-            viewportHeight: 500,
-            selectedFileID: selected,
-            programmaticTarget: target,
-            firstFileID: nil
-        )
-
-        #expect(rendered.contains(selected))
-        #expect(rendered.contains(target))
-        #expect(rendered.contains(near))
-        #expect(!rendered.contains(far))
-    }
-
-    @Test func renderWindowRetainsRecentlyRenderedFilesNearViewport() {
-        let visible = DiffReviewFileID(namespace: "commit", path: "Visible.swift")
-        let justAbove = DiffReviewFileID(namespace: "commit", path: "JustAbove.swift")
-        let justBelow = DiffReviewFileID(namespace: "commit", path: "JustBelow.swift")
-        let far = DiffReviewFileID(namespace: "commit", path: "Far.swift")
-        let frames = [
-            DiffReviewSectionFrame(id: visible, minY: 120, maxY: 420),
-            DiffReviewSectionFrame(id: justAbove, minY: -1_200, maxY: -900),
-            DiffReviewSectionFrame(id: justBelow, minY: 1_600, maxY: 1_900),
-            DiffReviewSectionFrame(id: far, minY: 9_000, maxY: 9_300),
-        ]
-
-        let rendered = DiffReviewRenderWindow.renderedFileIDs(
-            current: [justAbove, justBelow, far],
-            frames: frames,
-            viewportHeight: 500,
-            selectedFileID: nil,
-            programmaticTarget: nil,
-            firstFileID: nil
-        )
-
-        #expect(rendered.contains(visible))
-        #expect(rendered.contains(justAbove))
-        #expect(rendered.contains(justBelow))
-        #expect(!rendered.contains(far))
     }
 
     @Test func estimatedSectionHeightScalesWithDiffRows() {

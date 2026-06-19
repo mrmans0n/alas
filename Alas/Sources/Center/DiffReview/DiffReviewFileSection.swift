@@ -222,7 +222,7 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private var fileLevelDraftCommentStack: some View {
-        let fileLevel = draftCommentPlacement.fileLevel
+        let fileLevel = draftCommentPlacement(groups: derivedDisplayGroups).fileLevel
         if !fileLevel.isEmpty {
             draftCommentStack(fileLevel)
         }
@@ -253,7 +253,7 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private var fileLevelInlineFeedbackStack: some View {
-        let fileLevel = inlineFeedbackPlacement.fileLevel
+        let fileLevel = inlineFeedbackPlacement(groups: derivedDisplayGroups).fileLevel
         if !fileLevel.isEmpty {
             inlineFeedbackStack(fileLevel, file: file.summary)
         }
@@ -292,15 +292,19 @@ struct DiffReviewFileSection: View {
         Set([focusedFeedbackID, inlineFeedbackScrollTargetID].compactMap(\.self))
     }
 
-    private var inlineFeedbackPlacement: DiffReviewInlineFeedbackPlacement.Result {
-        guard let groups = derivedDisplayGroups else {
+    private func inlineFeedbackPlacement(
+        groups: [DiffDisplayGroup]?
+    ) -> DiffReviewInlineFeedbackPlacement.Result {
+        guard let groups else {
             return DiffReviewInlineFeedbackPlacement.Result(fileLevel: inlineFeedback, byGroupID: [:])
         }
         return DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: groups)
     }
 
-    private var draftCommentPlacement: ReviewDraftCommentPlacement.Result {
-        guard let groups = derivedDisplayGroups else {
+    private func draftCommentPlacement(
+        groups: [DiffDisplayGroup]?
+    ) -> ReviewDraftCommentPlacement.Result {
+        guard let groups else {
             return ReviewDraftCommentPlacement.position(draftComments, in: [])
         }
         return ReviewDraftCommentPlacement.position(draftComments, in: groups)
@@ -321,8 +325,8 @@ struct DiffReviewFileSection: View {
     @ViewBuilder
     private var content: some View {
         if let displayModel = file.displayModel, let groups = derivedDisplayGroups {
-            let inlinePlacement = inlineFeedbackPlacement
-            let draftPlacement = draftCommentPlacement
+            let inlinePlacement = inlineFeedbackPlacement(groups: groups)
+            let draftPlacement = draftCommentPlacement(groups: groups)
             VStack(spacing: 0) {
                 ForEach(groups) { group in
                     if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
