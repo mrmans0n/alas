@@ -71,8 +71,10 @@ final class ACPSessionRunner {
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
     /// True after load-replay suppression ends until the next prompt starts.
-    /// While set, streaming chunks that would cross a completed output boundary
-    /// are dropped — they are late-arriving replay updates, not fresh content.
+    /// While set, all incoming updates are dropped — they are late-arriving
+    /// replay updates that slipped past the suppression window, and applying
+    /// any of them (including non-streaming ones) could corrupt transcript
+    /// state or create duplicate agent message bubbles.
     private var replayBoundaryGuard = false
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
@@ -146,19 +148,13 @@ final class ACPSessionRunner {
                         }
                         return
                     }
-                    // Drop streaming chunks that arrive after suppression ends while
-                    // there are still stale output boundaries from the previous run.
-                    // These are late replay updates that slipped past the suppression
-                    // window; letting them cross the boundary creates duplicate bubbles.
-                    if self.replayBoundaryGuard,
-                       !self.session.transcript.completedOutputBoundaryMessageIds.isEmpty {
-                        switch u.update {
-                        case .agentMessageChunk, .agentThoughtChunk:
-                            return
-                        default:
-                            break
-                        }
-                    }
+                    // Drop ALL updates that arrive after suppression ends but before
+                    // the next prompt starts. Any update in this window is a late
+                    // replay that slipped past the suppression target — including
+                    // non-streaming updates (toolCall, plan) that could otherwise
+                    // clear completedOutputBoundaryMessageIds and defuse the guard
+                    // for a subsequent replayed agentMessageChunk.
+                    if self.replayBoundaryGuard { return }
                     let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                     let dirty = self.session.apply(u.update)
                     if shouldBatchStreamingPersist {
