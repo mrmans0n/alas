@@ -340,7 +340,8 @@ struct EditorTabView: View {
         findHighlightRenderer.render(
             matches: findController.matches,
             activeIndex: findController.activeMatchIndex,
-            color: NSColor.systemYellow.withAlphaComponent(0.28)
+            inactiveColor: NSColor.systemYellow.withAlphaComponent(0.28),
+            activeColor: NSColor.systemOrange.withAlphaComponent(0.38)
         )
     }
 

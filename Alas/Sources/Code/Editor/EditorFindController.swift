@@ -247,10 +247,15 @@ final class EditorFindController {
 
         let text = textView.string as NSString
         let activeLocation = activeMatchIndex.flatMap { matches.indices.contains($0) ? matches[$0].location : nil }
+        let selectedRange = textView.selectedRange()
         matches = collectMatches(in: text)
         matchCount = matches.count
-        activeMatchIndex = activeLocation.flatMap { location in
-            matches.firstIndex { $0.location == location }
+        if rangeIsMatch(selectedRange, in: text) {
+            activeMatchIndex = matches.firstIndex { $0 == selectedRange }
+        } else {
+            activeMatchIndex = activeLocation.flatMap { location in
+                matches.firstIndex { $0.location == location }
+            }
         }
         return matchCount
     }
