@@ -132,8 +132,13 @@ struct FilesTabView: View {
                             }
                         }
                         .contentShape(Rectangle())
-                        .background(terminal.path == revealPath ? theme.color("bg-hover") : Color.clear)
+                        .background(chain.chainPaths.contains(revealPath ?? "") ? theme.color("bg-hover") : Color.clear)
                         .id("dir:\(terminal.path)")
+                        .overlay(alignment: .top) {
+                            ForEach(chain.chainPaths.dropLast(), id: \.self) { p in
+                                Color.clear.frame(width: 0, height: 0).id("dir:\(p)")
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                     if open && canExpand {
