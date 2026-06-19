@@ -85,6 +85,15 @@ final class ACPSession: ObservableObject, Identifiable {
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
 
+    /// When false, `appendStreaming` discards chunks that would cross a
+    /// completed-output boundary (i.e. create a duplicate agent message bubble).
+    /// The runner sets this false when load-replay suppression ends and true
+    /// when the next prompt starts, preventing late replay frames from creating
+    /// duplicate bubbles while still letting fresh in-progress continuation
+    /// chunks through (those target non-completed messages, so the boundary
+    /// check is never reached).
+    var allowsStreamingBoundaryCrossing: Bool = true
+
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
     /// explicit force-send remains next.
@@ -760,6 +769,10 @@ final class ACPSession: ObservableObject, Identifiable {
         if let i = locate() {
             let stableId = transcript.messages[i].stableId
             if transcript.completedOutputBoundaryMessageIds.contains(stableId) {
+                // Discard if boundary crossings are not allowed — this chunk
+                // is a late replay frame arriving after load-replay suppression
+                // ended. Return the existing message index without mutating.
+                guard allowsStreamingBoundaryCrossing else { return i }
                 transcript.completedOutputBoundaryMessageIds.remove(stableId)
             } else {
                 switch transcript.messages[i] {

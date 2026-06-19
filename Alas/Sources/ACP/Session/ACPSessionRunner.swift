@@ -138,6 +138,12 @@ final class ACPSessionRunner {
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
+                            // Disallow streaming boundary crossings until the next prompt
+                            // starts. Any agentMessageChunk that would cross a completed-
+                            // output boundary in this window is a late replay slip — the
+                            // session-level flag prevents it from creating a duplicate
+                            // bubble without blocking in-progress continuation updates.
+                            self.session.allowsStreamingBoundaryCrossing = false
                         }
                         return
                     }
@@ -300,6 +306,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
+            session.allowsStreamingBoundaryCrossing = false
         }
     }
 
@@ -1021,6 +1028,11 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
+                // Re-allow streaming boundary crossings now that we are inside
+                // the Task and have confirmed this prompt is still active. The
+                // RPC is sent below, so any agent chunk that follows is genuine
+                // new output — N+1 bubble creation is correct from here on.
+                self.session.allowsStreamingBoundaryCrossing = true
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we
@@ -1154,6 +1166,7 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
+                self.session.allowsStreamingBoundaryCrossing = true
                 self.session.transcript.streamingState = .sending
                 return true
             }
