@@ -12,8 +12,8 @@ enum ReviewTabLoadingPresentation {
 }
 
 enum ReviewTabPendingReviewPresentation {
-    static func showsRail(stagedCount: Int) -> Bool {
-        stagedCount > 0
+    static func showsRail(stagedCount: Int, loadedFileCount: Int?) -> Bool {
+        loadedFileCount != nil && stagedCount > 0
     }
 
     static func showsToolbarFinishButton(canSubmitReview: Bool, hasPendingReviewScope: Bool) -> Bool {
@@ -151,9 +151,11 @@ struct ReviewTabView: View {
                   let loadError {
             stateView(title: "Could not load review changes", detail: loadError, color: theme.color("del"))
         } else if let session, session.files.isEmpty {
-            stateView(title: "No changes to review", detail: "This worktree has no staged or unstaged file diffs.", color: theme.color("fg-dim"))
+            loadedReviewContent(fileCount: session.files.count) {
+                stateView(title: "No changes to review", detail: "This worktree has no staged or unstaged file diffs.", color: theme.color("fg-dim"))
+            }
         } else if let session {
-            loadedReviewContent {
+            loadedReviewContent(fileCount: session.files.count) {
                 reviewSurface(session)
             }
         } else {
@@ -161,12 +163,15 @@ struct ReviewTabView: View {
         }
     }
 
-    private func loadedReviewContent<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func loadedReviewContent<Content: View>(fileCount: Int, @ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 0) {
             content()
 
             if let pendingReview,
-               ReviewTabPendingReviewPresentation.showsRail(stagedCount: pendingReview.staged.count) {
+               ReviewTabPendingReviewPresentation.showsRail(
+                   stagedCount: pendingReview.staged.count,
+                   loadedFileCount: fileCount
+               ) {
                 PendingReviewRail(
                     pendingReview: pendingReview,
                     collapsed: $pendingReviewRailCollapsed

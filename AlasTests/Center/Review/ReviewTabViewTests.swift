@@ -27,8 +27,10 @@ struct ReviewTabViewTests {
     }
 
     @Test func pendingReviewRailOnlyShowsForStagedComments() {
-        #expect(!ReviewTabPendingReviewPresentation.showsRail(stagedCount: 0))
-        #expect(ReviewTabPendingReviewPresentation.showsRail(stagedCount: 1))
+        #expect(!ReviewTabPendingReviewPresentation.showsRail(stagedCount: 0, loadedFileCount: 0))
+        #expect(ReviewTabPendingReviewPresentation.showsRail(stagedCount: 1, loadedFileCount: 0))
+        #expect(ReviewTabPendingReviewPresentation.showsRail(stagedCount: 1, loadedFileCount: 3))
+        #expect(!ReviewTabPendingReviewPresentation.showsRail(stagedCount: 1, loadedFileCount: nil))
     }
 
     @Test func finishReviewToolbarButtonRequiresSubmitCapabilityAndPendingReviewScope() {
