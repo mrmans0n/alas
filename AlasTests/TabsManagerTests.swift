@@ -284,6 +284,65 @@ struct TabsManagerTests {
         #expect(back.isExternal)
     }
 
+    @Test func openEditorIncrementsRevealRevisionWhenRevealingExistingTab() {
+        let worktreeId = "tabs-manager-editor-reveal-revision"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openEditor(
+            worktreeId: worktreeId,
+            relativePath: "Sources/App.swift",
+            revealLine: 10,
+            revealCharacter: 0
+        )
+        let second = mgr.openEditor(
+            worktreeId: worktreeId,
+            relativePath: "Sources/App.swift",
+            revealLine: 10,
+            revealCharacter: 0
+        )
+
+        #expect(first.id == second.id)
+        if case .editor(let s) = second {
+            #expect(s.revealRevision == 1)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
+
+    @Test func openEditorForcesMarkdownEditorModeWhenRevealing() {
+        let worktreeId = "tabs-manager-markdown-reveal-mode"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+
+        let first = mgr.openEditor(
+            worktreeId: worktreeId,
+            relativePath: "README.md",
+            revealLine: nil,
+            revealCharacter: nil
+        )
+        if case .editor(let s) = first {
+            mgr.setMarkdownViewMode(worktreeId: worktreeId, tabId: s.id, mode: .preview)
+        } else {
+            Issue.record("expected editor tab")
+        }
+
+        let revealed = mgr.openEditor(
+            worktreeId: worktreeId,
+            relativePath: "README.md",
+            revealLine: 3,
+            revealCharacter: 0
+        )
+
+        if case .editor(let s) = revealed {
+            #expect(s.markdownViewMode == .editor)
+            #expect(s.revealLine == 3)
+            #expect(s.revealCharacter == 0)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
+
     @Test func openExternalEditorAppendsAndActivates() {
         let worktreeId = "tabs-manager-open-external"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
@@ -383,6 +442,23 @@ struct TabsManagerTests {
         if case .editor(let s) = second {
             #expect(s.revealLine == 5)
             #expect(s.revealCharacter == 2)
+        }
+    }
+
+    @Test func openExternalEditorIncrementsRevealRevisionWhenRevealingExistingTab() {
+        let worktreeId = "tabs-manager-external-reveal-revision"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let url = URL(fileURLWithPath: "/usr/include/foo.h")
+
+        let first = mgr.openExternalEditor(worktreeId: worktreeId, absoluteURL: url, revealLine: 1, revealCharacter: 0)
+        let second = mgr.openExternalEditor(worktreeId: worktreeId, absoluteURL: url, revealLine: 1, revealCharacter: 0)
+
+        #expect(first.id == second.id)
+        if case .editor(let s) = second {
+            #expect(s.revealRevision == 1)
+        } else {
+            Issue.record("expected editor tab")
         }
     }
 

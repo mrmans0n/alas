@@ -10,6 +10,7 @@ struct MarkdownTabView: View {
     let originatingRelativePath: String?
     let revealLine: Int?
     let revealCharacter: Int?
+    let revealRevision: Int?
     @Bindable var appState: AppState
     let onRevealInFiles: (String) -> Void
     @Environment(\.theme) var theme
@@ -147,6 +148,7 @@ struct MarkdownTabView: View {
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
+            revealRevision: revealRevision,
             appState: appState,
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath,

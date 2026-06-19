@@ -14,6 +14,7 @@ struct CodeEditorView: NSViewRepresentable {
     let tabId: TabID
     let revealLine: Int?
     let revealCharacter: Int?
+    let revealRevision: Int?
     let appState: AppState
     let externalAbsolutePath: String?
     /// The worktree-relative path of the in-worktree file from which the
@@ -109,6 +110,7 @@ struct CodeEditorView: NSViewRepresentable {
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
+            revealRevision: revealRevision,
             theme: theme,
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath
@@ -125,6 +127,7 @@ struct CodeEditorView: NSViewRepresentable {
             tabId: tabId,
             revealLine: revealLine,
             revealCharacter: revealCharacter,
+            revealRevision: revealRevision,
             theme: theme,
             externalAbsolutePath: externalAbsolutePath,
             originatingRelativePath: originatingRelativePath

@@ -109,7 +109,12 @@ struct FileSearchDialog: View {
     }
 
     private func openContent(_ hit: ContentSearchHit) {
-        appState.openFile(relativePath: hit.relativePath, worktreeId: hit.worktreeId)
+        appState.openFile(
+            relativePath: hit.relativePath,
+            worktreeId: hit.worktreeId,
+            revealLine: hit.revealLine,
+            revealCharacter: hit.revealCharacter
+        )
         close()
     }
 

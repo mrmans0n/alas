@@ -149,6 +149,7 @@ struct CenterPaneView: View {
                                             originatingRelativePath: s.originatingRelativePath,
                                             revealLine: s.revealLine,
                                             revealCharacter: s.revealCharacter,
+                                            revealRevision: s.revealRevision,
                                             appState: state,
                                             onRevealInFiles: { path in state.revealInFiles(worktreeId: worktree.id, path: path) })
                         } else {
@@ -158,6 +159,7 @@ struct CenterPaneView: View {
                                           tabId: s.id,
                                           revealLine: s.revealLine,
                                           revealCharacter: s.revealCharacter,
+                                          revealRevision: s.revealRevision,
                                           appState: state,
                                           externalAbsolutePath: s.externalAbsolutePath,
                                           originatingRelativePath: s.originatingRelativePath,

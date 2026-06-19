@@ -103,7 +103,7 @@ struct ContentSearcherTests {
     @Test func columnsUseCharacterOffsetsForNonASCIIPrefixes() async throws {
         try #require(rgAvailable())
         let repo = try await makeRepo(files: [
-            ("a.txt", "éneedle\n"),
+            ("a.txt", "😀needle\n"),
         ])
         defer { try? FileManager.default.removeItem(at: repo) }
 
@@ -120,8 +120,35 @@ struct ContentSearcherTests {
 
         let hit = try #require(hits.first)
         #expect(hit.column == 2)
-        #expect(hit.snippet == "éneedle")
+        #expect(hit.revealColumn == 3)
+        #expect(hit.revealCharacter == 2)
+        #expect(hit.snippet == "😀needle")
         #expect(hit.matchCharRange == 1..<7)
+    }
+
+    @Test func revealColumnsUseUTF16OffsetsInsideExtendedGraphemeClusters() async throws {
+        try #require(rgAvailable())
+        let repo = try await makeRepo(files: [
+            ("a.txt", "🇺🇸needle\n"),
+        ])
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let cs = ContentSearcher()
+        var hits: [ContentSearchHit] = []
+        for try await h in cs.search(
+            query: "🇸",
+            options: SearchContentOptions(),
+            worktrees: [SearchWorktree(
+                id: "w1", projectId: "p1", displayName: "w",
+                absolutePath: repo
+            )]
+        ) { hits.append(h) }
+
+        let hit = try #require(hits.first)
+        #expect(hit.revealColumn == 3)
+        #expect(hit.revealCharacter == 2)
+        #expect(hit.snippet == "🇺🇸needle")
+        #expect(hit.matchCharRange == nil)
     }
 }
 

@@ -35,6 +35,7 @@ struct ContentSearchHit: Identifiable, Equatable, Sendable {
     let relativePath: String
     let line: Int
     let column: Int
+    let revealColumn: Int?
     let snippet: String
     /// Character (grapheme) offsets into `snippet` of the matched run, or
     /// nil if the offsets don't align with character boundaries. Producers
@@ -44,6 +45,8 @@ struct ContentSearchHit: Identifiable, Equatable, Sendable {
 
     var id: String { "\(worktreeId):\(relativePath):\(line):\(column)" }
     var groupKey: String { "\(worktreeId):\(relativePath)" }
+    var revealLine: Int { max(0, line - 1) }
+    var revealCharacter: Int { max(0, (revealColumn ?? column) - 1) }
 }
 
 struct ContentSearchGroup: Identifiable, Equatable, Sendable {

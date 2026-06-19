@@ -4,6 +4,54 @@ import Foundation
 
 @MainActor
 struct SearchModelTests {
+    @Test func contentSearchHitRevealTargetUsesZeroBasedEditorCoordinates() {
+        let hit = ContentSearchHit(
+            worktreeId: "wt",
+            projectId: "project",
+            relativePath: "Sources/App.swift",
+            line: 12,
+            column: 4,
+            revealColumn: nil,
+            snippet: "    let value = true",
+            matchCharRange: nil
+        )
+
+        #expect(hit.revealLine == 11)
+        #expect(hit.revealCharacter == 3)
+    }
+
+    @Test func contentSearchHitRevealTargetUsesUtf16RevealColumnWhenAvailable() {
+        let hit = ContentSearchHit(
+            worktreeId: "wt",
+            projectId: "project",
+            relativePath: "Sources/App.swift",
+            line: 1,
+            column: 2,
+            revealColumn: 3,
+            snippet: "😀needle",
+            matchCharRange: nil
+        )
+
+        #expect(hit.column == 2)
+        #expect(hit.revealCharacter == 2)
+    }
+
+    @Test func contentSearchHitRevealTargetClampsInvalidCoordinatesToFileStart() {
+        let hit = ContentSearchHit(
+            worktreeId: "wt",
+            projectId: "project",
+            relativePath: "Sources/App.swift",
+            line: 0,
+            column: 0,
+            revealColumn: nil,
+            snippet: "",
+            matchCharRange: nil
+        )
+
+        #expect(hit.revealLine == 0)
+        #expect(hit.revealCharacter == 0)
+    }
+
     /// Returns a finished AsyncThrowingStream with no elements.
     private func emptyContentStream() -> AsyncThrowingStream<ContentSearchHit, Error> {
         AsyncThrowingStream { $0.finish() }
@@ -214,6 +262,7 @@ extension SearchModelTests {
                 relativePath: path,
                 line: line,
                 column: 1,
+                revealColumn: nil,
                 snippet: "some snippet",
                 matchCharRange: nil
             )
@@ -259,7 +308,8 @@ extension SearchModelTests {
             ContentSearchHit(
                 worktreeId: "a", projectId: "p1",
                 relativePath: "f\(i).rs",
-                line: 1, column: 1, snippet: "x", matchCharRange: nil
+                line: 1, column: 1, revealColumn: nil,
+                snippet: "x", matchCharRange: nil
             )
         }
         let env = makeEnv(
@@ -294,7 +344,8 @@ extension SearchModelTests {
             ContentSearchHit(
                 worktreeId: "a", projectId: "p1",
                 relativePath: i.isMultiple(of: 2) ? "a.rs" : "b.rs",
-                line: i + 1, column: 1, snippet: "x", matchCharRange: nil
+                line: i + 1, column: 1, revealColumn: nil,
+                snippet: "x", matchCharRange: nil
             )
         }
         let env = makeEnv(
@@ -405,7 +456,7 @@ extension SearchModelTests {
         let hit = ContentSearchHit(
             worktreeId: "a", projectId: "p1",
             relativePath: "x.rs", line: 1, column: 1,
-            snippet: "match", matchCharRange: nil
+            revealColumn: nil, snippet: "match", matchCharRange: nil
         )
         let env = makeEnv(
             worktrees: [wt("a")],

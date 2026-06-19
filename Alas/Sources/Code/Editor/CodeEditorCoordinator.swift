@@ -28,7 +28,9 @@ final class CodeEditorCoordinator {
     private var currentTheme: Theme?
     private var currentFontFamily: String?
     private var currentFontSize: CGFloat?
-    private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int)?
+    private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int, revision: Int)?
+    private var revealHighlightTask: Task<Void, Never>?
+    private var revealHighlightRange: NSRange?
     private var currentExternalAbsolutePath: String?
     private var currentOriginatingWorktreeRoot: URL?
     private var currentOriginatingRelativePath: String?
@@ -74,7 +76,7 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
@@ -266,7 +268,7 @@ final class CodeEditorCoordinator {
             appState.tabs.ensureExternalLSPOpen(tabId: tabId)
         }
 
-        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
+        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter, revision: revealRevision)
 
         NotificationCenter.default.post(
             name: .codeEditorDidAttach,
@@ -276,7 +278,7 @@ final class CodeEditorCoordinator {
         onTextViewAttached?(textView, tabId)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         // Re-query the registry every time so a registry change (e.g. a
         // server gets installed) still flips this comparison and triggers a
         // rebind. When the same tab is being re-evaluated and has an
@@ -319,6 +321,7 @@ final class CodeEditorCoordinator {
         }
 
         if pathChanged {
+            clearRevealHighlight()
             hoverHighlight?.cancelAndClear()
             completion?.cancelAndDismiss()
             didChangeTask?.cancel()
@@ -402,7 +405,7 @@ final class CodeEditorCoordinator {
             runHighlight(theme: theme)
         }
 
-        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter)
+        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter, revision: revealRevision)
     }
 
     /// Wire the coordinator and the text view to `buffer`. If a previous
@@ -878,13 +881,14 @@ final class CodeEditorCoordinator {
     /// so SwiftUI re-renders that re-pass the same hints don't keep stealing
     /// the user's scroll position. After applying, asks the TabsManager to
     /// clear the hint so it isn't replayed on relaunch.
-    private func applyRevealIfNeeded(tabId: TabID, line: Int?, character: Int?) {
+    private func applyRevealIfNeeded(tabId: TabID, line: Int?, character: Int?, revision: Int?) {
         guard let line, let character else {
             lastAppliedReveal = nil
             return
         }
+        let revision = revision ?? 0
         if let last = lastAppliedReveal,
-           last.tabId == tabId, last.line == line, last.character == character {
+           last.tabId == tabId, last.line == line, last.character == character, last.revision == revision {
             return
         }
         guard let textView, let buffer else { return }
@@ -902,9 +906,56 @@ final class CodeEditorCoordinator {
         let range = NSRange(location: target, length: 0)
         textView.setSelectedRange(range)
         textView.scrollRangeToVisible(range)
-        lastAppliedReveal = (tabId: tabId, line: line, character: character)
+        highlightRevealLine(containing: target, in: nsString, textView: textView)
+        lastAppliedReveal = (tabId: tabId, line: line, character: character, revision: revision)
         if let wid = currentWorktreeId {
             appState.tabs.consumeReveal(worktreeId: wid, tabId: tabId)
         }
+    }
+
+    private func highlightRevealLine(containing target: Int, in nsString: NSString, textView: CodeTextView) {
+        guard nsString.length > 0,
+              let layoutManager = textView.layoutManager else { return }
+        clearRevealHighlight()
+
+        let clampedTarget = min(max(0, target), max(0, nsString.length - 1))
+        let lineRange = nsString.lineRange(for: NSRange(location: clampedTarget, length: 0))
+        guard lineRange.location != NSNotFound, lineRange.length > 0 else { return }
+
+        let color = NSColor.systemYellow.withAlphaComponent(0.9)
+        layoutManager.addTemporaryAttribute(.underlineStyle, value: NSUnderlineStyle.thick.rawValue, forCharacterRange: lineRange)
+        layoutManager.addTemporaryAttribute(.underlineColor, value: color, forCharacterRange: lineRange)
+        revealHighlightRange = lineRange
+        revealHighlightTask = Task { [weak self, weak textView] in
+            try? await Task.sleep(for: .seconds(7))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, let textView, self.textView === textView else { return }
+                self.clearRevealHighlight()
+            }
+        }
+    }
+
+    private func clearRevealHighlight() {
+        revealHighlightTask?.cancel()
+        revealHighlightTask = nil
+        guard let range = revealHighlightRange,
+              let textView,
+              let layoutManager = textView.layoutManager else {
+            revealHighlightRange = nil
+            return
+        }
+        let textLength = (textView.string as NSString).length
+        if range.location < textLength {
+            let clampedRange = NSRange(
+                location: range.location,
+                length: min(range.length, textLength - range.location)
+            )
+            if clampedRange.length > 0 {
+                layoutManager.removeTemporaryAttribute(.underlineStyle, forCharacterRange: clampedRange)
+                layoutManager.removeTemporaryAttribute(.underlineColor, forCharacterRange: clampedRange)
+            }
+        }
+        revealHighlightRange = nil
     }
 }

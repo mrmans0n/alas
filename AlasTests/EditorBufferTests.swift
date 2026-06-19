@@ -681,6 +681,129 @@ struct EditorBufferTests {
         #expect(fontB?.isFixedPitch == true)
     }
 
+    @Test func coordinatorReappliesSameRevealTargetWhenRevisionChanges() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "line one\nline two\nline three\n")
+        let appState = AppState()
+        appState.config.code.fontFamily = "Menlo"
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-a",
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: "tab-a",
+            revealLine: 1,
+            revealCharacter: 0,
+            revealRevision: 0,
+            theme: theme
+        )
+
+        let revealedSelection = textView.selectedRange()
+        #expect(revealedSelection.location > 0)
+
+        textView.setSelectedRange(NSRange(location: 0, length: 0))
+        let findHighlightColor = NSColor.systemBlue
+        layoutManager.addTemporaryAttribute(
+            .backgroundColor,
+            value: findHighlightColor,
+            forCharacterRange: NSRange(location: revealedSelection.location, length: 4)
+        )
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: "a.swift",
+            tabId: "tab-a",
+            revealLine: 1,
+            revealCharacter: 0,
+            revealRevision: 0,
+            theme: theme
+        )
+        #expect(textView.selectedRange().location == 0)
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: "a.swift",
+            tabId: "tab-a",
+            revealLine: 1,
+            revealCharacter: 0,
+            revealRevision: 1,
+            theme: theme
+        )
+        #expect(textView.selectedRange() == revealedSelection)
+        let preservedBackground = layoutManager.temporaryAttribute(
+            .backgroundColor,
+            atCharacterIndex: revealedSelection.location,
+            effectiveRange: nil
+        ) as? NSColor
+        #expect(preservedBackground == findHighlightColor)
+    }
+
+    @Test func coordinatorClampsStaleRevealHighlightRangeAfterEdit() throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "line one\nline two\nline three\n")
+        let appState = AppState()
+        appState.config.code.fontFamily = "Menlo"
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-a",
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), textContainer: textContainer)
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: "tab-a",
+            revealLine: 1,
+            revealCharacter: 0,
+            revealRevision: 0,
+            theme: theme
+        )
+        #expect(textView.selectedRange().location > 0)
+
+        buffer.storage.replaceCharacters(
+            in: NSRange(location: 0, length: buffer.storage.length),
+            with: "x\n"
+        )
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: "a.swift",
+            tabId: "tab-a",
+            revealLine: 0,
+            revealCharacter: 0,
+            revealRevision: 1,
+            theme: theme
+        )
+
+        #expect(textView.selectedRange() == NSRange(location: 0, length: 0))
+    }
+
     @Test func coordinatorRebindsActiveExternalEditorWhenLanguageAppears() throws {
         let root = tempWorktree()
         let externalURL = FileManager.default.temporaryDirectory

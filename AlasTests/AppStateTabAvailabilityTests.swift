@@ -188,6 +188,69 @@ struct AppStateTabAvailabilityTests {
         #expect(!state.hasActiveEditorTab)
     }
 
+    @Test func openFileWithRevealBypassesImagePreviewForSearchableSvg() async throws {
+        let repo = try await makeRepo(name: "svg-reveal")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        state.openFile(relativePath: "Assets/icon.svg", worktreeId: trees[0].id)
+        if case .imagePreview = state.activeTab {
+            // Expected path for normal image opens.
+        } else {
+            Issue.record("expected image preview tab")
+        }
+
+        state.openFile(
+            relativePath: "Assets/icon.svg",
+            worktreeId: trees[0].id,
+            revealLine: 4,
+            revealCharacter: 2
+        )
+
+        if case .editor(let tab) = state.activeTab {
+            #expect(tab.relativePath == "Assets/icon.svg")
+            #expect(tab.revealLine == 4)
+            #expect(tab.revealCharacter == 2)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
+
+    @Test func openFileWithRevealKeepsBinaryImagesInPreview() async throws {
+        let repo = try await makeRepo(name: "binary-image-reveal")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        #expect(trees.count == 1)
+        state.selectedWorktreeId = trees[0].id
+
+        state.openFile(
+            relativePath: "Assets/logo.png",
+            worktreeId: trees[0].id,
+            revealLine: 12,
+            revealCharacter: 4
+        )
+
+        if case .imagePreview(let tab) = state.activeTab {
+            #expect(tab.relativePath == "Assets/logo.png")
+        } else {
+            Issue.record("expected image preview tab")
+        }
+    }
+
     @Test func hasAnyDirtyEditorTabFalseWhenEmpty() {
         let state = AppState()
         #expect(!state.hasAnyDirtyEditorTab)
