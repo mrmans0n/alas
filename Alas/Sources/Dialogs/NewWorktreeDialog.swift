@@ -166,13 +166,12 @@ struct NewWorktreeDialog: View {
 
     private var renderedPath: String {
         guard let project = state.projects.first(where: { $0.id == projectId }) else { return "" }
-        let template = state.config.worktrees.pathTemplate
-            .replacingOccurrences(of: "{worktreeRoot}", with: state.config.worktrees.rootPath)
-            .replacingOccurrences(of: "{repo}", with: project.name.split(separator: "/").last.map(String.init) ?? "repo")
-            .replacingOccurrences(of: "{branch}", with: branch.replacingOccurrences(of: "/", with: "-"))
-            .replacingOccurrences(of: "{user}", with: NSUserName())
-            .replacingOccurrences(of: "{ts}", with: ISO8601DateFormatter().string(from: Date()))
-        return (template as NSString).expandingTildeInPath
+        return WorktreePathTemplateRenderer.render(
+            template: state.config.worktrees.pathTemplate,
+            worktreeRoot: state.config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        ).path
     }
 
     private func loadBranchesForSelectedProject() {
