@@ -1,39 +1,90 @@
 import SwiftUI
 
-struct PendingReviewTray: View {
+struct PendingReviewRail: View {
     @Bindable var pendingReview: PendingReview
+    @Binding var collapsed: Bool
     var onFinish: () -> Void = {}
 
     @Environment(\.theme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            trayHeader
-            Divider()
-            commentList
-            Divider()
-            finishButton
+            if collapsed {
+                collapsedBody
+            } else {
+                expandedBody
+            }
         }
-        .frame(width: 280)
+        .frame(width: collapsed ? 44 : 280)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(theme.color("bg-2"))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(theme.color("line"), lineWidth: 0.75)
-        )
-        .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 4)
-        .padding(12)
+        .overlay(Rectangle().fill(theme.color("line")).frame(width: 0.5), alignment: .leading)
+        .accessibilityIdentifier("pending-review-rail")
     }
 
-    private var trayHeader: some View {
+    private var expandedBody: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            railHeader
+            Divider().overlay(theme.color("line"))
+            commentList
+            Spacer(minLength: 0)
+            Divider().overlay(theme.color("line"))
+            finishButton
+        }
+    }
+
+    private var collapsedBody: some View {
+        VStack(spacing: 8) {
+            collapseButton
+                .padding(.top, 8)
+            Text("\(pendingReview.staged.count)")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(theme.color("warn"))
+                .frame(width: 26, height: 22)
+                .background(theme.color("warn").opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityLabel("\(pendingReview.staged.count) pending review comments")
+            Button {
+                onFinish()
+            } label: {
+                Image(systemName: "arrow.up.doc")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .frame(width: 26, height: 24)
+                    .background(theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+            .help("Finish review")
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var railHeader: some View {
         HStack {
             Text("Review (\(pendingReview.staged.count) comment\(pendingReview.staged.count == 1 ? "" : "s"))")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(theme.color("fg"))
             Spacer(minLength: 0)
+            collapseButton
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private var collapseButton: some View {
+        Button {
+            collapsed.toggle()
+        } label: {
+            Image(systemName: collapsed ? "sidebar.right" : "sidebar.trailing")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(theme.color("fg-muted"))
+                .frame(width: 26, height: 24)
+                .background(theme.color("bg-3"))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .help(collapsed ? "Expand review rail" : "Collapse review rail")
     }
 
     private var commentList: some View {
@@ -46,7 +97,6 @@ struct PendingReviewTray: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-        .frame(maxHeight: 200)
     }
 
     private func commentRow(_ comment: StagedComment) -> some View {

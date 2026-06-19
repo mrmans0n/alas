@@ -28,7 +28,9 @@ struct VerdictSheet: View {
                     .foregroundColor(theme.color("fg-dim"))
                 TextEditor(text: $summaryBody)
                     .font(.system(size: 12))
+                    .scrollContentBackground(.hidden)
                     .frame(minHeight: 80)
+                    .background(theme.color("bg-1"))
                     .overlay(
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(theme.color("line"), lineWidth: 0.75)
@@ -52,6 +54,8 @@ struct VerdictSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+        .background(theme.color("bg-2"))
+        .presentationBackground(theme.color("bg-2"))
     }
 
     private var verdictPicker: some View {
