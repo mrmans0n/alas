@@ -256,7 +256,8 @@ struct FilesTabView: View {
                 let children = current.children,
                 children.count == 1,
                 children[0].kind == .dir,
-                !children[0].isSubmodule
+                !children[0].isSubmodule,
+                children[0].childrenState == .loaded
             else { break }
             let next = children[0]
             displayParts.append(next.name)
