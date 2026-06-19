@@ -37,7 +37,7 @@ struct EditorFindBarView: View {
                     .frame(minWidth: 36, idealWidth: showsReplace ? 120 : 180, maxWidth: .infinity)
                     .layoutPriority(2)
                     .onSubmit { onFind(.next) }
-                    .onChange(of: findText) { _ in
+                    .onChange(of: findText) {
                         onFindChanged()
                     }
             }

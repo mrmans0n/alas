@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct CodeLanguageDetailView: View {
-    @State var entry: LanguageServerConfig
+    @State private var entry: LanguageServerConfig
     let isNew: Bool
     let onSave: (LanguageServerConfig, [InstallRecipe]?) -> Void
     let onCancel: () -> Void

@@ -28,4 +28,32 @@ enum RepoSelectorRow: Equatable {
         default: return true
         }
     }
+
+    var stableId: String {
+        switch self {
+        case .worktree(let worktree, _, _):
+            return "worktree:\(worktree.id)"
+        case .action(.newProject):
+            return "action:new-project"
+        case .action(.newWorktreeForRepo(let projectId)):
+            return "action:new-worktree:\(projectId)"
+        case .emptyHint(.noProjects):
+            return "empty:no-projects"
+        case .recentHeader:
+            return "header:recent"
+        case .projectHeader(let projectId):
+            return "header:project:\(projectId)"
+        case .actionsHeader:
+            return "header:actions"
+        }
+    }
+}
+
+struct RepoSelectorRenderedRow: Identifiable, Equatable {
+    let index: Int
+    let row: RepoSelectorRow
+
+    var id: String {
+        "\(index):\(row.stableId)"
+    }
 }

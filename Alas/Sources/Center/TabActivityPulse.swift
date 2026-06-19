@@ -13,7 +13,7 @@ struct TabActivityPulse: ViewModifier {
             .animation(breathingAnimation, value: animatedOpacity)
             .animation(.spring(duration: 0.3), value: pulseTrigger)
             .onAppear { appeared = true }
-            .onChange(of: activityState) { newState in
+            .onChange(of: activityState) { _, newState in
                 if newState != previousState && newState != nil && newState != .idle {
                     pulseTrigger = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {

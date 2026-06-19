@@ -242,7 +242,7 @@ struct DiffReviewSurface: View {
                     }
                     .padding(16)
                 }
-                .coordinateSpace(name: Self.scrollCoordinateSpace)
+                .coordinateSpace(.named(Self.scrollCoordinateSpace))
                 .onPreferenceChange(DiffReviewSectionFramePreferenceKey.self) { frames in
                     updateSelectedFileFromScroll(frames: frames, viewportHeight: viewport.size.height)
                     updateRenderedFileIDs(

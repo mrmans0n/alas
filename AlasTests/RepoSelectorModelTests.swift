@@ -627,4 +627,35 @@ struct RepoSelectorModelTests {
         #expect(opened)
         #expect(model.isOpen == false)
     }
+
+    @Test func rowStableIDsComeFromRowSemanticsNotPosition() {
+        let worktreeRow = RepoSelectorRow.worktree(
+            worktree("w1", projectId: "p1"),
+            indices: [0, 1],
+            isCurrent: false
+        )
+
+        #expect(worktreeRow.stableId == "worktree:w1")
+        #expect(RepoSelectorRow.projectHeader(projectId: "p1").stableId == "header:project:p1")
+        #expect(RepoSelectorRow.action(.newWorktreeForRepo(projectId: "p1")).stableId == "action:new-worktree:p1")
+        #expect(RepoSelectorRow.action(.newProject).stableId == "action:new-project")
+        #expect(RepoSelectorRow.emptyHint(.noProjects).stableId == "empty:no-projects")
+        #expect(RepoSelectorRow.recentHeader.stableId == "header:recent")
+        #expect(RepoSelectorRow.actionsHeader.stableId == "header:actions")
+    }
+
+    @Test func renderedRowIDsDisambiguateDuplicateSemanticRows() {
+        let worktreeRow = RepoSelectorRow.worktree(
+            worktree("w1", projectId: "p1"),
+            indices: [],
+            isCurrent: false
+        )
+
+        let recentInstance = RepoSelectorRenderedRow(index: 1, row: worktreeRow)
+        let projectInstance = RepoSelectorRenderedRow(index: 3, row: worktreeRow)
+
+        #expect(recentInstance.id == "1:worktree:w1")
+        #expect(projectInstance.id == "3:worktree:w1")
+        #expect(recentInstance.id != projectInstance.id)
+    }
 }

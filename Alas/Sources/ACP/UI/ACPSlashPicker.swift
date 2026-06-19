@@ -103,7 +103,7 @@ struct ACPSlashPickerView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                     } else {
-                        ForEach(Array(items.enumerated()), id: \.offset) { idx, s in
+                        ForEach(Array(items.enumerated()), id: \.element) { idx, s in
                             row(s, isSelected: idx == model.selectedIndex)
                                 .id(idx)
                                 .contentShape(Rectangle())

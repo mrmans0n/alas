@@ -90,30 +90,31 @@ struct RepoSelectorDialog: View {
     private var rowList: some View {
         let env = environment()
         let rows = appState.repoSelector.rows(environment: env)
+        let renderedRows = rows.enumerated().map { RepoSelectorRenderedRow(index: $0.offset, row: $0.element) }
         let projectsById = Dictionary(uniqueKeysWithValues: appState.projects.map { ($0.id, $0) })
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                    ForEach(renderedRows) { renderedRow in
                         RepoSelectorRowView(
-                            row: row,
-                            isSelected: idx == appState.repoSelector.selectedIndex,
+                            row: renderedRow.row,
+                            isSelected: renderedRow.index == appState.repoSelector.selectedIndex,
                             projectsById: projectsById,
                             onTap: {
                                 // Snap selection to the clicked row before
                                 // activating so a tap without a preceding hover
                                 // can't fire the stale keyboard selection.
-                                appState.repoSelector.setSelectedIndex(idx, in: rows)
+                                appState.repoSelector.setSelectedIndex(renderedRow.index, in: rows)
                                 activate(rows: rows)
                             },
                             onHover: {
                                 let current = NSEvent.mouseLocation
                                 if lastHoverLocation == current { return }
                                 lastHoverLocation = current
-                                appState.repoSelector.setSelectedIndex(idx, in: rows)
+                                appState.repoSelector.setSelectedIndex(renderedRow.index, in: rows)
                             }
                         )
-                        .id(idx)
+                        .id(renderedRow.index)
                     }
                 }
                 .padding(.vertical, 4)

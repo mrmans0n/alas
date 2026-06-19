@@ -23,7 +23,7 @@ struct CompletionPopup: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                             rowView(row)
                                 .id(index)
                                 .background(index == selection ? Color.accentColor.opacity(0.24) : Color.clear)
