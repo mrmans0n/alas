@@ -339,6 +339,7 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     var relativePath: String   // relative to worktree root; empty when external
     var revealLine: Int? = nil       // 0-based, optional reveal hint set by go-to-definition
     var revealCharacter: Int? = nil  // 0-based UTF-16
+    var revealRevision: Int? = nil   // increments for each explicit reveal request
     var externalAbsolutePath: String? = nil  // set when navigating to a file outside the worktree
     /// The worktree-relative path of the in-worktree file the user was
     /// viewing when they ⌘-clicked to open this external tab. Persisted so

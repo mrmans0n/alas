@@ -2475,7 +2475,9 @@ final class AppState {
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
         }
 
-        if ImageFileType.isSupported(relativePath: relativePath) {
+        let hasRevealTarget = revealLine != nil || revealCharacter != nil
+        if ImageFileType.isSupported(relativePath: relativePath),
+           !hasRevealTarget || !ImageFileType.isTextBacked(relativePath: relativePath) {
             _ = tabs.openImagePreview(worktreeId: worktree.id, relativePath: relativePath)
             return
         }

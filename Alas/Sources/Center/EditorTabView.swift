@@ -43,6 +43,7 @@ struct EditorTabView: View {
     let tabId: TabID
     let revealLine: Int?
     let revealCharacter: Int?
+    let revealRevision: Int?
     let appState: AppState
     let externalAbsolutePath: String?
     let originatingRelativePath: String?
@@ -101,6 +102,7 @@ struct EditorTabView: View {
                 tabId: tabId,
                 revealLine: revealLine,
                 revealCharacter: revealCharacter,
+                revealRevision: revealRevision,
                 appState: appState,
                 externalAbsolutePath: externalAbsolutePath,
                 originatingRelativePath: originatingRelativePath,

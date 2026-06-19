@@ -11,6 +11,13 @@ struct ImageFileTypeTests {
         #expect(ImageFileType.isSupported(relativePath: "Assets/icon.svg"))
     }
 
+    @Test func recognizesOnlySvgAsTextBackedImage() {
+        #expect(ImageFileType.isTextBacked(relativePath: "Assets/icon.svg"))
+        #expect(ImageFileType.isTextBacked(relativePath: "Assets/icon.SVG"))
+        #expect(!ImageFileType.isTextBacked(relativePath: "Assets/logo.png"))
+        #expect(!ImageFileType.isTextBacked(relativePath: "photo.jpeg"))
+    }
+
     @Test func rejectsNonImagePaths() {
         #expect(!ImageFileType.isSupported(relativePath: "Sources/AppState.swift"))
         #expect(!ImageFileType.isSupported(relativePath: "README.md"))

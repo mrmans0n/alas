@@ -433,6 +433,8 @@ final class TabsManager {
         revealLine: Int?,
         revealCharacter: Int?
     ) -> Tab {
+        let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
+            && MarkdownFileType.isMarkdown(relativePath: relativePath)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
                if case .editor(let s) = $0 { return s.relativePath == relativePath }
@@ -441,6 +443,12 @@ final class TabsManager {
             if case .editor(var s) = file.tabs[idx] {
                 s.revealLine = revealLine
                 s.revealCharacter = revealCharacter
+                if revealLine != nil || revealCharacter != nil {
+                    s.revealRevision = (s.revealRevision ?? 0) &+ 1
+                }
+                if shouldRevealInMarkdownEditor {
+                    s.markdownViewMode = .editor
+                }
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id
                 byWorktree[worktreeId] = file
@@ -449,13 +457,16 @@ final class TabsManager {
             }
         }
         let title = (relativePath as NSString).lastPathComponent
-        let state = EditorTabState(
+        var state = EditorTabState(
             id: UUID().uuidString,
             title: title,
             relativePath: relativePath,
             revealLine: revealLine,
             revealCharacter: revealCharacter
         )
+        if shouldRevealInMarkdownEditor {
+            state.markdownViewMode = .editor
+        }
         let tab = Tab.editor(state)
         append(tab, to: worktreeId)
         return tab
@@ -494,6 +505,9 @@ final class TabsManager {
                 let originChanged = (s.originatingRelativePath != originatingRelativePath)
                 s.revealLine = revealLine
                 s.revealCharacter = revealCharacter
+                if revealLine != nil || revealCharacter != nil {
+                    s.revealRevision = (s.revealRevision ?? 0) &+ 1
+                }
                 s.originatingRelativePath = originatingRelativePath   // refresh the origin
                 file.tabs[idx] = .editor(s)
                 file.activeTabId = s.id

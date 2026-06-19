@@ -20,6 +20,10 @@ enum ImageFileType {
         return supportedExtensions.contains(ext)
     }
 
+    static func isTextBacked(relativePath: String) -> Bool {
+        fileExtension(relativePath: relativePath) == "svg"
+    }
+
     static func fileExtension(relativePath: String) -> String? {
         let ext = (relativePath as NSString).pathExtension
             .trimmingCharacters(in: .whitespacesAndNewlines)

@@ -219,6 +219,7 @@ final class ContentSearcher: Sendable {
         let endColByte = (first?["end"] as? Int) ?? colByte
         let rawSnippet = lineBlob.trimmingCharacters(in: .newlines)
         let column = charOffset(forByteOffset: colByte, in: rawSnippet).map { $0 + 1 } ?? (colByte + 1)
+        let revealColumn = utf16Offset(forByteOffset: colByte, in: rawSnippet).map { $0 + 1 } ?? column
 
         // `--max-columns=400` doesn't apply in `--json` mode (per rg --help).
         // For a single very long line — minified JS, generated JSON, lockfiles —
@@ -237,6 +238,7 @@ final class ContentSearcher: Sendable {
             relativePath: pathBlob,
             line: lineNumber,
             column: column,
+            revealColumn: revealColumn,
             snippet: trimmedSnippet,
             matchCharRange: charRange
         )
@@ -250,6 +252,15 @@ final class ContentSearcher: Sendable {
         let utf8Index = s.utf8.index(s.utf8.startIndex, offsetBy: bytes)
         guard let charIndex = utf8Index.samePosition(in: s) else { return nil }
         return s.distance(from: s.startIndex, to: charIndex)
+    }
+
+    /// Convert a UTF-8 byte offset into the UTF-16 offset expected by
+    /// NSTextStorage/NSString-based editor APIs.
+    private func utf16Offset(forByteOffset bytes: Int, in s: String) -> Int? {
+        guard bytes >= 0, bytes <= s.utf8.count else { return nil }
+        let utf8Index = s.utf8.index(s.utf8.startIndex, offsetBy: bytes)
+        guard let utf16Index = utf8Index.samePosition(in: s.utf16) else { return nil }
+        return s.utf16.distance(from: s.utf16.startIndex, to: utf16Index)
     }
 
     /// Bound a snippet to ~400 characters, centered on the matched range.
