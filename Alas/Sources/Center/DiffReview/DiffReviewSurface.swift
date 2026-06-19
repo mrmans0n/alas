@@ -43,12 +43,8 @@ struct DiffReviewSurface: View {
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
-    @State private var renderedFileIDs: Set<DiffReviewFileID> = []
-    @State private var measuredHeights: [DiffReviewFileID: CGFloat] = [:]
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
-
-    private static let scrollCoordinateSpace = "diff-review-scroll"
 
     init(
         session: DiffReviewLoadedSession,
@@ -230,133 +226,100 @@ struct DiffReviewSurface: View {
     }
 
     private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
-        GeometryReader { viewport in
-            ScrollViewReader { scrollProxy in
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 14) {
-                        let renderedIDs = effectiveRenderedFileIDs(firstFileID: firstFileID)
-                        ForEach(session.files) { file in
-                            fileSection(file, isRendered: renderedIDs.contains(file.id))
-                                .id(file.summary.id.rawValue)
-                                .background(sectionFrameReader(for: file.summary.id))
-                        }
+        ScrollViewReader { scrollProxy in
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
+                    ForEach(session.files.filter { renderEligibleIDs.contains($0.id) }) { file in
+                        fileSection(file)
+                            .id(file.summary.id.rawValue)
                     }
-                    .padding(16)
                 }
-                .coordinateSpace(.named(Self.scrollCoordinateSpace))
-                .onPreferenceChange(DiffReviewSectionFramePreferenceKey.self) { frames in
-                    updateSelectedFileFromScroll(frames: frames, viewportHeight: viewport.size.height)
-                    updateRenderedFileIDs(
-                        frames: frames,
-                        viewportHeight: viewport.size.height,
-                        firstFileID: firstFileID
-                    )
+                .padding(16)
+            }
+            .onChange(of: scrollCommand) { _, command in
+                guard let command else { return }
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
                 }
-                .onChange(of: scrollCommand) { _, command in
-                    guard let command else { return }
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                    }
+                scrollCommand = DiffReviewScrollCommandConsumption.consume(
+                    current: scrollCommand,
+                    consumed: command
+                )
+            }
+            .onAppear {
+                if let command = scrollCommand {
+                    scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
                     scrollCommand = DiffReviewScrollCommandConsumption.consume(
                         current: scrollCommand,
                         consumed: command
                     )
                 }
-                .onAppear {
-                    if let command = scrollCommand {
-                        scrollProxy.scrollTo(command.id.rawValue, anchor: .top)
-                        scrollCommand = DiffReviewScrollCommandConsumption.consume(
-                            current: scrollCommand,
-                            consumed: command
-                        )
-                    }
-                    if let command = inlineFeedbackScrollCommand {
-                        Task { @MainActor in
-                            scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
-                        }
-                    }
-                    if let draftCommand = draftCommentScrollCommand {
-                        Task { @MainActor in
-                            scrollToDraftComment(draftCommand, scrollProxy: scrollProxy, animated: false)
-                        }
+                if let command = inlineFeedbackScrollCommand {
+                    Task { @MainActor in
+                        scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
                     }
                 }
-                .onChange(of: inlineFeedbackScrollCommand) { _, command in
-                    guard let command else { return }
-                    scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: true)
+                if let draftCommand = draftCommentScrollCommand {
+                    Task { @MainActor in
+                        scrollToDraftComment(draftCommand, scrollProxy: scrollProxy, animated: false)
+                    }
                 }
-                .onChange(of: draftCommentScrollCommand) { _, command in
-                    guard let command else { return }
-                    scrollToDraftComment(command, scrollProxy: scrollProxy, animated: true)
-                }
+            }
+            .onChange(of: inlineFeedbackScrollCommand) { _, command in
+                guard let command else { return }
+                scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: true)
+            }
+            .onChange(of: draftCommentScrollCommand) { _, command in
+                guard let command else { return }
+                scrollToDraftComment(command, scrollProxy: scrollProxy, animated: true)
             }
         }
         .background(theme.color("bg-1"))
     }
 
     @ViewBuilder
-    private func fileSection(_ file: DiffReviewFileSectionModel, isRendered: Bool) -> some View {
+    private func fileSection(_ file: DiffReviewFileSectionModel) -> some View {
         let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
         let draftComments = draftCommentsByFileID[file.id] ?? []
-        if isRendered {
-            DiffReviewFileSection(
-                file: file,
-                inlineFeedback: inlineFeedback,
-                focusedFeedbackID: focusedFeedbackID,
-                inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
-                draftComments: draftComments,
-                focusedDraftCommentID: focusedDraftCommentID,
-                layoutMode: $layoutMode,
-                wrapLines: $wrapLines,
-                showWhitespace: $showWhitespace,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize,
-                showsSourceBadge: showsSourceBadges,
-                lspContext: lspContextForFile(file),
-                inlineFeedbackActions: inlineFeedbackActions,
-                onSelectInlineFeedback: onSelectInlineFeedback,
-                draftCommentActions: draftCommentActions,
-                onSelectDraftComment: onSelectDraftComment,
-                onSaveDraftComment: { anchor, body in
-                    onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
-                },
-                allowsDraftCommentCreation: allowsDraftCommentCreation,
-                onContextExpansionActivated: {
-                    contextExpandedFileIDs.insert(file.id)
-                },
-                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                threads: inlineThreads(for: file.summary.path),
-                annotations: inlineAnnotations(for: file.summary.path),
-                onReply: onReply,
-                onResolve: onResolve,
-                onUnresolve: onUnresolve,
-                onEdit: onEdit,
-                onDelete: onDelete,
-                canReply: canReply,
-                canResolve: canResolve,
-                onStageReply: onStageReply,
-                canAddToReview: canAddToReview
-            )
-            .onGeometryChange(for: CGFloat.self) { proxy in
-                proxy.size.height
-            } action: { height in
-                if measuredHeights[file.id] != height {
-                    measuredHeights[file.id] = height
-                }
-            }
-        } else {
-            DiffReviewFileSectionPlaceholder(
-                file: file,
-                estimatedHeight: measuredHeights[file.id] ?? DiffReviewFileSectionHeightEstimator.estimatedHeight(
-                    for: file,
-                    inlineFeedback: inlineFeedback,
-                    draftComments: draftComments
-                ),
-                showsSourceBadge: showsSourceBadges,
-                codeFontFamily: codeFontFamily,
-                codeFontSize: codeFontSize
-            )
-        }
+        DiffReviewFileSection(
+            file: file,
+            inlineFeedback: inlineFeedback,
+            focusedFeedbackID: focusedFeedbackID,
+            inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
+            draftComments: draftComments,
+            focusedDraftCommentID: focusedDraftCommentID,
+            layoutMode: $layoutMode,
+            wrapLines: $wrapLines,
+            showWhitespace: $showWhitespace,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            showsSourceBadge: showsSourceBadges,
+            lspContext: lspContextForFile(file),
+            inlineFeedbackActions: inlineFeedbackActions,
+            onSelectInlineFeedback: onSelectInlineFeedback,
+            draftCommentActions: draftCommentActions,
+            onSelectDraftComment: onSelectDraftComment,
+            onSaveDraftComment: { anchor, body in
+                onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
+            },
+            allowsDraftCommentCreation: allowsDraftCommentCreation,
+            onContextExpansionActivated: {
+                contextExpandedFileIDs.insert(file.id)
+            },
+            reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+            threads: inlineThreads(for: file.summary.path),
+            annotations: inlineAnnotations(for: file.summary.path),
+            onReply: onReply,
+            onResolve: onResolve,
+            onUnresolve: onUnresolve,
+            onEdit: onEdit,
+            onDelete: onDelete,
+            canReply: canReply,
+            canResolve: canResolve,
+            onStageReply: onStageReply,
+            canAddToReview: canAddToReview
+        )
     }
 
     private func inlineFeedbackScrollTargetID(for fileID: DiffReviewFileID) -> String? {
@@ -405,69 +368,6 @@ struct DiffReviewSurface: View {
         }
     }
 
-    private func effectiveRenderedFileIDs(firstFileID: DiffReviewFileID) -> Set<DiffReviewFileID> {
-        DiffReviewRenderWindow.renderedFileIDs(
-            current: renderedFileIDs,
-            frames: [],
-            viewportHeight: 0,
-            selectedFileID: selectedFileID,
-            programmaticTarget: DiffReviewSurfaceSelectionSync.renderedTargetFileID(
-                fileScrollTarget: programmaticScroll.target,
-                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
-                draftCommentScrollCommand: draftCommentScrollCommand
-            ),
-            firstFileID: firstFileID
-        ).union(contextExpandedFileIDs)
-    }
-
-    private func sectionFrameReader(for id: DiffReviewFileID) -> some View {
-        GeometryReader { proxy in
-            Color.clear.preference(
-                key: DiffReviewSectionFramePreferenceKey.self,
-                value: [
-                    DiffReviewSectionFrame(
-                        id: id,
-                        minY: proxy.frame(in: .named(Self.scrollCoordinateSpace)).minY,
-                        maxY: proxy.frame(in: .named(Self.scrollCoordinateSpace)).maxY
-                    ),
-                ]
-            )
-        }
-    }
-
-    private func updateSelectedFileFromScroll(frames: [DiffReviewSectionFrame], viewportHeight: CGFloat) {
-        guard let updated = DiffReviewActiveFileSelection.updatedSelection(
-            current: selectedFileID,
-            frames: frames,
-            viewportHeight: viewportHeight,
-            programmaticScroll: programmaticScroll
-        ) else { return }
-
-        selectedFileID = updated
-    }
-
-    private func updateRenderedFileIDs(
-        frames: [DiffReviewSectionFrame],
-        viewportHeight: CGFloat,
-        firstFileID: DiffReviewFileID
-    ) {
-        let updated = DiffReviewRenderWindow.renderedFileIDs(
-            current: renderedFileIDs,
-            frames: frames,
-            viewportHeight: viewportHeight,
-            selectedFileID: selectedFileID,
-            programmaticTarget: DiffReviewSurfaceSelectionSync.renderedTargetFileID(
-                fileScrollTarget: programmaticScroll.target,
-                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
-                draftCommentScrollCommand: draftCommentScrollCommand
-            ),
-            firstFileID: firstFileID
-        ).union(contextExpandedFileIDs)
-        guard updated != renderedFileIDs else { return }
-
-        renderedFileIDs = updated
-    }
-
     private func synchronizeSelectionWithSession() {
         let previousFileSetKey = synchronizedFileSetKey
         let previousSelection = selectedFileID
@@ -481,9 +381,7 @@ struct DiffReviewSurface: View {
         selectedFileID = result.selectedFileID
         synchronizedFileSetKey = result.fileSetKey
         programmaticScroll = result.programmaticScroll
-        renderedFileIDs = []
         contextExpandedFileIDs.formIntersection(Set(fileIDs))
-        measuredHeights = measuredHeights.filter { fileIDs.contains($0.key) }
         if DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
             previousFileSetKey: previousFileSetKey,
             previousSelection: previousSelection,
@@ -671,119 +569,5 @@ extension DiffReviewFileSectionHeightEstimator {
         }
 
         return estimatedHeight(for: file) + fileLevelHeight + groupHeights + draftFileLevelHeight + draftGroupHeights
-    }
-}
-
-struct DiffReviewSectionFramePreferenceKey: PreferenceKey {
-    static var defaultValue: [DiffReviewSectionFrame] = []
-
-    static func reduce(value: inout [DiffReviewSectionFrame], nextValue: () -> [DiffReviewSectionFrame]) {
-        value.append(contentsOf: nextValue())
-    }
-}
-
-private struct DiffReviewFileSectionPlaceholder: View {
-    let file: DiffReviewFileSectionModel
-    let estimatedHeight: CGFloat
-    let showsSourceBadge: Bool
-    let codeFontFamily: String
-    let codeFontSize: CGFloat
-
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, minHeight: estimatedHeight, maxHeight: estimatedHeight)
-        .background(theme.color("bg-1"))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(theme.color("line"), lineWidth: 0.75)
-        )
-        .accessibilityIdentifier("diff-review-file-section-placeholder-\(file.id.rawValue)")
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text(file.summary.status.glyph)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundColor(statusColor(file.summary.status))
-                .frame(width: 16)
-            Text(file.summary.path)
-                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
-                .foregroundColor(theme.color("fg-muted"))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            sourceBadge
-            Spacer(minLength: 12)
-            if file.summary.additions > 0 {
-                Text("+\(file.summary.additions)")
-                    .foregroundColor(theme.color("add"))
-            }
-            if file.summary.deletions > 0 {
-                Text("-\(file.summary.deletions)")
-                    .foregroundColor(theme.color("del"))
-            }
-            if let unstageFile = file.stagedMutationActions?.unstageFile {
-                Button("Unstage") {
-                    unstageFile()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundColor(theme.color("fg-muted"))
-                .padding(.horizontal, 8)
-                .frame(height: 24)
-                .background(theme.color("bg-3"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .accessibilityIdentifier("diff-review-unstage-file-\(file.id.rawValue)")
-            }
-        }
-        .font(.system(size: 11, weight: .medium, design: .monospaced))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(theme.color("bg-2"))
-        .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
-    }
-
-    @ViewBuilder
-    private var sourceBadge: some View {
-        if showsSourceBadge, let title = file.summary.groupTitle {
-            Text(title.uppercased())
-                .font(.system(size: 9.5, weight: .semibold))
-                .foregroundColor(sourceColor)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(sourceColor.opacity(0.16))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-        }
-    }
-
-    private var sourceColor: Color {
-        switch file.summary.groupID ?? file.summary.namespace {
-        case "unstaged":
-            theme.color("warn")
-        case "staged":
-            theme.color("info")
-        default:
-            theme.color("accent")
-        }
-    }
-
-    private func statusColor(_ status: DiffReviewFileStatus) -> Color {
-        switch status {
-        case .added:
-            theme.color("add")
-        case .deleted:
-            theme.color("del")
-        case .renamed, .copied:
-            theme.color("accent")
-        case .conflicted:
-            theme.color("warn")
-        case .modified, .unknown:
-            theme.color("fg-dim")
-        }
     }
 }
