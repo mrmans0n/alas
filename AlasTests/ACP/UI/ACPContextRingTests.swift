@@ -57,8 +57,9 @@ struct ACPContextRingTests {
         #expect(contextUsageTooltip(ratio: 1.0) == "Context window: 100% in use")
     }
 
-    @Test("ring stays non-interactive when action is nil")
-    func ringWithoutActionIsNonInteractive() {
+    @Test("ring body evaluates on the main actor")
+    @MainActor
+    func ringBodyEvaluates() {
         let view = ACPContextRing(ratio: 0.5)
         _ = view.body
     }
