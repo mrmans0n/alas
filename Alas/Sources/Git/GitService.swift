@@ -1348,6 +1348,19 @@ extension GitService {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Resolves an arbitrary revision (branch name, ref, or SHA) to its commit
+    /// SHA. Used to pin a branch-comparison base to an immutable revision so a
+    /// stored review keeps the same merge base even if the branch advances.
+    func resolveRevision(at worktree: URL, ref: String) async throws -> String {
+        let result = try await Process.git(["rev-parse", "--verify", "\(ref)^{commit}"], cwd: worktree)
+        let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !resolved.isEmpty else {
+            throw NSError(domain: "GitService.resolveRevision", code: Int(result.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: result.stderr])
+        }
+        return resolved
+    }
+
     /// Resolves the base ref to compare against for a given worktree.
     /// Returns nil when neither `origin/<base>`, `refs/remotes/<base>`, nor local `<base>` exists.
     /// `remote == nil` means "no fetch path; use the local ref as-is".

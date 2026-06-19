@@ -119,18 +119,20 @@ struct ReviewChangesTabView: View {
                     // reflects the current revision (the worktree may have moved
                     // since the picker opened).
                     Task { @MainActor in
-                        let headSHA: String?
-                        if case .branch = choice {
-                            headSHA = try? await GitService().headSHA(at: worktree.path)
-                        } else {
-                            headSHA = nil
+                        var headSHA: String?
+                        var branchBaseSHA: String?
+                        if case .branch(let name) = choice {
+                            let git = GitService()
+                            headSHA = try? await git.headSHA(at: worktree.path)
+                            branchBaseSHA = try? await git.resolveRevision(at: worktree.path, ref: name)
                         }
                         openReviewSession(
                             target: ReviewScopeSelection.target(
                                 for: choice,
                                 worktreeID: worktree.id,
                                 repositoryPath: worktree.path,
-                                headSHA: headSHA
+                                headSHA: headSHA,
+                                branchBaseSHA: branchBaseSHA
                             )
                         )
                     }

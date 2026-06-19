@@ -12,7 +12,8 @@ enum ReviewScopeSelection {
         for choice: ReviewScopeChoice,
         worktreeID: String,
         repositoryPath: URL,
-        headSHA: String? = nil
+        headSHA: String? = nil,
+        branchBaseSHA: String? = nil
     ) -> ReviewSessionTarget {
         switch choice {
         case .workingTree:
@@ -33,10 +34,13 @@ enum ReviewScopeSelection {
                 title: "Review \(older.shortSha)…\(newer.shortSha)"
             )
         case .branch(let name):
+            // Pin both endpoints to immutable SHAs when resolved, so a stored
+            // review keeps the same merge base even if the branch advances.
+            // The branch name is retained only for the display title.
             return .branch(
                 worktreeID: worktreeID,
                 repositoryPath: repositoryPath,
-                base: name,
+                base: branchBaseSHA ?? name,
                 head: headSHA ?? "HEAD",
                 title: "Review HEAD against \(name)"
             )

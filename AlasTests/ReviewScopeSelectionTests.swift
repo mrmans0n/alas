@@ -41,6 +41,42 @@ struct ReviewScopeSelectionTests {
         #expect(target.payload == .branch(base: "main", head: "abc1234abc1234abc1234abc1234abc1234abc1234"))
     }
 
+    @Test func branchWithBranchBaseSHAPinsBase() {
+        let target = ReviewScopeSelection.target(
+            for: .branch(name: "main"),
+            worktreeID: "wt",
+            repositoryPath: path,
+            headSHA: "abc1234abc1234abc1234abc1234abc1234abc1234",
+            branchBaseSHA: "def5678def5678def5678def5678def5678def567"
+        )
+        #expect(target.kind == .branch)
+        #expect(target.payload == .branch(
+            base: "def5678def5678def5678def5678def5678def567",
+            head: "abc1234abc1234abc1234abc1234abc1234abc1234"
+        ))
+        // The branch name is retained only for display.
+        #expect(target.title == "Review HEAD against main")
+    }
+
+    @Test func branchTargetIDVariesWithBranchBaseSHA() {
+        let targetA = ReviewScopeSelection.target(
+            for: .branch(name: "main"),
+            worktreeID: "wt",
+            repositoryPath: path,
+            headSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            branchBaseSHA: "1111111111111111111111111111111111111111"
+        )
+        let targetB = ReviewScopeSelection.target(
+            for: .branch(name: "main"),
+            worktreeID: "wt",
+            repositoryPath: path,
+            headSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            branchBaseSHA: "2222222222222222222222222222222222222222"
+        )
+        #expect(targetA.id != targetB.id)
+        #expect(targetA.draftSessionID != targetB.draftSessionID)
+    }
+
     @Test func branchTargetIDVariesWithHeadSHA() {
         let targetA = ReviewScopeSelection.target(
             for: .branch(name: "main"),

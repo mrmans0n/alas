@@ -817,4 +817,21 @@ struct GitServiceTests {
         #expect(svcSHA == gitSHA)
         #expect(svcSHA.count == 40)
     }
+
+    @Test func resolveRevisionResolvesBranchNameToSHA() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "c"], cwd: repo)
+
+        let branchSHA = try await gitOK(["rev-parse", "main"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = try await GitService().resolveRevision(at: repo, ref: "main")
+        #expect(resolved == branchSHA)
+
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().resolveRevision(at: repo, ref: "no-such-branch")
+        }
+    }
 }
