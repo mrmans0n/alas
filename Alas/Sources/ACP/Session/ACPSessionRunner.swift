@@ -71,10 +71,13 @@ final class ACPSessionRunner {
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
     /// True after load-replay suppression ends until the next prompt starts.
+    /// Set when suppression ends AND the previous agent turn was complete.
     /// While set, all incoming updates are dropped — they are late-arriving
     /// replay updates that slipped past the suppression window, and applying
     /// any of them (including non-streaming ones) could corrupt transcript
     /// state or create duplicate agent message bubbles.
+    /// Not set when the previous turn was still in progress (completedOutputBoundaryMessageIds
+    /// is empty): fresh continuation updates must flow through in that case.
     private var replayBoundaryGuard = false
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
@@ -144,16 +147,19 @@ final class ACPSessionRunner {
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
-                            self.replayBoundaryGuard = true
+                            // Only guard when the previous turn is complete. An empty
+                            // completedOutputBoundaryMessageIds means an agent turn is
+                            // still in progress; guarding would silently drop live output.
+                            self.replayBoundaryGuard = !self.session.transcript.completedOutputBoundaryMessageIds.isEmpty
                         }
                         return
                     }
-                    // Drop ALL updates that arrive after suppression ends but before
-                    // the next prompt starts. Any update in this window is a late
-                    // replay that slipped past the suppression target — including
-                    // non-streaming updates (toolCall, plan) that could otherwise
-                    // clear completedOutputBoundaryMessageIds and defuse the guard
-                    // for a subsequent replayed agentMessageChunk.
+                    // Drop post-suppression updates while the guard is up. The guard
+                    // is only active when the previous turn was complete, so everything
+                    // arriving here is a late replay slip — including non-streaming
+                    // updates (toolCall, plan) that could clear
+                    // completedOutputBoundaryMessageIds and allow a subsequent replayed
+                    // agentMessageChunk to create a duplicate agent message bubble.
                     if self.replayBoundaryGuard { return }
                     let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                     let dirty = self.session.apply(u.update)
@@ -314,7 +320,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
-            replayBoundaryGuard = true
+            replayBoundaryGuard = !session.transcript.completedOutputBoundaryMessageIds.isEmpty
         }
     }
 
