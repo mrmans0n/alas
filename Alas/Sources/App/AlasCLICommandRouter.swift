@@ -12,20 +12,39 @@ struct AlasCLICommandRouter {
     var visibleWorktrees: () -> [Worktree]
     var openRelativeFile: (String, String) -> Void
     var openExternalFile: (URL, String) -> Void
+    var focusWorktree: (Worktree) -> Void = { _ in }
+    var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
+        .error("Creating worktrees from the terminal is not available yet.")
+    }
+    var deleteWorktree: (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in
+        .error("Deleting worktrees from the terminal is not available yet.")
+    }
+    var openReviewChanges: (Worktree) -> Void = { _ in }
+    var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
+        .error("Opening provider reviews from the terminal is not available yet.")
+    }
     var activateApp: () -> Void
 
-    func handle(_ request: AlasCLIRequest) -> AlasCLIResponse {
-        guard case .open = request.command else {
-            return .error("Unsupported command.")
-        }
+    func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         guard let originWorktreeId = sessionWorktreeId(request.sessionId),
-              originatingWorktree(originWorktreeId) != nil else {
+              let origin = originatingWorktree(originWorktreeId) else {
             return .error("Unknown Alas terminal session.")
         }
 
+        switch request.command {
+        case .open(let paths):
+            return handleOpen(paths: paths, originWorktreeId: originWorktreeId)
+        case .worktree(let command):
+            return await handleWorktree(command, origin: origin)
+        case .review(let command):
+            return await handleReview(command, origin: origin)
+        }
+    }
+
+    private func handleOpen(paths: [String], originWorktreeId: String) -> AlasCLIResponse {
         var errors: [String] = []
         var openedAny = false
-        for rawPath in request.paths {
+        for rawPath in paths {
             let url = URL(fileURLWithPath: rawPath).standardizedFileURL
             guard fileExists(at: url) else {
                 errors.append("\(url.path) does not exist.")
@@ -48,6 +67,47 @@ struct AlasCLICommandRouter {
             activateApp()
         }
         return errors.isEmpty ? .ok : .error(errors.joined(separator: " "))
+    }
+
+    private func handleWorktree(_ command: AlasCLIRequest.WorktreeCommand, origin: Worktree) async -> AlasCLIResponse {
+        let projectWorktrees = visibleWorktrees().filter { $0.projectId == origin.projectId }
+        switch command {
+        case .list:
+            return .text(AlasCLIWorktreeResolver.rows(worktrees: projectWorktrees, currentWorktreeId: origin.id))
+        case .switch(let target):
+            switch AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
+            case .matched(let worktree):
+                focusWorktree(worktree)
+                activateApp()
+                return .ok
+            case .missing(let target):
+                return .error("unknown worktree \"\(target)\"")
+            case .ambiguous(let labels):
+                return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
+            }
+        case .new(let branch, let base):
+            return await createWorktree(origin, branch, base)
+        case .delete(let target, let force, let keepBranch):
+            switch AlasCLIWorktreeResolver.resolve(target: target, worktrees: projectWorktrees) {
+            case .matched(let worktree):
+                return await deleteWorktree(worktree, force, keepBranch)
+            case .missing(let target):
+                return .error("unknown worktree \"\(target)\"")
+            case .ambiguous(let labels):
+                return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
+            }
+        }
+    }
+
+    private func handleReview(_ command: AlasCLIRequest.ReviewCommand, origin: Worktree) async -> AlasCLIResponse {
+        switch command {
+        case .localChanges:
+            openReviewChanges(origin)
+            activateApp()
+            return .ok
+        case .provider(let target):
+            return await openProviderReview(origin, target)
+        }
     }
 
     private func containingWorktree(for url: URL) -> (worktree: Worktree, relativePath: String)? {

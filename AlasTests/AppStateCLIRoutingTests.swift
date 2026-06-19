@@ -38,7 +38,7 @@ struct AppStateCLIRoutingTests {
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { sessionId in
             sessionId == "s1" ? worktree.id : nil
         })
-        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [file.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [file.path])))
 
         #expect(response == .ok)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
@@ -436,7 +436,7 @@ struct AppStateCLIRoutingTests {
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { sessionId in
             sessionId == "s1" ? worktree.id : nil
         })
-        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [externalFile.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [externalFile.path])))
 
         #expect(response == .ok)
         #expect(state.selectedWorktreeId == worktree.id)

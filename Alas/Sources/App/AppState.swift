@@ -1407,19 +1407,8 @@ final class AppState {
             )
         }
         harness.socketServer.onCLIRequest = { [weak self] request in
-            await MainActor.run {
-                guard let self else { return .error("Alas is not available.") }
-                let router = self.makeCLICommandRouter { [weak self] sessionId in
-                    if let s = self?.terminal.registry.session(for: sessionId) {
-                        return s.worktreeId
-                    }
-                    // Fall back to persisted-tab scan so `alas open` etc.
-                    // still resolve a worktree for zmx-persisted leaves
-                    // whose `TerminalSession` hasn't been restored yet.
-                    return self?.persistedLeafLocation(leafId: sessionId)?.worktreeId
-                }
-                return router.handle(request)
-            }
+            guard let self else { return .error("Alas is not available.") }
+            return await self.handleCLIRequest(request)
         }
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
@@ -1434,6 +1423,20 @@ final class AppState {
         // to call here: it reads live managers lazily, so no session state is
         // required at this point.
         syncRemoteServer()
+    }
+
+    @MainActor
+    private func handleCLIRequest(_ request: AlasCLIRequest) async -> AlasCLIResponse {
+        let router = makeCLICommandRouter { [weak self] sessionId in
+            if let s = self?.terminal.registry.session(for: sessionId) {
+                return s.worktreeId
+            }
+            // Fall back to persisted-tab scan so `alas open` etc.
+            // still resolve a worktree for zmx-persisted leaves
+            // whose `TerminalSession` hasn't been restored yet.
+            return self?.persistedLeafLocation(leafId: sessionId)?.worktreeId
+        }
+        return await router.handle(request)
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -1506,6 +1509,12 @@ final class AppState {
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
+            },
+            focusWorktree: { [weak self] worktree in
+                self?.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+            },
+            openReviewChanges: { [weak self] worktree in
+                _ = self?.openReviewChangesTab(for: worktree)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
