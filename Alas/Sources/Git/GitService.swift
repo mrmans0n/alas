@@ -214,6 +214,16 @@ extension GitService {
         return DiffReviewFileContextSnapshot(old: old, new: new)
     }
 
+    /// Resolves the left tree for a two-dot range base. The base is constructed
+    /// as "<sha>^"; for a root commit that parent does not exist, so fall back to
+    /// the canonical empty tree (matching diff(worktreePath:sha:file:)).
+    private func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
+        let result = try await Process.git(["rev-parse", "--verify", "--quiet", base], cwd: worktreePath)
+        let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.exitCode == 0, !resolved.isEmpty { return resolved }
+        return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+    }
+
     private func mergeBase(worktreePath: URL, baseRef: String, headRef: String) async throws -> String {
         let result = try await Process.git(["merge-base", baseRef, headRef], cwd: worktreePath)
         let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -361,7 +371,7 @@ extension GitService {
     func rangeDiff(worktreePath: URL, base: String, head: String, threeDot: Bool, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
         let leftTree = threeDot
             ? try await mergeBase(worktreePath: worktreePath, baseRef: base, headRef: head)
-            : base
+            : try await resolveTwoDotLeftTree(worktreePath: worktreePath, base: base)
         var args: [String] = ["-c", "core.quotePath=false",
                               "diff", "--no-color", "-M", "-C", leftTree, head, "--", file]
         if let originalPath { args.append(originalPath) }
@@ -877,7 +887,7 @@ extension GitService {
     func rangeChangedFiles(at worktree: URL, base: String, head: String, threeDot: Bool) async throws -> [CommitChangedFile] {
         let leftTree = threeDot
             ? try await mergeBase(worktreePath: worktree, baseRef: base, headRef: head)
-            : base
+            : try await resolveTwoDotLeftTree(worktreePath: worktree, base: base)
         return try await changedFiles(worktree: worktree, leftTree: leftTree, rightTree: head)
     }
 
@@ -1300,6 +1310,16 @@ extension GitService {
         )
         guard result.exitCode == 0 else {
             throw ProcessError.nonZeroExit(result.exitCode, result.stderr)
+        }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Returns the full SHA of the current HEAD commit for the given worktree.
+    func headSHA(at worktree: URL) async throws -> String {
+        let result = try await Process.git(["rev-parse", "HEAD"], cwd: worktree)
+        guard result.exitCode == 0 else {
+            throw NSError(domain: "GitService.headSHA", code: Int(result.exitCode),
+                          userInfo: [NSLocalizedDescriptionKey: result.stderr])
         }
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }

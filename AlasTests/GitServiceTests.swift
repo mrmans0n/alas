@@ -719,4 +719,77 @@ struct GitServiceTests {
 
         #expect(Set(files.map(\.path)) == ["a.txt", "new.txt"])
     }
+
+    // MARK: - Root-commit range tests (Fix 1)
+
+    @Test func rangeChangedFilesHandlesRootCommitParentBase() async throws {
+        // Repo with a SINGLE root commit. base = "<rootSHA>^" (no parent).
+        // rangeChangedFiles must not throw and must treat the missing parent
+        // as the canonical empty tree, so all files in the root commit appear.
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-root-range-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await gitOK(["init", "-q", "-b", "main"], cwd: repo)
+        try await gitOK(["config", "user.email", "t@example.com"], cwd: repo)
+        try await gitOK(["config", "user.name", "Test User"], cwd: repo)
+        try writeText("hello\n", "hello.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "root"], cwd: repo)
+        let rootSHA = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let files = try await GitService().rangeChangedFiles(
+            at: repo,
+            base: "\(rootSHA)^",
+            head: rootSHA,
+            threeDot: false
+        )
+
+        #expect(files.map(\.path).contains("hello.txt"))
+    }
+
+    @Test func rangeDiffHandlesRootCommitParentBase() async throws {
+        // Same single-commit repo; rangeDiff must return non-empty hunks
+        // for the file introduced in the root commit.
+        let repo = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-root-rdiff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try await gitOK(["init", "-q", "-b", "main"], cwd: repo)
+        try await gitOK(["config", "user.email", "t@example.com"], cwd: repo)
+        try await gitOK(["config", "user.name", "Test User"], cwd: repo)
+        try writeText("world\n", "world.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "root"], cwd: repo)
+        let rootSHA = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let diff = try await GitService().rangeDiff(
+            worktreePath: repo,
+            base: "\(rootSHA)^",
+            head: rootSHA,
+            threeDot: false,
+            file: "world.txt",
+            originalPath: nil
+        )
+
+        #expect(!diff.hunks.isEmpty)
+    }
+
+    // MARK: - headSHA test (Fix 2)
+
+    @Test func headSHAReturnsCurrentHEAD() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let gitSHA = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let svcSHA = try await GitService().headSHA(at: repo)
+
+        #expect(svcSHA == gitSHA)
+        #expect(svcSHA.count == 40)
+    }
 }
