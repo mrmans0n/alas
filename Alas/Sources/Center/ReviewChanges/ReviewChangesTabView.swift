@@ -94,7 +94,6 @@ struct ReviewChangesTabView: View {
     @State private var showWhitespace = false
     @State private var showScopePicker = false
     @State private var scopeBranches: [String] = []
-    @State private var scopeHeadSHA: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -116,26 +115,34 @@ struct ReviewChangesTabView: View {
                 branches: scopeBranches,
                 onSelect: { choice in
                     showScopePicker = false
-                    openReviewSession(
-                        target: ReviewScopeSelection.target(
-                            for: choice,
-                            worktreeID: worktree.id,
-                            repositoryPath: worktree.path,
-                            headSHA: scopeHeadSHA
+                    // Resolve HEAD at selection time so a branch target always
+                    // reflects the current revision (the worktree may have moved
+                    // since the picker opened).
+                    Task { @MainActor in
+                        let headSHA: String?
+                        if case .branch = choice {
+                            headSHA = try? await GitService().headSHA(at: worktree.path)
+                        } else {
+                            headSHA = nil
+                        }
+                        openReviewSession(
+                            target: ReviewScopeSelection.target(
+                                for: choice,
+                                worktreeID: worktree.id,
+                                repositoryPath: worktree.path,
+                                headSHA: headSHA
+                            )
                         )
-                    )
+                    }
                 },
                 onCancel: { showScopePicker = false }
             )
         }
         .task(id: showScopePicker) {
+            // Refetch every time the picker opens so the branch list reflects
+            // branches created/checked out since the last open.
             guard showScopePicker else { return }
-            if scopeBranches.isEmpty {
-                scopeBranches = (try? await GitService().branches(at: worktree.path)) ?? []
-            }
-            if scopeHeadSHA == nil {
-                scopeHeadSHA = try? await GitService().headSHA(at: worktree.path)
-            }
+            scopeBranches = (try? await GitService().branches(at: worktree.path)) ?? []
         }
     }
 
