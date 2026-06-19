@@ -959,6 +959,52 @@ final class AppState {
         return optimistic.id
     }
 
+    @MainActor
+    func cliCreateWorktree(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {
+        guard let project = projects.first(where: { $0.id == origin.projectId }) else {
+            return .error("The current worktree's project is no longer available.")
+        }
+        switch GitNameValidator.validateBranchName(branch) {
+        case .valid:
+            break
+        case .invalid(let message):
+            return .error("invalid branch name: \(message)")
+        }
+
+        let destination = WorktreePathTemplateRenderer.render(
+            template: config.worktrees.pathTemplate,
+            worktreeRoot: config.worktrees.rootPath,
+            repoName: project.name,
+            branch: branch
+        )
+        if FileManager.default.fileExists(atPath: destination.path) {
+            return .error("A worktree already exists at this path.")
+        }
+        let resolvedBase: String
+        if let base {
+            resolvedBase = base
+        } else {
+            let availableBranches = (try? await GitService().branches(at: URL(fileURLWithPath: project.path))) ?? []
+            resolvedBase = NewWorktreeDialog.preferredBaseBranch(
+                availableBranches: availableBranches,
+                configuredDefault: config.worktrees.baseBranch
+            )
+        }
+
+        let id = createWorktree(
+            projectId: project.id,
+            base: resolvedBase,
+            branch: branch,
+            destination: destination,
+            runStartup: true,
+            launchSurface: .none
+        )
+        guard !id.isEmpty else {
+            return .error("A worktree already exists at this path.")
+        }
+        return .text(["creating \(branch) at \(destination.path)"])
+    }
+
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
         var argv = [agent.resolvedBinary]
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
@@ -1407,19 +1453,8 @@ final class AppState {
             )
         }
         harness.socketServer.onCLIRequest = { [weak self] request in
-            await MainActor.run {
-                guard let self else { return .error("Alas is not available.") }
-                let router = self.makeCLICommandRouter { [weak self] sessionId in
-                    if let s = self?.terminal.registry.session(for: sessionId) {
-                        return s.worktreeId
-                    }
-                    // Fall back to persisted-tab scan so `alas open` etc.
-                    // still resolve a worktree for zmx-persisted leaves
-                    // whose `TerminalSession` hasn't been restored yet.
-                    return self?.persistedLeafLocation(leafId: sessionId)?.worktreeId
-                }
-                return router.handle(request)
-            }
+            guard let self else { return .error("Alas is not available.") }
+            return await self.handleCLIRequest(request)
         }
         harness.onClickThrough = { [weak self] projectId, worktreeId, sessionId in
             self?.activateHarnessSession(
@@ -1434,6 +1469,20 @@ final class AppState {
         // to call here: it reads live managers lazily, so no session state is
         // required at this point.
         syncRemoteServer()
+    }
+
+    @MainActor
+    private func handleCLIRequest(_ request: AlasCLIRequest) async -> AlasCLIResponse {
+        let router = makeCLICommandRouter { [weak self] sessionId in
+            if let s = self?.terminal.registry.session(for: sessionId) {
+                return s.worktreeId
+            }
+            // Fall back to persisted-tab scan so `alas open` etc.
+            // still resolve a worktree for zmx-persisted leaves
+            // whose `TerminalSession` hasn't been restored yet.
+            return self?.persistedLeafLocation(leafId: sessionId)?.worktreeId
+        }
+        return await router.handle(request)
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -1506,6 +1555,26 @@ final class AppState {
                    let worktree = self.worktree(withId: worktreeId) {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
+            },
+            focusWorktree: { [weak self] worktree in
+                self?.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+            },
+            createWorktree: { [weak self] origin, branch, base in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliCreateWorktree(origin: origin, branch: branch, base: base)
+            },
+            deleteWorktree: { [weak self] worktree, force, keepBranch in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliDeleteWorktree(worktree, force: force, keepBranch: keepBranch)
+            },
+            openReviewChanges: { [weak self] worktree in
+                guard let self else { return }
+                self.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+                _ = self.openReviewChangesTab(for: worktree)
+            },
+            openProviderReview: { [weak self] worktree, target in
+                guard let self else { return .error("Alas is not available.") }
+                return await self.cliOpenProviderReview(worktree: worktree, target: target)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
@@ -2788,6 +2857,148 @@ final class AppState {
                 removedIndex: removedIndex
             )
         }
+    }
+
+    @MainActor
+    func cliDeleteWorktree(_ worktree: Worktree, force: Bool, keepBranch: Bool) async -> AlasCLIResponse {
+        if pendingForceDeleteWorktree?.id == worktree.id {
+            pendingForceDeleteWorktree = nil
+        }
+        if projectsManager.operationState(for: worktree.id) == .deleting {
+            return .ok
+        }
+        let dirty = dirtyEditorTabIds(worktreeId: worktree.id)
+        if !dirty.isEmpty && !force {
+            return .error("worktree has unsaved editor changes; save them or rerun with --force to delete")
+        }
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            return .error("Could not find the project for this worktree.")
+        }
+        if !force {
+            let preflight = await Self.performDeletePreflight(worktreePath: worktree.path)
+            if preflight.requiresForce {
+                if preflight.reasons.contains(.dirty) {
+                    return .error("worktree has local changes; rerun with --force to delete")
+                }
+                if preflight.reasons.contains(.containsInitializedSubmodules) {
+                    return .error("worktree contains initialized submodules; rerun with --force to delete")
+                }
+                return .error("worktree requires force delete; rerun with --force to delete")
+            }
+        }
+
+        let repoPath = URL(fileURLWithPath: project.path)
+        let deleteBranch = Self.resolveDeleteBranchIfMerged(
+            globalDeleteOnRemove: config.worktrees.deleteBranchOnRemove,
+            keepBranch: keepBranch
+        )
+        let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
+        let removedIndex = siblingsBefore.firstIndex(where: { $0.id == worktree.id }) ?? 0
+        projectsManager.setOperationState(id: worktree.id, state: .deleting)
+        Task { @MainActor in
+            await performDeleteWorktree(
+                worktree: worktree,
+                repoPath: repoPath,
+                deleteBranchIfMerged: deleteBranch,
+                force: force,
+                removedIndex: removedIndex
+            )
+            if pendingForceDeleteWorktree?.id == worktree.id {
+                pendingForceDeleteWorktree = nil
+                projectsManager.setOperationState(
+                    id: worktree.id,
+                    state: .deleteFailed(message: "worktree requires force delete; rerun with --force to delete")
+                )
+            }
+        }
+        return .ok
+    }
+
+    @MainActor
+    func cliOpenProviderReview(worktree: Worktree, target: String) async -> AlasCLIResponse {
+        guard let parsed = AlasCLIReviewTargetResolver.parse(target) else {
+            return .error("unsupported review URL")
+        }
+
+        do {
+            let providerRegistry = CodeHostProviderRegistry.live()
+            let remotes = try await GitService().remotes(worktreePath: worktree.path)
+            let baseBranch = rightPaneStore.state(
+                for: worktree,
+                baseBranch: config.worktrees.baseBranch,
+                trackUpstreamForCommits: config.changes.trackUpstreamForCommits
+            ).baseBranch
+            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+                forBaseBranch: baseBranch,
+                remotes: remotes
+            )
+            let supportedRemotes = CodeHostRemoteDetector.detectAll(
+                from: remotes,
+                supportedKinds: providerRegistry.supportedKinds,
+                preferredRemoteName: preferredRemoteName
+            )
+            guard !supportedRemotes.isEmpty else {
+                return .error("no code host remote found for this worktree")
+            }
+
+            let remote: CodeHostRemote
+            let number: Int
+            switch parsed {
+            case .number(let value):
+                remote = supportedRemotes[0]
+                number = value
+            case .url(let host, let repositorySlug, let value):
+                guard let matchingRemote = supportedRemotes.first(where: {
+                    $0.host == host && $0.repositorySlug.lowercased() == repositorySlug.lowercased()
+                }) else {
+                    return .error("review URL does not match this worktree's remote")
+                }
+                remote = matchingRemote
+                number = value
+            }
+
+            guard let provider = providerRegistry.provider(for: remote.kind) else {
+                return .error("\(remote.kind.displayName) is not supported yet.")
+            }
+            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+            let reviewTarget = ReviewSessionTarget.reviewRequest(
+                worktreeID: worktree.id,
+                repositoryPath: worktree.path,
+                provider: request.provider,
+                host: request.remote.host,
+                repositorySlug: request.remote.repositorySlug,
+                number: request.number,
+                url: request.url,
+                title: request.title,
+                headSHA: request.headSHA
+            )
+            let store = ReviewSessionStore()
+            let opened = ReviewSessionLauncher.openOrFocus(
+                target: reviewTarget,
+                findActive: { try store.findActive(targetID: $0) },
+                save: { try store.save($0) },
+                open: { [weak self] record in
+                    _ = self?.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+                }
+            )
+            guard opened else {
+                return .error("could not open review session")
+            }
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+            NSApp.activate(ignoringOtherApps: true)
+            return .ok
+        } catch {
+            return .error(Self.describeCLIError(error))
+        }
+    }
+
+    nonisolated private static func describeCLIError(_ error: any Error) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return String(describing: error)
     }
 
     /// Runs the git removal off the main actor, then resumes on MainActor

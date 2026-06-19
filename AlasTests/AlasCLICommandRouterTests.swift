@@ -13,7 +13,7 @@ struct AlasCLICommandRouterTests {
         return url
     }
 
-    @Test func opensInWorktreeFileByRelativePath() throws {
+    @Test func opensInWorktreeFileByRelativePath() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
@@ -30,7 +30,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("a.txt").path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("a.txt").path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -38,7 +38,7 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "a.txt")
     }
 
-    @Test func opensNestedWorktreeFileInMostSpecificVisibleWorktree() throws {
+    @Test func opensNestedWorktreeFileInMostSpecificVisibleWorktree() async throws {
         let root = try makeFile("repo/packages/tool/file.txt")
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -63,7 +63,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [nestedRoot.appendingPathComponent("file.txt").path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [nestedRoot.appendingPathComponent("file.txt").path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -71,7 +71,7 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "file.txt")
     }
 
-    @Test func opensSymlinkedLogicalWorktreePathByRelativePath() throws {
+    @Test func opensSymlinkedLogicalWorktreePathByRelativePath() async throws {
         let realRoot = try makeFile("repo/Sources/App.swift")
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -93,7 +93,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [logicalFile.path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [logicalFile.path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -101,7 +101,7 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "Sources/App.swift")
     }
 
-    @Test func opensCaseVariantWorktreePathByRelativePathOnCaseInsensitiveVolumes() throws {
+    @Test func opensCaseVariantWorktreePathByRelativePathOnCaseInsensitiveVolumes() async throws {
         let realRoot = try makeFile("repo/Sources/App.swift")
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -125,7 +125,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [caseVariantFile.path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [caseVariantFile.path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -133,7 +133,7 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "Sources/App.swift")
     }
 
-    @Test func opensExternalFileOwnedByOriginatingWorktree() throws {
+    @Test func opensExternalFileOwnedByOriginatingWorktree() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let external = try makeFile("external/note.txt")
         let worktree = Worktree(
@@ -151,7 +151,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [external.path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [external.path])))
 
         #expect(response == .ok)
         #expect(externalOpens.count == 1)
@@ -159,7 +159,7 @@ struct AlasCLICommandRouterTests {
         #expect(externalOpens[0].url.standardizedFileURL.path == external.standardizedFileURL.path)
     }
 
-    @Test func rejectsUnsafePrefixMatch() throws {
+    @Test func rejectsUnsafePrefixMatch() async throws {
         let repo = try makeFile("repo/a.txt").deletingLastPathComponent()
         let sibling = repo.deletingLastPathComponent().appendingPathComponent(repo.lastPathComponent + "-copy")
         try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
@@ -180,13 +180,13 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [siblingFile.path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [siblingFile.path])))
 
         #expect(response == .ok)
         #expect(externalCount == 1)
     }
 
-    @Test func rejectsMissingFilesAndDirectories() throws {
+    @Test func rejectsMissingFilesAndDirectories() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
@@ -201,8 +201,8 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let missing = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("missing.txt").path]))
-        let directory = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.path]))
+        let missing = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("missing.txt").path])))
+        let directory = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.path])))
 
         guard case .error(let missingMessage) = missing else {
             Issue.record("expected missing file error")
@@ -216,7 +216,7 @@ struct AlasCLICommandRouterTests {
         #expect(directoryMessage.contains("is a directory"))
     }
 
-    @Test func returnsCombinedErrorForMissingFilesAndDirectoriesInOneRequest() throws {
+    @Test func returnsCombinedErrorForMissingFilesAndDirectoriesInOneRequest() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
@@ -233,7 +233,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { Issue.record("expected no activation") }
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [missingPath, root.path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [missingPath, root.path])))
 
         guard case .error(let message) = response else {
             Issue.record("expected combined error")
@@ -243,7 +243,7 @@ struct AlasCLICommandRouterTests {
         #expect(message.contains("\(root.path) is a directory."))
     }
 
-    @Test func activatesAfterSuccessfulOpen() throws {
+    @Test func activatesAfterSuccessfulOpen() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
@@ -260,13 +260,13 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("a.txt").path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("a.txt").path])))
 
         #expect(response == .ok)
         #expect(activationCount == 1)
     }
 
-    @Test func doesNotActivateWhenAllPathsFail() throws {
+    @Test func doesNotActivateWhenAllPathsFail() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(
             id: "wt1", projectId: "p1", name: "main", branch: "main",
@@ -283,12 +283,12 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        _ = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("missing.txt").path, root.path]))
+        _ = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("missing.txt").path, root.path])))
 
         #expect(activationCount == 0)
     }
 
-    @Test func activatesOnceForMultiFileRequest() throws {
+    @Test func activatesOnceForMultiFileRequest() async throws {
         let first = try makeFile("repo/a.txt")
         let root = first.deletingLastPathComponent()
         let second = root.appendingPathComponent("b.txt")
@@ -308,9 +308,168 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [first.path, second.path]))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [first.path, second.path])))
 
         #expect(response == .ok)
         #expect(activationCount == 1)
+    }
+
+    @Test func listsCurrentProjectWorktrees() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let other = Self.worktree(branch: "feature/review", path: "/tmp/review", projectId: "p1")
+        let differentProject = Self.worktree(branch: "main", path: "/tmp/other", projectId: "p2")
+        let router = Self.router(origin: current, visibleWorktrees: [current, other, differentProject])
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.list)))
+
+        #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)))
+    }
+
+    @Test func switchesMatchedWorktree() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let target = Self.worktree(branch: "feature/review", path: "/tmp/review", projectId: "p1")
+        var focused: (id: String, projectId: String)?
+        var activationCount = 0
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current, target],
+            focusWorktree: { focused = ($0.id, $0.projectId) },
+            activateApp: { activationCount += 1 }
+        )
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.switch(target: "feature"))))
+
+        #expect(response == .ok)
+        #expect(focused?.id == target.id)
+        #expect(focused?.projectId == "p1")
+        #expect(activationCount == 1)
+    }
+
+    @Test func returnsWorktreeResolutionErrors() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let first = Self.worktree(branch: "feature/a", path: "/tmp/a", projectId: "p1")
+        let second = Self.worktree(branch: "feature/b", path: "/tmp/b", projectId: "p1")
+        let router = Self.router(origin: current, visibleWorktrees: [current, first, second])
+
+        let missing = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.switch(target: "missing"))))
+        let ambiguous = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "feature", force: false, keepBranch: false))))
+
+        #expect(missing == .error("unknown worktree \"missing\""))
+        #expect(ambiguous == .error("ambiguous worktree \"feature\"; matches: feature/a, feature/b"))
+    }
+
+    @Test func createsNewWorktreeFromOrigin() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        var created: (origin: Worktree, branch: String, base: String?)?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current],
+            createWorktree: { origin, branch, base in
+                created = (origin, branch, base)
+                return .text(["created"])
+            }
+        )
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "feature/cli", base: "main"))))
+
+        #expect(response == .text(["created"]))
+        #expect(created?.origin == current)
+        #expect(created?.branch == "feature/cli")
+        #expect(created?.base == "main")
+    }
+
+    @Test func deletesMatchedWorktree() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        let target = Self.worktree(branch: "feature/review", path: "/tmp/review", projectId: "p1")
+        var deleted: (worktree: Worktree, force: Bool, keepBranch: Bool)?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current, target],
+            deleteWorktree: { worktree, force, keepBranch in
+                deleted = (worktree, force, keepBranch)
+                return .ok
+            }
+        )
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "feature", force: true, keepBranch: true))))
+
+        #expect(response == .ok)
+        #expect(deleted?.worktree == target)
+        #expect(deleted?.force == true)
+        #expect(deleted?.keepBranch == true)
+    }
+
+    @Test func opensLocalReviewChanges() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        var opened: String?
+        var activationCount = 0
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current],
+            openReviewChanges: { opened = $0.id },
+            activateApp: { activationCount += 1 }
+        )
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.localChanges)))
+
+        #expect(response == .ok)
+        #expect(opened == current.id)
+        #expect(activationCount == 1)
+    }
+
+    @Test func opensProviderReviewFromOrigin() async throws {
+        let current = Self.worktree(branch: "main", path: "/tmp/repo", projectId: "p1")
+        var opened: (origin: Worktree, target: String)?
+        let router = Self.router(
+            origin: current,
+            visibleWorktrees: [current],
+            openProviderReview: { origin, target in
+                opened = (origin, target)
+                return .ok
+            }
+        )
+
+        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.provider(target: "123"))))
+
+        #expect(response == .ok)
+        #expect(opened?.origin == current)
+        #expect(opened?.target == "123")
+    }
+
+    private static func router(
+        origin: Worktree,
+        visibleWorktrees: [Worktree],
+        focusWorktree: @escaping (Worktree) -> Void = { _ in },
+        createWorktree: @escaping (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in .ok },
+        deleteWorktree: @escaping (Worktree, Bool, Bool) async -> AlasCLIResponse = { _, _, _ in .ok },
+        openReviewChanges: @escaping (Worktree) -> Void = { _ in },
+        openProviderReview: @escaping (Worktree, String) async -> AlasCLIResponse = { _, _ in .ok },
+        activateApp: @escaping () -> Void = {}
+    ) -> AlasCLICommandRouter {
+        AlasCLICommandRouter(
+            sessionWorktreeId: { $0 == "s1" ? origin.id : nil },
+            originatingWorktree: { $0 == origin.id ? origin : nil },
+            visibleWorktrees: { visibleWorktrees },
+            openRelativeFile: { _, _ in Issue.record("expected no relative file open") },
+            openExternalFile: { _, _ in Issue.record("expected no external file open") },
+            focusWorktree: focusWorktree,
+            createWorktree: createWorktree,
+            deleteWorktree: deleteWorktree,
+            openReviewChanges: openReviewChanges,
+            openProviderReview: openProviderReview,
+            activateApp: activateApp
+        )
+    }
+
+    private static func worktree(branch: String, path: String, projectId: String) -> Worktree {
+        Worktree(
+            id: Worktree.makeId(path: URL(fileURLWithPath: path)),
+            projectId: projectId,
+            name: branch,
+            branch: branch,
+            path: URL(fileURLWithPath: path),
+            status: .clean,
+            lastActivity: Date()
+        )
     }
 }

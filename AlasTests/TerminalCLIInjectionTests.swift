@@ -10,9 +10,21 @@ struct TerminalCLIInjectionTests {
         #expect(script.contains("ALAS_SOCKET_PATH"))
         #expect(script.contains("ALAS_SESSION_ID"))
         #expect(script.contains(#""kind": "cli""#))
-        #expect(script.contains(#""command": "open""#))
+        #expect(script.contains(#""command": command"#))
         #expect(script.contains("os.path.abspath"))
-        #expect(script.contains("/usr/bin/nc -U -w1"))
+        #expect(script.contains(#"/usr/bin/nc -U -w "$timeout""#))
+    }
+
+    @Test func executableScriptSendsWorktreeAndReviewRequests() {
+        let script = TerminalCLIInjection.executableScript()
+
+        #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "list""#))
+        #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "switch" "$1""#))
+        #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "new" "$branch" "$base""#))
+        #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "delete" "$target" "$force" "$keep_branch""#))
+        #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "review""#))
+        #expect(script.components(separatedBy: #"send_request "$request" 30"#).count == 4)
+        #expect(script.contains(#""keep_branch""#))
     }
 
     @Test func aoExecutableScriptExecsAlasOpen() {
@@ -67,14 +79,64 @@ struct TerminalCLIInjectionTests {
     }
 
     @Test func bashExecutableSendsOpenRequestFromLogicalPWD() async throws {
-        try await assertExecutableSendsOpenRequestFromLogicalPWD(shell: "/bin/bash")
+        try await assertExecutableRequest(
+            shell: "/bin/bash",
+            commandLine: #"cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#
+        ) { request in
+            if case .open(let paths) = request.command {
+                #expect(paths.count == 1)
+                #expect(paths.first?.hasSuffix("/logical/dir with spaces/file.txt") == true)
+            } else {
+                Issue.record("expected open command")
+            }
+        }
     }
 
     @Test func zshExecutableSendsOpenRequestFromLogicalPWD() async throws {
-        try await assertExecutableSendsOpenRequestFromLogicalPWD(shell: "/bin/zsh")
+        try await assertExecutableRequest(
+            shell: "/bin/zsh",
+            commandLine: #"cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#
+        ) { request in
+            if case .open(let paths) = request.command {
+                #expect(paths.count == 1)
+                #expect(paths.first?.hasSuffix("/logical/dir with spaces/file.txt") == true)
+            } else {
+                Issue.record("expected open command")
+            }
+        }
     }
 
-    private func assertExecutableSendsOpenRequestFromLogicalPWD(shell: String) async throws {
+    @Test func bashExecutableSendsWorktreeListRequest() async throws {
+        try await assertExecutableRequest(shell: "/bin/bash", commandLine: "alas wt list") { request in
+            #expect(request.command == .worktree(.list))
+        }
+    }
+
+    @Test func zshExecutableSendsReviewProviderRequest() async throws {
+        try await assertExecutableRequest(shell: "/bin/zsh", commandLine: "alas review 123") { request in
+            #expect(request.command == .review(.provider(target: "123")))
+        }
+    }
+
+    @Test func executablePrintsResponseLines() async throws {
+        try await assertExecutableRequest(
+            shell: "/bin/bash",
+            commandLine: "alas wt list",
+            response: .text(["* main    /tmp/repo", "  feature /tmp/repo-feature"]),
+            expectedStdout: "* main    /tmp/repo\n  feature /tmp/repo-feature\n"
+        ) { request in
+            #expect(request.command == .worktree(.list))
+        }
+    }
+
+    private func assertExecutableRequest(
+        shell: String,
+        commandLine: String,
+        response: AlasCLIResponse = .ok,
+        expectedStdout: String = "",
+        expectedStderr: String = "",
+        verify: @escaping (AlasCLIRequest) -> Void
+    ) async throws {
         let root = "/tmp/alas-cli-injection-\(UUID().uuidString)"
         let realDir = "\(root)/real"
         let logicalDir = "\(root)/logical"
@@ -94,14 +156,15 @@ struct TerminalCLIInjectionTests {
             func current() -> AlasCLIRequest? { request }
         }
         let holder = Holder()
+        let response = response
         server.onCLIRequest = { request in
             await holder.set(request)
-            return .ok
+            return response
         }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-c", #"cd "$ALAS_LOGICAL_DIR"; alas open "dir with spaces/file.txt""#]
+        process.arguments = ["-c", commandLine]
         process.currentDirectoryURL = URL(fileURLWithPath: root, isDirectory: true)
         var env = ProcessInfo.processInfo.environment
         env["PATH"] = "\(binDir.path):\(env["PATH"] ?? "")"
@@ -122,10 +185,13 @@ struct TerminalCLIInjectionTests {
         let request = await holder.current()
 
         #expect(process.terminationStatus == 0)
-        #expect(stdoutText == "")
-        #expect(stderrText == "")
-        #expect(request?.command == .open)
+        #expect(stdoutText == expectedStdout)
+        #expect(stderrText == expectedStderr)
+        if let request {
+            verify(request)
+        } else {
+            Issue.record("expected CLI request")
+        }
         #expect(request?.sessionId == "test-session")
-        #expect(request?.paths == ["\(logicalDir)/dir with spaces/file.txt"])
     }
 }
