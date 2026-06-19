@@ -121,63 +121,6 @@ enum DiffReviewScrollCommandConsumption {
     }
 }
 
-enum DiffReviewRenderWindow {
-    private static let leadingScreens: CGFloat = 1.25
-    private static let trailingScreens: CGFloat = 2.5
-    private static let retentionLeadingScreens: CGFloat = 3.0
-    private static let retentionTrailingScreens: CGFloat = 4.0
-
-    static func renderedFileIDs(
-        current: Set<DiffReviewFileID>,
-        frames: [DiffReviewSectionFrame],
-        viewportHeight: CGFloat,
-        selectedFileID: DiffReviewFileID?,
-        programmaticTarget: DiffReviewFileID?,
-        firstFileID: DiffReviewFileID?
-    ) -> Set<DiffReviewFileID> {
-        var rendered = Set(frames.compactMap { frame -> DiffReviewFileID? in
-            guard isNearViewport(frame, viewportHeight: viewportHeight) else { return nil }
-            return frame.id
-        })
-        rendered.formUnion(frames.compactMap { frame -> DiffReviewFileID? in
-            guard current.contains(frame.id),
-                  isWithinRetentionBand(frame, viewportHeight: viewportHeight)
-            else { return nil }
-            return frame.id
-        })
-
-        if frames.isEmpty || rendered.isEmpty {
-            rendered.formUnion(current)
-        }
-
-        if let selectedFileID {
-            rendered.insert(selectedFileID)
-        }
-        if let programmaticTarget {
-            rendered.insert(programmaticTarget)
-        }
-        if let firstFileID {
-            rendered.insert(firstFileID)
-        }
-
-        return rendered
-    }
-
-    private static func isNearViewport(_ frame: DiffReviewSectionFrame, viewportHeight: CGFloat) -> Bool {
-        let height = max(viewportHeight, 1)
-        let minY = -height * leadingScreens
-        let maxY = height * trailingScreens
-        return frame.maxY >= minY && frame.minY <= maxY
-    }
-
-    private static func isWithinRetentionBand(_ frame: DiffReviewSectionFrame, viewportHeight: CGFloat) -> Bool {
-        let height = max(viewportHeight, 1)
-        let minY = -height * retentionLeadingScreens
-        let maxY = height * retentionTrailingScreens
-        return frame.maxY >= minY && frame.minY <= maxY
-    }
-}
-
 enum DiffReviewFileSectionHeightEstimator {
     private static let fileHeaderHeight: CGFloat = 45
     private static let hunkHeaderHeight: CGFloat = 38

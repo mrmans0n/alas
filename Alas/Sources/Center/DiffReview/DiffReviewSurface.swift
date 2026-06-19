@@ -228,14 +228,32 @@ struct DiffReviewSurface: View {
     private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
-                    ForEach(session.files.filter { renderEligibleIDs.contains($0.id) }) { file in
+                    let renderEligibleFiles = session.files.filter { renderEligibleIDs.contains($0.id) }
+                    ForEach(renderEligibleFiles.indices, id: \.self) { index in
+                        let file = renderEligibleFiles[index]
+                        Color.clear
+                            .frame(height: 1)
+                            .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))
+                            .accessibilityHidden(true)
                         fileSection(file)
-                            .id(file.summary.id.rawValue)
+                            .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: file.summary.id))
+                        if index < renderEligibleFiles.index(before: renderEligibleFiles.endIndex) {
+                            Color.clear
+                                .frame(height: 14)
+                                .accessibilityHidden(true)
+                        }
                     }
                 }
                 .padding(16)
+                .scrollTargetLayout()
+            }
+            .onScrollTargetVisibilityChange(
+                idType: String.self,
+                threshold: DiffReviewSurfaceSelectionSync.visibilityThreshold
+            ) { ids in
+                updateSelectedFileFromVisibility(ids)
             }
             .onChange(of: scrollCommand) { _, command in
                 guard let command else { return }
@@ -368,6 +386,17 @@ struct DiffReviewSurface: View {
         }
     }
 
+    private func updateSelectedFileFromVisibility(_ visibleRawIDs: [String]) {
+        guard let updated = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
+            current: selectedFileID,
+            visibleRawIDs: visibleRawIDs,
+            fileIDs: fileIDs,
+            programmaticScroll: programmaticScroll
+        ) else { return }
+
+        selectedFileID = updated
+    }
+
     private func synchronizeSelectionWithSession() {
         let previousFileSetKey = synchronizedFileSetKey
         let previousSelection = selectedFileID
@@ -449,6 +478,8 @@ struct DiffReviewSurface: View {
 }
 
 enum DiffReviewSurfaceSelectionSync {
+    static let visibilityThreshold: CGFloat = 0
+
     struct Result {
         let selectedFileID: DiffReviewFileID?
         let fileSetKey: String
@@ -457,6 +488,14 @@ enum DiffReviewSurfaceSelectionSync {
 
     static func fileSetKey(for fileIDs: [DiffReviewFileID]) -> String {
         fileIDs.map { "\($0.rawValue.count):\($0.rawValue)" }.joined(separator: "|")
+    }
+
+    static func sectionVisibilityTargetID(for fileID: DiffReviewFileID) -> String {
+        fileID.rawValue
+    }
+
+    static func topVisibilityTargetID(for fileID: DiffReviewFileID) -> String {
+        "\(fileID.rawValue.count):\(fileID.rawValue):top"
     }
 
     static func synchronizedSelection(
@@ -470,6 +509,28 @@ enum DiffReviewSurfaceSelectionSync {
         }
 
         return first
+    }
+
+    static func updatedSelectionFromVisibility(
+        current: DiffReviewFileID?,
+        visibleRawIDs: [String],
+        fileIDs: [DiffReviewFileID],
+        programmaticScroll: DiffReviewProgrammaticScrollController
+    ) -> DiffReviewFileID? {
+        let topTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
+            (topVisibilityTargetID(for: $0), $0)
+        })
+        let sectionTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
+            (sectionVisibilityTargetID(for: $0), $0)
+        })
+        let active = visibleRawIDs.lazy.compactMap { topTargetLookup[$0] }.first
+            ?? visibleRawIDs.lazy.compactMap { sectionTargetLookup[$0] }.first
+        guard let active,
+              active != current,
+              programmaticScroll.acceptsScrollSpyUpdate(for: active)
+        else { return nil }
+
+        return active
     }
 
     static func renderedTargetFileID(
