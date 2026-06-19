@@ -18,6 +18,10 @@ struct GitRemote: Equatable, Sendable {
 }
 
 enum CodeHostRemoteDetector {
+    static func preferredRemoteName(forBaseBranch baseBranch: String, remotes: [GitRemote]) -> String? {
+        remotes.first { baseBranch.hasPrefix("\($0.name)/") }?.name
+    }
+
     static func detect(
         from remotes: [GitRemote],
         supportedKinds: Set<CodeHostKind>? = nil,

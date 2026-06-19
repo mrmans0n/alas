@@ -189,7 +189,7 @@ enum TerminalCLIInjection {
                   esac
                 done
                 request=$(build_request "$ALAS_SESSION_ID" "wt" "new" "$branch" "$base") || exit 1
-                send_request "$request"
+                send_request "$request" 30
                 ;;
               delete)
                 shift
@@ -228,7 +228,7 @@ enum TerminalCLIInjection {
                   esac
                 done
                 request=$(build_request "$ALAS_SESSION_ID" "wt" "delete" "$target" "$force" "$keep_branch") || exit 1
-                send_request "$request"
+                send_request "$request" 30
                 ;;
               *)
                 usage_all

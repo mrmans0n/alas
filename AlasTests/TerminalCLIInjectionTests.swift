@@ -23,7 +23,7 @@ struct TerminalCLIInjectionTests {
         #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "new" "$branch" "$base""#))
         #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "wt" "delete" "$target" "$force" "$keep_branch""#))
         #expect(script.contains(#"build_request "$ALAS_SESSION_ID" "review""#))
-        #expect(script.contains(#"send_request "$request" 30"#))
+        #expect(script.components(separatedBy: #"send_request "$request" 30"#).count == 4)
         #expect(script.contains(#""keep_branch""#))
     }
 

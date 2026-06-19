@@ -109,6 +109,26 @@ struct CodeHostRemoteDetectorTests {
         #expect(remotes.map(\.repositorySlug) == ["nacho/alas", "mrmans0n/alas"])
     }
 
+    @Test func detectAllUsesBaseBranchPreferredRemoteBeforeOrigin() {
+        let gitRemotes = [
+            GitRemote(name: "origin", url: "https://github.com/nacho/alas.git"),
+            GitRemote(name: "upstream", url: "https://github.com/mrmans0n/alas.git"),
+        ]
+        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+            forBaseBranch: "upstream/main",
+            remotes: gitRemotes
+        )
+
+        let remotes = CodeHostRemoteDetector.detectAll(
+            from: gitRemotes,
+            preferredRemoteName: preferredRemoteName
+        )
+
+        #expect(preferredRemoteName == "upstream")
+        #expect(remotes.map(\.remoteName) == ["upstream", "origin"])
+        #expect(remotes.map(\.repositorySlug) == ["mrmans0n/alas", "nacho/alas"])
+    }
+
     @Test func preferredRemoteOverridesOrigin() {
         let remote = CodeHostRemoteDetector.detect(
             from: [

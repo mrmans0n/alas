@@ -2923,9 +2923,19 @@ final class AppState {
         do {
             let providerRegistry = CodeHostProviderRegistry.live()
             let remotes = try await GitService().remotes(worktreePath: worktree.path)
+            let baseBranch = rightPaneStore.state(
+                for: worktree,
+                baseBranch: config.worktrees.baseBranch,
+                trackUpstreamForCommits: config.changes.trackUpstreamForCommits
+            ).baseBranch
+            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+                forBaseBranch: baseBranch,
+                remotes: remotes
+            )
             let supportedRemotes = CodeHostRemoteDetector.detectAll(
                 from: remotes,
-                supportedKinds: providerRegistry.supportedKinds
+                supportedKinds: providerRegistry.supportedKinds,
+                preferredRemoteName: preferredRemoteName
             )
             guard !supportedRemotes.isEmpty else {
                 return .error("no code host remote found for this worktree")
