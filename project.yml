@@ -2,14 +2,14 @@ name: Alas
 options:
   bundleIdPrefix: io.nlopez
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "15.0"
   developmentLanguage: en
   createIntermediateGroups: true
 
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
     SWIFT_STRICT_CONCURRENCY: complete
     ENABLE_APPINTENTS_METADATA_EXTRACTION: NO
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -133,7 +133,7 @@ targets:
         CFBundleDevelopmentRegion: en
         CFBundleShortVersionString: "0.8.5"
         CFBundleVersion: "1"
-        LSMinimumSystemVersion: "14.0"
+        LSMinimumSystemVersion: "15.0"
         NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.developer-tools
