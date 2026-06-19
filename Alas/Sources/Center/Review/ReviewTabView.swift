@@ -5,6 +5,10 @@ enum ReviewTabLoadingPresentation {
     static func showsBlockingLoader(isLoading: Bool, hasSession: Bool) -> Bool {
         isLoading && !hasSession
     }
+
+    static func showsLoadError(loadError: String?, isLoading: Bool, hasSession: Bool) -> Bool {
+        loadError != nil && !showsBlockingLoader(isLoading: isLoading, hasSession: hasSession)
+    }
 }
 
 enum ReviewTabPendingReviewPresentation {
@@ -143,14 +147,15 @@ struct ReviewTabView: View {
     private var content: some View {
         if ReviewTabLoadingPresentation.showsBlockingLoader(isLoading: isLoading, hasSession: session != nil) {
             stateView(title: "Loading changes...", detail: nil, color: theme.color("fg-dim"))
+        } else if ReviewTabLoadingPresentation.showsLoadError(loadError: loadError, isLoading: isLoading, hasSession: session != nil),
+                  let loadError {
+            stateView(title: "Could not load review changes", detail: loadError, color: theme.color("del"))
         } else if let session, session.files.isEmpty {
             stateView(title: "No changes to review", detail: "This worktree has no staged or unstaged file diffs.", color: theme.color("fg-dim"))
         } else if let session {
             loadedReviewContent {
                 reviewSurface(session)
             }
-        } else if let loadError {
-            stateView(title: "Could not load review changes", detail: loadError, color: theme.color("del"))
         } else {
             stateView(title: "No changes loaded", detail: nil, color: theme.color("fg-dim"))
         }
