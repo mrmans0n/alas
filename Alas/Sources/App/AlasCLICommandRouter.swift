@@ -15,7 +15,7 @@ struct AlasCLICommandRouter {
     var activateApp: () -> Void
 
     func handle(_ request: AlasCLIRequest) -> AlasCLIResponse {
-        guard request.command == .open else {
+        guard case .open = request.command else {
             return .error("Unsupported command.")
         }
         guard let originWorktreeId = sessionWorktreeId(request.sessionId),

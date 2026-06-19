@@ -124,7 +124,10 @@ struct TerminalCLIInjectionTests {
         #expect(process.terminationStatus == 0)
         #expect(stdoutText == "")
         #expect(stderrText == "")
-        #expect(request?.command == .open)
+        if case .open = request?.command {
+        } else {
+            Issue.record("expected open command")
+        }
         #expect(request?.sessionId == "test-session")
         #expect(request?.paths == ["\(logicalDir)/dir with spaces/file.txt"])
     }

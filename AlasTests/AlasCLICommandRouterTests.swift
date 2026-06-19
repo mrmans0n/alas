@@ -30,7 +30,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("a.txt").path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("a.txt").path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -63,7 +63,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [nestedRoot.appendingPathComponent("file.txt").path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [nestedRoot.appendingPathComponent("file.txt").path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -93,7 +93,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [logicalFile.path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [logicalFile.path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -125,7 +125,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [caseVariantFile.path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [caseVariantFile.path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -151,7 +151,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [external.path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [external.path])))
 
         #expect(response == .ok)
         #expect(externalOpens.count == 1)
@@ -180,7 +180,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [siblingFile.path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [siblingFile.path])))
 
         #expect(response == .ok)
         #expect(externalCount == 1)
@@ -201,8 +201,8 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let missing = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("missing.txt").path]))
-        let directory = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.path]))
+        let missing = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("missing.txt").path])))
+        let directory = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.path])))
 
         guard case .error(let missingMessage) = missing else {
             Issue.record("expected missing file error")
@@ -233,7 +233,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { Issue.record("expected no activation") }
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [missingPath, root.path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [missingPath, root.path])))
 
         guard case .error(let message) = response else {
             Issue.record("expected combined error")
@@ -260,7 +260,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("a.txt").path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("a.txt").path])))
 
         #expect(response == .ok)
         #expect(activationCount == 1)
@@ -283,7 +283,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        _ = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [root.appendingPathComponent("missing.txt").path, root.path]))
+        _ = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("missing.txt").path, root.path])))
 
         #expect(activationCount == 0)
     }
@@ -308,7 +308,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = router.handle(.init(version: 1, command: .open, sessionId: "s1", paths: [first.path, second.path]))
+        let response = router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [first.path, second.path])))
 
         #expect(response == .ok)
         #expect(activationCount == 1)
