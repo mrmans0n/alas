@@ -217,11 +217,35 @@ extension GitService {
     /// Resolves the left tree for a two-dot range base. The base is constructed
     /// as "<sha>^"; for a root commit that parent does not exist, so fall back to
     /// the canonical empty tree (matching diff(worktreePath:sha:file:)).
+    ///
+    /// The empty-tree fallback is limited to the *proven* root-commit case: the
+    /// commit itself must resolve and have no parents. Any other resolution
+    /// failure (a stale or invalid base) is thrown, so we never silently diff
+    /// against the empty tree and report every file in `head` as newly added.
     private func resolveTwoDotLeftTree(worktreePath: URL, base: String) async throws -> String {
         let result = try await Process.git(["rev-parse", "--verify", "--quiet", base], cwd: worktreePath)
         let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if result.exitCode == 0, !resolved.isEmpty { return resolved }
-        return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+        // `base` did not resolve. Only treat it as the empty tree when it is a
+        // genuine root-commit parent ("<root>^"): the commit-ish must resolve
+        // and report no parents. Otherwise the base is stale/invalid — throw.
+        if base.hasSuffix("^") {
+            let commitish = String(base.dropLast())
+            let parents = try await Process.git(["rev-list", "--parents", "-n", "1", commitish], cwd: worktreePath)
+            let tokens = parents.stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(separator: " ", omittingEmptySubsequences: true)
+            if parents.exitCode == 0, tokens.count == 1 {
+                return "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            }
+        }
+
+        throw NSError(
+            domain: "GitService.resolveTwoDotLeftTree",
+            code: Int(result.exitCode),
+            userInfo: [NSLocalizedDescriptionKey: "Could not resolve range base \"\(base)\": \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))"]
+        )
     }
 
     private func mergeBase(worktreePath: URL, baseRef: String, headRef: String) async throws -> String {

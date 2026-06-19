@@ -779,6 +779,31 @@ struct GitServiceTests {
         #expect(!diff.hunks.isEmpty)
     }
 
+    @Test func rangeChangedFilesThrowsForStaleNonRootBase() async throws {
+        // A non-root base that no longer resolves (e.g. a stale SHA after a
+        // rebase) must throw rather than silently diffing against the empty
+        // tree and reporting every file in head as newly added.
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("a\n", "a.txt", in: repo)
+        try await gitOK(["add", "."], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "head"], cwd: repo)
+        let head = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // "<bogus-sha>^" — the commit-ish does not resolve, so this is not a
+        // proven root commit and must not fall back to the empty tree.
+        let staleBase = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef^"
+        await #expect(throws: (any Error).self) {
+            _ = try await GitService().rangeChangedFiles(
+                at: repo,
+                base: staleBase,
+                head: head,
+                threeDot: false
+            )
+        }
+    }
+
     // MARK: - headSHA test (Fix 2)
 
     @Test func headSHAReturnsCurrentHEAD() async throws {
