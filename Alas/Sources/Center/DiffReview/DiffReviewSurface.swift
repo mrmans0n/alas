@@ -44,6 +44,7 @@ struct DiffReviewSurface: View {
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
     @State private var renderedFileIDs: Set<DiffReviewFileID> = []
+    @State private var measuredHeights: [DiffReviewFileID: CGFloat] = [:]
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
 
@@ -336,10 +337,17 @@ struct DiffReviewSurface: View {
                 onStageReply: onStageReply,
                 canAddToReview: canAddToReview
             )
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.size.height
+            } action: { height in
+                if measuredHeights[file.id] != height {
+                    measuredHeights[file.id] = height
+                }
+            }
         } else {
             DiffReviewFileSectionPlaceholder(
                 file: file,
-                estimatedHeight: DiffReviewFileSectionHeightEstimator.estimatedHeight(
+                estimatedHeight: measuredHeights[file.id] ?? DiffReviewFileSectionHeightEstimator.estimatedHeight(
                     for: file,
                     inlineFeedback: inlineFeedback,
                     draftComments: draftComments
@@ -475,6 +483,7 @@ struct DiffReviewSurface: View {
         programmaticScroll = result.programmaticScroll
         renderedFileIDs = []
         contextExpandedFileIDs.formIntersection(Set(fileIDs))
+        measuredHeights = measuredHeights.filter { fileIDs.contains($0.key) }
         if DiffReviewSurfaceSelectionSync.shouldScrollRestoredSelection(
             previousFileSetKey: previousFileSetKey,
             previousSelection: previousSelection,
