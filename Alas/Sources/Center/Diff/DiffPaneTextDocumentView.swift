@@ -1005,7 +1005,7 @@ final class DiffPaneCodeTextView: NSTextView {
         layoutManager.ensureLayout(for: textContainer)
         let paragraphRanges = paragraphRanges(lineCount: lineTones.count)
         let origin = textContainerOrigin
-        var nextY = textContainerOrigin.y
+        var fallbackY = textContainerOrigin.y
 
         var rowRects: [NSRect] = []
         var firstLineFragmentRects: [NSRect] = []
@@ -1013,12 +1013,11 @@ final class DiffPaneCodeTextView: NSTextView {
         firstLineFragmentRects.reserveCapacity(paragraphRanges.count)
 
         for range in paragraphRanges {
-            let height = measuredRowHeight(for: range, layoutManager: layoutManager)
-            let rowRect = NSRect(
-                x: 0,
-                y: nextY,
-                width: max(bounds.width, visibleRect.width),
-                height: height
+            let rowRect = measuredRowRect(
+                for: range,
+                layoutManager: layoutManager,
+                origin: origin,
+                fallbackY: fallbackY
             )
             let firstRect = firstLineFragmentRect(
                 for: range,
@@ -1027,7 +1026,7 @@ final class DiffPaneCodeTextView: NSTextView {
             )
             rowRects.append(rowRect)
             firstLineFragmentRects.append(firstRect)
-            nextY += height
+            fallbackY = rowRect.maxY
         }
 
         return RowGeometry(rowRects: rowRects, firstLineFragmentRects: firstLineFragmentRects)
@@ -1290,6 +1289,8 @@ final class DiffPaneCodeTextView: NSTextView {
             rowRect.fill()
             if tone == .placeholder {
                 drawPlaceholderHatch(in: rowRect, theme: theme)
+            } else if lineMetadata.indices.contains(index), lineMetadata[index].kind == .expandableContext {
+                drawExpandableContextPill(row: index, in: rowRect, theme: theme)
             }
         }
     }
@@ -1316,19 +1317,36 @@ final class DiffPaneCodeTextView: NSTextView {
         return ranges
     }
 
-    private func measuredRowHeight(for range: NSRange, layoutManager: NSLayoutManager) -> CGFloat {
+    private func measuredRowRect(
+        for range: NSRange,
+        layoutManager: NSLayoutManager,
+        origin: NSPoint,
+        fallbackY: CGFloat
+    ) -> NSRect {
         let defaultHeight = layoutManager.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 13, weight: .regular))
-        guard range.length > 0 else { return defaultHeight }
+        let fallback = NSRect(
+            x: 0,
+            y: fallbackY,
+            width: max(bounds.width, visibleRect.width),
+            height: defaultHeight
+        )
+        guard range.length > 0 else { return fallback }
 
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-        guard glyphRange.length > 0 else { return defaultHeight }
+        guard glyphRange.length > 0 else { return fallback }
 
         var rowRect = NSRect.null
         layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) { lineFragmentRect, _, _, _, _ in
             rowRect = rowRect.union(lineFragmentRect)
         }
-        guard !rowRect.isNull else { return defaultHeight }
-        return max(ceil(rowRect.height), defaultHeight)
+        guard !rowRect.isNull else { return fallback }
+
+        return NSRect(
+            x: 0,
+            y: rowRect.minY + origin.y,
+            width: max(bounds.width, visibleRect.width),
+            height: max(rowRect.height, defaultHeight)
+        )
     }
 
     private func firstLineFragmentRect(
@@ -1393,6 +1411,39 @@ final class DiffPaneCodeTextView: NSTextView {
         }
         path.lineWidth = 1
         NSColor(theme.color("line")).withAlphaComponent(0.35).setStroke()
+        path.stroke()
+    }
+
+    private func drawExpandableContextPill(row: Int, in rowRect: NSRect, theme: Theme) {
+        guard lineMetadata.indices.contains(row),
+              let layoutManager,
+              let textContainer
+        else {
+            return
+        }
+
+        let range = lineMetadata[row].range
+        guard range.length > 0 else { return }
+
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return }
+
+        let textRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+            .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        guard !textRect.isEmpty else { return }
+
+        let pillHeight = min(max(textRect.height + 6, 18), max(rowRect.height - 4, 1))
+        let pillRect = NSRect(
+            x: textRect.minX - 10,
+            y: rowRect.midY - pillHeight / 2,
+            width: textRect.width + 20,
+            height: pillHeight
+        )
+        let path = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
+        NSColor(theme.color("bg-1")).withAlphaComponent(0.72).setFill()
+        path.fill()
+        NSColor(theme.color("line")).withAlphaComponent(0.55).setStroke()
+        path.lineWidth = 1
         path.stroke()
     }
 }
