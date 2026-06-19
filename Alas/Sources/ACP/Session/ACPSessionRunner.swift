@@ -1021,7 +1021,6 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
-        replayBoundaryGuard = false
         Task { [weak self, onPromptFinished] in
             guard let self else {
                 await MainActor.run { onPromptFinished?(false) }
@@ -1037,6 +1036,11 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
+                // Clear the replay boundary guard now that we are inside the
+                // Task and have confirmed this prompt is still active. Doing
+                // this here (rather than before Task spawn) prevents late
+                // replay updates from slipping through during Task scheduling.
+                self.replayBoundaryGuard = false
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we
@@ -1160,7 +1164,6 @@ extension ACPSessionRunner {
         let promptID = nextPromptID
         nextPromptID += 1
         activePromptID = promptID
-        replayBoundaryGuard = false
         Task { [weak self, onCompleted] in
             guard let self else {
                 await MainActor.run { onCompleted?(false) }
@@ -1171,6 +1174,7 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
+                self.replayBoundaryGuard = false
                 self.session.transcript.streamingState = .sending
                 return true
             }
