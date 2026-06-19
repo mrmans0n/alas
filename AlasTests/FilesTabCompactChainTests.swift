@@ -9,6 +9,7 @@ struct FilesTabCompactChainTests {
         path: String,
         children: [FileTreeNode]? = nil,
         childrenState: DirectoryChildrenState = .loaded,
+        visibility: FileVisibility = .tracked,
         isSubmodule: Bool = false
     ) -> FileTreeNode {
         FileTreeNode(
@@ -17,6 +18,7 @@ struct FilesTabCompactChainTests {
             kind: .dir,
             children: children,
             badge: nil,
+            visibility: visibility,
             childrenState: childrenState,
             isSubmodule: isSubmodule
         )
@@ -126,5 +128,29 @@ struct FilesTabCompactChainTests {
         #expect(result.displayName == "src")
         #expect(result.chainPaths == ["src"])
         #expect(result.terminal.path == "src")
+    }
+
+    @Test func chainStopsAtVisibilityBoundary() {
+        let node = dir(name: "ignored", path: "ignored", children: [
+            dir(name: "tracked", path: "ignored/tracked", children: [
+                file(name: "App.swift", path: "ignored/tracked/App.swift")
+            ])
+        ], visibility: .ignored)
+        let result = FilesTabView.compactChain(from: node)
+        #expect(result.displayName == "ignored")
+        #expect(result.chainPaths == ["ignored"])
+        #expect(result.terminal.path == "ignored")
+    }
+
+    @Test func chainContinuesWithSameVisibility() {
+        let node = dir(name: "ignored", path: "ignored", children: [
+            dir(name: "child", path: "ignored/child", children: [
+                file(name: "cache.log", path: "ignored/child/cache.log")
+            ], visibility: .ignored)
+        ], visibility: .ignored)
+        let result = FilesTabView.compactChain(from: node)
+        #expect(result.displayName == "ignored/child")
+        #expect(result.chainPaths == ["ignored", "ignored/child"])
+        #expect(result.terminal.path == "ignored/child")
     }
 }
