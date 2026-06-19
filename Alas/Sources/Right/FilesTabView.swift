@@ -70,17 +70,21 @@ struct FilesTabView: View {
 
     private func renderNode(_ node: FileTreeNode, depth: Int) -> AnyView {
         if node.kind == .dir {
-            let open = openPaths.contains(node.path)
-            let canExpand = !node.isSubmodule
+            let chain = Self.compactChain(from: node)
+            let terminal = chain.terminal
+            let open = openPaths.contains(terminal.path)
+            let canExpand = !terminal.isSubmodule
             return AnyView(
                 Group {
                     Button {
                         guard canExpand else { return }
                         if open {
-                            openPaths.remove(node.path)
+                            for p in chain.chainPaths { openPaths.remove(p) }
                         } else {
-                            openPaths.insert(node.path)
-                            onLoadChildren(node.path)
+                            for p in chain.chainPaths {
+                                openPaths.insert(p)
+                                onLoadChildren(p)
+                            }
                         }
                     } label: {
                         HStack(spacing: 6) {
@@ -91,62 +95,67 @@ struct FilesTabView: View {
                                 Color.clear.frame(width: 14, height: 14)
                             }
                             FolderIconView(
-                                name: node.name,
-                                path: node.path,
+                                name: terminal.name,
+                                path: terminal.path,
                                 open: open,
-                                fallbackColor: folderColor(for: node, open: open)
+                                fallbackColor: folderColor(for: terminal, open: open)
                             )
-                            Text(node.name)
+                            Text(chain.displayName)
                                 .font(.system(size: 11.5, design: .monospaced))
-                                .foregroundColor(rowForeground(for: node))
+                                .foregroundColor(rowForeground(for: terminal))
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                             Spacer()
-                            if node.isSubmodule {
+                            if terminal.isSubmodule {
                                 submodulePill
                             }
-                            if let badge = node.badge {
+                            if let badge = terminal.badge {
                                 StatusBadge(status: badge)
                             }
-                            if isOffGit(node) {
-                                visibilityPill(node)
+                            if isOffGit(terminal) {
+                                visibilityPill(terminal)
                             }
-                            if Self.showsInlineLoadingIndicator(for: node, open: open, canExpand: canExpand) {
+                            if Self.showsInlineLoadingIndicator(for: terminal, open: open, canExpand: canExpand) {
                                 Spinner(lineWidth: 1.5, duration: 0.7)
                                     .frame(width: 12, height: 12)
-                                    .accessibilityLabel("Loading \(node.name)")
+                                    .accessibilityLabel("Loading \(terminal.name)")
                             }
                         }
                         .padding(.leading, CGFloat(12 + depth * 14))
                         .padding(.trailing, 12)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .opacity(isOffGit(node) ? 0.72 : 1.0)
+                        .opacity(isOffGit(terminal) ? 0.72 : 1.0)
                         .overlay(alignment: .leading) {
-                            if isOffGit(node) {
+                            if isOffGit(terminal) {
                                 ghostRail(depth: depth)
                             }
                         }
                         .contentShape(Rectangle())
-                        .background(node.path == revealPath ? theme.color("bg-hover") : Color.clear)
-                        .id(node.id)
+                        .background(chain.chainPaths.contains(revealPath ?? "") ? theme.color("bg-hover") : Color.clear)
+                        .id("dir:\(terminal.path)")
+                        .overlay(alignment: .top) {
+                            ForEach(chain.chainPaths.dropLast(), id: \.self) { p in
+                                Color.clear.frame(width: 0, height: 0).id("dir:\(p)")
+                            }
+                        }
                     }
                     .buttonStyle(.plain)
                     if open && canExpand {
-                        switch node.childrenState {
+                        switch terminal.childrenState {
                         case .loading, .loaded:
-                            renderChildren(of: node, depth: depth + 1)
+                            renderChildren(of: terminal, depth: depth + 1)
                         case .failed:
                             treeMessage("Could not load children", depth: depth + 1)
-                            renderChildren(of: node, depth: depth + 1)
+                            renderChildren(of: terminal, depth: depth + 1)
                         case .notLoaded:
                             EmptyView()
                         }
                     }
                 }
-                .task(id: loadTaskID(for: node, open: open)) {
-                    if shouldAutoLoadChildren(for: node, open: open) {
-                        onLoadChildren(node.path)
+                .task(id: loadTaskID(for: terminal, open: open)) {
+                    if shouldAutoLoadChildren(for: terminal, open: open) {
+                        for p in chain.chainPaths { onLoadChildren(p) }
                     }
                 }
             )
@@ -240,6 +249,32 @@ struct FilesTabView: View {
 
     nonisolated static func revealDisplayName(for path: String) -> String {
         path.split(separator: "/").last.map(String.init) ?? path
+    }
+
+    nonisolated static func compactChain(
+        from node: FileTreeNode
+    ) -> (displayName: String, chainPaths: [String], terminal: FileTreeNode) {
+        var displayParts = [node.name]
+        var chainPaths = [node.path]
+        var current = node
+        while true {
+            guard
+                current.kind == .dir,
+                !current.isSubmodule,
+                current.childrenState == .loaded,
+                let children = current.children,
+                children.count == 1,
+                children[0].kind == .dir,
+                !children[0].isSubmodule,
+                children[0].childrenState == .loaded,
+                children[0].visibility == current.visibility
+            else { break }
+            let next = children[0]
+            displayParts.append(next.name)
+            chainPaths.append(next.path)
+            current = next
+        }
+        return (displayParts.joined(separator: "/"), chainPaths, current)
     }
 
     private func isOffGit(_ node: FileTreeNode) -> Bool {
