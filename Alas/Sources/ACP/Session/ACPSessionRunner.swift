@@ -70,19 +70,6 @@ final class ACPSessionRunner {
     private let streamingPersistDebounceNanos: UInt64
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
-    /// True after load-replay suppression ends until the next prompt starts.
-    /// Set when suppression ends AND the previous agent turn was complete
-    /// (i.e. completedOutputBoundaryMessageIds is non-empty). Populated either
-    /// from runtime state (network blip / same session object) or from the
-    /// seeded value that ACPSessionManager writes via markCompletedOutputBoundary()
-    /// right after hydration from disk.
-    /// While set, all incoming updates are dropped — they are late-arriving
-    /// replay updates that slipped past the suppression window, and applying
-    /// any of them (including non-streaming ones) could corrupt transcript
-    /// state or create duplicate agent message bubbles.
-    /// Not set when completedOutputBoundaryMessageIds is empty (previous turn
-    /// in progress): fresh continuation updates must flow through in that case.
-    private var replayBoundaryGuard = false
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so an
@@ -151,20 +138,15 @@ final class ACPSessionRunner {
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
-                            // Only guard when the previous turn is complete. An empty
-                            // completedOutputBoundaryMessageIds means an agent turn is
-                            // still in progress; guarding would silently drop live output.
-                            self.replayBoundaryGuard = !self.session.transcript.completedOutputBoundaryMessageIds.isEmpty
+                            // Disallow streaming boundary crossings until the next prompt
+                            // starts. Any agentMessageChunk that would cross a completed-
+                            // output boundary in this window is a late replay slip — the
+                            // session-level flag prevents it from creating a duplicate
+                            // bubble without blocking in-progress continuation updates.
+                            self.session.allowsStreamingBoundaryCrossing = false
                         }
                         return
                     }
-                    // Drop post-suppression updates while the guard is up. The guard
-                    // is only active when the previous turn was complete, so everything
-                    // arriving here is a late replay slip — including non-streaming
-                    // updates (toolCall, plan) that could clear
-                    // completedOutputBoundaryMessageIds and allow a subsequent replayed
-                    // agentMessageChunk to create a duplicate agent message bubble.
-                    if self.replayBoundaryGuard { return }
                     let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                     let dirty = self.session.apply(u.update)
                     if shouldBatchStreamingPersist {
@@ -324,7 +306,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
-            replayBoundaryGuard = !session.transcript.completedOutputBoundaryMessageIds.isEmpty
+            session.allowsStreamingBoundaryCrossing = false
         }
     }
 
@@ -1046,11 +1028,11 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
-                // Clear the replay boundary guard now that we are inside the
-                // Task and have confirmed this prompt is still active. Doing
-                // this here (rather than before Task spawn) prevents late
-                // replay updates from slipping through during Task scheduling.
-                self.replayBoundaryGuard = false
+                // Re-allow streaming boundary crossings now that we are inside
+                // the Task and have confirmed this prompt is still active. The
+                // RPC is sent below, so any agent chunk that follows is genuine
+                // new output — N+1 bubble creation is correct from here on.
+                self.session.allowsStreamingBoundaryCrossing = true
                 // Record the user prompt BEFORE awaiting `session/prompt`.
                 // The agent streams `session/update` notifications through
                 // `incomingUpdates` while the RPC is in flight, so if we
@@ -1184,7 +1166,7 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
-                self.replayBoundaryGuard = false
+                self.session.allowsStreamingBoundaryCrossing = true
                 self.session.transcript.streamingState = .sending
                 return true
             }
