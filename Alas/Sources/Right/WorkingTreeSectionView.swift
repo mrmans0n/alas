@@ -128,6 +128,7 @@ struct WorkingTreeSectionView: View {
             let folderGroups = groups.groups(under: node.path)
             let stagedEntries = folderGroups.flatMap(\.stagedEntries)
             let unstagedEntries = folderGroups.flatMap(\.unstagedEntries)
+            let folderState = folderStageState(staged: stagedEntries, unstaged: unstagedEntries)
             let folderUntracked = isUntrackedSubtree(node, groupsByPath: groupsByPath)
             return AnyView(
                 Group {
@@ -141,6 +142,12 @@ struct WorkingTreeSectionView: View {
                         HStack(spacing: 6) {
                             Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
                                 .frame(width: 14, height: 14)
+                            StageChip(state: stageChipState(for: folderState)) {
+                                switch folderState {
+                                case .staged:           onUnstageAll?(stagedEntries)
+                                case .mixed, .unstaged: onStageAll?(unstagedEntries)
+                                }
+                            }
                             FolderIconView(
                                 name: node.name,
                                 path: node.path,
@@ -236,6 +243,17 @@ struct WorkingTreeSectionView: View {
         case .mixed, .unstaged:
             guard !group.unstagedEntries.isEmpty else { return nil }
             return { onStageAll?(group.unstagedEntries) }
+        }
+    }
+
+    private func folderStageState(
+        staged: [ChangedFile],
+        unstaged: [ChangedFile]
+    ) -> WorkingTreeStageState {
+        switch (staged.isEmpty, unstaged.isEmpty) {
+        case (false, false): return .mixed
+        case (false, true):  return .staged
+        default:             return .unstaged
         }
     }
 
