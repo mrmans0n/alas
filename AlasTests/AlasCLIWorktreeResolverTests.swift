@@ -8,7 +8,7 @@ struct AlasCLIWorktreeResolverTests {
         let current = Self.worktree(branch: "main", path: "/tmp/repo")
         let other = Self.worktree(branch: "feature/review", path: "/tmp/repo-feature")
         let rows = AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)
-        #expect(rows == ["* main                 /tmp/repo", "  feature/review       /tmp/repo-feature"])
+        #expect(rows == ["* main              /tmp/repo", "  feature/review    /tmp/repo-feature"])
     }
 
     @Test func exactBranchMatchWins() {
