@@ -760,10 +760,6 @@ final class ACPSession: ObservableObject, Identifiable {
         if let i = locate() {
             let stableId = transcript.messages[i].stableId
             if transcript.completedOutputBoundaryMessageIds.contains(stableId) {
-                // Only start a new message when actively streaming. If the transcript
-                // is idle, this chunk is a late replay update that slipped past the
-                // suppression window — discard it to prevent a duplicate bubble.
-                guard transcript.streamingState != .idle else { return i }
                 transcript.completedOutputBoundaryMessageIds.remove(stableId)
             } else {
                 switch transcript.messages[i] {

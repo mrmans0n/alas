@@ -128,6 +128,12 @@ final class ACPSessionRunner {
     }
 
     func start() {
+        if suppressingLoadReplay {
+            // Discard output-boundary markers from the previous session run.
+            // Late-arriving replay updates can't cross a stale boundary and
+            // create duplicate bubbles. sendRecoveryContext re-marks as needed.
+            session.transcript.completedOutputBoundaryMessageIds.removeAll()
+        }
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
@@ -1154,6 +1160,9 @@ extension ACPSessionRunner {
                     self.cancelledPromptIDs.remove(promptID)
                     return false
                 }
+                // Re-mark the output boundary so the recovery response starts a
+                // new message bubble rather than appending to the previous turn.
+                self.session.markCompletedOutputBoundary()
                 self.session.transcript.streamingState = .sending
                 return true
             }

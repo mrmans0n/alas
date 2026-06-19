@@ -20,8 +20,6 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.apply(.agentMessageChunk(.text("first task output")))
         session.markCompletedOutputBoundary()
-        // In production the runner sets .sending before the new turn's first chunk.
-        session.transcript.streamingState = .sending
         session.apply(.agentMessageChunk(.text("next task output")))
 
         #expect(session.transcript.messages.count == 2)
@@ -53,7 +51,6 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("first task")))
         session.apply(.plan([.init(content: "done", priority: nil, status: "completed")]))
         session.markCompletedOutputBoundary()
-        session.transcript.streamingState = .sending
         session.apply(.agentMessageChunk(.text("second task")))
 
         #expect(session.transcript.messages.count == 3)
@@ -73,7 +70,6 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("visible answer")))
         session.apply(.agentThoughtChunk(.text("trailing thought")))
         session.markCompletedOutputBoundary()
-        session.transcript.streamingState = .sending
         session.apply(.agentMessageChunk(.text("next task")))
 
         #expect(session.transcript.messages.count == 3)
@@ -94,7 +90,6 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("first answer")))
         session.apply(.agentThoughtChunk(.text("first thought")))
         session.markCompletedOutputBoundary()
-        session.transcript.streamingState = .sending
         session.apply(.agentThoughtChunk(.text("next thought")))
         session.apply(.agentMessageChunk(.text("second answer")))
 
@@ -109,27 +104,6 @@ struct ACPSessionTests {
             #expect(second.value == "second answer")
         } else {
             Issue.record("expected agent, thought, thought, agent")
-        }
-    }
-
-    @Test("late replay chunk while idle does not create a duplicate message")
-    func replayChunkWhileIdleIsDiscarded() async {
-        // Simulates a replay update that slips past load-replay suppression:
-        // the output boundary is already marked (previous turn complete) and the
-        // transcript is idle — the chunk must be silently dropped, not create N+1.
-        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        session.apply(.agentMessageChunk(.text("complete response")))
-        session.markCompletedOutputBoundary()
-        // streamingState remains .idle — no active prompt (runner not involved).
-
-        // Replay chunk arrives while idle.
-        session.apply(.agentMessageChunk(.text("complete response")))
-
-        #expect(session.transcript.messages.count == 1)
-        if case .agent(_, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "complete response")
-        } else {
-            Issue.record("expected single agent message")
         }
     }
 
