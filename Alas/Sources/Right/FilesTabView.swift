@@ -242,6 +242,30 @@ struct FilesTabView: View {
         path.split(separator: "/").last.map(String.init) ?? path
     }
 
+    nonisolated static func compactChain(
+        from node: FileTreeNode
+    ) -> (displayName: String, chainPaths: [String], terminal: FileTreeNode) {
+        var displayParts = [node.name]
+        var chainPaths = [node.path]
+        var current = node
+        while true {
+            guard
+                current.kind == .dir,
+                !current.isSubmodule,
+                current.childrenState == .loaded,
+                let children = current.children,
+                children.count == 1,
+                children[0].kind == .dir,
+                !children[0].isSubmodule
+            else { break }
+            let next = children[0]
+            displayParts.append(next.name)
+            chainPaths.append(next.path)
+            current = next
+        }
+        return (displayParts.joined(separator: "/"), chainPaths, current)
+    }
+
     private func isOffGit(_ node: FileTreeNode) -> Bool {
         node.visibility == .ignored || node.visibility == .excluded
     }
