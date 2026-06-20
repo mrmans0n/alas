@@ -36,6 +36,9 @@ final class RightPaneState {
     /// a future inline strip — for now, set this and rely on existing
     /// log output for diagnosability.
     var sidebarError: String? = nil
+    /// True while a `pull()` is running; drives the upstream chip's spinner
+    /// and disables re-entry. Only `pull()` mutates it.
+    private(set) var pullInFlight: Bool = false
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
@@ -958,13 +961,20 @@ final class RightPaneState {
     /// than 30s. Errors are logged but never surfaced; chips reflect the
     /// last successful probe (or stay hidden if none has succeeded yet).
     @MainActor
-    func refreshSyncStatus() async {
-        await refreshBehindBase()
-        await refreshBehindUpstream()
+    func refreshSyncStatus(force: Bool = false) async {
+        await refreshBehindBase(force: force)
+        await refreshBehindUpstream(force: force)
+    }
+
+    /// Force an immediate fetch + recompute of the behind chips, bypassing the
+    /// 30s probe throttle. Backs the "Fetch now" menu item.
+    @MainActor
+    func fetchNow() {
+        Task { @MainActor in await self.refreshSyncStatus(force: true) }
     }
 
     @MainActor
-    private func refreshBehindBase() async {
+    private func refreshBehindBase(force: Bool = false) async {
         do {
             guard let resolved = try await git.resolveBaseRef(
                 worktreePath: worktree.path,
@@ -976,7 +986,7 @@ final class RightPaneState {
             }
             if let remote = resolved.remote {
                 let last = behindBase?.probedAt ?? .distantPast
-                if Date().timeIntervalSince(last) > 30 {
+                if force || Date().timeIntervalSince(last) > 30 {
                     do {
                         try await git.fetchRef(
                             worktreePath: worktree.path,
@@ -998,7 +1008,7 @@ final class RightPaneState {
     }
 
     @MainActor
-    private func refreshBehindUpstream() async {
+    private func refreshBehindUpstream(force: Bool = false) async {
         do {
             guard let upstream = try await git.resolveUpstreamRef(
                 worktreePath: worktree.path
@@ -1012,7 +1022,7 @@ final class RightPaneState {
             // is what we fetch.
             let branchName = String(upstream.ref.dropFirst(upstream.remote.count + 1))
             let last = behindUpstream?.probedAt ?? .distantPast
-            if Date().timeIntervalSince(last) > 30 {
+            if force || Date().timeIntervalSince(last) > 30 {
                 do {
                     try await git.fetchRef(
                         worktreePath: worktree.path,
@@ -1111,6 +1121,33 @@ final class RightPaneState {
                 handleOperationResult(result)
             } catch {
                 logger.error("cherry-pick failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Pull the current branch's upstream (fetch + rebase onto it). Surfaces
+    /// conflicts through the existing `OperationCard` via `refresh()` +
+    /// `handleOperationResult`. No-ops when there is no upstream, when an
+    /// operation is already in flight, or when a pull is already running.
+    @MainActor
+    func pull() {
+        guard behindUpstream != nil, mergeOp.current == nil, !pullInFlight else { return }
+        sidebarError = nil
+        pullInFlight = true
+        Task { @MainActor in
+            defer { pullInFlight = false }
+            do {
+                let result = try await git.pull(worktreePath: worktree.path)
+                await refresh()
+                // Force the behind chips to reflect the post-pull state now
+                // rather than waiting out the 30s probe throttle.
+                await refreshSyncStatus(force: true)
+                handleOperationResult(result)
+            } catch {
+                // Unlike the pure rebase/merge siblings, surface the failure to
+                // the user: a pull is the only signal they have that it ran.
+                sidebarError = error.localizedDescription
+                logger.error("pull failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
