@@ -87,7 +87,7 @@ struct DiffReviewFileSection: View {
             resetContextState()
         }
         .onChange(of: pendingDraftAnchor) { _, anchor in
-            guard anchor != nil else { return }
+            guard allowsDraftCommentCreation, anchor != nil else { return }
             Task { @MainActor in
                 draftComposerFocused = true
             }
@@ -362,7 +362,8 @@ struct DiffReviewFileSection: View {
         let segments = ReviewDraftCommentRowSegmentation.segments(
             for: group,
             placement: placement,
-            pendingAnchor: pendingDraftAnchor
+            pendingAnchor: pendingDraftAnchor,
+            canCreateDraftComment: allowsDraftCommentCreation
         )
         if segments.containsLocalAccessories {
             VStack(alignment: .leading, spacing: 0) {
@@ -517,6 +518,15 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private var draftComposer: some View {
+        if !allowsDraftCommentCreation {
+            EmptyView()
+        } else {
+            draftComposerBody
+        }
+    }
+
+    @ViewBuilder
+    private var draftComposerBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             ReviewDraftComposerTextEditor(
                 text: $pendingDraftBody,
@@ -1036,7 +1046,8 @@ enum ReviewDraftCommentRowSegmentation {
     static func segments(
         for group: DiffDisplayGroup,
         placement: ReviewDraftCommentPlacement.Result,
-        pendingAnchor: DiffReviewLineAnchor?
+        pendingAnchor: DiffReviewLineAnchor?,
+        canCreateDraftComment: Bool = true
     ) -> Result {
         let pendingKey = pendingAnchor.map {
             ReviewDraftCommentPlacement.RowKey(side: $0.side, line: $0.draftPlacementLine)
@@ -1055,7 +1066,7 @@ enum ReviewDraftCommentRowSegmentation {
                 excludingIDs: emittedCommentIDs
             )
             emittedCommentIDs.formUnion(comments.map(\.id))
-            let showsComposer = pendingKey.map { keys.contains($0) } ?? false
+            let showsComposer = canCreateDraftComment && (pendingKey.map { keys.contains($0) } ?? false)
             guard !comments.isEmpty || showsComposer else { continue }
 
             segments.append(Segment(

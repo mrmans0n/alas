@@ -93,6 +93,46 @@ struct DiffReviewSurfaceTests {
         #expect(DiffReviewRailSelectedRowStyle.contentLeadingPadding == 6)
     }
 
+    @Test func fileSectionHidesReviewAffordanceWhenDraftCommentCreationIsDisabled() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(
+                path: "Sources/App/AlphaView.swift",
+                namespace: "commit",
+                groupID: "commit",
+                groupTitle: "Commit",
+                additions: 1,
+                deletions: 1
+            ),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false,
+            allowsDraftCommentCreation: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 500)
+        let rulers = allSubviews(of: controller.view).compactMap { $0 as? DiffPaneLineNumberRulerView }
+        #expect(!rulers.isEmpty)
+        for ruler in rulers {
+            #expect(!ruler.allowsReviewLineSelection)
+        }
+    }
+
     @Test func fileSectionEmbedsDiffPaneWithoutToolbarAndShowsOpenFile() {
         let file = DiffReviewFileSectionModel(
             summary: summary(
