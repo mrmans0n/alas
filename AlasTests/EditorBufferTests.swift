@@ -1031,6 +1031,49 @@ struct EditorBufferTests {
         #expect(onDisk == "x\n")
     }
 
+    @Test func codeEditorLeadingClipViewPinsNegativeHorizontalOriginToZero() {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 500, height: 400))
+        scroll.contentView = CodeEditorLeadingClipView(frame: .zero)
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        scroll.borderType = .noBorder
+        scroll.autohidesScrollers = false
+
+        let text = CodeTextView(frame: NSRect(x: 0, y: 0, width: 1000, height: 300), textContainer: nil)
+        text.isHorizontallyResizable = true
+        text.isVerticallyResizable = true
+        text.autoresizingMask = []
+        text.string = "hello world\n"
+        scroll.documentView = text
+
+        scroll.contentView.scroll(to: NSPoint(x: -50, y: 0))
+        #expect(scroll.contentView.bounds.origin.x == 0)
+
+        scroll.contentView.setBoundsOrigin(NSPoint(x: -100, y: 0))
+        #expect(scroll.contentView.bounds.origin.x == 0)
+
+        scroll.contentView.scroll(to: NSPoint(x: 50, y: 0))
+        #expect(scroll.contentView.bounds.origin.x == 50)
+
+        scroll.contentView.setBoundsOrigin(NSPoint(x: 100, y: 0))
+        #expect(scroll.contentView.bounds.origin.x == 100)
+
+        let leadingConstrained = scroll.contentView.constrainBoundsRect(
+            NSRect(x: -25, y: 0, width: 500, height: 400)
+        )
+        #expect(leadingConstrained.origin.x == 0)
+
+        let validConstrained = scroll.contentView.constrainBoundsRect(
+            NSRect(x: 75, y: 0, width: 500, height: 400)
+        )
+        #expect(validConstrained.origin.x == 75)
+
+        let trailingConstrained = scroll.contentView.constrainBoundsRect(
+            NSRect(x: 750, y: 0, width: 500, height: 400)
+        )
+        #expect(trailingConstrained.origin.x == 500)
+    }
+
     @Test func coordinatorPathChangeClearsTextViewUndoStack() throws {
         // Regression: NSTextView's undoManager survives across tab swaps
         // because CenterPaneView reuses the same text view. Without an

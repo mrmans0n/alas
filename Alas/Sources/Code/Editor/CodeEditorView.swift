@@ -1,6 +1,44 @@
 import SwiftUI
 import AppKit
 
+/// `NSClipView` subclass that prevents AppKit from placing the document before
+/// the leading edge during initial layout, while preserving normal horizontal
+/// scrolling for long lines.
+final class CodeEditorLeadingClipView: NSClipView {
+    override func scroll(to newOrigin: NSPoint) {
+        super.scroll(to: pinnedOrigin(for: newOrigin))
+    }
+
+    override func setBoundsOrigin(_ newOrigin: NSPoint) {
+        super.setBoundsOrigin(pinnedOrigin(for: newOrigin))
+    }
+
+    override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+        var bounds = super.constrainBoundsRect(proposedBounds)
+        guard enclosingScrollView?.hasHorizontalScroller == true else {
+            bounds.origin.x = 0
+            return bounds
+        }
+        guard let documentView else {
+            bounds.origin.x = 0
+            return bounds
+        }
+
+        let maxX = max(documentView.frame.width - bounds.width, 0)
+        bounds.origin.x = min(max(bounds.origin.x, 0), maxX)
+        return bounds
+    }
+
+    private func pinnedOrigin(for origin: NSPoint) -> NSPoint {
+        guard enclosingScrollView?.hasHorizontalScroller == true, origin.x < 0 else {
+            return origin
+        }
+        var pinned = origin
+        pinned.x = 0
+        return pinned
+    }
+}
+
 /// `NSViewRepresentable` that wraps an `NSScrollView` containing a
 /// `CodeTextView`. Read-only, monospaced, no soft-wrap. The coordinator
 /// (`CodeEditorCoordinator`) owns load/highlight/LSP wiring — the view
@@ -45,6 +83,7 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.autohidesScrollers = false
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(theme.color("bg-1"))
+        scroll.contentView = CodeEditorLeadingClipView(frame: .zero)
 
         let buffer: EditorBuffer
         if let abs = externalAbsolutePath {
