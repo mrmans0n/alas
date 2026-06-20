@@ -422,6 +422,7 @@ struct CommitReviewBody: View {
             showsSourceBadges: false,
             showsRailDisplayControls: true,
             showsDraftSummaryRail: reviewDraftSessionID != nil,
+            allowsDraftCommentCreation: reviewDraftSessionID != nil,
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
