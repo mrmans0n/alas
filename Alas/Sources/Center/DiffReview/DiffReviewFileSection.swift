@@ -1276,11 +1276,13 @@ enum DiffReviewInlineFeedbackMarkdown {
         ACPMarkdownText.parse(source).compactMap { block -> String? in
             switch block {
             case .heading(_, let text), .paragraph(let text), .quote(let text):
-                return NSAttributedString(ACPMarkdownText.inlineMarkdown(text)).string
+                return ACPMarkdownInlineRenderer.plainText(text)
             case .code(_, let body):
                 return body
             case .table(let header, let rows):
-                return ([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " ")
+                return ([header] + rows).map { row in
+                    row.map { ACPMarkdownInlineRenderer.plainText($0) }.joined(separator: " ")
+                }.joined(separator: " ")
             }
         }.joined(separator: " ")
     }
