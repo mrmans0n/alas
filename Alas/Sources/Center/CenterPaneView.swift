@@ -268,7 +268,14 @@ struct CenterPaneView: View {
                             tabState: s
                         )
                         .id(s.id)
-                    case .fileSnapshot, .fileHistory:
+                    case .fileSnapshot(let s):
+                        FileSnapshotTabView(
+                            worktreePath: worktree.path,
+                            state: s,
+                            codeFontFamily: state.config.code.fontFamily,
+                            codeFontSize: CGFloat(state.config.code.fontSize)
+                        )
+                    case .fileHistory:
                         EmptyView()
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
