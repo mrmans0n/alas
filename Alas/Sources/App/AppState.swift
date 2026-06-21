@@ -3609,6 +3609,25 @@ final class AppState {
             tabs.activate(worktreeId: worktreeId, tabId: tab.id)
         }
     }
+
+    func openCommitTab(worktreeId: String, commit: CommitInfo) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        if selectedWorktreeId != worktree.id {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
+
+        let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .commit(let state) = tab { return state.sha == commit.sha }
+            return false
+        }
+        if let existing {
+            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
+            let tab = tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
+            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
+    }
 }
 
 // MARK: - RemoteSessionsProvider

@@ -275,8 +275,13 @@ struct CenterPaneView: View {
                             codeFontFamily: state.config.code.fontFamily,
                             codeFontSize: CGFloat(state.config.code.fontSize)
                         )
-                    case .fileHistory:
-                        EmptyView()
+                    case .fileHistory(let s):
+                        FileHistoryTabView(
+                            worktreePath: worktree.path,
+                            state: s,
+                            onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, commit: $0) },
+                            onCopySHA: { Clipboard.copy($0.sha) }
+                        )
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
                             .id(s.id)
