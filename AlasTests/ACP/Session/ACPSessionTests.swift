@@ -39,11 +39,11 @@ struct ACPSessionTests {
     @Test("agent chunks with ! or ? boundary also get a newline separator")
     func chunksSplitAtPunctuationGetNewline() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        // Lowercase word before `!` → separator applies.
-        session.apply(.agentMessageChunk(.text("done!")))
+        // Lowercase word before `!` with preceding whitespace → separator.
+        session.apply(.agentMessageChunk(.text("All done!")))
         session.apply(.agentMessageChunk(.text("Next task")))
         if case .agent(_, let buf) = session.transcript.messages[0] {
-            #expect(buf.value == "done!\nNext task")
+            #expect(buf.value == "All done!\nNext task")
         } else { Issue.record("expected single agent message") }
     }
 
@@ -67,6 +67,18 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("Next task")))
         if case .agent(_, let buf) = session.transcript.messages[0] {
             #expect(buf.value == ".Next task")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("qualified identifier with lowercase left segment gets no separator")
+    func chunksWithQualifiedIdentifierNoSeparator() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // `package.` + `Type` — lowercase word but no preceding whitespace
+        // (qualified identifier at chunk start) → no separator.
+        session.apply(.agentMessageChunk(.text("package.")))
+        session.apply(.agentMessageChunk(.text("Type")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "package.Type")
         } else { Issue.record("expected single agent message") }
     }
 

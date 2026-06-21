@@ -831,9 +831,13 @@ final class ACPSession: ObservableObject, Identifiable {
         var hasSlash = false
         var hasColon = false
         var wordChars: [UInt32] = []
+        var precededByWhitespace = false
         while i >= scalars.startIndex {
             let s = scalars[i]
-            if s.value == 0x20 || (s.value >= 0x09 && s.value <= 0x0D) { break }
+            if s.value == 0x20 || (s.value >= 0x09 && s.value <= 0x0D) {
+                precededByWhitespace = true
+                break
+            }
             wordChars.append(s.value)
             if s == "/" { hasSlash = true }
             if s == ":" { hasColon = true }
@@ -843,7 +847,12 @@ final class ACPSession: ObservableObject, Identifiable {
         // A `/` or `:` in the preceding run signals a URL/path tail
         // (e.g. `example.com.` split before `Path`); leave it alone.
         if hasSlash || hasColon { return "" }
-        guard !wordChars.isEmpty, wordChars.allSatisfy({ v in
+        // The word must be all lowercase ASCII letters. Require it to be
+        // preceded by whitespace so a qualified identifier whose left
+        // segment is lowercase (`package.Type`, `self.Value`) doesn't get
+        // a newline injected — a sentence-ending word in prose is always
+        // preceded by a space, a code identifier usually isn't.
+        guard precededByWhitespace, !wordChars.isEmpty, wordChars.allSatisfy({ v in
             v >= 0x61 && v <= 0x7A
         }) else { return "" }
         return "\n"

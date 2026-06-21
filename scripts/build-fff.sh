@@ -54,7 +54,15 @@ fingerprint="$(printf '%s\n%s\n%s\n%s\n' "${fff_sha}" "${fff_dirt}" "${target_ar
 # incremental Xcode builds fast. The fingerprint pins the dylib to a
 # specific submodule SHA + script version so a checkout change forces a
 # rebuild rather than linking a stale artifact.
-if [ -f "${lib_output}" ] && [ -f "${fingerprint_path}" ] \
+#
+# The shared include dir (fff.h, module.modulemap) is also required — a
+# partial clean that removed the headers while leaving the dylib would
+# otherwise make the Swift compile fail with a missing header on a fast
+# path that skipped regenerating it.
+if [ -f "${lib_output}" ] \
+   && [ -f "${fingerprint_path}" ] \
+   && [ -f "${include_root}/fff.h" ] \
+   && [ -f "${include_root}/module.modulemap" ] \
    && [ "$(cat "${fingerprint_path}")" = "${fingerprint}" ]; then
     echo "build-fff.sh: fast path — ${lib_output} up to date (fingerprint ${fingerprint:0:12})"
     exit 0
