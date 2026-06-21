@@ -22,8 +22,16 @@ struct BehindChip: View {
     let count: Int
     let label: String
     let role: Role
+    /// Spinner shown while a pull triggered by this chip is in flight.
+    var inFlight: Bool = false
+    /// When set, the chip becomes a button that runs this action (used by the
+    /// upstream chip to trigger a pull). When nil, the chip is a plain pill.
+    var onTap: (() -> Void)? = nil
+    /// Remote tracking ref shown in the action tooltip (e.g. "origin/main").
+    var ref: String? = nil
 
     @Environment(\.theme) private var theme
+    @State private var hovering = false
 
     /// Pure text composition: `↓N label` (e.g. "↓3 main"). `↓` reads as
     /// "commits to pull in."
@@ -31,15 +39,41 @@ struct BehindChip: View {
         "↓\(count) \(label)"
     }
 
+    @ViewBuilder
     var body: some View {
+        if let onTap {
+            // The actionable chip owns the tooltip ("Pull …"); the call site
+            // does not add its own `.help`, which would otherwise shadow this.
+            let refSuffix = ref.map { " from \($0)" } ?? ""
+            Button(action: onTap) { pill(highlighted: hovering) }
+                .buttonStyle(.plain)
+                .disabled(inFlight)
+                .onHover { hovering = $0 }
+                .onChange(of: inFlight) { _, nowInFlight in if nowInFlight { hovering = false } }
+                .pointingHandCursor()
+                .help("Pull \(count) commit\(count == 1 ? "" : "s")\(refSuffix) (rebase)")
+        } else {
+            pill(highlighted: false)
+        }
+    }
+
+    /// Hover styling is passed in explicitly so the non-interactive (base)
+    /// chip can never inherit it.
+    private func pill(highlighted: Bool) -> some View {
         let tint = theme.color(role.colorToken)
-        return Text(Self.displayText(count: count, label: label))
-            .font(.system(size: 9.5, weight: .semibold))
-            .foregroundColor(tint)
-            .lineLimit(1)
-            .padding(.horizontal, 6).padding(.vertical, 1)
-            .background(tint.opacity(0.12))
-            .clipShape(Capsule())
+        return HStack(spacing: 4) {
+            if inFlight {
+                Spinner(lineWidth: 1.2, duration: 0.7)
+                    .frame(width: 9, height: 9)
+            }
+            Text(Self.displayText(count: count, label: label))
+                .font(.system(size: 9.5, weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundColor(highlighted ? tint.opacity(0.8) : tint)
+        .padding(.horizontal, 6).padding(.vertical, 1)
+        .background(tint.opacity(highlighted ? 0.2 : 0.12))
+        .clipShape(Capsule())
     }
 }
 
@@ -84,8 +118,15 @@ struct CommitsSectionView: View {
                             .help("\(s.count) behind \(s.ref)")
                     }
                     if let s = behindUpstream {
-                        BehindChip(count: s.count, label: "remote", role: .upstream)
-                            .help("\(s.count) behind \(s.ref)")
+                        BehindChip(
+                            count: s.count,
+                            label: "remote",
+                            role: .upstream,
+                            inFlight: rps.pullInFlight,
+                            onTap: { rps.pull() },
+                            ref: s.ref
+                        )
+                        .disabled(rps.pullInFlight || rps.mergeOp.current != nil)
                     }
                     BaseBranchSelector(
                         baseBranch: $baseBranch,

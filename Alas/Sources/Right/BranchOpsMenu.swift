@@ -20,6 +20,8 @@ struct BranchOpsMenu: View {
         Menu {
             Button("Merge branch into this worktree…") { openMergePicker() }
             Button("Rebase this worktree onto…")      { openRebasePicker() }
+            Divider()
+            Button("Fetch now") { rps.fetchNow() }
         } label: {
             Image(systemName: "arrow.triangle.merge")
                 .font(.system(size: 11, weight: .semibold))
