@@ -1285,6 +1285,15 @@ struct DiffReviewSurfaceTests {
         #expect(plain == "Use bold and configId.")
     }
 
+    @MainActor
+    @Test func inlineFeedbackMarkdownPlainTextUsesImageAltAndStripsSubscript() {
+        let plain = DiffReviewInlineFeedbackMarkdown.plainText(
+            "**<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub> Preserve streamed text**"
+        )
+
+        #expect(plain == "P2 Badge Preserve streamed text")
+    }
+
     @Test func textDocumentViewClearsInactivePaneLSPContextWhenLayoutChanges() {
         let manager = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: []))
         let context = DiffPaneLSPContext(
