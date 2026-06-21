@@ -777,7 +777,7 @@ final class ACPSession: ObservableObject, Identifiable {
             } else {
                 switch transcript.messages[i] {
                 case .agent(_, let buf), .thought(_, let buf):
-                    buf.append(addition)
+                    buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
                     transcript.streamingTick &+= 1
                     return i
                 default:
@@ -788,6 +788,74 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.messages.append(makeNew())
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
+    }
+    /// Returns the separator (if any) to insert between two streaming
+    /// chunks before appending `next` to `previous`. Adapters sometimes
+    /// split their stream at a sentence boundary and drop the trailing
+    /// whitespace, so a chunk ending in `.` is followed by one starting
+    /// with an uppercase letter — `append` with no separator would glue
+    /// them as `completed.Running`, mashing two sentences together. When
+    /// we detect that boundary, inject a newline so the second sentence
+    /// starts on its own line.
+    ///
+    /// To avoid corrupting identifiers / URLs / paths that happen to be
+    /// split across chunks (`Foo.` + `Bar`, `example.com.` + `Path`), we
+    /// require the word immediately before the punctuation to be all
+    /// lowercase (a real English word ending a sentence, not a CamelCase
+    /// token) and not look like the tail of a URL or path (no `/` or `://`
+    /// in the run of non-whitespace preceding the punctuation).
+    private static func streamingSeparator(between previous: String, and next: String) -> String {
+        guard let last = previous.last, let first = next.first else { return "" }
+        if last.isWhitespace || first.isWhitespace { return "" }
+        guard last == "." || last == "!" || last == "?" else { return "" }
+        // Next chunk must start with an uppercase letter followed by a
+        // lowercase one (start of a new sentence, not an all-caps acronym
+        // like `API`).
+        guard let firstUpper = first.asciiValue,
+              firstUpper >= 0x41 && firstUpper <= 0x5A,
+              let secondScalar = next.unicodeScalars.dropFirst().first,
+              secondScalar.value >= 0x61 && secondScalar.value <= 0x7A
+        else { return "" }
+        // Walk back from the punctuation over the preceding run of
+        // non-whitespace. The word immediately before the punctuation must
+        // be all lowercase ASCII letters — this excludes CamelCase tokens
+        // like `Foo` in `Foo.Bar` and acronyms like `SHA` in `head SHA.Git`.
+        // A `/` or `://` in that run signals a URL/path tail (e.g.
+        // `example.com.` split before `Path`), which we also leave alone.
+        let scalars = previous.unicodeScalars
+        var i = scalars.index(before: scalars.endIndex) // the punctuation
+        // No word before the punctuation (chunk is just "." or "!" etc.) —
+        // nothing to validate, treat as no separator.
+        guard i > scalars.startIndex else { return "" }
+        scalars.formIndex(before: &i) // first char of the word run
+        var hasSlash = false
+        var hasColon = false
+        var wordChars: [UInt32] = []
+        var precededByWhitespace = false
+        while i >= scalars.startIndex {
+            let s = scalars[i]
+            if s.value == 0x20 || (s.value >= 0x09 && s.value <= 0x0D) {
+                precededByWhitespace = true
+                break
+            }
+            wordChars.append(s.value)
+            if s == "/" { hasSlash = true }
+            if s == ":" { hasColon = true }
+            if i == scalars.startIndex { break }
+            scalars.formIndex(before: &i)
+        }
+        // A `/` or `:` in the preceding run signals a URL/path tail
+        // (e.g. `example.com.` split before `Path`); leave it alone.
+        if hasSlash || hasColon { return "" }
+        // The word must be all lowercase ASCII letters. Require it to be
+        // preceded by whitespace so a qualified identifier whose left
+        // segment is lowercase (`package.Type`, `self.Value`) doesn't get
+        // a newline injected — a sentence-ending word in prose is always
+        // preceded by a space, a code identifier usually isn't.
+        guard precededByWhitespace, !wordChars.isEmpty, wordChars.allSatisfy({ v in
+            v >= 0x61 && v <= 0x7A
+        }) else { return "" }
+        return "\n"
     }
     /// Returns the index of the matching tool call, or nil if no match.
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) -> Int? {

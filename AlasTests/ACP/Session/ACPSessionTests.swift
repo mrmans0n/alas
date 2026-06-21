@@ -15,6 +15,106 @@ struct ACPSessionTests {
         else { Issue.record("expected single agent message") }
     }
 
+    @Test("agent chunks split at a sentence boundary get a newline separator")
+    func chunksSplitAtSentenceGetNewline() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("Compacting completed.")))
+        session.apply(.agentMessageChunk(.text("Running the pull tests.")))
+        #expect(session.transcript.messages.count == 1)
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "Compacting completed.\nRunning the pull tests.")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("agent chunks already separated by whitespace are not double-spaced")
+    func chunksWithExistingWhitespaceNoExtraSeparator() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("line one\n")))
+        session.apply(.agentMessageChunk(.text("line two")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "line one\nline two")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("agent chunks with ! or ? boundary also get a newline separator")
+    func chunksSplitAtPunctuationGetNewline() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // Lowercase word before `!` with preceding whitespace → separator.
+        session.apply(.agentMessageChunk(.text("All done!")))
+        session.apply(.agentMessageChunk(.text("Next task")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "All done!\nNext task")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("agent chunks with capitalized word before punctuation do not get a newline")
+    func chunksWithCapitalizedWordNoSeparator() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // `Foo` is CamelCase → no separator (protects identifiers).
+        session.apply(.agentMessageChunk(.text("Foo.")))
+        session.apply(.agentMessageChunk(.text("Bar")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "Foo.Bar")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("single-character punctuation chunk does not crash and adds no separator")
+    func chunksWithSingleCharPunctuationNoCrash() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // A chunk that is just "." followed by "Next" must not trap when
+        // walking back past the punctuation and must not inject a newline.
+        session.apply(.agentMessageChunk(.text(".")))
+        session.apply(.agentMessageChunk(.text("Next task")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == ".Next task")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("qualified identifier with lowercase left segment gets no separator")
+    func chunksWithQualifiedIdentifierNoSeparator() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // `package.` + `Type` — lowercase word but no preceding whitespace
+        // (qualified identifier at chunk start) → no separator.
+        session.apply(.agentMessageChunk(.text("package.")))
+        session.apply(.agentMessageChunk(.text("Type")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "package.Type")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("agent chunks with all-caps acronym after period do not get a newline")
+    func chunksWithAcronymNoSeparator() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("See the API docs.")))
+        session.apply(.agentMessageChunk(.text("API")))
+        // "API" — first char 'A' (upper), second char 'P' (upper, not [a-z]) → no separator
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "See the API docs.API")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("agent chunks split at a URL tail do not get a newline")
+    func chunksSplitAtURLNoSeparator() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.text("See https://example.com.")))
+        session.apply(.agentMessageChunk(.text("Path")))
+        // `com.` is preceded by `/` (URL tail) → no separator.
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "See https://example.com.Path")
+        } else { Issue.record("expected single agent message") }
+    }
+
+    @Test("thought chunks split at a sentence boundary get a newline separator")
+    func thoughtChunksSplitAtSentenceGetNewline() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.agentThoughtChunk(.text("First thought.")))
+        session.apply(.agentThoughtChunk(.text("Second thought.")))
+        #expect(session.transcript.messages.count == 1)
+        if case .thought(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == "First thought.\nSecond thought.")
+        } else { Issue.record("expected single thought message") }
+    }
+
     @Test("agent chunks after a completed output boundary start a new message")
     func completedOutputBoundaryStartsNewMessage() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

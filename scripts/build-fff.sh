@@ -23,11 +23,50 @@ install_root="${build_root}/install"
 lib_dir="${install_root}/lib"
 lib_output="${lib_dir}/libfff_c.dylib"
 include_root="${srcroot}/.build/fff/include"
+fingerprint_path="${build_root}/fingerprint"
 
 die() {
     echo "build-fff.sh: error: $*" >&2
     exit 1
 }
+
+# Fingerprint over the fff submodule (HEAD + working-tree dirt), target
+# arch, and this script's content hash. A stale `.build/fff` from a
+# previous submodule checkout is invalidated by the SHA change.
+fff_sha="$(git -C "${fff_src}" rev-parse HEAD 2>/dev/null || echo "")"
+fff_dirt="$(
+    {
+        git -C "${fff_src}" diff --no-ext-diff --no-color HEAD -- . 2>/dev/null | shasum -a 256
+        while IFS= read -r -d '' untracked; do
+            printf '%s\0' "${untracked}"
+            shasum -a 256 "${fff_src}/${untracked}" 2>/dev/null | awk '{print $1}'
+        done < <(git -C "${fff_src}" ls-files --others --exclude-standard -z 2>/dev/null | LC_ALL=C sort -z) \
+            | shasum -a 256
+    } | shasum -a 256 | awk '{print $1}'
+)"
+script_id="$(shasum -a 256 "${script_path}" 2>/dev/null | awk '{print $1}')"
+fingerprint="$(printf '%s\n%s\n%s\n%s\n' "${fff_sha}" "${fff_dirt}" "${target_arch}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+
+# Fast path: if the expected dylib for this arch already exists AND the
+# fingerprint matches, skip the cargo build. The Xcode build phase runs
+# this script on every build (`alwaysOutOfDate = 1`), but a cargo build
+# from scratch takes ~40s, so reusing a previously produced dylib keeps
+# incremental Xcode builds fast. The fingerprint pins the dylib to a
+# specific submodule SHA + script version so a checkout change forces a
+# rebuild rather than linking a stale artifact.
+#
+# The shared include dir (fff.h, module.modulemap) is also required — a
+# partial clean that removed the headers while leaving the dylib would
+# otherwise make the Swift compile fail with a missing header on a fast
+# path that skipped regenerating it.
+if [ -f "${lib_output}" ] \
+   && [ -f "${fingerprint_path}" ] \
+   && [ -f "${include_root}/fff.h" ] \
+   && [ -f "${include_root}/module.modulemap" ] \
+   && [ "$(cat "${fingerprint_path}")" = "${fingerprint}" ]; then
+    echo "build-fff.sh: fast path — ${lib_output} up to date (fingerprint ${fingerprint:0:12})"
+    exit 0
+fi
 
 if [ "${target_arch}" = "universal" ]; then
     mkdir -p "${lib_dir}"
@@ -42,6 +81,7 @@ if [ "${target_arch}" = "universal" ]; then
 
     lipo -create "${arm64_slice}" "${x86_64_slice}" -output "${lib_output}"
     install_name_tool -id @rpath/libfff_c.dylib "${lib_output}"
+    printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
     echo "build-fff.sh: produced universal ${lib_output}"
     exit 0
 fi
@@ -87,5 +127,10 @@ module FffC [system] {
     export *
 }
 MODULEMAP
+
+# Write the fingerprint last so a partial interruption (between dylib
+# install and header copy, or a failed header/modulemap write) leaves
+# an absent or mismatched fingerprint rather than a stale-valid one.
+printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
 
 echo "build-fff.sh: built ${lib_output}"
