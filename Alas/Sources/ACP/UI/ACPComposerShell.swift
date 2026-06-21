@@ -365,7 +365,8 @@ struct ACPComposer: View {
                     ?? spec.currentId
                     ?? "Model",
              placeholder: "Model",
-             accent: theme.color("syntax-keyword"))
+             accent: theme.color("syntax-keyword"),
+             searchDescriptions: false)
     }
 
     private func parameterChip(_ parameter: ACPParameterChip) -> some View {
@@ -411,7 +412,8 @@ struct ACPComposer: View {
     private func chip(spec: ChipSpec,
                       label: String,
                       placeholder: String,
-                      accent: Color) -> some View {
+                      accent: Color,
+                      searchDescriptions: Bool = true) -> some View {
         ACPSelectChip(
             label: label,
             placeholder: placeholder,
@@ -420,6 +422,7 @@ struct ACPComposer: View {
                 ACPSelectChip.Item(id: $0.id, name: $0.name, description: $0.description)
             },
             selectedId: spec.currentId,
+            searchDescriptions: searchDescriptions,
             onSelect: { item in apply(spec: spec, selectedId: item.id) }
         )
     }

@@ -108,8 +108,8 @@ struct ACPSelectChipTests {
 
     // MARK: - DropdownPanel filtering
 
-    @Test("filters model options by name/id but not description substrings")
-    func filteringIgnoresDescriptionSubstrings() {
+    @Test("can exclude description substrings for model filtering")
+    func filteringCanIgnoreDescriptionSubstrings() {
         let items = [
             ACPSelectChip.Item(id: "kimi-2.7", name: "kimi-2.7", description: nil),
             ACPSelectChip.Item(id: "claude-opus", name: "Claude Opus", description: "2.7M context"),
@@ -117,9 +117,21 @@ struct ACPSelectChipTests {
             ACPSelectChip.Item(id: "gpt-4", name: "GPT-4", description: "2.7M parameters"),
         ]
 
-        let result = ACPSelectChip.filteredItems(items, query: "2.7")
+        let result = ACPSelectChip.filteredItems(items, query: "2.7", searchDescriptions: false)
 
         #expect(result.map(\.id) == ["kimi-2.7"])
+    }
+
+    @Test("default filtering includes description substrings for non-model chips")
+    func defaultFilteringIncludesDescriptionSubstrings() {
+        let items = [
+            ACPSelectChip.Item(id: "standard", name: "Standard", description: "No background processing"),
+            ACPSelectChip.Item(id: "fast", name: "Fast", description: "Lower reasoning effort"),
+        ]
+
+        let result = ACPSelectChip.filteredItems(items, query: "reasoning")
+
+        #expect(result.map(\.id) == ["fast"])
     }
 
     @Test("empty query returns all items in order")
