@@ -219,7 +219,10 @@ struct DiffReviewSurface: View {
                     collapsed: $reviewSummaryCollapsed,
                     focusedDraftCommentID: focusedDraftCommentID,
                     draftCommentActions: draftCommentActions,
-                    onSelectDraftComment: onSelectDraftComment
+                    onSelectDraftComment: onSelectDraftComment,
+                    inlineFeedbackByFileID: inlineFeedbackByFileID,
+                    focusedFeedbackID: focusedFeedbackID,
+                    onSelectInlineFeedback: onSelectInlineFeedback
                 )
             }
         }

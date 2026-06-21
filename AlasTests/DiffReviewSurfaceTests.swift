@@ -2291,6 +2291,46 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-header", in: controller.view) == nil)
     }
 
+    @Test func surfaceForwardsInlineFeedbackToSummaryRail() throws {
+        let file = summary(path: "Sources/App.swift")
+        let session = loadedSession(summaries: [file])
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please fix this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: file.path, line: 2, side: .new),
+            evidenceItemID: "thread-1"
+        )
+        var selectedFileID: DiffReviewFileID? = file.id
+        var railCollapsed = false
+        var summaryCollapsed = false
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewSurface(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            reviewSummaryCollapsed: Binding(get: { summaryCollapsed }, set: { summaryCollapsed = $0 }),
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsDraftSummaryRail: true,
+            inlineFeedbackByFileID: [file.id: [feedback]]
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1200, height: 700)
+
+        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-thread-1", in: controller.view) != nil)
+    }
+
     private func parsedDiff() -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
