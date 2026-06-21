@@ -86,6 +86,9 @@ struct ReviewSessionTabView: View {
     @State private var focusedDraftCommentID: String?
     @State private var draftCommentScrollCommand: DiffReviewDraftCommentScrollCommand?
     @State private var draftCommentScrollController = DiffReviewDraftCommentScrollController()
+    @State private var focusedFeedbackID: String?
+    @State private var inlineFeedbackScrollCommand: DiffReviewInlineFeedbackScrollCommand?
+    @State private var inlineFeedbackScrollController = DiffReviewInlineFeedbackScrollController()
     @State private var loadCoordinator = ReviewSessionTabLoadCoordinator()
     @State private var loadGeneration = 0
     @State private var providerPublishConfirmation: ProviderReviewPublishConfirmationState?
@@ -296,7 +299,10 @@ struct ReviewSessionTabView: View {
                 showsDraftSummaryRail: true,
                 lspContextForFile: makeLSPContext,
                 inlineFeedbackByFileID: inlineFeedbackByFileID(for: loaded),
+                focusedFeedbackID: focusedFeedbackID,
+                inlineFeedbackScrollCommand: inlineFeedbackScrollCommand,
                 inlineFeedbackActions: inlineFeedbackActions(for: loaded),
+                onSelectInlineFeedback: selectInlineFeedback,
                 reviewFeedbackTarget: loaded.feedbackTarget,
                 draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
                 focusedDraftCommentID: focusedDraftCommentID,
@@ -740,6 +746,15 @@ struct ReviewSessionTabView: View {
         }
     }
 
+    static func fileID(
+        forFeedbackID feedbackID: String,
+        in grouped: [DiffReviewFileID: [DiffReviewInlineFeedback]]
+    ) -> DiffReviewFileID? {
+        grouped.first { _, items in
+            items.contains { $0.id == feedbackID }
+        }?.key
+    }
+
     private func inlineFeedbackActions(for loaded: ReviewSessionLoadedContext) -> DiffReviewInlineFeedbackActions {
         var actions = DiffReviewInlineFeedbackActions()
         actions.availability = { item, _ in
@@ -894,6 +909,18 @@ struct ReviewSessionTabView: View {
         draftCommentScrollCommand = draftCommentScrollController.command(
             commentID: comment.id,
             fileID: comment.fileID
+        )
+    }
+
+    private func selectInlineFeedback(_ item: DiffReviewInlineFeedback) {
+        guard let loaded else { return }
+        let grouped = inlineFeedbackByFileID(for: loaded)
+        guard let fileID = Self.fileID(forFeedbackID: item.id, in: grouped) else { return }
+        focusedFeedbackID = item.id
+        setSelectedFileID(fileID, persist: true)
+        inlineFeedbackScrollCommand = inlineFeedbackScrollController.command(
+            feedbackID: item.id,
+            fileID: fileID
         )
     }
 
