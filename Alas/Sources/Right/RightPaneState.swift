@@ -121,6 +121,7 @@ final class RightPaneState {
     var trackUpstreamForCommits: Bool = false
 
     var pendingDiscard: PendingDiscard? = nil
+    var pendingCherryPickSHA: String? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -838,6 +839,20 @@ final class RightPaneState {
 
     func cancelDiscard() {
         pendingDiscard = nil
+    }
+
+    func requestCherryPick(sha: String) {
+        pendingCherryPickSHA = sha
+    }
+
+    func cancelCherryPick() {
+        pendingCherryPickSHA = nil
+    }
+
+    func confirmCherryPick() {
+        guard let sha = pendingCherryPickSHA else { return }
+        pendingCherryPickSHA = nil
+        runCherryPick(sha: sha)
     }
 
     @MainActor
