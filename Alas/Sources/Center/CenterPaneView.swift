@@ -268,6 +268,8 @@ struct CenterPaneView: View {
                             tabState: s
                         )
                         .id(s.id)
+                    case .fileSnapshot, .fileHistory:
+                        EmptyView()
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
                             .id(s.id)

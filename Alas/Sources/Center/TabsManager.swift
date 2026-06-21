@@ -681,6 +681,30 @@ final class TabsManager {
     }
 
     @discardableResult
+    func openOrFocusFileSnapshot(worktreeId: String, relativePath: String, ref: String = "HEAD") -> Tab {
+        let state = FileSnapshotTabState(worktreeId: worktreeId, relativePath: relativePath, ref: ref)
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .fileSnapshot(state)
+        }
+        let tab = Tab.fileSnapshot(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func openOrFocusFileHistory(worktreeId: String, relativePath: String) -> Tab {
+        let state = FileHistoryTabState(worktreeId: worktreeId, relativePath: relativePath)
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .fileHistory(state)
+        }
+        let tab = Tab.fileHistory(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func openOrFocusReviewSession(worktreeId: String, record: ReviewSessionRecord) -> Tab {
         let baseState = ReviewSessionTabState(worktreeId: worktreeId, record: record)
         if var file = byWorktree[worktreeId],
