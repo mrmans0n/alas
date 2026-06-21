@@ -834,6 +834,7 @@ final class ACPSession: ObservableObject, Identifiable {
             wordChars.append(s.value)
             if s == "/" { hasSlash = true }
             if s == ":" { hasColon = true }
+            if i == scalars.startIndex { break }
             scalars.formIndex(before: &i)
         }
         // A `/` or `:` in the preceding run signals a URL/path tail

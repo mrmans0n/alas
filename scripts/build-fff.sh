@@ -110,7 +110,6 @@ cargo_output="${build_root}/cargo-target/${cargo_target}/release/libfff_c.dylib"
 
 rsync -a "${cargo_output}" "${lib_output}"
 install_name_tool -id @rpath/libfff_c.dylib "${lib_output}"
-printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
 
 rsync -a "${fff_src}/crates/fff-c/include/fff.h" "${include_root}/fff.h"
 cat > "${include_root}/module.modulemap" <<'MODULEMAP'
@@ -120,5 +119,10 @@ module FffC [system] {
     export *
 }
 MODULEMAP
+
+# Write the fingerprint last so a partial interruption (between dylib
+# install and header copy, or a failed header/modulemap write) leaves
+# an absent or mismatched fingerprint rather than a stale-valid one.
+printf '%s\n' "${fingerprint}" > "${fingerprint_path}"
 
 echo "build-fff.sh: built ${lib_output}"
