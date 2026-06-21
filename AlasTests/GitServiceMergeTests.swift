@@ -102,6 +102,31 @@ struct GitServiceMergeTests {
         #expect(sha.hasPrefix(featureSha.prefix(7)))
     }
 
+    @Test func mergeStateDetectsRevertInProgress() async throws {
+        let repo = try await Self.makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try Self.writeFile(repo, "a.txt", "base\n")
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: repo)
+        try Self.writeFile(repo, "a.txt", "target\n")
+        _ = try await Process.git(["commit", "-q", "-am", "target change"], cwd: repo)
+        let targetSha = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        try Self.writeFile(repo, "a.txt", "current\n")
+        _ = try await Process.git(["commit", "-q", "-am", "current change"], cwd: repo)
+
+        _ = try await Process.git(["revert", "--no-edit", targetSha], cwd: repo)
+
+        let svc = GitService()
+        let state = try await svc.mergeState(worktreePath: repo)
+        guard case .revert(let sha, _) = state else {
+            Issue.record("expected .revert state, got \(String(describing: state))")
+            return
+        }
+        #expect(sha.hasPrefix(targetSha.prefix(7)))
+    }
+
     @Test func conflictedFileReadsAllThreeSides() async throws {
         let repo = try await Self.makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }

@@ -6,13 +6,17 @@ struct CommitRow: View {
     var isHistorical: Bool = false
     let onSelect: () -> Void
     let onCopySHA: () -> Void
+    var onCopyMessage: (() -> Void)? = nil
+    var onOpenRemote: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
+    var onRevert: (() -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var shaHovering = false
     @State private var pendingCherryPick = false
+    @State private var pendingRevert = false
 
     var body: some View {
         Button(action: onSelect) {
@@ -37,9 +41,17 @@ struct CommitRow: View {
                 Divider()
             }
             Button("Copy Commit SHA") { copySHA() }
+            Button("Copy Commit Message") { copyMessage() }
+            if let onOpenRemote {
+                Button("Open Commit on Remote") { onOpenRemote() }
+            }
             if onCherryPick != nil {
                 Divider()
                 Button("Cherry-pick…") { pendingCherryPick = true }
+            }
+            if onRevert != nil {
+                Divider()
+                Button("Revert Commit…", role: .destructive) { pendingRevert = true }
             }
         }
         .confirmationDialog(
@@ -53,6 +65,18 @@ struct CommitRow: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Apply this commit to the current branch.")
+        }
+        .confirmationDialog(
+            "Revert commit?",
+            isPresented: $pendingRevert,
+            titleVisibility: .visible
+        ) {
+            Button("Revert \(String(commit.sha.prefix(7)))", role: .destructive) {
+                onRevert?()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Create a new commit that reverses this commit.")
         }
     }
 
@@ -183,5 +207,14 @@ struct CommitRow: View {
     private func copySHA() {
         onCopySHA()
         copyFeedback.show("Copied SHA")
+    }
+
+    private func copyMessage() {
+        if let onCopyMessage {
+            onCopyMessage()
+        } else {
+            Clipboard.copy(commit.fullMessage)
+        }
+        copyFeedback.show("Copied message")
     }
 }

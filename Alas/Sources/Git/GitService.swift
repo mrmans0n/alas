@@ -817,6 +817,8 @@ extension GitService {
             authorInitials: CommitInfo.initials(for: author),
             date: date,
             subject: subject,
+            rawSubject: rawSubject,
+            body: body,
             conventionalTag: tag,
             filesChanged: files.count,
             insertions: files.reduce(0) { $0 + $1.add },
@@ -1150,16 +1152,17 @@ extension GitService {
         }
 
         // %x1f = ASCII 0x1f (unit separator), %x1e = 0x1e (record
-        // separator). Avoids collisions with any text in messages.
+        // separator), %x1d = 0x1d (group separator). Avoids collisions with
+        // most message text while keeping the body separate from numstat rows.
         //
         // Place %x1e at the START of each commit's format line (using
         // tformat: so git appends a LF after each record). Splitting on
         // \x1e then yields one empty leading piece followed by one piece
         // per commit, each containing:
-        //   <sha>\x1f<short>\x1f<author-name>\x1f<author-iso-date>\x1f<subject>\n
+        //   <sha>\x1f<short>\x1f<author-name>\x1f<author-iso-date>\x1f<subject>\x1f<body>\x1d
         //   \n                        ← blank separator between header and numstat
         //   <numstat lines: "A\tD\tpath" each>
-        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
+        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1d"
         let log = try await Process.git(
             ["log", "\(comparisonRef)..HEAD", "--pretty=tformat:\(format)", "--numstat"],
             cwd: worktree
@@ -1179,15 +1182,18 @@ extension GitService {
         for record in records {
             let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
-            guard let headerLine = lines.first else { continue }
-            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
-            guard fields.count == 5 else { continue }
+            let sections = trimmed.split(separator: "\u{1d}", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let headerLine = sections.first else { continue }
+            let numstatText = sections.count > 1 ? String(sections[1]) : ""
+            let lines = numstatText.split(separator: "\n", omittingEmptySubsequences: false)
+            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 5, omittingEmptySubsequences: false)
+            guard fields.count == 6 else { continue }
             let sha = String(fields[0])
             let short = String(fields[1])
             let author = String(fields[2])
             let dateStr = String(fields[3])
             let rawSubject = String(fields[4])
+            let body = String(fields[5]).trimmingCharacters(in: .whitespacesAndNewlines)
             let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
             let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
 
@@ -1214,6 +1220,8 @@ extension GitService {
                 authorInitials: CommitInfo.initials(for: author),
                 date: date,
                 subject: subject,
+                rawSubject: rawSubject,
+                body: body,
                 conventionalTag: tag,
                 filesChanged: filesChanged,
                 insertions: adds,
@@ -1231,7 +1239,7 @@ extension GitService {
     /// `CommitInfo` shape and the divider/dimming lives in the view layer.
     func commitsOlder(worktreePath: URL, beforeSha: String, count: Int) async throws -> [CommitInfo] {
         let range = "\(beforeSha)^"
-        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
+        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1f%b%x1d"
         let log = try await Process.git(
             ["log", range, "-n", String(count), "--first-parent",
              "--pretty=tformat:\(format)", "--numstat"],
@@ -1256,15 +1264,18 @@ extension GitService {
         for record in records {
             let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { continue }
-            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
-            guard let headerLine = lines.first else { continue }
-            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
-            guard fields.count == 5 else { continue }
+            let sections = trimmed.split(separator: "\u{1d}", maxSplits: 1, omittingEmptySubsequences: false)
+            guard let headerLine = sections.first else { continue }
+            let numstatText = sections.count > 1 ? String(sections[1]) : ""
+            let lines = numstatText.split(separator: "\n", omittingEmptySubsequences: false)
+            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 5, omittingEmptySubsequences: false)
+            guard fields.count == 6 else { continue }
             let sha = String(fields[0])
             let short = String(fields[1])
             let author = String(fields[2])
             let dateStr = String(fields[3])
             let rawSubject = String(fields[4])
+            let body = String(fields[5]).trimmingCharacters(in: .whitespacesAndNewlines)
             let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
             let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
 
@@ -1288,6 +1299,8 @@ extension GitService {
                 authorInitials: CommitInfo.initials(for: author),
                 date: date,
                 subject: subject,
+                rawSubject: rawSubject,
+                body: body,
                 conventionalTag: tag,
                 filesChanged: filesChanged,
                 insertions: adds,
@@ -1598,6 +1611,17 @@ extension GitService {
             return .cherryPick(sha: sha, summary: summary)
         }
 
+        let revertHead = gitDir.appendingPathComponent("REVERT_HEAD")
+        if FileManager.default.fileExists(atPath: revertHead.path) {
+            let sha = (try? String(contentsOf: revertHead, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let summary = (try? await Process.git(
+                ["log", "-1", "--pretty=%s", sha],
+                cwd: worktreePath
+            ).stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? sha
+            return .revert(sha: sha, summary: summary)
+        }
+
         let mergeHead = gitDir.appendingPathComponent("MERGE_HEAD")
         if FileManager.default.fileExists(atPath: mergeHead.path) {
             // Try to read MERGE_MSG for the source-branch name (`merge branch 'X'`).
@@ -1867,6 +1891,21 @@ extension GitService {
         )
     }
 
+    func revert(worktreePath: URL, sha: String) async throws -> MergeResult {
+        let parents = try await parentCount(worktreePath: worktreePath, sha: sha)
+        var args: [String] = ["-c", "merge.conflictStyle=zdiff3", "revert", "--no-edit"]
+        if parents >= 2 {
+            args.append(contentsOf: ["-m", "1"])
+        }
+        args.append(sha)
+        let result = try await Process.git(args, cwd: worktreePath)
+        return try await classifyOperationResult(
+            worktreePath: worktreePath,
+            exitCode: result.exitCode,
+            stderr: result.stderr
+        )
+    }
+
     /// Number of parent commits for `sha`. Returns 1 for a normal commit, 2+ for a merge.
     private func parentCount(worktreePath: URL, sha: String) async throws -> Int {
         let result = try await Process.git(
@@ -1952,6 +1991,7 @@ extension GitService {
         case .merge:      subcommand = "merge"
         case .rebase:     subcommand = "rebase"
         case .cherryPick: subcommand = "cherry-pick"
+        case .revert:     subcommand = "revert"
         }
         let result = try await Process.git(
             ["-c", "merge.conflictStyle=zdiff3", "-c", "core.editor=true", subcommand, "--continue"],
@@ -1971,6 +2011,7 @@ extension GitService {
         case .merge:      subcommand = "merge"
         case .rebase:     subcommand = "rebase"
         case .cherryPick: subcommand = "cherry-pick"
+        case .revert:     subcommand = "revert"
         }
         let result = try await Process.git([subcommand, "--abort"], cwd: worktreePath)
         guard result.exitCode == 0 else {
@@ -1985,6 +2026,7 @@ extension GitService {
         switch op {
         case .rebase:     subcommand = "rebase"
         case .cherryPick: subcommand = "cherry-pick"
+        case .revert:     subcommand = "revert"
         case .merge:      throw OperationError.skipNotSupported
         }
         let result = try await Process.git(

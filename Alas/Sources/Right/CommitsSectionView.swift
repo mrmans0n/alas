@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Small pill shown in the Commits section header trailing slot when the
@@ -158,8 +159,11 @@ struct CommitsSectionView: View {
                     isLast: idx == commits.count - 1 && olderCommits.isEmpty,
                     onSelect: { onSelect(commit) },
                     onCopySHA: { onCopySHA(commit) },
+                    onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+                    onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
                     onEdit: { onEdit(commit) },
-                    onCherryPick: { rps.runCherryPick(sha: commit.sha) }
+                    onCherryPick: { rps.runCherryPick(sha: commit.sha) },
+                    onRevert: { rps.runRevert(sha: commit.sha) }
                 )
             }
         } else if olderCommits.isEmpty {
@@ -181,7 +185,10 @@ struct CommitsSectionView: View {
                     isHistorical: comparisonRef != nil,
                     onSelect: { onSelect(commit) },
                     onCopySHA: { onCopySHA(commit) },
-                    onCherryPick: { rps.runCherryPick(sha: commit.sha) }
+                    onCopyMessage: { Clipboard.copy(commit.fullMessage) },
+                    onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
+                    onCherryPick: { rps.runCherryPick(sha: commit.sha) },
+                    onRevert: { rps.runRevert(sha: commit.sha) }
                 )
             }
         }
@@ -214,6 +221,13 @@ struct CommitsSectionView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    private func openRemoteAction(for commit: CommitInfo, remote: CodeHostRemote?) -> (() -> Void)? {
+        guard let url = remote?.commitURL(sha: commit.sha) else { return nil }
+        return {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @ViewBuilder

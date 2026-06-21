@@ -159,4 +159,30 @@ struct CodeHostRemoteDetectorTests {
 
         #expect(remote == nil)
     }
+
+    @Test func commitURLUsesGitHubCommitPath() {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+
+        #expect(remote.commitURL(sha: "abcdef123") == URL(string: "https://github.com/mrmans0n/alas/commit/abcdef123"))
+    }
+
+    @Test func commitURLUsesGitLabCommitPath() {
+        let remote = CodeHostRemote(
+            kind: .gitlab,
+            host: "gitlab.example.com",
+            owner: "platform/mobile",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://gitlab.example.com/platform/mobile/alas")!
+        )
+
+        #expect(remote.commitURL(sha: "abcdef123") == URL(string: "https://gitlab.example.com/platform/mobile/alas/-/commit/abcdef123"))
+    }
 }
