@@ -150,8 +150,8 @@ struct ConflictedFile: Equatable {
 }
 
 /// An in-progress conflict-producing operation. Detected by the presence
-/// of marker files inside `.git`: `MERGE_HEAD`, `rebase-merge/`, or
-/// `CHERRY_PICK_HEAD`.
+/// of marker files inside `.git`: `MERGE_HEAD`, `rebase-merge/`,
+/// `CHERRY_PICK_HEAD`, or `REVERT_HEAD`.
 enum MergeOperation: Equatable {
     /// Merging another branch into the current one.
     /// - sourceBranch: the branch being merged in (read from MERGE_MSG / MERGE_HEAD ref)
@@ -164,6 +164,10 @@ enum MergeOperation: Equatable {
     /// Cherry-picking a single commit. `sha` and the first line of the
     /// commit message are exposed for the operation card.
     case cherryPick(sha: String, summary: String)
+
+    /// Reverting a single commit. `sha` and the first line of the commit
+    /// message are exposed for the operation card.
+    case revert(sha: String, summary: String)
 }
 
 struct RebasePlan: Equatable {

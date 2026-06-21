@@ -69,6 +69,16 @@ final class RightPaneState {
     var behindBase: GitService.BehindStatus? = nil
     var behindUpstream: GitService.BehindStatus? = nil
 
+    /// Hosted remote used for commit browser links in the Commits section.
+    /// Nil when the worktree has no recognized GitHub/GitLab fetch remote.
+    var commitRemote: CodeHostRemote? = nil
+    /// Hosted remote used for primary/ahead commit rows. This follows the
+    /// current branch's upstream remote, not the comparison/base remote.
+    var primaryCommitRemote: CodeHostRemote? = nil
+    /// True until the current branch is known to have no commits ahead of its
+    /// upstream. Used to avoid remote links for local-only primary commit rows.
+    var commitsNeedPush: Bool = true
+
     /// Live branch name, refreshed on each `refresh()`. The `worktree.branch`
     /// snapshot captured at construction goes stale after a `git checkout`
     /// inside the same worktree, so the chip predicates read this instead.
@@ -382,12 +392,14 @@ final class RightPaneState {
             )
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)
+            async let remotesProbe = git.remotes(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
             let (commits, ref) = try await c
             let reviewLoopBaseResult = try? await reviewLoopBase
             let resolvedUpstream = try? await upstream
+            let remotes = (try? await remotesProbe) ?? []
             _ = await mergeRefresh
             let indexFingerprint: String
             if let lsResult = try? await Process.git(
@@ -419,6 +431,22 @@ final class RightPaneState {
             self.fileTree = tree
             self.commits = commits
             self.comparisonRef = ref
+            let preferredCommitRemoteRef = ref ?? baseBranch
+            self.commitRemote = CodeHostRemoteDetector.detect(
+                from: remotes,
+                preferredRemoteName: CodeHostRemoteDetector.preferredRemoteName(
+                    forBaseBranch: preferredCommitRemoteRef,
+                    remotes: remotes
+                )
+            )
+            if let upstreamRemoteName = resolvedUpstream?.remote {
+                self.primaryCommitRemote = CodeHostRemoteDetector.detectAll(
+                    from: remotes,
+                    preferredRemoteName: upstreamRemoteName
+                ).first { $0.remoteName == upstreamRemoteName }
+            } else {
+                self.primaryCommitRemote = nil
+            }
             self.currentBranch = currentBranch
             self.currentHeadSHA = headSHA
             if previousBranch != currentBranch || previousHeadSHA != headSHA {
@@ -479,6 +507,9 @@ final class RightPaneState {
         commits = []
         olderCommits = []
         comparisonRef = nil
+        commitRemote = nil
+        primaryCommitRemote = nil
+        commitsNeedPush = true
         sidebarError = nil
         pendingDiscard = nil
         changesGeneration += 1
@@ -498,6 +529,7 @@ final class RightPaneState {
         async let upstreamAheadProbe = git.upstreamAheadCommitCount(worktreePath: worktree.path)
         let needsPush = (try? await needsPushProbe) ?? true
         let upstreamAheadCommitCount = (try? await upstreamAheadProbe) ?? 0
+        self.commitsNeedPush = needsPush
         let local = ReviewLoopLocalState(
             branchName: currentBranch,
             headSHA: headSHA,
@@ -1111,6 +1143,19 @@ final class RightPaneState {
                 handleOperationResult(result)
             } catch {
                 logger.error("cherry-pick failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @MainActor
+    func runRevert(sha: String) {
+        Task { @MainActor in
+            do {
+                let result = try await git.revert(worktreePath: worktree.path, sha: sha)
+                await refresh()
+                handleOperationResult(result)
+            } catch {
+                logger.error("revert failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }

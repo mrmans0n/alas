@@ -79,6 +79,54 @@ struct RightPaneStateBaseBranchTests {
         return (worktree, root)
     }
 
+    private func createTestRepoWithForkAndUpstream() async throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-base-branch-fork-upstream-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: tmp)
+        try "base\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: tmp)
+        _ = try await Process.git(["remote", "add", "origin", "https://github.com/nacho/alas.git"], cwd: tmp)
+        _ = try await Process.git(["remote", "add", "upstream", "https://github.com/mrmans0n/alas.git"], cwd: tmp)
+        let baseSha = try await Process.git(["rev-parse", "HEAD"], cwd: tmp)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["update-ref", "refs/remotes/origin/main", baseSha], cwd: tmp)
+        _ = try await Process.git(["update-ref", "refs/remotes/upstream/main", baseSha], cwd: tmp)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: tmp)
+        _ = try await Process.git(["branch", "--set-upstream-to=upstream/main", "feature"], cwd: tmp)
+        try "feature\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feature work"], cwd: tmp)
+        return tmp
+    }
+
+    private func createTestRepoWithUnsupportedTrackedRemote() async throws -> URL {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-base-branch-unsupported-upstream-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["config", "user.email", "t@e"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "t"], cwd: tmp)
+        try "base\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "."], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "-m", "base"], cwd: tmp)
+        _ = try await Process.git(["remote", "add", "origin", "https://github.com/nacho/alas.git"], cwd: tmp)
+        _ = try await Process.git(["remote", "add", "internal", "../internal.git"], cwd: tmp)
+        let baseSha = try await Process.git(["rev-parse", "HEAD"], cwd: tmp)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["update-ref", "refs/remotes/origin/main", baseSha], cwd: tmp)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: tmp)
+        try "feature\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["commit", "-q", "-am", "feature work"], cwd: tmp)
+        let featureSha = try await Process.git(["rev-parse", "HEAD"], cwd: tmp)
+            .stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["update-ref", "refs/remotes/internal/feature", featureSha], cwd: tmp)
+        _ = try await Process.git(["branch", "--set-upstream-to=internal/feature", "feature"], cwd: tmp)
+        return tmp
+    }
+
     private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async throws {
         for _ in 0..<100 {
             if condition() { return }
@@ -157,6 +205,34 @@ struct RightPaneStateBaseBranchTests {
         await state.refresh()
 
         #expect(state.comparisonRef == "origin/feature")
+    }
+
+    @Test func refreshUsesComparisonRefRemoteForCommitLinks() async throws {
+        let repo = try await createTestRepoWithForkAndUpstream()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let wt = makeWorktree(at: repo, branch: "feature")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+        state.trackUpstreamForCommits = true
+
+        await state.refresh()
+
+        #expect(state.comparisonRef == "upstream/main")
+        #expect(state.commitRemote?.remoteName == "upstream")
+        #expect(state.commitRemote?.repositorySlug == "mrmans0n/alas")
+    }
+
+    @Test func refreshDoesNotFallbackPrimaryCommitRemoteFromUnsupportedUpstream() async throws {
+        let repo = try await createTestRepoWithUnsupportedTrackedRemote()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let wt = makeWorktree(at: repo, branch: "feature")
+        let state = RightPaneState(worktree: wt, baseBranch: "main")
+
+        await state.refresh()
+
+        #expect(state.upstreamRef == "internal/feature")
+        #expect(!state.commitsNeedPush)
+        #expect(state.commitRemote?.remoteName == "origin")
+        #expect(state.primaryCommitRemote == nil)
     }
 
     @Test func storeRefreshesWhenConfigMatchesClearedOverride() async throws {

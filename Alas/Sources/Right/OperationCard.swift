@@ -43,6 +43,7 @@ struct OperationCard: View {
         case .merge:      return "Merging"
         case .rebase:     return "Rebasing"
         case .cherryPick: return "Cherry-picking"
+        case .revert:     return "Reverting"
         }
     }
 
@@ -64,7 +65,8 @@ struct OperationCard: View {
             case let (src?, nil):   return "\(src) · \(position)"
             default:                return position
             }
-        case .cherryPick(let sha, let summary):
+        case .cherryPick(let sha, let summary),
+             .revert(let sha, let summary):
             return "\(String(sha.prefix(7))) · \(summary)"
         }
     }

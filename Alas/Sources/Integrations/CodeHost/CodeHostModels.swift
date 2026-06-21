@@ -50,6 +50,15 @@ struct CodeHostRemote: Equatable, Sendable {
     let webURL: URL
 
     var repositorySlug: String { "\(owner)/\(repository)" }
+
+    func commitURL(sha: String) -> URL {
+        switch kind {
+        case .github:
+            return webURL.appendingPathComponent("commit").appendingPathComponent(sha)
+        case .gitlab:
+            return webURL.appendingPathComponent("-").appendingPathComponent("commit").appendingPathComponent(sha)
+        }
+    }
 }
 
 struct CodeHostProviderCapabilities: Equatable, Sendable {

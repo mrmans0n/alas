@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 @testable import Alas
 
 struct CommitInfoTests {
@@ -84,6 +85,44 @@ struct CommitInfoTests {
         let (tag, stripped) = CommitInfo.parseConventional(subject: "polish: refine commit chips")
         #expect(tag == "polish")
         #expect(stripped == "refine commit chips")
+    }
+
+    @Test func fullMessageIncludesRawSubjectAndTrimmedBody() {
+        let commit = CommitInfo(
+            sha: "abcdef1234567890",
+            shortSha: "abcdef1",
+            author: "Test User",
+            authorInitials: "TU",
+            date: Date(timeIntervalSince1970: 0),
+            subject: "refine commit chips",
+            rawSubject: "polish: refine commit chips",
+            body: "\nMore context.\n\n",
+            conventionalTag: "polish",
+            filesChanged: 0,
+            insertions: 0,
+            deletions: 0
+        )
+
+        #expect(commit.fullMessage == "polish: refine commit chips\n\nMore context.")
+    }
+
+    @Test func fullMessageFallsBackToRawSubjectWhenBodyIsEmpty() {
+        let commit = CommitInfo(
+            sha: "abcdef1234567890",
+            shortSha: "abcdef1",
+            author: "Test User",
+            authorInitials: "TU",
+            date: Date(timeIntervalSince1970: 0),
+            subject: "refine commit chips",
+            rawSubject: "polish: refine commit chips",
+            body: " \n ",
+            conventionalTag: "polish",
+            filesChanged: 0,
+            insertions: 0,
+            deletions: 0
+        )
+
+        #expect(commit.fullMessage == "polish: refine commit chips")
     }
 
     @Test func initialsEmpty() {

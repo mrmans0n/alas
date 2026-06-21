@@ -8,10 +8,40 @@ struct CommitInfo: Identifiable, Hashable {
     let authorInitials: String
     let date: Date
     let subject: String      // already stripped of conventional prefix
+    let rawSubject: String
+    let body: String
     let conventionalTag: String?
     let filesChanged: Int
     let insertions: Int
     let deletions: Int
+
+    init(
+        sha: String,
+        shortSha: String,
+        author: String,
+        authorInitials: String,
+        date: Date,
+        subject: String,
+        rawSubject: String? = nil,
+        body: String = "",
+        conventionalTag: String?,
+        filesChanged: Int,
+        insertions: Int,
+        deletions: Int
+    ) {
+        self.sha = sha
+        self.shortSha = shortSha
+        self.author = author
+        self.authorInitials = authorInitials
+        self.date = date
+        self.subject = subject
+        self.rawSubject = rawSubject ?? subject
+        self.body = body
+        self.conventionalTag = conventionalTag
+        self.filesChanged = filesChanged
+        self.insertions = insertions
+        self.deletions = deletions
+    }
 }
 
 extension CommitInfo {
@@ -55,5 +85,11 @@ extension CommitInfo {
             .prefix(2)
             .compactMap { $0.first.map { String($0).uppercased() } }
         return parts.isEmpty ? "?" : parts.joined()
+    }
+
+    var fullMessage: String {
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBody.isEmpty else { return rawSubject }
+        return "\(rawSubject)\n\n\(trimmedBody)"
     }
 }

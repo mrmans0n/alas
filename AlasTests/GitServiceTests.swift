@@ -128,6 +128,32 @@ struct GitServiceTests {
         #expect(branches.firstIndex(of: "develop")! < branches.firstIndex(of: "origin/main")!)
     }
 
+    @Test func revertCreatesCleanRevertCommit() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        try writeText("before\n", "file.txt", in: repo)
+        try await gitOK(["add", "file.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "seed file"], cwd: repo)
+
+        try writeText("after\n", "file.txt", in: repo)
+        try await gitOK(["add", "file.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "change file"], cwd: repo)
+        let sha = try await gitOK(["rev-parse", "HEAD"], cwd: repo)
+            .stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let result = try await GitService().revert(worktreePath: repo, sha: sha)
+
+        #expect(result == .clean)
+        let content = try String(contentsOf: repo.appendingPathComponent("file.txt"), encoding: .utf8)
+        #expect(content == "before\n")
+        let subject = try await gitOK(["log", "-1", "--pretty=%s"], cwd: repo)
+            .stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(subject == #"Revert "change file""#)
+    }
+
     @Test func contextSnapshotSeparatesStagedAndUnstagedRefs() async throws {
         let repo = try await makeContextSnapshotRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
