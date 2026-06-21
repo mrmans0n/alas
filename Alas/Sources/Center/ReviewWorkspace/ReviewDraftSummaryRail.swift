@@ -79,7 +79,7 @@ struct ReviewDraftSummaryRail: View {
     }
 
     private var hasFeedback: Bool {
-        feedbackGroups.contains { !$0.items.isEmpty }
+        !feedbackGroups.isEmpty
     }
 
     private var canCopyPrompt: Bool {
