@@ -795,20 +795,54 @@ final class ACPSession: ObservableObject, Identifiable {
     /// whitespace, so a chunk ending in `.` is followed by one starting
     /// with an uppercase letter — `append` with no separator would glue
     /// them as `completed.Running`, mashing two sentences together. When
-    /// we detect that boundary (`[.!?]` then `[A-Z][a-z]`), inject a
-    /// newline so the second sentence starts on its own line.
+    /// we detect that boundary, inject a newline so the second sentence
+    /// starts on its own line.
+    ///
+    /// To avoid corrupting identifiers / URLs / paths that happen to be
+    /// split across chunks (`Foo.` + `Bar`, `example.com.` + `Path`), we
+    /// require the word immediately before the punctuation to be all
+    /// lowercase (a real English word ending a sentence, not a CamelCase
+    /// token) and not look like the tail of a URL or path (no `/` or `://`
+    /// in the run of non-whitespace preceding the punctuation).
     private static func streamingSeparator(between previous: String, and next: String) -> String {
         guard let last = previous.last, let first = next.first else { return "" }
         if last.isWhitespace || first.isWhitespace { return "" }
-        if last == "." || last == "!" || last == "?" {
-            if let firstUpper = first.asciiValue,
-               firstUpper >= 0x41 && firstUpper <= 0x5A,
-               let secondScalar = next.unicodeScalars.dropFirst().first,
-               secondScalar.value >= 0x61 && secondScalar.value <= 0x7A {
-                return "\n"
-            }
+        guard last == "." || last == "!" || last == "?" else { return "" }
+        // Next chunk must start with an uppercase letter followed by a
+        // lowercase one (start of a new sentence, not an all-caps acronym
+        // like `API`).
+        guard let firstUpper = first.asciiValue,
+              firstUpper >= 0x41 && firstUpper <= 0x5A,
+              let secondScalar = next.unicodeScalars.dropFirst().first,
+              secondScalar.value >= 0x61 && secondScalar.value <= 0x7A
+        else { return "" }
+        // Walk back from the punctuation over the preceding run of
+        // non-whitespace. The word immediately before the punctuation must
+        // be all lowercase ASCII letters — this excludes CamelCase tokens
+        // like `Foo` in `Foo.Bar` and acronyms like `SHA` in `head SHA.Git`.
+        // A `/` or `://` in that run signals a URL/path tail (e.g.
+        // `example.com.` split before `Path`), which we also leave alone.
+        let scalars = previous.unicodeScalars
+        var i = scalars.index(before: scalars.endIndex) // the punctuation
+        scalars.formIndex(before: &i) // first char of the word run
+        var hasSlash = false
+        var hasColon = false
+        var wordChars: [UInt32] = []
+        while i >= scalars.startIndex {
+            let s = scalars[i]
+            if s.value == 0x20 || (s.value >= 0x09 && s.value <= 0x0D) { break }
+            wordChars.append(s.value)
+            if s == "/" { hasSlash = true }
+            if s == ":" { hasColon = true }
+            scalars.formIndex(before: &i)
         }
-        return ""
+        // A `/` or `:` in the preceding run signals a URL/path tail
+        // (e.g. `example.com.` split before `Path`); leave it alone.
+        if hasSlash || hasColon { return "" }
+        guard !wordChars.isEmpty, wordChars.allSatisfy({ v in
+            v >= 0x61 && v <= 0x7A
+        }) else { return "" }
+        return "\n"
     }
     /// Returns the index of the matching tool call, or nil if no match.
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) -> Int? {
