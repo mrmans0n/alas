@@ -1127,11 +1127,14 @@ final class RightPaneState {
 
     /// Pull the current branch's upstream (fetch + rebase onto it). Surfaces
     /// conflicts through the existing `OperationCard` via `refresh()` +
-    /// `handleOperationResult`. No-ops when there is no upstream, when an
-    /// operation is already in flight, or when a pull is already running.
+    /// `handleOperationResult`. No-ops unless the upstream chip is actually
+    /// showing (behind by >0, attached HEAD), and when an operation is already
+    /// in flight or a pull is already running. Gating on `showBehindUpstreamChip`
+    /// keeps the action's safety with the action rather than relying on the
+    /// view to hide the chip.
     @MainActor
     func pull() {
-        guard behindUpstream != nil, mergeOp.current == nil, !pullInFlight else { return }
+        guard showBehindUpstreamChip, mergeOp.current == nil, !pullInFlight else { return }
         sidebarError = nil
         pullInFlight = true
         Task { @MainActor in
