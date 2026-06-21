@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-06-21
+
+### ✨ Features
+
+- Add changed-file HEAD snapshots and history actions (#601).
+- Surface GitHub feedback in the inspect summary rail (#600).
+- Render inline markdown badges (#598).
+- Add pull-from-upstream support in Changes (#595).
+
+### 🐛 Fixes
+
+- Filter ACP model dropdown results by searchable model fields (#599).
+- Expand commit row actions in Changes (#597).
+- Improve streamed sentence spacing and cache `fff` builds (#596).
+- Disable comment affordances in read-only commit diffs (#594).
+- Pin the editor's initial horizontal viewport (#593).
+
 ## [0.8.5] - 2026-06-19
 
 ### ✨ Features
