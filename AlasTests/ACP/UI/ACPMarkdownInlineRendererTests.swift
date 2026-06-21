@@ -36,6 +36,22 @@ struct ACPMarkdownInlineRendererTests {
         #expect(size.height >= 1)
     }
 
+    @Test("remote image sources are renderable")
+    func remoteImageSourcesAreRenderable() {
+        let image = ACPMarkdownInlineImage(
+            placeholder: "\u{E000}ALAS_IMG_0\u{E000}",
+            alt: "P2 Badge",
+            source: "https://img.shields.io/badge/P2-yellow?style=flat",
+            isSubscript: true
+        )
+        #expect(ACPMarkdownInlineRenderer.imageSourceKind(image.source) == .remote)
+    }
+
+    @Test("local image sources fall back without base directory")
+    func localImageSourcesFallbackWithoutBaseDirectory() {
+        #expect(ACPMarkdownInlineRenderer.imageSourceKind("assets/badge.png") == .local)
+    }
+
     @Test("badge markup produces placeholder and metadata")
     func badgeMarkupProducesPlaceholderAndMetadata() throws {
         let plan = ACPMarkdownInlineRenderer.makePlan(

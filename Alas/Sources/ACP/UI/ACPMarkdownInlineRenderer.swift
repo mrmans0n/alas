@@ -15,6 +15,17 @@ struct ACPMarkdownInlineImage: Equatable {
     let isSubscript: Bool
 }
 
+enum ACPMarkdownInlineImageSourceKind: Equatable {
+    case remote
+    case local
+    case invalid
+}
+
+struct ACPMarkdownInlineRemoteImage: Equatable {
+    let image: ACPMarkdownInlineImage
+    let url: URL
+}
+
 struct ACPMarkdownSubscriptMarker: Equatable {
     let start: String
     let end: String
@@ -34,6 +45,17 @@ enum ACPMarkdownInlineRenderer {
 
     private static let privateUsePrefix = "\u{E000}"
     private static let privateUseSuffix = "\u{E001}"
+
+    static func imageSourceKind(_ source: String) -> ACPMarkdownInlineImageSourceKind {
+        switch MarkdownImageLoader.classify(source) {
+        case .remote:
+            return .remote
+        case .local:
+            return .local
+        case .invalid:
+            return .invalid
+        }
+    }
 
     static func displaySize(original: CGSize, isSubscript: Bool) -> CGSize {
         let cap = isSubscript ? badgeMaxSize : normalImageMaxSize
@@ -75,8 +97,16 @@ enum ACPMarkdownInlineRenderer {
         let attributed = NSMutableAttributedString(ACPMarkdownText.inlineMarkdown(plan.markdownSource))
         applyBaseAttributes(to: attributed, theme: theme, typography: typography, role: role)
         applySubscriptRanges(to: attributed, markers: plan.subscriptMarkers, typography: typography, role: role)
-        replaceImages(in: attributed, images: plan.images)
+        replaceImages(in: attributed, images: plan.images, theme: theme)
         return attributed
+    }
+
+    static func loadedImageAttachment(for image: NSImage, isSubscript: Bool) -> NSTextAttachment {
+        let displaySize = displaySize(original: image.size, isSubscript: isSubscript)
+        let attachment = NSTextAttachment()
+        attachment.image = resizedImage(image, to: displaySize)
+        attachment.bounds = NSRect(x: 0, y: -2, width: displaySize.width, height: displaySize.height)
+        return attachment
     }
 
     private static func removingSubscriptMarkers(
@@ -140,12 +170,27 @@ enum ACPMarkdownInlineRenderer {
 
     private static func replaceImages(
         in attributed: NSMutableAttributedString,
-        images: [ACPMarkdownInlineImage]
+        images: [ACPMarkdownInlineImage],
+        theme: Theme
     ) {
         for image in images {
             let range = (attributed.string as NSString).range(of: image.placeholder)
             guard range.location != NSNotFound else { continue }
-            attributed.replaceCharacters(in: range, with: NSAttributedString(attachment: attachment(for: image)))
+            let inheritedAttributes = range.location < attributed.length
+                ? attributed.attributes(at: range.location, effectiveRange: nil)
+                : [:]
+            let fallbackAttributes = mutedAttributes(from: inheritedAttributes, theme: theme)
+            let replacement: NSAttributedString
+            switch MarkdownImageLoader.classify(image.source) {
+            case .remote(let url):
+                replacement = remotePlaceholderString(
+                    for: ACPMarkdownInlineRemoteImage(image: image, url: url),
+                    attributes: fallbackAttributes
+                )
+            case .local, .invalid:
+                replacement = mutedAltString(for: image, attributes: fallbackAttributes)
+            }
+            attributed.replaceCharacters(in: range, with: replacement)
         }
     }
 
@@ -154,6 +199,54 @@ enum ACPMarkdownInlineRenderer {
         let maxSize = image.isSubscript ? badgeMaxSize : normalImageMaxSize
         attachment.bounds = NSRect(x: 0, y: -2, width: maxSize.width, height: maxSize.height)
         return attachment
+    }
+
+    private static func remotePlaceholderString(
+        for remoteImage: ACPMarkdownInlineRemoteImage,
+        attributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        let attributed = NSMutableAttributedString(
+            attributedString: NSAttributedString(attachment: attachment(for: remoteImage.image))
+        )
+        let range = NSRange(location: 0, length: attributed.length)
+        attributed.addAttributes(attributes, range: range)
+        attributed.addAttribute(.acpMarkdownInlineRemoteImage, value: remoteImage, range: range)
+        return attributed
+    }
+
+    static func mutedAltString(
+        for image: ACPMarkdownInlineImage,
+        attributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        guard !image.alt.isEmpty else { return NSAttributedString() }
+        var attributes = attributes
+        attributes.removeValue(forKey: .attachment)
+        attributes.removeValue(forKey: .acpMarkdownInlineRemoteImage)
+        return NSAttributedString(string: image.alt, attributes: attributes)
+    }
+
+    private static func mutedAttributes(
+        from attributes: [NSAttributedString.Key: Any],
+        theme: Theme
+    ) -> [NSAttributedString.Key: Any] {
+        var result = attributes
+        result[.foregroundColor] = NSColor(theme.color("fg-muted"))
+        result.removeValue(forKey: .attachment)
+        result.removeValue(forKey: .acpMarkdownInlineRemoteImage)
+        return result
+    }
+
+    private static func resizedImage(_ image: NSImage, to size: CGSize) -> NSImage {
+        let resized = NSImage(size: size)
+        resized.lockFocus()
+        image.draw(
+            in: NSRect(origin: .zero, size: size),
+            from: NSRect(origin: .zero, size: image.size),
+            operation: .copy,
+            fraction: 1
+        )
+        resized.unlockFocus()
+        return resized
     }
 
     private static func fontSize(typography: ACPChatTypography, role: ACPMarkdownInlineRole) -> CGFloat {
