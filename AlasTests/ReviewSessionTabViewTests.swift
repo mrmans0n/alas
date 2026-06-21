@@ -1233,6 +1233,84 @@ struct ReviewSessionTabViewTests {
         #expect(description.contains("could not refresh the PR"))
     }
 
+    @Test func fileIDLookupFindsFeedbackOwningFile() {
+        let fileA = DiffReviewFileID(namespace: "github", path: "A.swift")
+        let fileB = DiffReviewFileID(namespace: "github", path: "B.swift")
+        func feedback(_ id: String, path: String) -> DiffReviewInlineFeedback {
+            DiffReviewInlineFeedback(
+                id: id,
+                providerName: "GitHub",
+                author: "reviewer",
+                bodyPreview: "body",
+                status: .actionable,
+                providerURL: nil,
+                anchor: DiffReviewInlineFeedbackAnchor(path: path, line: 1, side: .new),
+                evidenceItemID: id
+            )
+        }
+        let grouped: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [
+            fileA: [feedback("fb-a", path: "A.swift")],
+            fileB: [feedback("fb-b", path: "B.swift")],
+        ]
+
+        #expect(ReviewSessionTabView.fileID(forFeedbackID: "fb-b", in: grouped) == fileB)
+        #expect(ReviewSessionTabView.fileID(forFeedbackID: "missing", in: grouped) == nil)
+    }
+
+    @Test func selectingGitHubFeedbackInRailFocusesItInDiff() throws {
+        let thread = ReviewThreadSummary(
+            id: "thread-1",
+            author: "reviewer",
+            body: "Please fix this.",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/527#discussion_r1"),
+            isResolved: false,
+            isActionable: true,
+            location: ReviewThreadLocation(path: "Sources/App.swift", originalPath: nil, line: 2, side: .new, providerPosition: nil),
+            providerThreadID: "thread-provider-1",
+            providerCommentID: "comment-provider-1"
+        )
+        let request = Self.reviewRequest(provider: .github, threads: [thread])
+        let target = Self.reviewRequestTarget(provider: .github, request: request)
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let loaded = Self.loadedReviewRequestContext(provider: .github, request: request)
+        let view = ReviewSessionTabView.testView(
+            record: record,
+            loaded: loaded,
+            provider: RecordingProviderReviewMutator(
+                kind: .github,
+                publishResult: ProviderReviewPublishResult(
+                    published: [],
+                    failed: [],
+                    refreshedRequest: request,
+                    warnings: []
+                )
+            )
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 1200, height: 720))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-thread-1", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: host) == nil)
+
+        #expect(pressAccessibilityElement(withAccessibilityIdentifier: "review-summary-feedback-thread-1", in: host))
+
+        let deadline = Date().addingTimeInterval(1)
+        while subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: host) == nil,
+              Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            host.layoutSubtreeIfNeeded()
+        }
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: host) != nil)
+    }
+
     @Test func providerFeedbackMatcherPrefersExactOldSidePathWhenOriginalPathIsMissing() {
         let modified = DiffReviewFileSummary(
             path: "Sources/App.swift",
