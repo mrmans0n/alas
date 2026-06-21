@@ -146,6 +146,44 @@ extension GitService {
         )
     }
 
+    func imageDiffPairAgainstHEAD(
+        worktreePath: URL,
+        relativePath: String,
+        originalPath: String? = nil
+    ) async throws -> ImageDiffPair {
+        let headPath = originalPath ?? relativePath
+        let fileURL = worktreePath.appendingPathComponent(relativePath)
+        let fileExistsOnDisk = FileManager.default.fileExists(atPath: fileURL.path)
+
+        let before = try await loadBlobImage(
+            worktreePath: worktreePath,
+            ref: "HEAD",
+            path: headPath
+        )
+        let after = fileExistsOnDisk ? NSImage(contentsOf: fileURL) : nil
+        let oldPath = originalPath ?? (before != nil && relativePath != headPath ? headPath : nil)
+        let kind: ImageDiffPairKind
+        switch (before != nil, after != nil, oldPath != nil) {
+        case (false, true, _):
+            kind = .added
+        case (true, false, _):
+            kind = .deleted
+        case (true, true, true):
+            kind = .renamed
+        default:
+            kind = .modified
+        }
+
+        return ImageDiffPair(
+            before: before,
+            after: after,
+            oldPath: oldPath,
+            kind: kind,
+            beforeFrameCount: frameCount(for: before),
+            afterFrameCount: frameCount(for: after)
+        )
+    }
+
     /// Internal: `git show <ref>:<path>` → `NSImage`. `ref == ""` means
     /// the index (i.e. `:path`).
     fileprivate func loadBlobImage(

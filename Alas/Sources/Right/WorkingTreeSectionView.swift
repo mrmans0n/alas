@@ -14,6 +14,9 @@ struct WorkingTreeSectionView: View {
     var onCopyFull:        ((ChangedFile) -> Void)? = nil
     var onRevealInFinder:  ((ChangedFile) -> Void)? = nil
     var onCopyDiff:        ((ChangedFile) -> Void)? = nil
+    var onViewAtHEAD:      ((ChangedFile) -> Void)? = nil
+    var onCompareWithHEAD: ((ChangedFile) -> Void)? = nil
+    var onFileHistory:     ((ChangedFile) -> Void)? = nil
     var onDiscardFile:     ((ChangedFile) -> Void)? = nil
     var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
 
@@ -86,6 +89,13 @@ struct WorkingTreeSectionView: View {
     /// is required.
     private func isUntracked(_ file: ChangedFile) -> Bool {
         file.status == "A" && file.stage == .unstaged
+    }
+
+    private func hasHeadVersion(_ group: WorkingTreeChangeGroup) -> Bool {
+        if group.entries.contains(where: { $0.status == "D" || $0.status == "R" }) {
+            return true
+        }
+        return !group.entries.contains { $0.status == "A" }
     }
 
     /// True when every ChangedFile reachable through `node` is untracked.
@@ -209,6 +219,7 @@ struct WorkingTreeSectionView: View {
                 : nil
             let canStage = !group.unstagedEntries.isEmpty
             let canUnstage = !group.stagedEntries.isEmpty
+            let headPathEntry = group.entries.first { $0.renameFrom != nil } ?? file
             return AnyView(
                 ChangedRow(
                     file: file,
@@ -225,8 +236,12 @@ struct WorkingTreeSectionView: View {
                     onCopyFull: onCopyFull.map { fn in { fn(file) } },
                     onRevealInFinder: onRevealInFinder.map { fn in { fn(file) } },
                     onCopyDiff: onCopyDiff.map { fn in { fn(file) } },
+                    onViewAtHEAD: onViewAtHEAD.map { fn in { fn(headPathEntry) } },
+                    onCompareWithHEAD: onCompareWithHEAD.map { fn in { fn(headPathEntry) } },
+                    onFileHistory: onFileHistory.map { fn in { fn(headPathEntry) } },
                     onDiscard: onDiscardFile.map { fn in { fn(file) } },
                     openFileEnabled: isOpenFileEnabled?(file) ?? true,
+                    viewAtHEADEnabled: hasHeadVersion(group),
                     ignoreMenu: ignore
                 )
             )

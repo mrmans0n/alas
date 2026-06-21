@@ -217,6 +217,8 @@ struct TabsManagerTests {
         let decoded = try JSONDecoder().decode(DiffTabState.self, from: json)
         #expect(decoded.relativePath == "a.txt")
         #expect(decoded.staged == false)
+        #expect(decoded.originalPath == nil)
+        #expect(decoded.compareWithHEAD == false)
     }
 
     @Test func diffTabStateRoundTripsStagedFlag() throws {
@@ -225,6 +227,21 @@ struct TabsManagerTests {
         let decoded = try JSONDecoder().decode(DiffTabState.self, from: data)
         #expect(decoded == state)
         #expect(decoded.staged)
+    }
+
+    @Test func diffTabStateRoundTripsHeadComparisonFields() throws {
+        let state = DiffTabState(
+            id: "d",
+            title: "new.txt vs HEAD",
+            relativePath: "new.txt",
+            originalPath: "old.txt",
+            compareWithHEAD: true
+        )
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(DiffTabState.self, from: data)
+        #expect(decoded == state)
+        #expect(decoded.originalPath == "old.txt")
+        #expect(decoded.compareWithHEAD)
     }
 
     @Test func openOrFocusReviewChangesCreatesStableWorktreeScopedTab() {

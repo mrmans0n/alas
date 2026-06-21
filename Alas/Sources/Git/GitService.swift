@@ -195,6 +195,46 @@ extension GitService {
         return await Self.parseOffMain(stdout)
     }
 
+    func diffAgainstHEAD(worktreePath: URL, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+        let head = try await hasHead(worktreePath: worktreePath)
+        if !head {
+            let fileURL = worktreePath.appendingPathComponent(file)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return ParsedDiff(hunks: [])
+            }
+            let result = try await Process.git(
+                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
+                cwd: worktreePath
+            )
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            return await Self.parseOffMain(result.stdout)
+        }
+
+        let headPath = originalPath?.isEmpty == false ? originalPath! : file
+        let headBlob = try await Process.gitData(
+            ["show", "HEAD:\(headPath)"],
+            cwd: worktreePath
+        )
+        if headBlob.exitCode != 0 {
+            let result = try await Process.git(
+                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
+                cwd: worktreePath
+            )
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            return await Self.parseOffMain(result.stdout)
+        }
+
+        var args = ["diff", "--no-color", "-M", "-C"]
+        args.append("HEAD")
+        args.append("--")
+        args.append(file)
+        if let originalPath, !originalPath.isEmpty {
+            args.append(originalPath)
+        }
+        let result = try await Process.git(args, cwd: worktreePath)
+        return await Self.parseOffMain(result.stdout)
+    }
+
     func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
         let oldPath = originalPath?.isEmpty == false ? originalPath! : file
         let old: DiffReviewFileContextLines

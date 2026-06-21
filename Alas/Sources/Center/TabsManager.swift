@@ -604,8 +604,22 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendDiff(worktreeId: String, title: String, relativePath: String, staged: Bool = false) -> Tab {
-        let state = DiffTabState(id: UUID().uuidString, title: title, relativePath: relativePath, staged: staged)
+    func appendDiff(
+        worktreeId: String,
+        title: String,
+        relativePath: String,
+        staged: Bool = false,
+        originalPath: String? = nil,
+        compareWithHEAD: Bool = false
+    ) -> Tab {
+        let state = DiffTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: relativePath,
+            staged: staged,
+            originalPath: originalPath,
+            compareWithHEAD: compareWithHEAD
+        )
         let tab = Tab.diff(state)
         append(tab, to: worktreeId)
         return tab

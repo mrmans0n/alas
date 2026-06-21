@@ -402,16 +402,27 @@ struct DiffTabState: Codable, Equatable, Identifiable {
     var title: String
     var relativePath: String
     var staged: Bool = false
+    var originalPath: String? = nil
+    var compareWithHEAD: Bool = false
 
-    init(id: TabID, title: String, relativePath: String, staged: Bool = false) {
+    init(
+        id: TabID,
+        title: String,
+        relativePath: String,
+        staged: Bool = false,
+        originalPath: String? = nil,
+        compareWithHEAD: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.relativePath = relativePath
         self.staged = staged
+        self.originalPath = originalPath
+        self.compareWithHEAD = compareWithHEAD
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, relativePath, staged
+        case id, title, relativePath, staged, originalPath, compareWithHEAD
     }
 
     init(from decoder: Decoder) throws {
@@ -420,6 +431,8 @@ struct DiffTabState: Codable, Equatable, Identifiable {
         title = try container.decode(String.self, forKey: .title)
         relativePath = try container.decode(String.self, forKey: .relativePath)
         staged = try container.decodeIfPresent(Bool.self, forKey: .staged) ?? false
+        originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
+        compareWithHEAD = try container.decodeIfPresent(Bool.self, forKey: .compareWithHEAD) ?? false
     }
 }
 

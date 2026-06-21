@@ -178,6 +178,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             relativePath: s.relativePath,
                             staged: s.staged,
+                            originalPath: s.originalPath,
+                            compareWithHEAD: s.compareWithHEAD,
                             worktreeId: worktree.id,
                             appState: state,
                             codeFontFamily: state.config.code.fontFamily,

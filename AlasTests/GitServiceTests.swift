@@ -206,6 +206,37 @@ struct GitServiceTests {
         #expect(commits.allSatisfy { $0.filesChanged >= 1 })
     }
 
+    @Test func diffAgainstHEADIncludesStagedAndUnstagedChanges() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("base\n", "file.txt", in: repo)
+        try await gitOK(["add", "file.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+
+        try writeText("base\nstaged\n", "file.txt", in: repo)
+        try await gitOK(["add", "file.txt"], cwd: repo)
+        try writeText("base\nstaged\nunstaged\n", "file.txt", in: repo)
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "file.txt")
+
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "staged" } })
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "unstaged" } })
+    }
+
+    @Test func diffAgainstHEADShowsStagedDeletion() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("delete me\n", "deleted.txt", in: repo)
+        try await gitOK(["add", "deleted.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("deleted.txt"))
+        try await gitOK(["rm", "--cached", "deleted.txt"], cwd: repo)
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "deleted.txt")
+
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .delete && $0.text == "delete me" } })
+    }
+
     @Test func contextSnapshotSeparatesStagedAndUnstagedRefs() async throws {
         let repo = try await makeContextSnapshotRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
