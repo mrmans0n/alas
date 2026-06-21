@@ -369,8 +369,12 @@ enum ACPMarkdownInlineRenderer {
                 }
 
                 if !isSubscript,
-                   source[index...].hasPrefix("<sub>"),
-                   let closeRange = source.range(of: "</sub>", range: source.index(index, offsetBy: 5)..<source.endIndex) {
+                   hasSubscriptOpenTag(in: source, at: index),
+                   let closeRange = source.range(
+                       of: "</sub>",
+                       options: [.caseInsensitive],
+                       range: source.index(index, offsetBy: 5)..<source.endIndex
+                   ) {
                     let marker = makeSubscriptMarker()
                     output += marker.start
                     output += render(String(source[source.index(index, offsetBy: 5)..<closeRange.lowerBound]), isSubscript: true)
@@ -397,6 +401,13 @@ enum ACPMarkdownInlineRenderer {
                 index = source.index(after: index)
             }
             return output
+        }
+
+        private func hasSubscriptOpenTag(in source: String, at index: String.Index) -> Bool {
+            guard let end = source.index(index, offsetBy: 5, limitedBy: source.endIndex) else {
+                return false
+            }
+            return source[index..<end].caseInsensitiveCompare("<sub>") == .orderedSame
         }
 
         mutating private func makeImagePlaceholder() -> String {

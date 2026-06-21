@@ -73,6 +73,18 @@ struct ACPMarkdownInlineRendererTests {
         #expect(plain == "Before small after")
     }
 
+    @Test("subscript tags are case-insensitive")
+    func subscriptTagsAreCaseInsensitive() throws {
+        let plain = ACPMarkdownInlineRenderer.plainText("Before <SUB>small</SUB> after")
+        #expect(plain == "Before small after")
+
+        let plan = ACPMarkdownInlineRenderer.makePlan(
+            "<SUB>![P3 Badge](https://img.shields.io/badge/P3-lightgrey?style=flat)</SUB>"
+        )
+        let image = try #require(plan.images.first)
+        #expect(image.isSubscript)
+    }
+
     @Test("malformed subscript remains visible")
     func malformedSubscriptRemainsVisible() {
         let plain = ACPMarkdownInlineRenderer.plainText("Before <sub>small after")
