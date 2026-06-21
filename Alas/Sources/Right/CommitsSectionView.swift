@@ -27,6 +27,8 @@ struct BehindChip: View {
     /// When set, the chip becomes a button that runs this action (used by the
     /// upstream chip to trigger a pull). When nil, the chip is a plain pill.
     var onTap: (() -> Void)? = nil
+    /// Remote tracking ref shown in the action tooltip (e.g. "origin/main").
+    var ref: String? = nil
 
     @Environment(\.theme) private var theme
     @State private var hovering = false
@@ -42,12 +44,14 @@ struct BehindChip: View {
         if let onTap {
             // The actionable chip owns the tooltip ("Pull …"); the call site
             // does not add its own `.help`, which would otherwise shadow this.
+            let refSuffix = ref.map { " from \($0)" } ?? ""
             Button(action: onTap) { pill(highlighted: hovering) }
                 .buttonStyle(.plain)
                 .disabled(inFlight)
                 .onHover { hovering = $0 }
+                .onChange(of: inFlight) { _, nowInFlight in if nowInFlight { hovering = false } }
                 .pointingHandCursor()
-                .help("Pull \(count) commit\(count == 1 ? "" : "s") (rebase)")
+                .help("Pull \(count) commit\(count == 1 ? "" : "s")\(refSuffix) (rebase)")
         } else {
             pill(highlighted: false)
         }
@@ -119,7 +123,8 @@ struct CommitsSectionView: View {
                             label: "remote",
                             role: .upstream,
                             inFlight: rps.pullInFlight,
-                            onTap: { rps.pull() }
+                            onTap: { rps.pull() },
+                            ref: s.ref
                         )
                         .disabled(rps.pullInFlight || rps.mergeOp.current != nil)
                     }

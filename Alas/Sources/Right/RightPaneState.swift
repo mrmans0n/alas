@@ -39,6 +39,7 @@ final class RightPaneState {
     /// True while a `pull()` is running; drives the upstream chip's spinner
     /// and disables re-entry. Only `pull()` mutates it.
     private(set) var pullInFlight: Bool = false
+    private var fetchInFlight: Bool = false
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
@@ -970,7 +971,12 @@ final class RightPaneState {
     /// 30s probe throttle. Backs the "Fetch now" menu item.
     @MainActor
     func fetchNow() {
-        Task { @MainActor in await self.refreshSyncStatus(force: true) }
+        guard !fetchInFlight, !pullInFlight else { return }
+        fetchInFlight = true
+        Task { @MainActor in
+            defer { fetchInFlight = false }
+            await self.refreshSyncStatus(force: true)
+        }
     }
 
     @MainActor
@@ -1142,10 +1148,13 @@ final class RightPaneState {
             do {
                 let result = try await git.pull(worktreePath: worktree.path)
                 await refresh()
-                // Force the behind chips to reflect the post-pull state now
-                // rather than waiting out the 30s probe throttle.
-                await refreshSyncStatus(force: true)
+                // pull() already fetched upstream; skip the redundant network
+                // fetch and just recount against the already-fresh tracking ref.
+                await refreshSyncStatus()
                 handleOperationResult(result)
+                if case .error(let message) = result {
+                    sidebarError = message
+                }
             } catch {
                 // Unlike the pure rebase/merge siblings, surface the failure to
                 // the user: a pull is the only signal they have that it ran.
