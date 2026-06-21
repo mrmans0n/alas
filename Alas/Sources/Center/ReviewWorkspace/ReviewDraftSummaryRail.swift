@@ -45,6 +45,9 @@ struct ReviewDraftSummaryRail: View {
     var focusedDraftCommentID: String?
     var draftCommentActions = ReviewDraftCommentActions()
     var onSelectDraftComment: (ReviewDraftComment) -> Void = { _ in }
+    var inlineFeedbackByFileID: [DiffReviewFileID: [DiffReviewInlineFeedback]] = [:]
+    var focusedFeedbackID: String?
+    var onSelectInlineFeedback: (DiffReviewInlineFeedback) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @Environment(\.reviewDraftSummaryRailStatus) private var sendStatus
@@ -66,6 +69,17 @@ struct ReviewDraftSummaryRail: View {
             .map { path in
                 CommentGroup(path: path, comments: ReviewDraftCommentPlacement.sorted(grouped[path] ?? []))
             }
+    }
+
+    private var feedbackGroups: [FeedbackGroup] {
+        inlineFeedbackByFileID
+            .filter { !$0.value.isEmpty }
+            .map { FeedbackGroup(fileID: $0.key, items: $0.value) }
+            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    private var hasFeedback: Bool {
+        feedbackGroups.contains { !$0.items.isEmpty }
     }
 
     private var canCopyPrompt: Bool {
@@ -113,9 +127,14 @@ struct ReviewDraftSummaryRail: View {
         VStack(spacing: 0) {
             expandedHeader
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(groupedComments) { group in
-                        commentGroup(group)
+                VStack(alignment: .leading, spacing: 10) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(groupedComments) { group in
+                            commentGroup(group)
+                        }
+                    }
+                    if hasFeedback {
+                        feedbackSection
                     }
                 }
                 .padding(10)
@@ -439,6 +458,110 @@ struct ReviewDraftSummaryRail: View {
         }
     }
 
+    @ViewBuilder
+    private var feedbackSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("GitHub feedback")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+                .accessibilityIdentifier("review-summary-feedback-header")
+                .background(
+                    DiffReviewAccessibilityMarker(
+                        identifier: "review-summary-feedback-header",
+                        label: "GitHub feedback"
+                    )
+                )
+            ForEach(feedbackGroups) { group in
+                feedbackGroupView(group)
+            }
+        }
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func feedbackGroupView(_ group: FeedbackGroup) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(group.path)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(theme.color("fg-dim"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            ForEach(group.items) { item in
+                feedbackCard(item)
+            }
+        }
+    }
+
+    private func feedbackCard(_ item: DiffReviewInlineFeedback) -> some View {
+        let isFocused = item.id == focusedFeedbackID
+        return Button {
+            onSelectInlineFeedback(item)
+        } label: {
+            feedbackCardContent(item)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("review-summary-feedback-\(item.id)")
+        .accessibilityLabel(feedbackAccessibilityLabel(for: item))
+        .padding(8)
+        .background(isFocused ? theme.color("accent-soft") : theme.color("bg-1"))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isFocused ? theme.color("accent") : theme.color("line"), lineWidth: isFocused ? 1 : 0.5)
+        )
+        .background(
+            ReviewDraftSummaryPressMarker(
+                identifier: "review-summary-feedback-\(item.id)",
+                label: feedbackAccessibilityLabel(for: item),
+                isEnabled: true
+            ) {
+                onSelectInlineFeedback(item)
+            }
+        )
+    }
+
+    private func feedbackCardContent(_ item: DiffReviewInlineFeedback) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Text(item.providerName)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(theme.color("accent"))
+                if let author = item.author, !author.isEmpty {
+                    Text(author)
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                if let line = item.anchor.line {
+                    Text("line \(line)")
+                        .font(.system(size: 10))
+                        .foregroundColor(theme.color("fg-faint"))
+                }
+                Spacer(minLength: 0)
+            }
+            .lineLimit(1)
+
+            DiffReviewInlineFeedbackMarkdown.view(item.bodyPreview)
+                .frame(maxHeight: 80, alignment: .top)
+                .clipped()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func feedbackAccessibilityLabel(for item: DiffReviewInlineFeedback) -> String {
+        [
+            item.providerName,
+            item.author,
+            item.anchor.line.map { "line \($0)" },
+            DiffReviewInlineFeedbackMarkdown.plainText(item.bodyPreview),
+        ]
+        .compactMap { part in
+            guard let part, !part.isEmpty else { return nil }
+            return part
+        }
+        .joined(separator: ", ")
+    }
+
     private func summaryCard(_ comment: ReviewDraftComment) -> some View {
         let availability = draftCommentActions.availability(comment)
         let isFocused = comment.id == focusedDraftCommentID
@@ -654,6 +777,14 @@ private struct CommentGroup: Identifiable {
     let comments: [ReviewDraftComment]
 
     var id: String { path }
+}
+
+private struct FeedbackGroup: Identifiable {
+    let fileID: DiffReviewFileID
+    let items: [DiffReviewInlineFeedback]
+
+    var id: String { fileID.id }
+    var path: String { fileID.path }
 }
 
 private struct ReviewDraftSummaryPressMarker: NSViewRepresentable {

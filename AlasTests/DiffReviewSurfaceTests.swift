@@ -2233,6 +2233,64 @@ struct DiffReviewSurfaceTests {
         #expect(DiffReviewInlineFeedbackDisplayPolicy.estimatedCardHeight(for: short) >= DiffReviewInlineFeedbackDisplayPolicy.cardMinimumHeight)
     }
 
+    @Test func summaryRailRendersGitHubFeedbackSection() {
+        let fileID = DiffReviewFileID(namespace: "github", path: "Sources/App.swift")
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-1",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please fix this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: "Sources/App.swift", line: 2, side: .new),
+            evidenceItemID: "thread-1"
+        )
+        var collapsed = false
+        let view = ReviewDraftSummaryRail(
+            comments: [],
+            bundle: ReviewFeedbackBundle(
+                target: ReviewFeedbackTarget(
+                    title: "PR",
+                    repositoryPath: nil,
+                    providerDescription: nil,
+                    sourceDescription: "Diff review"
+                ),
+                comments: []
+            ),
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 }),
+            inlineFeedbackByFileID: [fileID: [feedback]]
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 320, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-header", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-thread-1", in: controller.view) != nil)
+        #expect(accessibilityLabel(in: controller.view, containing: "Please fix this.") != nil)
+    }
+
+    @Test func summaryRailOmitsGitHubFeedbackSectionWhenEmpty() {
+        var collapsed = false
+        let view = ReviewDraftSummaryRail(
+            comments: [],
+            bundle: ReviewFeedbackBundle(
+                target: ReviewFeedbackTarget(
+                    title: "PR",
+                    repositoryPath: nil,
+                    providerDescription: nil,
+                    sourceDescription: "Diff review"
+                ),
+                comments: []
+            ),
+            collapsed: Binding(get: { collapsed }, set: { collapsed = $0 })
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 320, height: 500)
+
+        #expect(subview(withAccessibilityIdentifier: "review-summary-feedback-header", in: controller.view) == nil)
+    }
+
     private func parsedDiff() -> ParsedDiff {
         ParsedDiff(hunks: [
             ParsedDiff.Hunk(
