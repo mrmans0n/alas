@@ -38,35 +38,17 @@ struct ACPMarkdownText: View {
     private func view(for block: Block) -> some View {
         switch block {
         case .heading(let level, let text):
-            Text(ACPMarkdownText.inlineMarkdown(text))
-                .font(typography.swiftUIFont(
-                    size: typography.headingSize(level: level),
-                    weight: .bold,
-                    traits: .boldFontMask
-                ))
-                .foregroundStyle(theme.color("fg"))
-                .textSelection(.enabled)
+            ACPMarkdownInlineTextView(source: text, typography: typography, role: .heading(level: level), theme: theme)
                 .padding(.top, level == 1 ? 4 : 2)
         case .paragraph(let text):
-            Text(ACPMarkdownText.inlineMarkdown(text))
-                .font(typography.swiftUIFont(size: typography.paragraphSize))
-                .foregroundStyle(theme.color("fg"))
-                .lineSpacing(3)
-                .textSelection(.enabled)
+            ACPMarkdownInlineTextView(source: text, typography: typography, role: .body, theme: theme)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .quote(let text):
             HStack(alignment: .top, spacing: 10) {
                 Rectangle()
                     .fill(theme.color("accent").opacity(0.55))
                     .frame(width: 2)
-                Text(ACPMarkdownText.inlineMarkdown(text))
-                    .font(typography.swiftUIFont(
-                        size: typography.quoteSize,
-                        traits: .italicFontMask
-                    ))
-                    .foregroundStyle(theme.color("fg-muted"))
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
+                ACPMarkdownInlineTextView(source: text, typography: typography, role: .quote, theme: theme)
                 Spacer(minLength: 0)
             }
         case .code(let lang, let body):
@@ -99,13 +81,12 @@ struct ACPMarkdownText: View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(0..<columnCount, id: \.self) { i in
                 let value = i < cells.count ? cells[i] : ""
-                Text(ACPMarkdownText.inlineMarkdown(value))
-                    .font(typography.swiftUIFont(
-                        size: isHeader ? typography.tableHeaderSize : typography.tableBodySize,
-                        weight: isHeader ? .semibold : .regular,
-                        traits: isHeader ? .boldFontMask : []
-                    ))
-                    .foregroundStyle(isHeader ? theme.color("fg-muted") : theme.color("fg"))
+                ACPMarkdownInlineTextView(
+                    source: value,
+                    typography: typography,
+                    role: .tableCell(isHeader: isHeader),
+                    theme: theme
+                )
                     .frame(minWidth: 80, alignment: .leading)
                     .padding(.horizontal, 10).padding(.vertical, 6)
                 if i < columnCount - 1 {

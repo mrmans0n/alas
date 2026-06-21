@@ -6,6 +6,36 @@ import Testing
 @MainActor
 @Suite("ACP markdown inline renderer")
 struct ACPMarkdownInlineRendererTests {
+    @Test("badge image size is capped with aspect ratio")
+    func badgeImageSizeIsCapped() {
+        let size = ACPMarkdownInlineRenderer.displaySize(
+            original: CGSize(width: 300, height: 60),
+            isSubscript: true
+        )
+        #expect(size.width == 90)
+        #expect(size.height == 18)
+    }
+
+    @Test("normal inline image size is capped")
+    func normalInlineImageSizeIsCapped() {
+        let size = ACPMarkdownInlineRenderer.displaySize(
+            original: CGSize(width: 600, height: 300),
+            isSubscript: false
+        )
+        #expect(size.width == 160)
+        #expect(size.height == 80)
+    }
+
+    @Test("display size keeps minimum pixel dimension")
+    func displaySizeKeepsMinimumPixelDimension() {
+        let size = ACPMarkdownInlineRenderer.displaySize(
+            original: CGSize(width: 100_000, height: 1),
+            isSubscript: true
+        )
+        #expect(size.width >= 1)
+        #expect(size.height >= 1)
+    }
+
     @Test("badge markup produces placeholder and metadata")
     func badgeMarkupProducesPlaceholderAndMetadata() throws {
         let plan = ACPMarkdownInlineRenderer.makePlan(

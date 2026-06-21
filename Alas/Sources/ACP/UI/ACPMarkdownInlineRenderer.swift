@@ -35,6 +35,16 @@ enum ACPMarkdownInlineRenderer {
     private static let privateUsePrefix = "\u{E000}"
     private static let privateUseSuffix = "\u{E001}"
 
+    static func displaySize(original: CGSize, isSubscript: Bool) -> CGSize {
+        let cap = isSubscript ? badgeMaxSize : normalImageMaxSize
+        guard original.width > 0, original.height > 0 else { return cap }
+        let scale = min(cap.width / original.width, cap.height / original.height, 1)
+        return CGSize(
+            width: max(1, floor(original.width * scale)),
+            height: max(1, floor(original.height * scale))
+        )
+    }
+
     static func makePlan(_ source: String) -> ACPMarkdownInlineRenderPlan {
         var builder = PlanBuilder()
         let markdownSource = builder.render(source, isSubscript: false)
