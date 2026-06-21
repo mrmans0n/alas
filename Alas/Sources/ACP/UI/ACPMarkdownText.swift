@@ -40,6 +40,7 @@ struct ACPMarkdownText: View {
         case .heading(let level, let text):
             ACPMarkdownInlineTextView(source: text, typography: typography, role: .heading(level: level), theme: theme)
                 .padding(.top, level == 1 ? 4 : 2)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph(let text):
             ACPMarkdownInlineTextView(source: text, typography: typography, role: .body, theme: theme)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -49,6 +50,7 @@ struct ACPMarkdownText: View {
                     .fill(theme.color("accent").opacity(0.55))
                     .frame(width: 2)
                 ACPMarkdownInlineTextView(source: text, typography: typography, role: .quote, theme: theme)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
         case .code(let lang, let body):

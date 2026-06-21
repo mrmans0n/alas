@@ -1269,7 +1269,9 @@ enum DiffReviewInlineFeedbackMarkdown {
             case .code(_, let body):
                 return body
             case .table(let header, let rows):
-                return ([header] + rows).map { $0.joined(separator: " ") }.joined(separator: " ")
+                return ([header] + rows).map { row in
+                    row.map { ACPMarkdownInlineRenderer.plainText($0) }.joined(separator: " ")
+                }.joined(separator: " ")
             }
         }.joined(separator: " ")
     }

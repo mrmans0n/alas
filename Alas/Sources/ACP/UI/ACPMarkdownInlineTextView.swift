@@ -2,7 +2,6 @@ import SwiftUI
 import AppKit
 
 struct ACPMarkdownInlineTextView: NSViewRepresentable {
-    private static let defaultFittingWidth: CGFloat = 240
     private static let minimumFittingWidth: CGFloat = 80
 
     let source: String
@@ -40,10 +39,18 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextView, context: Context) -> CGSize? {
-        let fallbackWidth = nsView.bounds.width > 1 ? nsView.bounds.width : Self.defaultFittingWidth
-        let width = max(Self.minimumFittingWidth, proposal.width ?? fallbackWidth)
-        return (nsView as? ACPMarkdownInlineNSTextView)?.fittingSize(for: width)
-            ?? CGSize(width: width, height: nsView.intrinsicContentSize.height)
+        guard let inlineTextView = nsView as? ACPMarkdownInlineNSTextView else {
+            let fallbackWidth = max(Self.minimumFittingWidth, proposal.width ?? nsView.bounds.width)
+            return CGSize(width: fallbackWidth, height: nsView.intrinsicContentSize.height)
+        }
+
+        if let proposedWidth = proposal.width {
+            return inlineTextView.fittingSize(for: proposedWidth)
+        }
+        if nsView.bounds.width > 1 {
+            return inlineTextView.fittingSize(for: nsView.bounds.width)
+        }
+        return inlineTextView.naturalFittingSize()
     }
 
     @MainActor
@@ -172,6 +179,7 @@ extension NSAttributedString.Key {
 
 private final class ACPMarkdownInlineNSTextView: NSTextView {
     private let minimumFittingWidth: CGFloat = 80
+    private let maximumNaturalFittingWidth: CGFloat = 10_000
 
     func fittingSize(for width: CGFloat) -> CGSize {
         let fittingWidth = max(minimumFittingWidth, width)
@@ -185,7 +193,21 @@ private final class ACPMarkdownInlineNSTextView: NSTextView {
         return CGSize(width: fittingWidth, height: ceil(used.height))
     }
 
+    func naturalFittingSize() -> CGSize {
+        guard let textContainer, let layoutManager else {
+            return CGSize(width: minimumFittingWidth, height: 0)
+        }
+
+        textContainer.containerSize = CGSize(width: maximumNaturalFittingWidth, height: .greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: textContainer)
+        let used = layoutManager.usedRect(for: textContainer)
+        return CGSize(
+            width: max(minimumFittingWidth, ceil(used.width)),
+            height: ceil(used.height)
+        )
+    }
+
     override var intrinsicContentSize: NSSize {
-        fittingSize(for: bounds.width)
+        bounds.width > 1 ? fittingSize(for: bounds.width) : naturalFittingSize()
     }
 }
