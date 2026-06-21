@@ -17,6 +17,7 @@ struct ACPSelectChip: View {
     let accent: Color
     let items: [Item]
     let selectedId: String?
+    let searchDescriptions: Bool
     let onSelect: (Item) -> Void
 
     @Environment(\.theme) private var theme
@@ -57,12 +58,26 @@ struct ACPSelectChip: View {
                 items: items,
                 selectedId: selectedId,
                 accent: accent,
+                searchDescriptions: searchDescriptions,
                 onSelect: { item in
                     onSelect(item)
                     showPopover = false
                 }
             )
             .environment(\.theme, theme)
+        }
+    }
+
+    /// Case-insensitive substring filter used by the dropdown. Model pickers
+    /// disable description matching so numeric snippets in descriptions do
+    /// not pollute model results.
+    static func filteredItems(_ items: [Item], query: String, searchDescriptions: Bool = true) -> [Item] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if q.isEmpty { return items }
+        return items.filter {
+            $0.name.lowercased().contains(q)
+                || $0.id.lowercased().contains(q)
+                || (searchDescriptions && ($0.description?.lowercased().contains(q) ?? false))
         }
     }
 
@@ -147,6 +162,7 @@ private struct DropdownPanel: View {
     let items: [ACPSelectChip.Item]
     let selectedId: String?
     let accent: Color
+    let searchDescriptions: Bool
     let onSelect: (ACPSelectChip.Item) -> Void
 
     @Environment(\.theme) private var theme
@@ -163,13 +179,7 @@ private struct DropdownPanel: View {
     private var showSearch: Bool { items.count > 5 }
 
     private var filtered: [ACPSelectChip.Item] {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if q.isEmpty { return items }
-        return items.filter {
-            $0.name.lowercased().contains(q)
-                || $0.id.lowercased().contains(q)
-                || ($0.description?.lowercased().contains(q) ?? false)
-        }
+        ACPSelectChip.filteredItems(items, query: query, searchDescriptions: searchDescriptions)
     }
 
     var body: some View {
