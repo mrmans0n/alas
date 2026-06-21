@@ -16,6 +16,8 @@ enum Tab: Codable, Equatable, Identifiable {
     case mergeConflict(MergeConflictTabState)
     case acpSession(ACPSessionTabState)
     case reviewPR(ReviewPRTabState)
+    case fileSnapshot(FileSnapshotTabState)
+    case fileHistory(FileHistoryTabState)
 
     var id: TabID {
         switch self {
@@ -32,6 +34,8 @@ enum Tab: Codable, Equatable, Identifiable {
         case .mergeConflict(let s): return s.id
         case .acpSession(let s):   return s.id
         case .reviewPR(let s):     return s.id
+        case .fileSnapshot(let s): return s.id
+        case .fileHistory(let s):  return s.id
         }
     }
 
@@ -50,6 +54,8 @@ enum Tab: Codable, Equatable, Identifiable {
         case .mergeConflict(let s): return s.title
         case .acpSession(let s):   return s.title
         case .reviewPR(let s):     return s.displayTitle
+        case .fileSnapshot(let s): return s.title
+        case .fileHistory(let s):  return s.title
         }
     }
 
@@ -68,6 +74,8 @@ enum Tab: Codable, Equatable, Identifiable {
         case .mergeConflict: return "diff"
         case .acpSession:   return "sparkle"
         case .reviewPR:     return "list.bullet.rectangle.portrait.fill"
+        case .fileSnapshot: return "doc.text.magnifyingglass"
+        case .fileHistory:  return "clock.arrow.circlepath"
         }
     }
 
@@ -76,8 +84,40 @@ enum Tab: Codable, Equatable, Identifiable {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
         case .imagePreview(let s): return s.relativePath
         case .mergeConflict(let s): return s.relativePath
+        case .fileSnapshot(let s): return s.relativePath
+        case .fileHistory(let s):  return s.relativePath
         default:                   return nil
         }
+    }
+}
+
+struct FileSnapshotTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let relativePath: String
+    let ref: String
+    var title: String
+
+    init(worktreeId: String, relativePath: String, ref: String = "HEAD") {
+        self.worktreeId = worktreeId
+        self.relativePath = relativePath
+        self.ref = ref
+        self.title = "\((relativePath as NSString).lastPathComponent) @ \(ref)"
+        self.id = "file-snapshot:\(worktreeId):\(ref):\(relativePath)"
+    }
+}
+
+struct FileHistoryTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let relativePath: String
+    var title: String
+
+    init(worktreeId: String, relativePath: String) {
+        self.worktreeId = worktreeId
+        self.relativePath = relativePath
+        self.title = "\((relativePath as NSString).lastPathComponent) History"
+        self.id = "file-history:\(worktreeId):\(relativePath)"
     }
 }
 
@@ -362,16 +402,27 @@ struct DiffTabState: Codable, Equatable, Identifiable {
     var title: String
     var relativePath: String
     var staged: Bool = false
+    var originalPath: String? = nil
+    var compareWithHEAD: Bool = false
 
-    init(id: TabID, title: String, relativePath: String, staged: Bool = false) {
+    init(
+        id: TabID,
+        title: String,
+        relativePath: String,
+        staged: Bool = false,
+        originalPath: String? = nil,
+        compareWithHEAD: Bool = false
+    ) {
         self.id = id
         self.title = title
         self.relativePath = relativePath
         self.staged = staged
+        self.originalPath = originalPath
+        self.compareWithHEAD = compareWithHEAD
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, relativePath, staged
+        case id, title, relativePath, staged, originalPath, compareWithHEAD
     }
 
     init(from decoder: Decoder) throws {
@@ -380,6 +431,8 @@ struct DiffTabState: Codable, Equatable, Identifiable {
         title = try container.decode(String.self, forKey: .title)
         relativePath = try container.decode(String.self, forKey: .relativePath)
         staged = try container.decodeIfPresent(Bool.self, forKey: .staged) ?? false
+        originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
+        compareWithHEAD = try container.decodeIfPresent(Bool.self, forKey: .compareWithHEAD) ?? false
     }
 }
 

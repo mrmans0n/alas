@@ -15,8 +15,12 @@ struct ChangedRow: View {
     var onCopyFull:       (() -> Void)? = nil
     var onRevealInFinder: (() -> Void)? = nil
     var onCopyDiff:       (() -> Void)? = nil
+    var onViewAtHEAD:     (() -> Void)? = nil
+    var onCompareWithHEAD: (() -> Void)? = nil
+    var onFileHistory:    (() -> Void)? = nil
     var onDiscard:        (() -> Void)? = nil
     var openFileEnabled:  Bool = true
+    var viewAtHEADEnabled: Bool = true
     var ignoreMenu:       AnyView? = nil
     @Environment(\.theme) var theme
 
@@ -51,6 +55,12 @@ struct ChangedRow: View {
         .contextMenu {
             Button("Open File") { onOpenFile?() }
                 .disabled(!openFileEnabled || onOpenFile == nil)
+            Button("View at HEAD") { onViewAtHEAD?() }
+                .disabled(!viewAtHEADEnabled || onViewAtHEAD == nil)
+            Button("Compare with HEAD") { onCompareWithHEAD?() }
+                .disabled(onCompareWithHEAD == nil)
+            Button("File History") { onFileHistory?() }
+                .disabled(onFileHistory == nil)
             Button("Copy Relative Path") { onCopyRelative?() }
             Button("Copy Full Path") { onCopyFull?() }
             Button("Reveal in Finder") { onRevealInFinder?() }

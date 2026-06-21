@@ -126,6 +126,26 @@ struct ChangesTabView: View {
                 onCopyDiff: { file in
                     rps.copyDiff(for: file.path, renameFrom: file.renameFrom)
                 },
+                onViewAtHEAD: { file in
+                    appState.openFileSnapshotAtHEAD(
+                        relativePath: file.renameFrom ?? file.path,
+                        worktreeId: rps.worktree.id
+                    )
+                },
+                onCompareWithHEAD: { file in
+                    appState.openDiffTab(
+                        forFileInWorktree: rps.worktree,
+                        relativePath: file.path,
+                        originalPath: file.renameFrom,
+                        compareWithHEAD: true
+                    )
+                },
+                onFileHistory: { file in
+                    appState.openFileHistory(
+                        relativePath: file.renameFrom ?? file.path,
+                        worktreeId: rps.worktree.id
+                    )
+                },
                 onDiscardFile: { file in rps.requestDiscardFile(path: file.path) },
                 isOpenFileEnabled: { file in
                     DiffOpenFileAvailability.isAvailable(

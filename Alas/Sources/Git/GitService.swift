@@ -63,6 +63,12 @@ private struct BranchListError: LocalizedError {
     }
 }
 
+enum HeadBlobTextResult: Equatable, Sendable {
+    case available(String)
+    case missing
+    case undisplayable
+}
+
 extension GitService {
     /// Whether the repo has any commits yet. `git diff HEAD` and friends
     /// fail with `bad revision 'HEAD'` on unborn branches; callers swap to
@@ -73,6 +79,19 @@ extension GitService {
             cwd: worktreePath
         )
         return result.exitCode == 0
+    }
+
+    func headBlobText(worktreePath: URL, relativePath: String) async throws -> HeadBlobTextResult {
+        let result = try await Process.gitData(["show", "HEAD:\(relativePath)"], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            return .missing
+        }
+        guard !result.stdout.contains(0),
+              let text = String(data: result.stdout, encoding: .utf8)
+        else {
+            return .undisplayable
+        }
+        return .available(text)
     }
 
     func status(worktreePath: URL) async throws -> [ChangedFile] {
@@ -174,6 +193,46 @@ extension GitService {
             ? Self.sliceDiffForFile(result.stdout, file: file)
             : result.stdout
         return await Self.parseOffMain(stdout)
+    }
+
+    func diffAgainstHEAD(worktreePath: URL, file: String, originalPath: String? = nil) async throws -> ParsedDiff {
+        let head = try await hasHead(worktreePath: worktreePath)
+        if !head {
+            let fileURL = worktreePath.appendingPathComponent(file)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                return ParsedDiff(hunks: [])
+            }
+            let result = try await Process.git(
+                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
+                cwd: worktreePath
+            )
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            return await Self.parseOffMain(result.stdout)
+        }
+
+        let headPath = originalPath?.isEmpty == false ? originalPath! : file
+        let headBlob = try await Process.gitData(
+            ["show", "HEAD:\(headPath)"],
+            cwd: worktreePath
+        )
+        if headBlob.exitCode != 0 {
+            let result = try await Process.git(
+                ["diff", "--no-color", "--no-index", "--", "/dev/null", file],
+                cwd: worktreePath
+            )
+            guard result.exitCode <= 1 else { return ParsedDiff(hunks: []) }
+            return await Self.parseOffMain(result.stdout)
+        }
+
+        var args = ["diff", "--no-color", "-M", "-C"]
+        args.append("HEAD")
+        args.append("--")
+        args.append(file)
+        if let originalPath, !originalPath.isEmpty {
+            args.append(originalPath)
+        }
+        let result = try await Process.git(args, cwd: worktreePath)
+        return await Self.parseOffMain(result.stdout)
     }
 
     func contextSnapshot(worktreePath: URL, file: String, staged: Bool, originalPath: String? = nil) async throws -> DiffReviewFileContextSnapshot {
@@ -1301,6 +1360,77 @@ extension GitService {
                 subject: subject,
                 rawSubject: rawSubject,
                 body: body,
+                conventionalTag: tag,
+                filesChanged: filesChanged,
+                insertions: adds,
+                deletions: dels
+            ))
+        }
+        return commits
+    }
+
+    func fileHistory(worktreePath: URL, relativePath: String, limit: Int = 200) async throws -> [CommitInfo] {
+        let boundedLimit = max(1, limit)
+        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
+        let log = try await Process.git(
+            ["log", "--follow", "-n", String(boundedLimit),
+             "--pretty=tformat:\(format)", "--numstat", "--", relativePath],
+            cwd: worktreePath
+        )
+        guard log.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.fileHistory",
+                code: Int(log.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: log.stderr.isEmpty ? "git log failed" : log.stderr]
+            )
+        }
+        return Self.parseFileHistoryCommitInfoRecords(log.stdout)
+    }
+
+    private static func parseFileHistoryCommitInfoRecords(_ stdout: String) -> [CommitInfo] {
+        let records = stdout
+            .split(separator: "\u{1e}", omittingEmptySubsequences: true)
+            .map { String($0) }
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+
+        var commits: [CommitInfo] = []
+        for record in records {
+            let trimmed = record.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+            guard let headerLine = lines.first else { continue }
+            let fields = headerLine.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
+            guard fields.count == 5 else { continue }
+            let sha = String(fields[0])
+            let short = String(fields[1])
+            let author = String(fields[2])
+            let dateStr = String(fields[3])
+            let rawSubject = String(fields[4])
+            let date = isoFormatter.date(from: dateStr) ?? Date(timeIntervalSince1970: 0)
+            let (tag, subject) = CommitInfo.parseConventional(subject: rawSubject)
+
+            var filesChanged = 0
+            var adds = 0
+            var dels = 0
+            for line in lines.dropFirst() {
+                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                if trimmedLine.isEmpty { continue }
+                let parts = trimmedLine.split(separator: "\t", omittingEmptySubsequences: false)
+                guard parts.count >= 3 else { continue }
+                filesChanged += 1
+                if let a = Int(parts[0]) { adds += a }
+                if let d = Int(parts[1]) { dels += d }
+            }
+
+            commits.append(CommitInfo(
+                sha: sha,
+                shortSha: short,
+                author: author,
+                authorInitials: CommitInfo.initials(for: author),
+                date: date,
+                subject: subject,
                 conventionalTag: tag,
                 filesChanged: filesChanged,
                 insertions: adds,

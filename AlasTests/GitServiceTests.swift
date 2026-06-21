@@ -56,6 +56,12 @@ struct GitServiceTests {
         try data.write(to: url)
     }
 
+    private func commitFile(_ repo: URL, path: String, contents: String, message: String) async throws {
+        try writeText(contents, path, in: repo)
+        try await gitOK(["add", path], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", message], cwd: repo)
+    }
+
     @Test func validateAcceptsRealRepo() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -152,6 +158,83 @@ struct GitServiceTests {
             .stdout
             .trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(subject == #"Revert "change file""#)
+    }
+
+    @Test func headBlobTextReturnsCommittedText() async throws {
+        let repo = try await makeContextSnapshotRepo(withInitialCommit: false)
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("hello\n", "a.txt", in: repo)
+        try await gitOK(["add", "a.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "add a"], cwd: repo)
+
+        let result = try await GitService().headBlobText(worktreePath: repo, relativePath: "a.txt")
+
+        #expect(result == .available("hello\n"))
+    }
+
+    @Test func headBlobTextReportsMissingPath() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let result = try await GitService().headBlobText(worktreePath: repo, relativePath: "missing.txt")
+
+        #expect(result == .missing)
+    }
+
+    @Test func headBlobTextReportsBinaryAsUndisplayable() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeData(Data([0, 1, 2, 3]), "blob.bin", in: repo)
+        try await gitOK(["add", "blob.bin"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "add binary"], cwd: repo)
+
+        let result = try await GitService().headBlobText(worktreePath: repo, relativePath: "blob.bin")
+
+        #expect(result == .undisplayable)
+    }
+
+    @Test func fileHistoryReturnsCommitsTouchingPathNewestFirst() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try await commitFile(repo, path: "a.txt", contents: "one\n", message: "add a")
+        try await commitFile(repo, path: "b.txt", contents: "other\n", message: "add b")
+        try await commitFile(repo, path: "a.txt", contents: "two\n", message: "update a")
+
+        let commits = try await GitService().fileHistory(worktreePath: repo, relativePath: "a.txt", limit: 200)
+
+        #expect(commits.map(\.subject) == ["update a", "add a"])
+        #expect(commits.allSatisfy { $0.filesChanged >= 1 })
+    }
+
+    @Test func diffAgainstHEADIncludesStagedAndUnstagedChanges() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("base\n", "file.txt", in: repo)
+        try await gitOK(["add", "file.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+
+        try writeText("base\nstaged\n", "file.txt", in: repo)
+        try await gitOK(["add", "file.txt"], cwd: repo)
+        try writeText("base\nstaged\nunstaged\n", "file.txt", in: repo)
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "file.txt")
+
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "staged" } })
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "unstaged" } })
+    }
+
+    @Test func diffAgainstHEADShowsStagedDeletion() async throws {
+        let repo = try await makeContextSnapshotRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try writeText("delete me\n", "deleted.txt", in: repo)
+        try await gitOK(["add", "deleted.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "base"], cwd: repo)
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("deleted.txt"))
+        try await gitOK(["rm", "--cached", "deleted.txt"], cwd: repo)
+
+        let diff = try await GitService().diffAgainstHEAD(worktreePath: repo, file: "deleted.txt")
+
+        #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .delete && $0.text == "delete me" } })
     }
 
     @Test func contextSnapshotSeparatesStagedAndUnstagedRefs() async throws {

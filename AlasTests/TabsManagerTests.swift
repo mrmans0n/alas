@@ -217,6 +217,8 @@ struct TabsManagerTests {
         let decoded = try JSONDecoder().decode(DiffTabState.self, from: json)
         #expect(decoded.relativePath == "a.txt")
         #expect(decoded.staged == false)
+        #expect(decoded.originalPath == nil)
+        #expect(decoded.compareWithHEAD == false)
     }
 
     @Test func diffTabStateRoundTripsStagedFlag() throws {
@@ -225,6 +227,21 @@ struct TabsManagerTests {
         let decoded = try JSONDecoder().decode(DiffTabState.self, from: data)
         #expect(decoded == state)
         #expect(decoded.staged)
+    }
+
+    @Test func diffTabStateRoundTripsHeadComparisonFields() throws {
+        let state = DiffTabState(
+            id: "d",
+            title: "new.txt vs HEAD",
+            relativePath: "new.txt",
+            originalPath: "old.txt",
+            compareWithHEAD: true
+        )
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(DiffTabState.self, from: data)
+        #expect(decoded == state)
+        #expect(decoded.originalPath == "old.txt")
+        #expect(decoded.compareWithHEAD)
     }
 
     @Test func openOrFocusReviewChangesCreatesStableWorktreeScopedTab() {
@@ -240,6 +257,36 @@ struct TabsManagerTests {
         #expect(mgr.tabs(forWorktree: worktreeId).count == 1)
         #expect(mgr.activeTabId(forWorktree: worktreeId) == first.id)
         #expect(first.title == "Review Changes")
+    }
+
+    @Test func openOrFocusFileSnapshotReusesWorktreePathRefTab() {
+        let worktreeId = "tabs-manager-file-snapshot-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusFileSnapshot(worktreeId: worktreeId, relativePath: "a.txt", ref: "HEAD")
+        let other = manager.appendTerminal(worktreeId: worktreeId, title: "other", sessionId: "s")
+        manager.activate(worktreeId: worktreeId, tabId: other.id)
+
+        let second = manager.openOrFocusFileSnapshot(worktreeId: worktreeId, relativePath: "a.txt", ref: "HEAD")
+
+        #expect(first.id == second.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 2)
+        #expect(manager.activeTabId(forWorktree: worktreeId) == first.id)
+    }
+
+    @Test func openOrFocusFileHistoryReusesWorktreePathTab() {
+        let worktreeId = "tabs-manager-file-history-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let manager = TabsManager()
+        let first = manager.openOrFocusFileHistory(worktreeId: worktreeId, relativePath: "a.txt")
+        let other = manager.appendTerminal(worktreeId: worktreeId, title: "other", sessionId: "s")
+        manager.activate(worktreeId: worktreeId, tabId: other.id)
+
+        let second = manager.openOrFocusFileHistory(worktreeId: worktreeId, relativePath: "a.txt")
+
+        #expect(first.id == second.id)
+        #expect(manager.tabs(forWorktree: worktreeId).count == 2)
+        #expect(manager.activeTabId(forWorktree: worktreeId) == first.id)
     }
 
     @Test func reviewChangesTabStateRoundTrips() throws {

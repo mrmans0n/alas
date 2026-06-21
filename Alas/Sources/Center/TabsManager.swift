@@ -604,8 +604,22 @@ final class TabsManager {
     }
 
     @discardableResult
-    func appendDiff(worktreeId: String, title: String, relativePath: String, staged: Bool = false) -> Tab {
-        let state = DiffTabState(id: UUID().uuidString, title: title, relativePath: relativePath, staged: staged)
+    func appendDiff(
+        worktreeId: String,
+        title: String,
+        relativePath: String,
+        staged: Bool = false,
+        originalPath: String? = nil,
+        compareWithHEAD: Bool = false
+    ) -> Tab {
+        let state = DiffTabState(
+            id: UUID().uuidString,
+            title: title,
+            relativePath: relativePath,
+            staged: staged,
+            originalPath: originalPath,
+            compareWithHEAD: compareWithHEAD
+        )
         let tab = Tab.diff(state)
         append(tab, to: worktreeId)
         return tab
@@ -676,6 +690,30 @@ final class TabsManager {
         }
 
         let tab = Tab.reviewChanges(ReviewChangesTabState(worktreeId: worktreeId))
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func openOrFocusFileSnapshot(worktreeId: String, relativePath: String, ref: String = "HEAD") -> Tab {
+        let state = FileSnapshotTabState(worktreeId: worktreeId, relativePath: relativePath, ref: ref)
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .fileSnapshot(state)
+        }
+        let tab = Tab.fileSnapshot(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
+    func openOrFocusFileHistory(worktreeId: String, relativePath: String) -> Tab {
+        let state = FileHistoryTabState(worktreeId: worktreeId, relativePath: relativePath)
+        if tabs(forWorktree: worktreeId).contains(where: { $0.id == state.id }) {
+            activate(worktreeId: worktreeId, tabId: state.id)
+            return tabs(forWorktree: worktreeId).first(where: { $0.id == state.id }) ?? .fileHistory(state)
+        }
+        let tab = Tab.fileHistory(state)
         append(tab, to: worktreeId)
         return tab
     }

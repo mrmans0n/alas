@@ -3587,27 +3587,86 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
-    /// Open a diff tab for the given worktree-relative path.
-    /// Reuses an existing unstaged diff tab for the same path if one is already open.
-    func openDiffTab(forFileInWorktree worktree: Worktree, relativePath: String) {
+    /// Open a diff tab for the given worktree-relative path and comparison mode.
+    /// Reuses an existing matching diff tab for the same path if one is already open.
+    func openDiffTab(
+        forFileInWorktree worktree: Worktree,
+        relativePath: String,
+        staged: Bool = false,
+        originalPath: String? = nil,
+        compareWithHEAD: Bool = false
+    ) {
         let worktreeId = worktree.id
-        let staged = false
         let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
-            if case .diff(let s) = tab { return s.relativePath == relativePath && s.staged == staged }
+            if case .diff(let s) = tab {
+                return s.relativePath == relativePath
+                    && s.staged == staged
+                    && s.originalPath == originalPath
+                    && s.compareWithHEAD == compareWithHEAD
+            }
             return false
         }
         if let existing {
             tabs.activate(worktreeId: worktreeId, tabId: existing.id)
         } else {
-            let title = (relativePath as NSString).lastPathComponent
+            let basename = (relativePath as NSString).lastPathComponent
+            let title: String
+            if compareWithHEAD {
+                title = "\(basename) vs HEAD"
+            } else if staged {
+                title = "\(basename) (staged)"
+            } else {
+                title = basename
+            }
             let tab = tabs.appendDiff(
                 worktreeId: worktreeId,
                 title: title,
                 relativePath: relativePath,
-                staged: staged
+                staged: staged,
+                originalPath: originalPath,
+                compareWithHEAD: compareWithHEAD
             )
             tabs.activate(worktreeId: worktreeId, tabId: tab.id)
         }
+    }
+
+    func openCommitTab(worktreeId: String, commit: CommitInfo) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        if selectedWorktreeId != worktree.id {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
+
+        let existing = tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .commit(let state) = tab { return state.sha == commit.sha }
+            return false
+        }
+        if let existing {
+            tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
+            let tab = tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
+            tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
+    }
+
+    func openFileSnapshotAtHEAD(relativePath: String, worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
+        if selectedWorktreeId != worktree.id {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
+        let tab = tabs.openOrFocusFileSnapshot(worktreeId: worktree.id, relativePath: relativePath, ref: "HEAD")
+        tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+    }
+
+    func openFileHistory(relativePath: String, worktreeId: String) {
+        guard let worktree = worktree(withId: worktreeId) else { return }
+        guard !projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else { return }
+        if selectedWorktreeId != worktree.id {
+            focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
+        }
+        let tab = tabs.openOrFocusFileHistory(worktreeId: worktree.id, relativePath: relativePath)
+        tabs.activate(worktreeId: worktree.id, tabId: tab.id)
     }
 }
 

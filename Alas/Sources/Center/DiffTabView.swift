@@ -17,6 +17,8 @@ struct DiffTabView: View {
     let worktreePath: URL
     let relativePath: String
     let staged: Bool
+    let originalPath: String?
+    let compareWithHEAD: Bool
     let worktreeId: String
     let appState: AppState
     var codeFontFamily: String = ""
@@ -82,18 +84,27 @@ struct DiffTabView: View {
     }
 
     private var imageLoadKey: String {
-        "img:\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)"
+        "img:\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)\u{0}\(originalPath ?? "")\u{0}\(compareWithHEAD)"
     }
 
     private func loadImagePair() async {
         imagePairLoaded = false
         imagePair = nil
         do {
-            let pair = try await git.imageDiffPair(
-                worktreePath: worktreePath,
-                relativePath: relativePath,
-                staged: staged
-            )
+            let pair: ImageDiffPair
+            if compareWithHEAD {
+                pair = try await git.imageDiffPairAgainstHEAD(
+                    worktreePath: worktreePath,
+                    relativePath: relativePath,
+                    originalPath: originalPath
+                )
+            } else {
+                pair = try await git.imageDiffPair(
+                    worktreePath: worktreePath,
+                    relativePath: relativePath,
+                    staged: staged
+                )
+            }
             guard !Task.isCancelled else { return }
             imagePair = pair
         } catch {
@@ -158,7 +169,7 @@ struct DiffTabView: View {
     }
 
     private var loadKey: String {
-        "\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)"
+        "\(worktreePath.path)\u{0}\(relativePath)\u{0}\(staged)\u{0}\(originalPath ?? "")\u{0}\(compareWithHEAD)"
     }
 
     private var diffPreferences: DiffPreferenceBindings {
@@ -228,7 +239,14 @@ struct DiffTabView: View {
             Text((relativePath as NSString).lastPathComponent)
                 .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
                 .foregroundColor(theme.color("fg"))
-            if staged {
+            if compareWithHEAD {
+                Text("HEAD")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(theme.color("accent").opacity(0.16))
+                    .foregroundColor(theme.color("accent"))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            } else if staged {
                 Text("STAGED")
                     .font(.system(size: 9.5, weight: .semibold))
                     .padding(.horizontal, 5).padding(.vertical, 1)
@@ -252,7 +270,7 @@ struct DiffTabView: View {
                 if let onOpenFile {
                     AlasButton(title: "Open File", style: .subtle, action: onOpenFile)
                 }
-                if let onRequestDiscardFile {
+                if let onRequestDiscardFile, !compareWithHEAD {
                     AlasButton(title: "Discard Changes...", style: .subtle, action: onRequestDiscardFile)
                 }
             }
@@ -276,7 +294,21 @@ struct DiffTabView: View {
         clearPendingDraft()
 
         do {
-            let loadedDiff = try await git.diff(worktreePath: worktreePath, file: relativePath, staged: staged)
+            let loadedDiff: ParsedDiff
+            if compareWithHEAD {
+                loadedDiff = try await git.diffAgainstHEAD(
+                    worktreePath: worktreePath,
+                    file: relativePath,
+                    originalPath: originalPath
+                )
+            } else {
+                loadedDiff = try await git.diff(
+                    worktreePath: worktreePath,
+                    file: relativePath,
+                    staged: staged,
+                    originalPath: originalPath
+                )
+            }
             guard isActiveLoad(requestedLoadToken) else { return }
 
             let loadedDisplayModel = await Task.detached(priority: .userInitiated) {
@@ -372,6 +404,7 @@ struct DiffTabView: View {
     }
 
     private func stagedHunkActions(hunk: ParsedDiff.Hunk) -> (stage: (() -> Void)?, discard: (() -> Void)?) {
+        if compareWithHEAD { return (nil, nil) }
         // Staged view: no per-hunk actions for now (out of scope).
         if staged { return (nil, nil) }
         // Unstaged tracked, file exists: stage + discard.
@@ -423,7 +456,8 @@ struct DiffTabView: View {
     // MARK: - Local review
 
     private var fileID: DiffReviewFileID {
-        DiffReviewFileID(namespace: staged ? "staged" : "unstaged", path: relativePath)
+        let namespace = compareWithHEAD ? "head" : (staged ? "staged" : "unstaged")
+        return DiffReviewFileID(namespace: namespace, path: relativePath)
     }
 
     private var draftSessionID: ReviewDraftSessionID {
@@ -439,14 +473,16 @@ struct DiffTabView: View {
             title: (relativePath as NSString).lastPathComponent,
             repositoryPath: worktreePath.path,
             providerDescription: nil,
-            sourceDescription: staged ? "Staged changes" : "Unstaged changes"
+            sourceDescription: compareWithHEAD
+                ? "Changes since HEAD"
+                : staged ? "Staged changes" : "Unstaged changes"
         )
     }
 
     private var fileSummary: DiffReviewFileSummary {
         DiffReviewFileSummary(
             path: relativePath,
-            namespace: staged ? "staged" : "unstaged",
+            namespace: compareWithHEAD ? "head" : (staged ? "staged" : "unstaged"),
             groupID: nil,
             groupTitle: nil,
             status: .modified,

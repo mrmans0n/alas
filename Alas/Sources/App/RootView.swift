@@ -80,7 +80,12 @@ struct RootView: View {
                                     state: state,
                                     worktree: wt,
                                     onSelectChangedFile: { file in
-                                        openOrFocusDiff(worktree: wt, path: file.path, staged: file.stage == .staged)
+                                        openOrFocusDiff(
+                                            worktree: wt,
+                                            path: file.path,
+                                            staged: file.stage == .staged,
+                                            originalPath: file.renameFrom
+                                        )
                                     },
                                     onSelectTreeFile: { node in
                                         openOrFocusEditor(worktree: wt, path: node.path)
@@ -290,29 +295,19 @@ struct RootView: View {
         return nil
     }
 
-    private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool) {
+    private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool, originalPath: String?) {
         if ImageFileType.isSupported(relativePath: path) {
             state.openFile(relativePath: path, worktreeId: worktree.id)
             return
         }
 
-        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .diff(let s) = tab { return s.relativePath == path && s.staged == staged } else { return false }
-        }
-        if let existing {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
-        } else {
-            let title = staged
-                ? "\((path as NSString).lastPathComponent) (staged)"
-                : (path as NSString).lastPathComponent
-            let tab = state.tabs.appendDiff(
-                worktreeId: worktree.id,
-                title: title,
-                relativePath: path,
-                staged: staged
-            )
-            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
-        }
+        state.openDiffTab(
+            forFileInWorktree: worktree,
+            relativePath: path,
+            staged: staged,
+            originalPath: originalPath,
+            compareWithHEAD: false
+        )
     }
 
     private func openOrFocusEditor(worktree: Worktree, path: String) {

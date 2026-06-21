@@ -178,6 +178,8 @@ struct CenterPaneView: View {
                             worktreePath: worktree.path,
                             relativePath: s.relativePath,
                             staged: s.staged,
+                            originalPath: s.originalPath,
+                            compareWithHEAD: s.compareWithHEAD,
                             worktreeId: worktree.id,
                             appState: state,
                             codeFontFamily: state.config.code.fontFamily,
@@ -268,6 +270,20 @@ struct CenterPaneView: View {
                             tabState: s
                         )
                         .id(s.id)
+                    case .fileSnapshot(let s):
+                        FileSnapshotTabView(
+                            worktreePath: worktree.path,
+                            state: s,
+                            codeFontFamily: state.config.code.fontFamily,
+                            codeFontSize: CGFloat(state.config.code.fontSize)
+                        )
+                    case .fileHistory(let s):
+                        FileHistoryTabView(
+                            worktreePath: worktree.path,
+                            state: s,
+                            onSelectCommit: { state.openCommitTab(worktreeId: worktree.id, commit: $0) },
+                            onCopySHA: { Clipboard.copy($0.sha) }
+                        )
                     case .acpSession(let s):
                         ACPTabView(sessionId: s.sessionId, state: state, worktree: worktree)
                             .id(s.id)
