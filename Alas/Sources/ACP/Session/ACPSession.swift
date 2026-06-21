@@ -824,6 +824,9 @@ final class ACPSession: ObservableObject, Identifiable {
         // `example.com.` split before `Path`), which we also leave alone.
         let scalars = previous.unicodeScalars
         var i = scalars.index(before: scalars.endIndex) // the punctuation
+        // No word before the punctuation (chunk is just "." or "!" etc.) —
+        // nothing to validate, treat as no separator.
+        guard i > scalars.startIndex else { return "" }
         scalars.formIndex(before: &i) // first char of the word run
         var hasSlash = false
         var hasColon = false

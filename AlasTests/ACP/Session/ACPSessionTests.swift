@@ -58,6 +58,18 @@ struct ACPSessionTests {
         } else { Issue.record("expected single agent message") }
     }
 
+    @Test("single-character punctuation chunk does not crash and adds no separator")
+    func chunksWithSingleCharPunctuationNoCrash() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        // A chunk that is just "." followed by "Next" must not trap when
+        // walking back past the punctuation and must not inject a newline.
+        session.apply(.agentMessageChunk(.text(".")))
+        session.apply(.agentMessageChunk(.text("Next task")))
+        if case .agent(_, let buf) = session.transcript.messages[0] {
+            #expect(buf.value == ".Next task")
+        } else { Issue.record("expected single agent message") }
+    }
+
     @Test("agent chunks with all-caps acronym after period do not get a newline")
     func chunksWithAcronymNoSeparator() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
