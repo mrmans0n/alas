@@ -105,4 +105,60 @@ struct ACPSelectChipTests {
         }
         return 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
     }
+
+    // MARK: - DropdownPanel filtering
+
+    @Test("filters model options by name/id but not description substrings")
+    func filteringIgnoresDescriptionSubstrings() {
+        let items = [
+            ACPSelectChip.Item(id: "kimi-2.7", name: "kimi-2.7", description: nil),
+            ACPSelectChip.Item(id: "claude-opus", name: "Claude Opus", description: "2.7M context"),
+            ACPSelectChip.Item(id: "gemini-2.5", name: "Gemini 2.5", description: "2.7M context"),
+            ACPSelectChip.Item(id: "gpt-4", name: "GPT-4", description: "2.7M parameters"),
+        ]
+
+        let result = ACPSelectChip.filteredItems(items, query: "2.7")
+
+        #expect(result.map(\.id) == ["kimi-2.7"])
+    }
+
+    @Test("empty query returns all items in order")
+    func emptyQueryReturnsAllItems() {
+        let items = [
+            ACPSelectChip.Item(id: "a", name: "Alpha", description: nil),
+            ACPSelectChip.Item(id: "b", name: "Beta", description: nil),
+        ]
+
+        #expect(ACPSelectChip.filteredItems(items, query: "").map(\.id) == ["a", "b"])
+    }
+
+    @Test("filters case-insensitively by name and id")
+    func filteringIsCaseInsensitive() {
+        let items = [
+            ACPSelectChip.Item(id: "kimi-2.7", name: "Kimi 2.7", description: nil),
+            ACPSelectChip.Item(id: "GPT-4", name: "gpt-4", description: nil),
+        ]
+
+        #expect(ACPSelectChip.filteredItems(items, query: "KIMI").map(\.id) == ["kimi-2.7"])
+        #expect(ACPSelectChip.filteredItems(items, query: "2.7").map(\.id) == ["kimi-2.7"])
+    }
+
+    @Test("matching by id still works when name differs")
+    func filteringMatchesById() {
+        let items = [
+            ACPSelectChip.Item(id: "kimi-2.7", name: "Kimi K2", description: nil),
+            ACPSelectChip.Item(id: "gemini-2.5", name: "Gemini 2.5", description: nil),
+        ]
+
+        #expect(ACPSelectChip.filteredItems(items, query: "kimi-2.7").map(\.id) == ["kimi-2.7"])
+    }
+
+    @Test("trims whitespace from query before filtering")
+    func filteringTrimsWhitespace() {
+        let items = [
+            ACPSelectChip.Item(id: "kimi-2.7", name: "kimi-2.7", description: nil),
+        ]
+
+        #expect(ACPSelectChip.filteredItems(items, query: "  2.7  ").map(\.id) == ["kimi-2.7"])
+    }
 }
