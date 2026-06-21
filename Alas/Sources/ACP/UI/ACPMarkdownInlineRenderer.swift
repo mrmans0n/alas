@@ -109,6 +109,23 @@ enum ACPMarkdownInlineRenderer {
         return attachment
     }
 
+    static func loadedImageString(
+        for image: NSImage,
+        isSubscript: Bool,
+        attributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        let attributed = NSMutableAttributedString(
+            attributedString: NSAttributedString(
+                attachment: loadedImageAttachment(for: image, isSubscript: isSubscript)
+            )
+        )
+        var inheritedAttributes = attributes
+        inheritedAttributes.removeValue(forKey: .attachment)
+        inheritedAttributes.removeValue(forKey: .acpMarkdownInlineRemoteImage)
+        attributed.addAttributes(inheritedAttributes, range: NSRange(location: 0, length: attributed.length))
+        return attributed
+    }
+
     private static func removingSubscriptMarkers(
         from source: String,
         markers: [ACPMarkdownSubscriptMarker]

@@ -130,11 +130,11 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
 
             let replacement: NSAttributedString
             if let loadedImage {
-                let attachment = ACPMarkdownInlineRenderer.loadedImageAttachment(
+                replacement = ACPMarkdownInlineRenderer.loadedImageString(
                     for: loadedImage,
-                    isSubscript: remoteImage.image.isSubscript
+                    isSubscript: remoteImage.image.isSubscript,
+                    attributes: target.fallbackAttributes
                 )
-                replacement = NSAttributedString(attachment: attachment)
             } else {
                 replacement = ACPMarkdownInlineRenderer.mutedAltString(
                     for: remoteImage.image,

@@ -128,4 +128,31 @@ struct ACPMarkdownInlineRendererTests {
         let font = attributed.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
         #expect(font?.isFixedPitch == true)
     }
+
+    @Test("loaded image replacement preserves inherited link")
+    func loadedImageReplacementPreservesInheritedLink() throws {
+        let url = try #require(URL(string: "https://review.example"))
+        let remoteImage = ACPMarkdownInlineRemoteImage(
+            image: ACPMarkdownInlineImage(
+                placeholder: "\u{E000}ALAS_IMG_0\u{E001}",
+                alt: "P2",
+                source: "https://img.shields.io/badge/P2-yellow?style=flat",
+                isSubscript: true
+            ),
+            url: try #require(URL(string: "https://img.shields.io/badge/P2-yellow?style=flat"))
+        )
+
+        let image = NSImage(size: CGSize(width: 32, height: 16))
+        let replacement = ACPMarkdownInlineRenderer.loadedImageString(
+            for: image,
+            isSubscript: true,
+            attributes: [
+                .link: url,
+                .acpMarkdownInlineRemoteImage: remoteImage,
+            ]
+        )
+
+        #expect(replacement.attribute(.link, at: 0, effectiveRange: nil) as? URL == url)
+        #expect(replacement.attribute(.acpMarkdownInlineRemoteImage, at: 0, effectiveRange: nil) == nil)
+    }
 }
