@@ -777,7 +777,7 @@ final class ACPSession: ObservableObject, Identifiable {
             } else {
                 switch transcript.messages[i] {
                 case .agent(_, let buf), .thought(_, let buf):
-                    buf.append(addition)
+                    buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
                     transcript.streamingTick &+= 1
                     return i
                 default:
@@ -788,6 +788,27 @@ final class ACPSession: ObservableObject, Identifiable {
         transcript.messages.append(makeNew())
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
+    }
+    /// Returns the separator (if any) to insert between two streaming
+    /// chunks before appending `next` to `previous`. Adapters sometimes
+    /// split their stream at a sentence boundary and drop the trailing
+    /// whitespace, so a chunk ending in `.` is followed by one starting
+    /// with an uppercase letter — `append` with no separator would glue
+    /// them as `completed.Running`, mashing two sentences together. When
+    /// we detect that boundary (`[.!?]` then `[A-Z][a-z]`), inject a
+    /// newline so the second sentence starts on its own line.
+    private static func streamingSeparator(between previous: String, and next: String) -> String {
+        guard let last = previous.last, let first = next.first else { return "" }
+        if last.isWhitespace || first.isWhitespace { return "" }
+        if last == "." || last == "!" || last == "?" {
+            if let firstUpper = first.asciiValue,
+               firstUpper >= 0x41 && firstUpper <= 0x5A,
+               let secondScalar = next.unicodeScalars.dropFirst().first,
+               secondScalar.value >= 0x61 && secondScalar.value <= 0x7A {
+                return "\n"
+            }
+        }
+        return ""
     }
     /// Returns the index of the matching tool call, or nil if no match.
     private func updateToolCall(id: String, _ mutate: (inout ACPMessage.ToolCall) -> Void) -> Int? {

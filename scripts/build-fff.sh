@@ -29,6 +29,24 @@ die() {
     exit 1
 }
 
+# Fast path: if the expected dylib for this arch already exists, skip the
+# cargo build. The Xcode build phase runs this script on every build
+# (`alwaysOutOfDate = 1`), but a cargo build from scratch takes ~40s, so
+# reusing a previously produced dylib keeps incremental Xcode builds fast.
+# The dylib is only regenerated when the fff submodule changes; a stale
+# dylib would be caught by the lipo step in the universal build path below.
+if [ "${target_arch}" = "universal" ]; then
+    arm64_slice="${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
+    x86_64_slice="${srcroot}/.build/fff/x86_64/install/lib/libfff_c.dylib"
+    if [ -f "${lib_output}" ] && [ -f "${arm64_slice}" ] && [ -f "${x86_64_slice}" ]; then
+        echo "build-fff.sh: fast path — universal ${lib_output} exists"
+        exit 0
+    fi
+elif [ -f "${lib_output}" ]; then
+    echo "build-fff.sh: fast path — ${lib_output} exists"
+    exit 0
+fi
+
 if [ "${target_arch}" = "universal" ]; then
     mkdir -p "${lib_dir}"
     for slice in arm64 x86_64; do
