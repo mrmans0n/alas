@@ -5,37 +5,93 @@ import AppKit
 /// the leading edge during initial layout, while preserving normal horizontal
 /// scrolling for long lines.
 final class CodeEditorLeadingClipView: NSClipView {
+    private var preservesNextExplicitZeroOrigin = false
+
     override func scroll(to newOrigin: NSPoint) {
+        defer { preservesNextExplicitZeroOrigin = false }
         super.scroll(to: pinnedOrigin(for: newOrigin))
     }
 
     override func setBoundsOrigin(_ newOrigin: NSPoint) {
+        defer { preservesNextExplicitZeroOrigin = false }
         super.setBoundsOrigin(pinnedOrigin(for: newOrigin))
     }
 
     override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
         var bounds = super.constrainBoundsRect(proposedBounds)
-        guard enclosingScrollView?.hasHorizontalScroller == true else {
-            bounds.origin.x = 0
-            return bounds
-        }
-        guard let documentView else {
-            bounds.origin.x = 0
+        let leadingX = leadingBoundsOriginX
+        guard enclosingScrollView?.hasHorizontalScroller == true,
+              let documentView else {
+            bounds.origin.x = leadingX
             return bounds
         }
 
-        let maxX = max(documentView.frame.width - bounds.width, 0)
-        bounds.origin.x = min(max(bounds.origin.x, 0), maxX)
+        let maxX = max(documentView.frame.width - bounds.width, leadingX)
+        bounds.origin.x = resolvedOriginX(
+            proposed: proposedBounds.origin.x,
+            clamped: bounds.origin.x,
+            leadingX: leadingX,
+            maxX: maxX
+        )
         return bounds
     }
 
     private func pinnedOrigin(for origin: NSPoint) -> NSPoint {
-        guard enclosingScrollView?.hasHorizontalScroller == true, origin.x < 0 else {
+        guard enclosingScrollView?.hasHorizontalScroller == true else { return origin }
+        let leadingX = leadingBoundsOriginX
+        if leadingX < 0, origin.x == 0 {
+            preservesNextExplicitZeroOrigin = true
             return origin
         }
-        var pinned = origin
-        pinned.x = 0
-        return pinned
+        // Only enforce the leading edge here; `constrainBoundsRect` (which
+        // `super.scroll`/`setBoundsOrigin` funnel through) applies the upper
+        // bound and the gutter-reset handling.
+        let resolved = resolvedOriginX(
+            proposed: origin.x,
+            clamped: max(origin.x, leadingX),
+            leadingX: leadingX,
+            maxX: .greatestFiniteMagnitude
+        )
+        return resolved == origin.x ? origin : NSPoint(x: resolved, y: origin.y)
+    }
+
+    /// Resolves a proposed horizontal origin against the gutter-adjusted leading
+    /// edge (`leadingX`, e.g. `-rulerThickness`).
+    ///
+    /// AppKit's layout and frame-change passes repeatedly propose `x == 0` — they
+    /// treat `0` as the leading edge, unaware the line-number gutter shifts the
+    /// true leading to `leadingX`. Whichever pass runs last would otherwise win,
+    /// so the first characters of a line intermittently end up hidden under the
+    /// gutter. Snapping layout-only `0` resets to `leadingX` fixes the race while
+    /// still preserving an explicit scroll/scrollbar move that lands exactly on
+    /// zero.
+    private func resolvedOriginX(proposed: CGFloat, clamped: CGFloat, leadingX: CGFloat, maxX: CGFloat) -> CGFloat {
+        guard leadingX < 0 else { return min(max(clamped, leadingX), maxX) }
+
+        if proposed == 0 {
+            if preservesNextExplicitZeroOrigin {
+                preservesNextExplicitZeroOrigin = false
+                return min(max(clamped, leadingX), maxX)
+            }
+            return leadingX
+        }
+
+        preservesNextExplicitZeroOrigin = false
+        return min(max(clamped, leadingX), maxX)
+    }
+
+    /// The leading-most horizontal bounds origin. A left-side vertical ruler
+    /// (the line-number gutter) makes AppKit shift the clip's bounds origin
+    /// negative by the ruler's reserved thickness so the document content
+    /// clears the gutter. The true leading edge is therefore `-rulerThickness`,
+    /// not `0` — clamping to `0` hides the first characters of every line under
+    /// the gutter with no way to scroll them back into view.
+    private var leadingBoundsOriginX: CGFloat {
+        guard let scrollView = enclosingScrollView,
+              scrollView.rulersVisible,
+              let ruler = scrollView.verticalRulerView,
+              ruler.orientation == .verticalRuler else { return 0 }
+        return -ruler.requiredThickness
     }
 }
 
