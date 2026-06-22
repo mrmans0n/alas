@@ -886,9 +886,9 @@ struct EditorBufferTests {
         )
         #expect(constrainedZero.origin.x == expectedLeadingX)
 
-        // Regression for the codex P2: an incremental scroll right from the
-        // leading edge (leadingX + delta) must be preserved, not collapsed back
-        // to the leading edge — otherwise the user can't start scrolling until a
+        // Regression: an incremental scroll right from the leading edge
+        // (leadingX + delta) must be preserved, not collapsed back to the
+        // leading edge — otherwise the user can't start scrolling until a
         // single event jumps the whole gutter width.
         let incremental = subject.contentView.constrainBoundsRect(
             NSRect(x: expectedLeadingX + 5, y: 0, width: clipW, height: subject.contentView.bounds.height)
