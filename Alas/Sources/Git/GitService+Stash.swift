@@ -147,16 +147,15 @@ extension GitService {
     }
 
     func stashDiff(worktreePath: URL, stash: GitStash, file: GitStashFile) async throws -> ParsedDiff {
-        try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
-
         let pathspecs = [file.oldPath, file.path].compactMap(\.self)
+        let stashRevision = stash.sha
         var result = try await Process.git(
-            ["diff", "--no-ext-diff", "--no-color", "--find-renames", "\(stash.ref)^1", stash.ref, "--"] + pathspecs,
+            ["diff", "--no-ext-diff", "--no-color", "--find-renames", "\(stashRevision)^1", stashRevision, "--"] + pathspecs,
             cwd: worktreePath
         )
         if result.exitCode == 0, result.stdout.isEmpty {
             result = try await Process.git(
-                ["show", "--format=", "--no-ext-diff", "--no-color", "\(stash.ref)^3", "--", file.path],
+                ["show", "--format=", "--no-ext-diff", "--no-color", "\(stashRevision)^3", "--", file.path],
                 cwd: worktreePath
             )
         }

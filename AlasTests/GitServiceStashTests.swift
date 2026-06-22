@@ -157,6 +157,26 @@ struct GitServiceStashTests {
         })
     }
 
+    @Test func stashDiffLoadsCapturedShaAfterRefMoves() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let service = GitService()
+        try "base\nold stash\n".write(to: repo.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        _ = try await service.pushStash(worktreePath: repo, message: "old", includeUntracked: false)
+        let oldStash = try #require(try await service.stashes(worktreePath: repo).first)
+        let oldFile = try #require(try await service.stashFiles(worktreePath: repo, stash: oldStash).first)
+
+        try "base\nnew stash\n".write(to: repo.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        _ = try await service.pushStash(worktreePath: repo, message: "new", includeUntracked: false)
+
+        let diff = try await service.stashDiff(worktreePath: repo, stash: oldStash, file: oldFile)
+
+        #expect(diff.hunks.contains { hunk in
+            hunk.lines.contains { $0.kind == .add && $0.text == "old stash" }
+        })
+    }
+
     @Test func applyPopAndDropStash() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
