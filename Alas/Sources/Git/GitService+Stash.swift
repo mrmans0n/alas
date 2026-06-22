@@ -62,4 +62,111 @@ extension GitService {
                 return GitStashFile(path: path, status: status, add: count.add, del: count.del)
             }
     }
+
+    func stashes(worktreePath: URL) async throws -> [GitStash] {
+        let result = try await Process.git(
+            ["stash", "list", "--format=%gd%x1f%gs%x1f%cr%x1f%H"],
+            cwd: worktreePath
+        )
+        guard result.exitCode == 0 else {
+            throw GitStashError.stderr(result.stderr, fallback: "Could not list stashes.")
+        }
+        return Self.parseStashList(result.stdout)
+    }
+
+    func pushStash(worktreePath: URL, message: String, includeUntracked: Bool) async throws -> StashOperationResult {
+        var args = ["stash", "push"]
+        if includeUntracked { args.append("--include-untracked") }
+
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            args.append(contentsOf: ["--message", trimmed])
+        }
+
+        let result = try await Process.git(args, cwd: worktreePath)
+        return Self.stashOperationResult(result, fallback: "Could not park changes.")
+    }
+
+    func stashFiles(worktreePath: URL, stash: GitStash) async throws -> [GitStashFile] {
+        let numstat = try await Process.git(
+            ["stash", "show", "--include-untracked", "--numstat", "--format=", stash.ref],
+            cwd: worktreePath
+        )
+        guard numstat.exitCode == 0 else {
+            throw GitStashError.stderr(numstat.stderr, fallback: "Could not load stash files.")
+        }
+
+        let nameStatus = try await Process.git(
+            ["stash", "show", "--include-untracked", "--name-status", "--format=", stash.ref],
+            cwd: worktreePath
+        )
+        guard nameStatus.exitCode == 0 else {
+            throw GitStashError.stderr(nameStatus.stderr, fallback: "Could not load stash files.")
+        }
+
+        return Self.parseStashFiles(numstat: numstat.stdout, nameStatus: nameStatus.stdout)
+    }
+
+    func stashDiff(worktreePath: URL, stash: GitStash, file: GitStashFile) async throws -> ParsedDiff {
+        var result = try await Process.git(
+            ["diff", "--no-ext-diff", "--no-color", "\(stash.ref)^1", stash.ref, "--", file.path],
+            cwd: worktreePath
+        )
+        if result.exitCode == 0, result.stdout.isEmpty {
+            result = try await Process.git(
+                ["show", "--format=", "--no-ext-diff", "--no-color", "\(stash.ref)^3", "--", file.path],
+                cwd: worktreePath
+            )
+        }
+        guard result.exitCode == 0 else {
+            throw GitStashError.stderr(result.stderr, fallback: "Could not load stash diff.")
+        }
+
+        return await Task.detached(priority: .userInitiated) {
+            DiffParser.parse(result.stdout)
+        }.value
+    }
+
+    func applyStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
+        let result = try await Process.git(["stash", "apply", stash.ref], cwd: worktreePath)
+        return Self.stashOperationResult(result, fallback: "Could not apply stash.")
+    }
+
+    func popStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
+        let result = try await Process.git(["stash", "pop", stash.ref], cwd: worktreePath)
+        return Self.stashOperationResult(result, fallback: "Could not pop stash.")
+    }
+
+    func dropStash(worktreePath: URL, stash: GitStash) async throws {
+        let result = try await Process.git(["stash", "drop", stash.ref], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw GitStashError.stderr(result.stderr, fallback: "Could not drop stash.")
+        }
+    }
+
+    private static func stashOperationResult(_ result: ProcessResult, fallback: String) -> StashOperationResult {
+        if result.exitCode == 0 { return .clean }
+
+        let output = [result.stderr, result.stdout]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        let message = output.isEmpty ? fallback : output
+        if message.localizedCaseInsensitiveContains("conflict") {
+            return .conflict(message: message)
+        }
+        return .error(message: message)
+    }
+}
+
+private enum GitStashError: LocalizedError {
+    case stderr(String, fallback: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .stderr(let stderr, let fallback):
+            let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return message.isEmpty ? fallback : message
+        }
+    }
 }
