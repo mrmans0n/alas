@@ -441,10 +441,8 @@ final class RightPaneState {
             }
             self.upstreamRef = resolvedUpstream?.ref
             self.changes = entries
+            self.reconcileStashCaches(with: stashes)
             self.stashes = stashes
-            let validStashRefs = Set(stashes.map(\.ref))
-            self.expandedStashRefs.formIntersection(validStashRefs)
-            self.stashFilesByRef = self.stashFilesByRef.filter { validStashRefs.contains($0.key) }
             self.changesGeneration += 1
             self.indexFingerprint = indexFingerprint
             self.fileTree = tree
@@ -961,7 +959,7 @@ final class RightPaneState {
             do {
                 let files = try await self.git.stashFiles(worktreePath: self.worktree.path, stash: stash)
                 guard snapshotGeneration == self.snapshotInvalidationGeneration else { return }
-                guard self.stashes.contains(where: { $0.ref == stash.ref }) else { return }
+                guard self.stashes.contains(where: { $0.ref == stash.ref && $0.sha == stash.sha }) else { return }
                 self.stashFilesByRef[stash.ref] = files
             } catch {
                 guard snapshotGeneration == self.snapshotInvalidationGeneration else { return }
@@ -1006,6 +1004,17 @@ final class RightPaneState {
                 self.sidebarError = error.localizedDescription
             }
         }
+    }
+
+    func reconcileStashCaches(with newStashes: [GitStash]) {
+        let previousSHAsByRef = Dictionary(uniqueKeysWithValues: stashes.map { ($0.ref, $0.sha) })
+        let newSHAsByRef = Dictionary(uniqueKeysWithValues: newStashes.map { ($0.ref, $0.sha) })
+        let stableRefs = Set(newSHAsByRef.compactMap { ref, sha in
+            previousSHAsByRef[ref] == sha ? ref : nil
+        })
+
+        expandedStashRefs.formIntersection(stableRefs)
+        stashFilesByRef = stashFilesByRef.filter { stableRefs.contains($0.key) }
     }
 
     private func runStashOperation(_ operation: @escaping @MainActor () async throws -> StashOperationResult) {

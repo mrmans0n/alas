@@ -88,6 +88,8 @@ extension GitService {
     }
 
     func stashFiles(worktreePath: URL, stash: GitStash) async throws -> [GitStashFile] {
+        try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
+
         let numstat = try await Process.git(
             ["stash", "show", "--include-untracked", "--numstat", "--format=", stash.ref],
             cwd: worktreePath
@@ -108,6 +110,8 @@ extension GitService {
     }
 
     func stashDiff(worktreePath: URL, stash: GitStash, file: GitStashFile) async throws -> ParsedDiff {
+        try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
+
         var result = try await Process.git(
             ["diff", "--no-ext-diff", "--no-color", "\(stash.ref)^1", stash.ref, "--", file.path],
             cwd: worktreePath
@@ -128,16 +132,19 @@ extension GitService {
     }
 
     func applyStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
+        try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
         let result = try await Process.git(["stash", "apply", stash.ref], cwd: worktreePath)
         return Self.stashOperationResult(result, fallback: "Could not apply stash.")
     }
 
     func popStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
+        try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
         let result = try await Process.git(["stash", "pop", stash.ref], cwd: worktreePath)
         return Self.stashOperationResult(result, fallback: "Could not pop stash.")
     }
 
     func dropStash(worktreePath: URL, stash: GitStash) async throws {
+        try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
         let result = try await Process.git(["stash", "drop", stash.ref], cwd: worktreePath)
         guard result.exitCode == 0 else {
             throw GitStashError.stderr(result.stderr, fallback: "Could not drop stash.")
@@ -157,16 +164,31 @@ extension GitService {
         }
         return .error(message: message)
     }
+
+    private func verifyStashIdentity(worktreePath: URL, stash: GitStash) async throws {
+        let result = try await Process.git(["rev-parse", "--verify", stash.ref], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw GitStashError.stderr(result.stderr, fallback: "\(stash.ref) is no longer available.")
+        }
+
+        let actualSHA = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard actualSHA == stash.sha else {
+            throw GitStashError.staleRef(ref: stash.ref, expectedSHA: stash.sha, actualSHA: actualSHA)
+        }
+    }
 }
 
 private enum GitStashError: LocalizedError {
     case stderr(String, fallback: String)
+    case staleRef(ref: String, expectedSHA: String, actualSHA: String)
 
     var errorDescription: String? {
         switch self {
         case .stderr(let stderr, let fallback):
             let message = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return message.isEmpty ? fallback : message
+        case .staleRef(let ref, let expectedSHA, let actualSHA):
+            return "\(ref) changed before the operation could run. Expected \(expectedSHA), found \(actualSHA). Refresh and try again."
         }
     }
 }

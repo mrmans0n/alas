@@ -157,6 +157,27 @@ struct GitServiceStashTests {
         #expect(try await service.stashes(worktreePath: repo).isEmpty)
     }
 
+    @Test func dropStashRejectsRefThatNowPointsAtDifferentSha() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let service = GitService()
+        try "base\nold stash\n".write(to: repo.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        _ = try await service.pushStash(worktreePath: repo, message: "old", includeUntracked: false)
+        let staleRef = try #require(try await service.stashes(worktreePath: repo).first)
+
+        try "base\nnew stash\n".write(to: repo.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        _ = try await service.pushStash(worktreePath: repo, message: "new", includeUntracked: false)
+
+        await #expect(throws: (any Error).self) {
+            try await service.dropStash(worktreePath: repo, stash: staleRef)
+        }
+        let stashes = try await service.stashes(worktreePath: repo)
+        #expect(stashes.count == 2)
+        #expect(stashes[0].subject.contains("new"))
+        #expect(stashes[1].subject.contains("old"))
+    }
+
     @Test func applyStashReportsConflictsFromGitStdout() async throws {
         let repo = try await makeRepo()
         defer { try? FileManager.default.removeItem(at: repo) }
