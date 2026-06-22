@@ -83,6 +83,12 @@ struct CodeEditorView: NSViewRepresentable {
         scroll.autohidesScrollers = false
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(theme.color("bg-1"))
+        // Since the macOS 14 SDK `clipsToBounds` defaults to `false`, so the
+        // scroll view no longer clips its subviews. Without this, the vertical
+        // ruler's responsive-scrolling overdraw paints line numbers above the
+        // scroll view's top edge, bleeding over the breadcrumb header that sits
+        // directly above the editor in the enclosing SwiftUI VStack.
+        scroll.clipsToBounds = true
         scroll.contentView = CodeEditorLeadingClipView(frame: .zero)
 
         let buffer: EditorBuffer
