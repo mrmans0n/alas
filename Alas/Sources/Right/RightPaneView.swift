@@ -137,5 +137,37 @@ struct RightPaneView: View {
                 Text("Apply this commit to the current branch.")
             }
         )
+        .sheet(
+            isPresented: Binding(
+                get: { rps.pendingParkChanges },
+                set: { if !$0 { rps.cancelParkChanges() } }
+            )
+        ) {
+            ParkChangesSheet(
+                onPark: { message, includeUntracked in
+                    rps.parkChanges(message: message, includeUntracked: includeUntracked)
+                },
+                onCancel: { rps.cancelParkChanges() }
+            )
+        }
+        .alert(
+            PendingStashDrop.alertTitle(for: rps.pendingStashDrop ?? .placeholder),
+            isPresented: Binding(
+                get: { rps.pendingStashDrop != nil },
+                set: { if !$0 { rps.cancelDropStash() } }
+            ),
+            presenting: rps.pendingStashDrop,
+            actions: { pending in
+                Button("Drop", role: .destructive) {
+                    rps.confirmDropStash(pending)
+                }
+                Button("Cancel", role: .cancel) {
+                    rps.cancelDropStash()
+                }
+            },
+            message: { pending in
+                Text(PendingStashDrop.alertMessage(for: pending))
+            }
+        )
     }
 }

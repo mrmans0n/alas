@@ -626,6 +626,14 @@ final class TabsManager {
     }
 
     @discardableResult
+    func appendStashDiff(worktreeId: String, stash: GitStash, file: GitStashFile) -> Tab {
+        let state = StashDiffTabState(worktreeId: worktreeId, stash: stash, file: file)
+        let tab = Tab.stashDiff(state)
+        append(tab, to: worktreeId)
+        return tab
+    }
+
+    @discardableResult
     func appendCommit(worktreeId: String, sha: String, title: String) -> Tab {
         let state = CommitTabState(worktreeId: worktreeId, sha: sha, title: title)
         let tab = Tab.commit(state)

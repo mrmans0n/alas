@@ -147,12 +147,29 @@ struct ChangesTabView: View {
                     )
                 },
                 onDiscardFile: { file in rps.requestDiscardFile(path: file.path) },
+                onParkChanges: { rps.requestParkChanges() },
+                parkChangesDisabled: rps.mergeOp.current != nil || rps.stashOperationInFlight,
                 isOpenFileEnabled: { file in
                     DiffOpenFileAvailability.isAvailable(
                         worktreePath: rps.worktree.path,
                         relativePath: file.path
                     )
                 }
+            )
+            StashesSectionView(
+                stashes: rps.stashes,
+                filesByRef: rps.stashFilesByRef,
+                loadingRefs: rps.loadingStashRefs,
+                expanded: $rps.stashesExpanded,
+                expandedRefs: rps.expandedStashRefs,
+                onToggleSection: { rps.stashesExpanded.toggle() },
+                onToggleStash: { rps.toggleStashExpanded($0) },
+                onSelectFile: { stash, file in
+                    appState.openStashDiffTab(worktree: rps.worktree, stash: stash, file: file)
+                },
+                onApply: { rps.applyStash($0) },
+                onPop: { rps.popStash($0) },
+                onDrop: { rps.requestDropStash($0) }
             )
             Divider().opacity(0.4)
             CommitsSectionView(

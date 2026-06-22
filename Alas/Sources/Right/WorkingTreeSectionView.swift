@@ -18,6 +18,8 @@ struct WorkingTreeSectionView: View {
     var onCompareWithHEAD: ((ChangedFile) -> Void)? = nil
     var onFileHistory:     ((ChangedFile) -> Void)? = nil
     var onDiscardFile:     ((ChangedFile) -> Void)? = nil
+    var onParkChanges:     (() -> Void)? = nil
+    var parkChangesDisabled: Bool = false
     var isOpenFileEnabled: ((ChangedFile) -> Bool)? = nil
 
     @Environment(\.theme) private var theme
@@ -70,6 +72,10 @@ struct WorkingTreeSectionView: View {
                     }
                 }
                 if !changes.isEmpty {
+                    Button("Park Changes…") {
+                        onParkChanges?()
+                    }
+                    .disabled(parkChangesDisabled || changes.isEmpty || onParkChanges == nil)
                     Divider()
                 }
                 Button("Discard all working tree changes…", role: .destructive) {

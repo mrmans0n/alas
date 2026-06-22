@@ -11,6 +11,14 @@ final class RightPaneState {
     let worktree: Worktree
     let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
+    var stashes: [GitStash] = []
+    var stashesExpanded: Bool = true
+    var expandedStashRefs: Set<String> = []
+    var stashFilesByRef: [String: [GitStashFile]] = [:]
+    var loadingStashRefs: Set<String> = []
+    var pendingParkChanges: Bool = false
+    var pendingStashDrop: PendingStashDrop? = nil
+    private(set) var stashOperationInFlight: Bool = false
     private(set) var hasLoadedSnapshot: Bool = false
     var displayChanges: [ChangedFile] {
         hasLoadedSnapshot ? changes : []
@@ -398,6 +406,7 @@ final class RightPaneState {
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)
             async let remotesProbe = git.remotes(worktreePath: worktree.path)
+            async let stashProbe = git.stashes(worktreePath: worktree.path)
             async let mergeRefresh: Void = mergeOp.refresh()
             let entries = try await s
             let tree = try await git.fileTree(worktreePath: worktree.path, statusEntries: entries)
@@ -405,6 +414,7 @@ final class RightPaneState {
             let reviewLoopBaseResult = try? await reviewLoopBase
             let resolvedUpstream = try? await upstream
             let remotes = (try? await remotesProbe) ?? []
+            let stashes = (try? await stashProbe) ?? []
             _ = await mergeRefresh
             let indexFingerprint: String
             if let lsResult = try? await Process.git(
@@ -431,6 +441,8 @@ final class RightPaneState {
             }
             self.upstreamRef = resolvedUpstream?.ref
             self.changes = entries
+            self.reconcileStashCaches(with: stashes)
+            self.stashes = stashes
             self.changesGeneration += 1
             self.indexFingerprint = indexFingerprint
             self.fileTree = tree
@@ -507,6 +519,13 @@ final class RightPaneState {
         snapshotInvalidationGeneration += 1
         hasLoadedSnapshot = false
         changes = []
+        stashes = []
+        expandedStashRefs = []
+        stashFilesByRef = [:]
+        loadingStashRefs = []
+        pendingParkChanges = false
+        pendingStashDrop = nil
+        stashOperationInFlight = false
         indexFingerprint = ""
         fileTree = []
         commits = []
@@ -889,6 +908,137 @@ final class RightPaneState {
         let cleanPaths = paths.filter { !remainingChangedPaths.contains($0) }
         if !cleanPaths.isEmpty {
             closeDiffTabs?(cleanPaths)
+        }
+    }
+
+    func requestParkChanges() {
+        guard !changes.isEmpty, mergeOp.current == nil, !stashOperationInFlight else { return }
+        pendingParkChanges = true
+    }
+
+    func cancelParkChanges() {
+        pendingParkChanges = false
+    }
+
+    func parkChanges(message: String, includeUntracked: Bool) {
+        guard pendingParkChanges, !stashOperationInFlight else { return }
+        pendingParkChanges = false
+        stashOperationInFlight = true
+        sidebarError = nil
+        Task { @MainActor in
+            defer { self.stashOperationInFlight = false }
+            do {
+                let result = try await self.git.pushStash(
+                    worktreePath: self.worktree.path,
+                    message: message,
+                    includeUntracked: includeUntracked
+                )
+                await self.refresh()
+                self.handleStashOperationResult(result)
+            } catch {
+                self.sidebarError = error.localizedDescription
+            }
+        }
+    }
+
+    func toggleStashExpanded(_ stash: GitStash) {
+        if expandedStashRefs.contains(stash.ref) {
+            expandedStashRefs.remove(stash.ref)
+        } else {
+            expandedStashRefs.insert(stash.ref)
+            loadFiles(for: stash)
+        }
+    }
+
+    func loadFiles(for stash: GitStash) {
+        guard stashFilesByRef[stash.ref] == nil, !loadingStashRefs.contains(stash.ref) else { return }
+        let snapshotGeneration = snapshotInvalidationGeneration
+        loadingStashRefs.insert(stash.ref)
+        Task { @MainActor in
+            defer { self.loadingStashRefs.remove(stash.ref) }
+            do {
+                let files = try await self.git.stashFiles(worktreePath: self.worktree.path, stash: stash)
+                guard snapshotGeneration == self.snapshotInvalidationGeneration else { return }
+                guard self.stashes.contains(where: { $0.ref == stash.ref && $0.sha == stash.sha }) else { return }
+                self.stashFilesByRef[stash.ref] = files
+            } catch {
+                guard snapshotGeneration == self.snapshotInvalidationGeneration else { return }
+                self.sidebarError = error.localizedDescription
+            }
+        }
+    }
+
+    func applyStash(_ stash: GitStash) {
+        runStashOperation {
+            try await self.git.applyStash(worktreePath: self.worktree.path, stash: stash)
+        }
+    }
+
+    func popStash(_ stash: GitStash) {
+        runStashOperation {
+            try await self.git.popStash(worktreePath: self.worktree.path, stash: stash)
+        }
+    }
+
+    func requestDropStash(_ stash: GitStash) {
+        pendingStashDrop = PendingStashDrop(stash: stash)
+    }
+
+    func cancelDropStash() {
+        pendingStashDrop = nil
+    }
+
+    func confirmDropStash(_ pending: PendingStashDrop) {
+        if pendingStashDrop == pending {
+            pendingStashDrop = nil
+        }
+        guard !stashOperationInFlight else { return }
+        stashOperationInFlight = true
+        sidebarError = nil
+        Task { @MainActor in
+            defer { self.stashOperationInFlight = false }
+            do {
+                try await self.git.dropStash(worktreePath: self.worktree.path, stash: pending.stash)
+                await self.refresh()
+            } catch {
+                self.sidebarError = error.localizedDescription
+            }
+        }
+    }
+
+    func reconcileStashCaches(with newStashes: [GitStash]) {
+        let previousSHAsByRef = Dictionary(uniqueKeysWithValues: stashes.map { ($0.ref, $0.sha) })
+        let newSHAsByRef = Dictionary(uniqueKeysWithValues: newStashes.map { ($0.ref, $0.sha) })
+        let stableRefs = Set(newSHAsByRef.compactMap { ref, sha in
+            previousSHAsByRef[ref] == sha ? ref : nil
+        })
+
+        expandedStashRefs.formIntersection(stableRefs)
+        stashFilesByRef = stashFilesByRef.filter { stableRefs.contains($0.key) }
+    }
+
+    private func runStashOperation(_ operation: @escaping @MainActor () async throws -> StashOperationResult) {
+        guard !stashOperationInFlight else { return }
+        stashOperationInFlight = true
+        sidebarError = nil
+        Task { @MainActor in
+            defer { self.stashOperationInFlight = false }
+            do {
+                let result = try await operation()
+                await self.refresh()
+                self.handleStashOperationResult(result)
+            } catch {
+                self.sidebarError = error.localizedDescription
+            }
+        }
+    }
+
+    private func handleStashOperationResult(_ result: StashOperationResult) {
+        switch result {
+        case .clean:
+            return
+        case .conflict(let message), .error(let message):
+            sidebarError = message
         }
     }
 

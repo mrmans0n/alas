@@ -191,6 +191,14 @@ struct CenterPaneView: View {
                                 rps.requestDiscardFile(path: s.relativePath)
                             }
                         )
+                    case .stashDiff(let s):
+                        StashDiffTabView(
+                            worktreePath: worktree.path,
+                            state: s,
+                            codeFontFamily: state.config.code.fontFamily,
+                            codeFontSize: CGFloat(state.config.code.fontSize)
+                        )
+                        .id(s.id)
                     case .commit(let s):
                         CommitTabView(
                             worktreePath: worktree.path,
