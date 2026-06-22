@@ -124,9 +124,6 @@ struct TabBarView: View {
                     .onChange(of: activeId) { _, _ in
                         scrollActiveTab(using: scrollProxy, animated: true)
                     }
-                    .onChange(of: tabs.map(\.id)) { _, _ in
-                        scrollActiveTab(using: scrollProxy, animated: true)
-                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
