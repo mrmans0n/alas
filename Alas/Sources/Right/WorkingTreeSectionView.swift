@@ -67,7 +67,7 @@ struct WorkingTreeSectionView: View {
                 if !changes.isEmpty {
                     Divider()
                 }
-                Button("Discard all working tree changes...") {
+                Button("Discard all working tree changes…", role: .destructive) {
                     onDiscardAll?()
                 }
                 .disabled(changes.isEmpty)
@@ -192,7 +192,7 @@ struct WorkingTreeSectionView: View {
                         if !stagedEntries.isEmpty || !unstagedEntries.isEmpty {
                             Divider()
                         }
-                        Button("Discard Changes...") {
+                        Button("Discard Changes…", role: .destructive) {
                             onDiscardFolder?(node.path)
                         }
                         if folderUntracked {

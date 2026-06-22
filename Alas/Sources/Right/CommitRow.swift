@@ -15,9 +15,7 @@ struct CommitRow: View {
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
     @State private var shaHovering = false
-    @State private var pendingCherryPick = false
     @State private var pendingRevert = false
-
     var body: some View {
         Button(action: onSelect) {
             HStack(alignment: .top, spacing: 8) {
@@ -37,7 +35,7 @@ struct CommitRow: View {
         .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
             if let onEdit {
-                Button("Edit Commit...") { onEdit() }
+                Button("Edit Commit…") { onEdit() }
                 Divider()
             }
             Button("Copy Commit SHA") { copySHA() }
@@ -47,24 +45,12 @@ struct CommitRow: View {
             }
             if onCherryPick != nil {
                 Divider()
-                Button("Cherry-pick…") { pendingCherryPick = true }
+                Button("Cherry-pick…") { onCherryPick?() }
             }
             if onRevert != nil {
                 Divider()
                 Button("Revert Commit…", role: .destructive) { pendingRevert = true }
             }
-        }
-        .confirmationDialog(
-            "Cherry-pick commit?",
-            isPresented: $pendingCherryPick,
-            titleVisibility: .visible
-        ) {
-            Button("Cherry-pick \(String(commit.sha.prefix(7)))", role: .destructive) {
-                onCherryPick?()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Apply this commit to the current branch.")
         }
         .confirmationDialog(
             "Revert commit?",

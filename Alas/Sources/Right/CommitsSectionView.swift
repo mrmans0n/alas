@@ -153,7 +153,7 @@ struct CommitsSectionView: View {
     private var expandedBody: some View {
         // 1. Worktree commits ("your work") OR today's empty placeholder.
         if !commits.isEmpty {
-            ForEach(Array(commits.enumerated()), id: \.element.id) { idx, commit in
+                ForEach(Array(commits.enumerated()), id: \.element.id) { idx, commit in
                 CommitRow(
                     commit: commit,
                     isLast: idx == commits.count - 1 && olderCommits.isEmpty,
@@ -162,7 +162,7 @@ struct CommitsSectionView: View {
                     onCopyMessage: { Clipboard.copy(commit.fullMessage) },
                     onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
                     onEdit: { onEdit(commit) },
-                    onCherryPick: { rps.runCherryPick(sha: commit.sha) },
+                    onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) }
                 )
             }
@@ -178,7 +178,7 @@ struct CommitsSectionView: View {
 
         // 3. Older commits — dimmed when comparisonRef exists, plain when not.
         if !olderCommits.isEmpty {
-            ForEach(Array(olderCommits.enumerated()), id: \.element.id) { idx, commit in
+                ForEach(Array(olderCommits.enumerated()), id: \.element.id) { idx, commit in
                 CommitRow(
                     commit: commit,
                     isLast: idx == olderCommits.count - 1,
@@ -187,7 +187,7 @@ struct CommitsSectionView: View {
                     onCopySHA: { onCopySHA(commit) },
                     onCopyMessage: { Clipboard.copy(commit.fullMessage) },
                     onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
-                    onCherryPick: { rps.runCherryPick(sha: commit.sha) },
+                    onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) }
                 )
             }

@@ -77,7 +77,7 @@ struct ChangedRow: View {
             } else if onStage != nil {
                 Button(file.stage == .staged ? "Unstage" : "Stage") { onStage?() }
             }
-            Button("Discard Changes...") { onDiscard?() }
+            Button("Discard Changes…", role: .destructive) { onDiscard?() }
             if let ignoreMenu {
                 Divider()
                 ignoreMenu

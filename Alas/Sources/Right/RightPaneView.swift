@@ -118,5 +118,24 @@ struct RightPaneView: View {
                 Text(PendingDiscard.alertMessage(for: p))
             }
         )
+        .alert(
+            "Cherry-pick commit?",
+            isPresented: Binding(
+                get: { rps.pendingCherryPickSHA != nil },
+                set: { if !$0 { rps.cancelCherryPick() } }
+            ),
+            presenting: rps.pendingCherryPickSHA,
+            actions: { sha in
+                Button("Cherry-pick \(sha.prefix(7))") {
+                    rps.confirmCherryPick()
+                }
+                Button("Cancel", role: .cancel) {
+                    rps.cancelCherryPick()
+                }
+            },
+            message: { _ in
+                Text("Apply this commit to the current branch.")
+            }
+        )
     }
 }
