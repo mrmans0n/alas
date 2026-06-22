@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-06-22
+
+### ✨ Features
+
+- Remove folder chevrons from file trees (#603).
+
+### 🐛 Fixes
+
+- Unify git menu ellipsis, destructive roles, and confirmation patterns in Changes (#602).
+- Preserve the editor horizontal offset when revealing files (#604).
+
 ## [0.8.6] - 2026-06-21
 
 ### ✨ Features
