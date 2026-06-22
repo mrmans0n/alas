@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Alas
 
@@ -166,5 +167,67 @@ struct ACPMarkdownInlineRendererTests {
 
         #expect(replacement.attribute(.link, at: 0, effectiveRange: nil) as? URL == url)
         #expect(replacement.attribute(.acpMarkdownInlineRemoteImage, at: 0, effectiveRange: nil) == nil)
+    }
+
+    @Test("inline provider thread comments render markdown body")
+    func inlineProviderThreadCommentRendersMarkdownBody() throws {
+        let comment = DiffInlineComment(
+            id: "comment-1",
+            author: "reviewer",
+            body: """
+            **<sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub> Preserve small horizontal scroll deltas**
+
+            Use `leadingX` instead of **resetting** each event.
+            """
+        )
+        let thread = DiffInlineCommentThread(
+            id: "thread-1",
+            filePath: "Sources/App.swift",
+            newLine: 2,
+            isResolved: false,
+            isOutdated: false,
+            comments: [comment]
+        )
+
+        let host = NSHostingView(
+            rootView: DiffInlineCommentCard(thread: thread)
+                .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+                .frame(width: 620, height: 260)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 260)
+        host.layoutSubtreeIfNeeded()
+
+        #expect(subview(withAccessibilityIdentifier: "diff-inline-comment-markdown-comment-1", in: host) != nil)
+
+        let renderedBody = allSubviews(of: host)
+            .compactMap { $0 as? NSTextView }
+            .map(\.string)
+            .joined(separator: "\n")
+
+        #expect(renderedBody.contains("Preserve small horizontal scroll deltas"))
+        #expect(renderedBody.contains("Use leadingX instead of resetting each event."))
+        #expect(!renderedBody.contains("**"))
+        #expect(!renderedBody.contains("<sub>"))
+        #expect(!renderedBody.contains("`leadingX`"))
+        #expect(accessibilityLabel(in: host, containing: "**<sub>") == nil)
+        #expect(accessibilityLabel(in: host, containing: "`leadingX`") == nil)
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {
+        if view.accessibilityIdentifier() == identifier {
+            return view
+        }
+        return view.subviews.lazy.compactMap { subview(withAccessibilityIdentifier: identifier, in: $0) }.first
+    }
+
+    private func accessibilityLabel(in view: NSView, containing text: String) -> String? {
+        if let label = view.accessibilityLabel(), label.contains(text) {
+            return label
+        }
+        return view.subviews.lazy.compactMap { accessibilityLabel(in: $0, containing: text) }.first
     }
 }

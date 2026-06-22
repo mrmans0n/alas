@@ -286,10 +286,14 @@ struct DiffInlineCommentCard: View {
                         .help("Delete comment")
                     }
                 }
-                Text(comment.body)
-                    .font(.system(size: 11))
-                    .foregroundColor(.primary)
+                DiffReviewInlineFeedbackMarkdown.view(comment.body)
                     .fixedSize(horizontal: false, vertical: true)
+                    .background(
+                        DiffReviewAccessibilityMarker(
+                            identifier: "diff-inline-comment-markdown-\(comment.id)",
+                            label: DiffReviewInlineFeedbackMarkdown.plainText(comment.body)
+                        )
+                    )
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
