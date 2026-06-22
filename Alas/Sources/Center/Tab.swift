@@ -6,6 +6,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case terminal(TerminalTabState)
     case editor(EditorTabState)
     case diff(DiffTabState)
+    case stashDiff(StashDiffTabState)
     case commit(CommitTabState)
     case commitEditor(CommitEditorTabState)
     case draftCommit(DraftCommitTabState)
@@ -24,6 +25,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .terminal(let s):     return s.id
         case .editor(let s):       return s.id
         case .diff(let s):         return s.id
+        case .stashDiff(let s):    return s.id
         case .commit(let s):       return s.id
         case .commitEditor(let s): return s.id
         case .draftCommit(let s):  return s.id
@@ -44,6 +46,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .terminal(let s):     return s.title
         case .editor(let s):       return s.title
         case .diff(let s):         return s.title
+        case .stashDiff(let s):    return s.title
         case .commit(let s):       return s.title
         case .commitEditor(let s): return s.title
         case .draftCommit:         return "Draft commit"
@@ -64,6 +67,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .terminal:     return "terminal"
         case .editor:       return "code"
         case .diff:         return "diff"
+        case .stashDiff:    return "archivebox"
         case .commit:       return "commit"
         case .commitEditor: return "commit"
         case .draftCommit:  return "commit"
@@ -82,6 +86,7 @@ enum Tab: Codable, Equatable, Identifiable {
     var relativeFilePath: String? {
         switch self {
         case .editor(let s):       return s.isExternal ? nil : s.relativePath
+        case .stashDiff(let s):    return s.file.path
         case .imagePreview(let s): return s.relativePath
         case .mergeConflict(let s): return s.relativePath
         case .fileSnapshot(let s): return s.relativePath
@@ -433,6 +438,22 @@ struct DiffTabState: Codable, Equatable, Identifiable {
         staged = try container.decodeIfPresent(Bool.self, forKey: .staged) ?? false
         originalPath = try container.decodeIfPresent(String.self, forKey: .originalPath)
         compareWithHEAD = try container.decodeIfPresent(Bool.self, forKey: .compareWithHEAD) ?? false
+    }
+}
+
+struct StashDiffTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    let worktreeId: String
+    let stash: GitStash
+    let file: GitStashFile
+    let title: String
+
+    init(worktreeId: String, stash: GitStash, file: GitStashFile) {
+        self.worktreeId = worktreeId
+        self.stash = stash
+        self.file = file
+        self.title = "\((file.path as NSString).lastPathComponent) @ \(stash.ref)"
+        self.id = "stash-diff:\(worktreeId):\(stash.ref):\(file.path)"
     }
 }
 

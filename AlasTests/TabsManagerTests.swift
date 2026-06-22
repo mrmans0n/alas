@@ -1042,6 +1042,25 @@ struct TabsManagerPaneTests {
         #expect(l.lastCwd == "/tmp/work",
                 "lastCwd should be preserved across session replacement")
     }
+
+    @Test func appendStashDiffCreatesStableReadOnlyPreviewTab() {
+        let worktreeId = "wt1"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let stash = GitStash(ref: "stash@{0}", subject: "parser cleanup", relativeTime: "now", sha: "abc")
+        let file = GitStashFile(path: "Sources/App.swift", status: "M", add: 2, del: 1)
+
+        let tab = mgr.appendStashDiff(worktreeId: worktreeId, stash: stash, file: file)
+
+        guard case .stashDiff(let state) = tab else {
+            Issue.record("Expected stashDiff tab")
+            return
+        }
+        #expect(state.id == "stash-diff:wt1:stash@{0}:Sources/App.swift")
+        #expect(state.title == "App.swift @ stash@{0}")
+        #expect(state.stash == stash)
+        #expect(state.file == file)
+    }
 }
 
 // MARK: - Terminal runtime titles

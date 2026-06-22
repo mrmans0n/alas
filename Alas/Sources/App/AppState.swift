@@ -3630,6 +3630,22 @@ final class AppState {
         }
     }
 
+    func openStashDiffTab(worktree: Worktree, stash: GitStash, file: GitStashFile) {
+        let worktreeId = worktree.id
+        let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
+            if case .stashDiff(let state) = tab {
+                return state.stash.ref == stash.ref && state.file.path == file.path
+            }
+            return false
+        }
+        if let existing {
+            tabs.activate(worktreeId: worktreeId, tabId: existing.id)
+            return
+        }
+        let tab = tabs.appendStashDiff(worktreeId: worktreeId, stash: stash, file: file)
+        tabs.activate(worktreeId: worktreeId, tabId: tab.id)
+    }
+
     func openCommitTab(worktreeId: String, commit: CommitInfo) {
         guard let worktree = worktree(withId: worktreeId) else { return }
         if selectedWorktreeId != worktree.id {
