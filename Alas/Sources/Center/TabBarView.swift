@@ -200,6 +200,8 @@ private struct AccessibilityMarkerView: NSViewRepresentable {
 }
 
 private struct TabButton: View {
+    private static let maxTitleWidth: CGFloat = 220
+
     let titleLookup: (TabID) -> String?
     let tab: Tab
     let active: Bool
@@ -230,6 +232,8 @@ private struct TabButton: View {
                 .font(.system(size: 11.5))
                 .foregroundColor(active ? theme.color("fg") : theme.color("fg-dim"))
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: Self.maxTitleWidth, alignment: .leading)
             if case .editor(let state) = tab, state.isExternal {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 9))
