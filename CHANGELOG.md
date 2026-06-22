@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-06-22
+
+### ✨ Features
+
+- Add stash support to the Changes tab (#605).
+- Make the tab bar scroll overflow tabs (#608).
+
+### 🐛 Fixes
+
+- Clip the line-number gutter to the scroll view bounds (#607).
+- Keep the line-number gutter clear at the editor leading edge (#606).
+- Render inline thread comments as markdown (#609).
+
 ## [0.8.7] - 2026-06-22
 
 ### ✨ Features
