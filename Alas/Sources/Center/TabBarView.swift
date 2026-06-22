@@ -34,6 +34,7 @@ struct TabBarView: View {
     let transcriptLookup: (TabID) -> ACPTranscript?
     var acpAgentLookup: (TabID) -> AgentDefinition? = { _ in nil }
     @Environment(\.theme) var theme
+    @State private var tabStripContentWidth: CGFloat = 0
 
     private var isTerminalActive: Bool {
         guard let activeId, let active = tabs.first(where: { $0.id == activeId }) else { return false }
@@ -50,58 +51,88 @@ struct TabBarView: View {
                 ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
                     .padding(.trailing, 8)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
-                    ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
-                        TabButton(
-                            titleLookup: titleLookup,
-                            tab: tab,
-                            active: tab.id == activeId,
-                            showClose: true,
-                            harnessInfo: harnessLookup(tab.id),
-                            dirty: dirtyLookup(tab.id),
-                            transcript: transcriptLookup(tab.id),
-                            acpAgent: acpAgentLookup(tab.id),
-                            onActivate: { onActivate(tab.id) },
-                            onClose: { onClose(tab.id) }
+            GeometryReader { geometry in
+                let stripWidth = min(
+                    max(tabStripContentWidth, 1),
+                    max(geometry.size.width, 1)
+                )
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 0) {
+                            ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
+                                TabButton(
+                                    titleLookup: titleLookup,
+                                    tab: tab,
+                                    active: tab.id == activeId,
+                                    showClose: true,
+                                    harnessInfo: harnessLookup(tab.id),
+                                    dirty: dirtyLookup(tab.id),
+                                    transcript: transcriptLookup(tab.id),
+                                    acpAgent: acpAgentLookup(tab.id),
+                                    onActivate: { onActivate(tab.id) },
+                                    onClose: { onClose(tab.id) }
+                                )
+                                .id(tab.id)
+                                .draggable(tab.id)
+                                .dropDestination(for: TabID.self) { ids, _ in
+                                    guard let draggedId = ids.first, draggedId != tab.id else { return false }
+                                    onMove(draggedId, tab.id)
+                                    return true
+                                }
+                                .contextMenu {
+                                    if case .terminal = tab {
+                                        Button("Rename…") { onRenameTerminal(tab.id) }
+                                        Divider()
+                                    }
+                                    if case .acpSession = tab {
+                                        Button("Rename…") { onRenameACPSession(tab.id) }
+                                        Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
+                                        Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
+                                        Divider()
+                                    }
+                                    Button("Close") { onClose(tab.id) }
+                                    Button("Close Other Tabs") { onCloseOthers(tab.id) }
+                                        .disabled(tabs.count <= 1)
+                                    Button("Close All Tabs") { onCloseAll() }
+                                    Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
+                                        .disabled(idx == 0)
+                                    Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
+                                        .disabled(idx == tabs.count - 1)
+                                    Divider()
+                                    if tab.relativeFilePath != nil {
+                                        Button("Copy Path") { onCopyPath(tab.id) }
+                                        Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
+                                    }
+                                }
+                            }
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .background(
+                            GeometryReader { contentGeometry in
+                                Color.clear.preference(
+                                    key: TabStripContentWidthKey.self,
+                                    value: contentGeometry.size.width
+                                )
+                            }
                         )
-                        .draggable(tab.id)
-                        .dropDestination(for: TabID.self) { ids, _ in
-                            guard let draggedId = ids.first, draggedId != tab.id else { return false }
-                            onMove(draggedId, tab.id)
-                            return true
-                        }
-                        .contextMenu {
-                            if case .terminal = tab {
-                                Button("Rename…") { onRenameTerminal(tab.id) }
-                                Divider()
-                            }
-                            if case .acpSession = tab {
-                                Button("Rename…") { onRenameACPSession(tab.id) }
-                                Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
-                                Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
-                                Divider()
-                            }
-                            Button("Close") { onClose(tab.id) }
-                            Button("Close Other Tabs") { onCloseOthers(tab.id) }
-                                .disabled(tabs.count <= 1)
-                            Button("Close All Tabs") { onCloseAll() }
-                            Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
-                                .disabled(idx == 0)
-                            Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
-                                .disabled(idx == tabs.count - 1)
-                            Divider()
-                            if tab.relativeFilePath != nil {
-                                Button("Copy Path") { onCopyPath(tab.id) }
-                                Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
-                            }
-                        }
+                    }
+                    .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
+                    .frame(width: stripWidth, alignment: .leading)
+                    .onAppear {
+                        scrollActiveTab(using: scrollProxy, animated: false)
+                    }
+                    .onChange(of: activeId) { _, _ in
+                        scrollActiveTab(using: scrollProxy, animated: true)
+                    }
+                    .onChange(of: tabs.map(\.id)) { _, _ in
+                        scrollActiveTab(using: scrollProxy, animated: true)
                     }
                 }
-                .fixedSize(horizontal: true, vertical: false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
-            .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onPreferenceChange(TabStripContentWidthKey.self) { tabStripContentWidth = $0 }
+            .frame(maxWidth: .infinity, maxHeight: 34, alignment: .leading)
+            .windowDragHandle()
             if isTerminalActive {
                 ToolbarIconButton(iconName: "split", tooltip: "Split Right (⌘D)") {
                     NotificationCenter.default.post(name: .alasSplitRight, object: nil)
@@ -135,6 +166,25 @@ struct TabBarView: View {
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .windowDragHandle()
+    }
+
+    private func scrollActiveTab(using proxy: ScrollViewProxy, animated: Bool) {
+        guard let activeId else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.12)) {
+                proxy.scrollTo(activeId, anchor: .center)
+            }
+        } else {
+            proxy.scrollTo(activeId, anchor: .center)
+        }
+    }
+}
+
+private struct TabStripContentWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
