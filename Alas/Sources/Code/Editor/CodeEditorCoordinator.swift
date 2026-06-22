@@ -905,12 +905,27 @@ final class CodeEditorCoordinator {
         let target = min(charIndex + character, nsString.length)
         let range = NSRange(location: target, length: 0)
         textView.setSelectedRange(range)
-        textView.scrollRangeToVisible(range)
+        scrollRangeToVisiblePreservingHorizontalOffset(range, in: textView)
         highlightRevealLine(containing: target, in: nsString, textView: textView)
         lastAppliedReveal = (tabId: tabId, line: line, character: character, revision: revision)
         if let wid = currentWorktreeId {
             appState.tabs.consumeReveal(worktreeId: wid, tabId: tabId)
         }
+    }
+
+    private func scrollRangeToVisiblePreservingHorizontalOffset(_ range: NSRange, in textView: CodeTextView) {
+        guard let scrollView = textView.enclosingScrollView else {
+            textView.scrollRangeToVisible(range)
+            return
+        }
+
+        let clipView = scrollView.contentView
+        let originalX = clipView.bounds.origin.x
+        textView.scrollRangeToVisible(range)
+
+        guard clipView.bounds.origin.x != originalX else { return }
+        clipView.scroll(to: NSPoint(x: originalX, y: clipView.bounds.origin.y))
+        scrollView.reflectScrolledClipView(clipView)
     }
 
     private func highlightRevealLine(containing target: Int, in nsString: NSString, textView: CodeTextView) {

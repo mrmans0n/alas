@@ -753,6 +753,64 @@ struct EditorBufferTests {
         #expect(preservedBackground == findHighlightColor)
     }
 
+    @Test func coordinatorRevealKeepsEditorHorizontallyAtLeadingEdge() throws {
+        let root = tempWorktree()
+        let prefix = String(repeating: "0123456789 ", count: 40)
+        _ = try writeFile(root, "a.swift", "short\n\(prefix)target\n")
+        let appState = AppState()
+        appState.config.code.fontFamily = "Menlo"
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-a",
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 120))
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = false
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        ))
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 220, height: 120),
+            textContainer: textContainer
+        )
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.isHorizontallyResizable = true
+        textView.isVerticallyResizable = true
+        textView.autoresizingMask = []
+        scrollView.documentView = textView
+        scrollView.layoutSubtreeIfNeeded()
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: "tab-a",
+            revealLine: 1,
+            revealCharacter: prefix.utf16.count,
+            revealRevision: 0,
+            theme: theme
+        )
+
+        #expect(textView.selectedRange().location > prefix.utf16.count)
+        #expect(scrollView.contentView.bounds.origin.x == 0)
+    }
+
     @Test func coordinatorClampsStaleRevealHighlightRangeAfterEdit() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "line one\nline two\nline three\n")
