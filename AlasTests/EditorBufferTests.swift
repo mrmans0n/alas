@@ -811,6 +811,97 @@ struct EditorBufferTests {
         #expect(scrollView.contentView.bounds.origin.x == 0)
     }
 
+    /// Regression for the gutter clipping the leading characters of every line:
+    /// AppKit shifts the clip's bounds origin to `-rulerThickness` so document
+    /// content clears a left-side vertical ruler. `CodeEditorLeadingClipView`
+    /// must honor that negative leading origin instead of pinning it to 0,
+    /// otherwise the first ~6 characters hide under the line-number gutter with
+    /// no way to scroll them back. Uses a plain `NSClipView` as the oracle for
+    /// the correct ruler-aware leading position.
+    @Test func codeEditorLeadingClipViewKeepsRulerGutterClear() throws {
+        let theme = try ThemeStore().current
+
+        func makeScroll(custom: Bool) -> NSScrollView {
+            let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+            scrollView.hasVerticalScroller = true
+            scrollView.hasHorizontalScroller = true
+            scrollView.autohidesScrollers = false
+            if custom {
+                scrollView.contentView = CodeEditorLeadingClipView(frame: .zero)
+            }
+            let layoutManager = NSLayoutManager()
+            let textContainer = NSTextContainer(size: NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            ))
+            textContainer.widthTracksTextView = false
+            textContainer.heightTracksTextView = false
+            layoutManager.addTextContainer(textContainer)
+            let textView = CodeTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300), textContainer: textContainer)
+            textView.minSize = NSSize(width: 0, height: 0)
+            textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            textView.isHorizontallyResizable = true
+            textView.isVerticallyResizable = true
+            textView.autoresizingMask = []
+            // A line long enough that the document is wider than the viewport.
+            textView.string = String(repeating: "x", count: 4000)
+            scrollView.documentView = textView
+            let ruler = CodeEditorLineNumberRulerView(scrollView: scrollView, textView: textView, theme: theme)
+            scrollView.verticalRulerView = ruler
+            scrollView.hasVerticalRuler = true
+            scrollView.rulersVisible = true
+            scrollView.tile()
+            scrollView.layoutSubtreeIfNeeded()
+            return scrollView
+        }
+
+        // A plain NSClipView rests at a negative leading origin (it reserves the
+        // gutter by shifting bounds left by the ruler thickness). This confirms
+        // the correct leading edge is negative, not 0.
+        let oracle = makeScroll(custom: false)
+        #expect(oracle.contentView.bounds.origin.x < 0)
+
+        // The custom clip must reach that same negative leading edge when the
+        // user scrolls fully left — not clamp it to 0 and hide the gutter-width
+        // of leading characters.
+        let subject = makeScroll(custom: true)
+        let expectedLeadingX = -(subject.verticalRulerView?.requiredThickness ?? 0)
+        #expect(expectedLeadingX < 0)
+        subject.contentView.scroll(to: NSPoint(x: -10_000, y: 0))
+        subject.reflectScrolledClipView(subject.contentView)
+        #expect(subject.contentView.bounds.origin.x == expectedLeadingX)
+
+        // Force a document genuinely wider than the viewport so a horizontal
+        // scroll range exists (headless text layout won't grow the text view on
+        // its own). The clip width is unchanged by a document resize.
+        let clipW = subject.contentView.bounds.width
+        subject.documentView?.setFrameSize(NSSize(width: clipW + 4000, height: 300))
+
+        // The actual production failure: AppKit's layout/frame-change passes
+        // propose x == 0 (treating 0 as the leading edge, unaware of the gutter
+        // offset). That exact reset must settle at the true leading edge,
+        // otherwise the leading characters race under the gutter.
+        let constrainedZero = subject.contentView.constrainBoundsRect(
+            NSRect(x: 0, y: 0, width: clipW, height: subject.contentView.bounds.height)
+        )
+        #expect(constrainedZero.origin.x == expectedLeadingX)
+
+        // Regression for the codex P2: an incremental scroll right from the
+        // leading edge (leadingX + delta) must be preserved, not collapsed back
+        // to the leading edge — otherwise the user can't start scrolling until a
+        // single event jumps the whole gutter width.
+        let incremental = subject.contentView.constrainBoundsRect(
+            NSRect(x: expectedLeadingX + 5, y: 0, width: clipW, height: subject.contentView.bounds.height)
+        )
+        #expect(incremental.origin.x == expectedLeadingX + 5)
+
+        // Positive origins scroll long lines normally.
+        let positive = subject.contentView.constrainBoundsRect(
+            NSRect(x: 30, y: 0, width: clipW, height: subject.contentView.bounds.height)
+        )
+        #expect(positive.origin.x == 30)
+    }
+
     @Test func coordinatorClampsStaleRevealHighlightRangeAfterEdit() throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.swift", "line one\nline two\nline three\n")
