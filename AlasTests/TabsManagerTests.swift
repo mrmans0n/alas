@@ -1056,10 +1056,25 @@ struct TabsManagerPaneTests {
             Issue.record("Expected stashDiff tab")
             return
         }
-        #expect(state.id == "stash-diff:wt1:stash@{0}:Sources/App.swift")
+        #expect(state.id == "stash-diff:wt1:stash@{0}:abc:Sources/App.swift")
         #expect(state.title == "App.swift @ stash@{0}")
         #expect(state.stash == stash)
         #expect(state.file == file)
+    }
+
+    @Test func appendStashDiffIncludesShaInTabIdentity() {
+        let worktreeId = "wt1"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let oldStash = GitStash(ref: "stash@{0}", subject: "old", relativeTime: "1 minute ago", sha: "old-sha")
+        let newStash = GitStash(ref: "stash@{0}", subject: "new", relativeTime: "now", sha: "new-sha")
+        let file = GitStashFile(path: "Sources/App.swift", status: "M", add: 2, del: 1)
+
+        let oldTab = mgr.appendStashDiff(worktreeId: worktreeId, stash: oldStash, file: file)
+        let newTab = mgr.appendStashDiff(worktreeId: worktreeId, stash: newStash, file: file)
+
+        #expect(oldTab.id != newTab.id)
+        #expect(mgr.tabs(forWorktree: worktreeId).count == 2)
     }
 }
 

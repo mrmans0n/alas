@@ -85,7 +85,7 @@ struct GitServiceStashTests {
         let files = GitService.parseStashFiles(numstat: numstat, nameStatus: nameStatus)
 
         #expect(files == [
-            GitStashFile(path: "Sources/New.swift", status: "R", add: 1, del: 2),
+            GitStashFile(path: "Sources/New.swift", status: "R", add: 1, del: 2, oldPath: "Sources/Old.swift"),
         ])
     }
 
@@ -96,7 +96,7 @@ struct GitServiceStashTests {
         let files = GitService.parseStashFiles(numstat: numstat, nameStatus: nameStatus)
 
         #expect(files == [
-            GitStashFile(path: "Sources/New.swift", status: "R", add: 1, del: 2),
+            GitStashFile(path: "Sources/New.swift", status: "R", add: 1, del: 2, oldPath: "Sources/Old.swift"),
         ])
     }
 
@@ -133,6 +133,28 @@ struct GitServiceStashTests {
         #expect(file == GitStashFile(path: "new.txt", status: "A", add: 1, del: 0))
         let diff = try await service.stashDiff(worktreePath: repo, stash: stash, file: file)
         #expect(diff.hunks.contains { hunk in hunk.lines.contains { $0.kind == .add && $0.text == "new" } })
+    }
+
+    @Test func stashDiffForRenameIncludesChangedLinesFromOriginalPath() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        try "one\ntwo\nthree\nfour\nfive\n".write(to: repo.appendingPathComponent("old.txt"), atomically: true, encoding: .utf8)
+        try await gitOK(["add", "old.txt"], cwd: repo)
+        try await gitOK(["commit", "-q", "-m", "add old"], cwd: repo)
+        try await gitOK(["mv", "old.txt", "new.txt"], cwd: repo)
+        try "one\nchanged\nthree\nfour\nfive\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        let service = GitService()
+        _ = try await service.pushStash(worktreePath: repo, message: "rename", includeUntracked: false)
+        let stash = try #require(try await service.stashes(worktreePath: repo).first)
+        let file = try #require(try await service.stashFiles(worktreePath: repo, stash: stash).first)
+
+        #expect(file == GitStashFile(path: "new.txt", status: "R", add: 1, del: 1, oldPath: "old.txt"))
+        let diff = try await service.stashDiff(worktreePath: repo, stash: stash, file: file)
+        #expect(diff.hunks.contains { hunk in
+            hunk.lines.contains { $0.kind == .delete && $0.text == "two" }
+                && hunk.lines.contains { $0.kind == .add && $0.text == "changed" }
+        })
     }
 
     @Test func applyPopAndDropStash() async throws {

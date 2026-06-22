@@ -3634,7 +3634,9 @@ final class AppState {
         let worktreeId = worktree.id
         let existing = tabs.tabs(forWorktree: worktreeId).first { tab in
             if case .stashDiff(let state) = tab {
-                return state.stash.ref == stash.ref && state.file.path == file.path
+                return state.stash.ref == stash.ref
+                    && state.stash.sha == stash.sha
+                    && state.file.path == file.path
             }
             return false
         }

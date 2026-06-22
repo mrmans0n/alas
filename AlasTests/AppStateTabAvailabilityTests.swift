@@ -91,6 +91,31 @@ struct AppStateTabAvailabilityTests {
         #expect(!state.hasActiveCodeEditorTab)
     }
 
+    @Test func openStashDiffTabDoesNotReuseTabForDifferentStashSha() {
+        let state = AppState()
+        let worktree = Worktree(
+            id: "wt-stash",
+            projectId: "project",
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let file = GitStashFile(path: "Sources/App.swift", status: "M", add: 2, del: 1)
+        let oldStash = GitStash(ref: "stash@{0}", subject: "old", relativeTime: "1 minute ago", sha: "old-sha")
+        let newStash = GitStash(ref: "stash@{0}", subject: "new", relativeTime: "now", sha: "new-sha")
+
+        state.openStashDiffTab(worktree: worktree, stash: oldStash, file: file)
+        state.openStashDiffTab(worktree: worktree, stash: newStash, file: file)
+
+        let tabs = state.tabs.tabs(forWorktree: worktree.id).compactMap { tab -> StashDiffTabState? in
+            if case .stashDiff(let stashDiff) = tab { return stashDiff }
+            return nil
+        }
+        #expect(tabs.map(\.stash.sha) == ["old-sha", "new-sha"])
+    }
+
     @Test func hasActiveCodeEditorTabFalseForExternalMarkdownEditor() async throws {
         let repo = try await makeRepo(name: "external-markdown-editor")
         defer { try? FileManager.default.removeItem(at: repo) }

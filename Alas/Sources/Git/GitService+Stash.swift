@@ -16,6 +16,28 @@ struct GitStashFile: Codable, Equatable, Identifiable, Sendable {
     let status: String
     let add: Int
     let del: Int
+    let oldPath: String?
+
+    init(path: String, status: String, add: Int, del: Int, oldPath: String? = nil) {
+        self.path = path
+        self.status = status
+        self.add = add
+        self.del = del
+        self.oldPath = oldPath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path, status, add, del, oldPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.decode(String.self, forKey: .path)
+        status = try container.decode(String.self, forKey: .status)
+        add = try container.decode(Int.self, forKey: .add)
+        del = try container.decode(Int.self, forKey: .del)
+        oldPath = try container.decodeIfPresent(String.self, forKey: .oldPath)
+    }
 }
 
 enum StashOperationResult: Equatable, Sendable {
@@ -56,10 +78,11 @@ extension GitService {
                 let rawStatus = parts[0]
                 let status = String(rawStatus.prefix(1))
                 let path = parts.count >= 3 ? parts[2] : parts[1]
+                let oldPath = parts.count >= 3 ? parts[1] : nil
                 let fallback = NumstatParser.destinationPath(from: path)
                 let count = counts[path] ?? counts[fallback] ?? (add: 0, del: 0)
 
-                return GitStashFile(path: path, status: status, add: count.add, del: count.del)
+                return GitStashFile(path: path, status: status, add: count.add, del: count.del, oldPath: oldPath)
             }
     }
 
@@ -91,7 +114,7 @@ extension GitService {
         try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
 
         let numstat = try await Process.git(
-            ["stash", "show", "--include-untracked", "--numstat", "--format=", stash.ref],
+            ["diff", "--numstat", "--find-renames", "\(stash.ref)^1", stash.ref],
             cwd: worktreePath
         )
         guard numstat.exitCode == 0 else {
@@ -99,21 +122,36 @@ extension GitService {
         }
 
         let nameStatus = try await Process.git(
-            ["stash", "show", "--include-untracked", "--name-status", "--format=", stash.ref],
+            ["diff", "--name-status", "--find-renames", "\(stash.ref)^1", stash.ref],
             cwd: worktreePath
         )
         guard nameStatus.exitCode == 0 else {
             throw GitStashError.stderr(nameStatus.stderr, fallback: "Could not load stash files.")
         }
 
-        return Self.parseStashFiles(numstat: numstat.stdout, nameStatus: nameStatus.stdout)
+        async let untrackedNumstatProbe = Process.git(
+            ["show", "--format=", "--numstat", "\(stash.ref)^3"],
+            cwd: worktreePath
+        )
+        async let untrackedNameStatusProbe = Process.git(
+            ["show", "--format=", "--name-status", "\(stash.ref)^3"],
+            cwd: worktreePath
+        )
+        let untrackedNumstat = try? await untrackedNumstatProbe
+        let untrackedNameStatus = try? await untrackedNameStatusProbe
+
+        return Self.parseStashFiles(
+            numstat: numstat.stdout + (untrackedNumstat?.exitCode == 0 ? untrackedNumstat?.stdout ?? "" : ""),
+            nameStatus: nameStatus.stdout + (untrackedNameStatus?.exitCode == 0 ? untrackedNameStatus?.stdout ?? "" : "")
+        )
     }
 
     func stashDiff(worktreePath: URL, stash: GitStash, file: GitStashFile) async throws -> ParsedDiff {
         try await verifyStashIdentity(worktreePath: worktreePath, stash: stash)
 
+        let pathspecs = [file.oldPath, file.path].compactMap(\.self)
         var result = try await Process.git(
-            ["diff", "--no-ext-diff", "--no-color", "\(stash.ref)^1", stash.ref, "--", file.path],
+            ["diff", "--no-ext-diff", "--no-color", "--find-renames", "\(stash.ref)^1", stash.ref, "--"] + pathspecs,
             cwd: worktreePath
         )
         if result.exitCode == 0, result.stdout.isEmpty {
