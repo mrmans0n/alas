@@ -78,6 +78,60 @@ struct TouchTargetSmokeTests {
         #expect(controller.view != nil)
     }
 
+    @Test func tabBarViewHostsOverflowingTabsInMarkedScrollView() {
+        let tabs = (1...12).map { index in
+            Tab.editor(EditorTabState(
+                id: "t\(index)",
+                title: "VeryLongFileName\(index).swift",
+                relativePath: "Sources/VeryLongFileName\(index).swift",
+                revealLine: nil,
+                revealCharacter: nil,
+                externalAbsolutePath: nil,
+                originatingRelativePath: nil,
+                markdownViewMode: nil,
+                markdownSplitFraction: nil
+            ))
+        }
+        let view = TabBarView(
+            tabs: tabs,
+            activeId: tabs.first?.id,
+            harnessLookup: { _ in nil },
+            dirtyLookup: { _ in false },
+            onActivate: { _ in },
+            onClose: { _ in },
+            onCloseOthers: { _ in },
+            onCloseAll: { },
+            onCloseToLeft: { _ in },
+            onCloseToRight: { _ in },
+            onCopyPath: { _ in },
+            onCopyRelativePath: { _ in },
+            onRenameTerminal: { _ in },
+            onRenameACPSession: { _ in },
+            onCopyACPSession: { _ in },
+            onExportACPSession: { _ in },
+            onNewTerminal: { },
+            enabledAgents: [],
+            onLaunchAgent: { _ in },
+            onLaunchACPSession: { _ in },
+            acpAgents: [],
+            onRevealRightSidebar: { },
+            rightSidebarHidden: false,
+            onRevealSidebar: { },
+            sidebarHidden: false,
+            onMove: { _, _ in },
+            titleLookup: { _ in nil },
+            transcriptLookup: { _ in nil }
+        )
+        .environment(\.theme, currentTheme())
+        let controller = NSHostingController(rootView: view)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 34)
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(allSubviews(of: controller.view).contains {
+            $0.accessibilityIdentifier() == "tab-overflow-scroll"
+        })
+    }
+
     @Test func agentMenuSectionTitlesUseCurrentLabels() {
         #expect(TabBarView.terminalAgentMenuSectionTitle == "Terminal")
         #expect(TabBarView.acpAgentMenuSectionTitle == "ACP Chat")
@@ -272,5 +326,9 @@ struct TouchTargetSmokeTests {
         let controller = NSHostingController(rootView: view)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view != nil)
+    }
+
+    private func allSubviews(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
 }

@@ -50,52 +50,58 @@ struct TabBarView: View {
                 ToolbarIconButton(iconName: "sidebar.left", tooltip: "Show sidebar", action: onRevealSidebar)
                     .padding(.trailing, 8)
             }
-            ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
-                TabButton(
-                    titleLookup: titleLookup,
-                    tab: tab,
-                    active: tab.id == activeId,
-                    showClose: true,
-                    harnessInfo: harnessLookup(tab.id),
-                    dirty: dirtyLookup(tab.id),
-                    transcript: transcriptLookup(tab.id),
-                    acpAgent: acpAgentLookup(tab.id),
-                    onActivate: { onActivate(tab.id) },
-                    onClose: { onClose(tab.id) }
-                )
-                .draggable(tab.id)
-                .dropDestination(for: TabID.self) { ids, _ in
-                    guard let draggedId = ids.first, draggedId != tab.id else { return false }
-                    onMove(draggedId, tab.id)
-                    return true
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
+                        TabButton(
+                            titleLookup: titleLookup,
+                            tab: tab,
+                            active: tab.id == activeId,
+                            showClose: true,
+                            harnessInfo: harnessLookup(tab.id),
+                            dirty: dirtyLookup(tab.id),
+                            transcript: transcriptLookup(tab.id),
+                            acpAgent: acpAgentLookup(tab.id),
+                            onActivate: { onActivate(tab.id) },
+                            onClose: { onClose(tab.id) }
+                        )
+                        .draggable(tab.id)
+                        .dropDestination(for: TabID.self) { ids, _ in
+                            guard let draggedId = ids.first, draggedId != tab.id else { return false }
+                            onMove(draggedId, tab.id)
+                            return true
+                        }
+                        .contextMenu {
+                            if case .terminal = tab {
+                                Button("Rename…") { onRenameTerminal(tab.id) }
+                                Divider()
+                            }
+                            if case .acpSession = tab {
+                                Button("Rename…") { onRenameACPSession(tab.id) }
+                                Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
+                                Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
+                                Divider()
+                            }
+                            Button("Close") { onClose(tab.id) }
+                            Button("Close Other Tabs") { onCloseOthers(tab.id) }
+                                .disabled(tabs.count <= 1)
+                            Button("Close All Tabs") { onCloseAll() }
+                            Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
+                                .disabled(idx == 0)
+                            Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
+                                .disabled(idx == tabs.count - 1)
+                            Divider()
+                            if tab.relativeFilePath != nil {
+                                Button("Copy Path") { onCopyPath(tab.id) }
+                                Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
+                            }
+                        }
+                    }
                 }
-                .contextMenu {
-                    if case .terminal = tab {
-                        Button("Rename…") { onRenameTerminal(tab.id) }
-                        Divider()
-                    }
-                    if case .acpSession = tab {
-                        Button("Rename…") { onRenameACPSession(tab.id) }
-                        Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
-                        Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
-                        Divider()
-                    }
-                    Button("Close") { onClose(tab.id) }
-                    Button("Close Other Tabs") { onCloseOthers(tab.id) }
-                        .disabled(tabs.count <= 1)
-                    Button("Close All Tabs") { onCloseAll() }
-                    Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
-                        .disabled(idx == 0)
-                    Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
-                        .disabled(idx == tabs.count - 1)
-                    Divider()
-                    if tab.relativeFilePath != nil {
-                        Button("Copy Path") { onCopyPath(tab.id) }
-                        Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
-                    }
-                }
+                .fixedSize(horizontal: true, vertical: false)
             }
-            Spacer()
+            .background(AccessibilityMarkerView(identifier: "tab-overflow-scroll"))
+            .frame(maxWidth: .infinity, alignment: .leading)
             if isTerminalActive {
                 ToolbarIconButton(iconName: "split", tooltip: "Split Right (⌘D)") {
                     NotificationCenter.default.post(name: .alasSplitRight, object: nil)
@@ -129,6 +135,20 @@ struct TabBarView: View {
         .background(theme.color("bg-2"))
         .overlay(Divider().opacity(0.5), alignment: .bottom)
         .windowDragHandle()
+    }
+}
+
+private struct AccessibilityMarkerView: NSViewRepresentable {
+    let identifier: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setAccessibilityIdentifier(identifier)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.setAccessibilityIdentifier(identifier)
     }
 }
 
