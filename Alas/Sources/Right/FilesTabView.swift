@@ -14,6 +14,14 @@ struct FilesTabView: View {
 
     @Environment(\.theme) private var theme
 
+    nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
+        12 + CGFloat(depth * 14)
+    }
+
+    nonisolated static func messageLeadingPadding(depth: Int) -> CGFloat {
+        rowLeadingPadding(depth: depth)
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             VStack(spacing: 0) {
@@ -88,12 +96,6 @@ struct FilesTabView: View {
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            if canExpand {
-                                Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
-                                    .frame(width: 14, height: 14)
-                            } else {
-                                Color.clear.frame(width: 14, height: 14)
-                            }
                             FolderIconView(
                                 name: terminal.name,
                                 path: terminal.path,
@@ -121,7 +123,7 @@ struct FilesTabView: View {
                                     .accessibilityLabel("Loading \(terminal.name)")
                             }
                         }
-                        .padding(.leading, CGFloat(12 + depth * 14))
+                        .padding(.leading, Self.rowLeadingPadding(depth: depth))
                         .padding(.trailing, 12)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -177,7 +179,7 @@ struct FilesTabView: View {
                             StatusBadge(status: badge)
                         }
                     }
-                    .padding(.leading, CGFloat(12 + depth * 14 + 14))
+                    .padding(.leading, Self.rowLeadingPadding(depth: depth))
                     .padding(.trailing, 12)
                     .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -324,7 +326,7 @@ struct FilesTabView: View {
         Text(text)
             .font(.system(size: 11, design: .monospaced))
             .foregroundColor(theme.color("fg-faint"))
-            .padding(.leading, CGFloat(12 + depth * 14 + 14))
+            .padding(.leading, Self.messageLeadingPadding(depth: depth))
             .padding(.trailing, 12)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)

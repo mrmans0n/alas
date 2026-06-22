@@ -24,6 +24,10 @@ struct ChangedRow: View {
     var ignoreMenu:       AnyView? = nil
     @Environment(\.theme) var theme
 
+    nonisolated static func rowLeadingPadding(depth: Int) -> CGFloat {
+        12 + CGFloat(depth * 14)
+    }
+
     var body: some View {
         let basename = file.path.split(separator: "/").last.map(String.init) ?? file.path
         let add = displayAdd ?? file.add
@@ -45,7 +49,7 @@ struct ChangedRow: View {
                 StatusBadge(status: file.status)
             }
             .font(.system(size: 11, design: .monospaced))
-            .padding(.leading, CGFloat(12 + (depth == 0 ? 0 : depth * 14 + 14)))
+            .padding(.leading, Self.rowLeadingPadding(depth: depth))
             .padding(.trailing, 12)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
