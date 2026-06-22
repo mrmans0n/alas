@@ -29,6 +29,11 @@ struct WorkingTreeSectionView: View {
     private var changeGroups: [WorkingTreeChangeGroup] {
         WorkingTreeChangeGroup.group(files: changes)
     }
+
+    nonisolated static func directoryRowLeadingPadding(depth: Int) -> CGFloat {
+        12 + CGFloat(depth * 14)
+    }
+
     private var totalAdd: Int { changeGroups.reduce(0) { $0 + $1.add } }
     private var totalDel: Int { changeGroups.reduce(0) { $0 + $1.del } }
 
@@ -150,8 +155,6 @@ struct WorkingTreeSectionView: View {
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Icon(name: open ? "chev-down" : "chev-right", size: 10, color: theme.color("fg-faint"))
-                                .frame(width: 14, height: 14)
                             StageChip(state: stageChipState(for: folderState)) {
                                 switch folderState {
                                 case .staged:           onUnstageAll?(stagedEntries)
@@ -171,7 +174,7 @@ struct WorkingTreeSectionView: View {
                                 .truncationMode(.middle)
                             Spacer()
                         }
-                        .padding(.leading, CGFloat(12 + depth * 14))
+                        .padding(.leading, Self.directoryRowLeadingPadding(depth: depth))
                         .padding(.trailing, 12)
                         .padding(.vertical, 4)
                         .frame(maxWidth: .infinity, alignment: .leading)
