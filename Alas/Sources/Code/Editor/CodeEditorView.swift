@@ -5,11 +5,15 @@ import AppKit
 /// the leading edge during initial layout, while preserving normal horizontal
 /// scrolling for long lines.
 final class CodeEditorLeadingClipView: NSClipView {
+    private var preservesNextExplicitZeroOrigin = false
+
     override func scroll(to newOrigin: NSPoint) {
+        defer { preservesNextExplicitZeroOrigin = false }
         super.scroll(to: pinnedOrigin(for: newOrigin))
     }
 
     override func setBoundsOrigin(_ newOrigin: NSPoint) {
+        defer { preservesNextExplicitZeroOrigin = false }
         super.setBoundsOrigin(pinnedOrigin(for: newOrigin))
     }
 
@@ -35,6 +39,10 @@ final class CodeEditorLeadingClipView: NSClipView {
     private func pinnedOrigin(for origin: NSPoint) -> NSPoint {
         guard enclosingScrollView?.hasHorizontalScroller == true else { return origin }
         let leadingX = leadingBoundsOriginX
+        if leadingX < 0, origin.x == 0 {
+            preservesNextExplicitZeroOrigin = true
+            return origin
+        }
         // Only enforce the leading edge here; `constrainBoundsRect` (which
         // `super.scroll`/`setBoundsOrigin` funnel through) applies the upper
         // bound and the gutter-reset handling.
@@ -54,12 +62,21 @@ final class CodeEditorLeadingClipView: NSClipView {
     /// treat `0` as the leading edge, unaware the line-number gutter shifts the
     /// true leading to `leadingX`. Whichever pass runs last would otherwise win,
     /// so the first characters of a line intermittently end up hidden under the
-    /// gutter. Snapping *only* that exact `0` reset to `leadingX` fixes the race
-    /// deterministically while leaving every other origin to clamp normally — so
-    /// incremental scrolling from the leading edge (`leadingX + delta`) is
-    /// preserved rather than discarded.
+    /// gutter. Snapping layout-only `0` resets to `leadingX` fixes the race while
+    /// still preserving an explicit scroll/scrollbar move that lands exactly on
+    /// zero.
     private func resolvedOriginX(proposed: CGFloat, clamped: CGFloat, leadingX: CGFloat, maxX: CGFloat) -> CGFloat {
-        if leadingX < 0, proposed == 0 { return leadingX }
+        guard leadingX < 0 else { return min(max(clamped, leadingX), maxX) }
+
+        if proposed == 0 {
+            if preservesNextExplicitZeroOrigin {
+                preservesNextExplicitZeroOrigin = false
+                return min(max(clamped, leadingX), maxX)
+            }
+            return leadingX
+        }
+
+        preservesNextExplicitZeroOrigin = false
         return min(max(clamped, leadingX), maxX)
     }
 

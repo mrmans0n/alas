@@ -895,6 +895,18 @@ struct EditorBufferTests {
         )
         #expect(incremental.origin.x == expectedLeadingX + 5)
 
+        // Exact zero is a valid user-driven scroll position. Starting at the
+        // negative gutter edge and landing exactly on zero must not be mistaken
+        // for AppKit's layout reset above.
+        subject.contentView.scroll(to: NSPoint(x: expectedLeadingX, y: 0))
+        subject.contentView.scroll(to: NSPoint(x: 0, y: 0))
+        subject.reflectScrolledClipView(subject.contentView)
+        #expect(subject.contentView.bounds.origin.x == 0)
+
+        subject.contentView.setBoundsOrigin(NSPoint(x: expectedLeadingX, y: 0))
+        subject.contentView.setBoundsOrigin(NSPoint(x: 0, y: 0))
+        #expect(subject.contentView.bounds.origin.x == 0)
+
         // Positive origins scroll long lines normally.
         let positive = subject.contentView.constrainBoundsRect(
             NSRect(x: 30, y: 0, width: clipW, height: subject.contentView.bounds.height)
