@@ -96,7 +96,7 @@ jobs:
         # .build/ghostty, which later main builds would restore and ship.
         if: steps.skip-check.outputs.skip != 'true'
         id: ghostty-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             .build/ghostty
@@ -111,7 +111,7 @@ jobs:
           && steps.skip-check.outputs.skip != 'true'
           && steps.ghostty-cache.outputs.cache-hit != 'true'
           && (inputs.ref == '' || inputs.ref == 'main')
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             .build/ghostty
@@ -131,7 +131,7 @@ jobs:
       - name: Restore SwiftPM package cache
         if: steps.skip-check.outputs.skip != 'true'
         id: swiftpm-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: .build/xcode/SourcePackages
           key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.xcode-cache-toolchain', 'project.yml', 'Alas.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'ThirdParty/TreeSitter*/Package.swift') }}
@@ -151,7 +151,7 @@ jobs:
           && steps.skip-check.outputs.skip != 'true'
           && steps.swiftpm-cache.outputs.cache-hit != 'true'
           && (inputs.ref == '' || inputs.ref == 'main')
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: .build/xcode/SourcePackages
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
