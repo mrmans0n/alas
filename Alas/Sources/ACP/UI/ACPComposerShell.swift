@@ -15,6 +15,41 @@ enum ACPComposerControlPresentation {
             ? "Fast mode is ON — click to disable"
             : "Click to enable fast mode"
     }
+
+    static func canRenderFastModeButton(for spec: ChipSpec) -> Bool {
+        fastModeToggleTarget(for: spec) != nil
+    }
+
+    static func fastModeToggleTarget(for spec: ChipSpec) -> String? {
+        if isFastModeEnabled(spec) {
+            return spec.options.first(where: { isFastModeOff(id: $0.id, name: $0.name) })?.id
+        }
+        return spec.options.first(where: { isFastModeOn(id: $0.id, name: $0.name) })?.id
+    }
+
+    static func isFastModeEnabled(_ spec: ChipSpec) -> Bool {
+        guard let currentId = spec.currentId else { return false }
+        if let item = spec.options.first(where: { $0.id == currentId }) {
+            return isFastModeOn(id: item.id, name: item.name)
+        }
+        return isFastModeOn(id: currentId, name: currentId)
+    }
+
+    private static func isFastModeOn(id: String, name: String) -> Bool {
+        let tokens = [normalizedFastModeValue(id), normalizedFastModeValue(name)]
+        return tokens.contains { ["true", "on", "enabled", "yes", "1", "fast"].contains($0) }
+    }
+
+    private static func isFastModeOff(id: String, name: String) -> Bool {
+        let tokens = [normalizedFastModeValue(id), normalizedFastModeValue(name)]
+        return tokens.contains { ["false", "off", "disabled", "no", "0", "standard"].contains($0) }
+    }
+
+    private static func normalizedFastModeValue(_ value: String) -> String {
+        value
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
 }
 
 enum ACPComposerPlacement: Equatable {
@@ -414,7 +449,10 @@ struct ACPComposer: View {
     }
 
     private var fastModeParameter: ACPParameterChip? {
-        session.chipState.parameters.first { $0.presentation == .fastMode }
+        session.chipState.parameters.first {
+            $0.presentation == .fastMode
+                && ACPComposerControlPresentation.canRenderFastModeButton(for: $0.spec)
+        }
     }
 
     private var fastModeBooleanOption: ACPConfigOption? {
@@ -426,38 +464,18 @@ struct ACPComposer: View {
     }
 
     private var parameterChips: [ACPParameterChip] {
-        session.chipState.parameters.filter { $0.presentation != .fastMode }
+        session.chipState.parameters.filter {
+            $0.presentation != .fastMode
+                || !ACPComposerControlPresentation.canRenderFastModeButton(for: $0.spec)
+        }
     }
 
     private func fastModeToggleTarget(for spec: ChipSpec) -> String? {
-        if isFastModeEnabled(spec) {
-            return spec.options.first(where: { isFastModeOff(id: $0.id, name: $0.name) })?.id
-        }
-        return spec.options.first(where: { isFastModeOn(id: $0.id, name: $0.name) })?.id
+        ACPComposerControlPresentation.fastModeToggleTarget(for: spec)
     }
 
     private func isFastModeEnabled(_ spec: ChipSpec) -> Bool {
-        guard let currentId = spec.currentId else { return false }
-        if let item = spec.options.first(where: { $0.id == currentId }) {
-            return isFastModeOn(id: item.id, name: item.name)
-        }
-        return isFastModeOn(id: currentId, name: currentId)
-    }
-
-    private func isFastModeOn(id: String, name: String) -> Bool {
-        let tokens = [normalizedFastModeValue(id), normalizedFastModeValue(name)]
-        return tokens.contains { ["true", "on", "enabled", "yes", "1", "fast"].contains($0) }
-    }
-
-    private func isFastModeOff(id: String, name: String) -> Bool {
-        let tokens = [normalizedFastModeValue(id), normalizedFastModeValue(name)]
-        return tokens.contains { ["false", "off", "disabled", "no", "0", "standard"].contains($0) }
-    }
-
-    private func normalizedFastModeValue(_ value: String) -> String {
-        value
-            .lowercased()
-            .filter { $0.isLetter || $0.isNumber }
+        ACPComposerControlPresentation.isFastModeEnabled(spec)
     }
 
     private func fastModeBg(_ spec: ChipSpec) -> Color {
@@ -525,7 +543,10 @@ struct ACPComposer: View {
                  placeholder: parameter.label,
                  accent: cursorContextAccent)
         case .fastMode:
-            EmptyView()
+            chip(spec: parameter.spec,
+                 label: chipLabel(prefix: parameter.label, spec: parameter.spec),
+                 placeholder: parameter.label,
+                 accent: cursorFastAccent)
         case .standard:
             chip(spec: parameter.spec,
                  label: chipLabel(prefix: parameter.label, spec: parameter.spec),

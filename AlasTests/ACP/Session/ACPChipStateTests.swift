@@ -395,6 +395,29 @@ extension ACPChipStateTests {
         #expect(ACPComposerControlPresentation.fastModeHelp(isEnabled: false, canToggle: false) == "Fast mode cannot be changed")
     }
 
+    @Test("composer fast mode select toggles only when both directions are known")
+    func composerFastModeSelectToggleAvailability() {
+        let offOn = ChipSpec(
+            source: .configOption(id: "fast"),
+            options: [
+                ChipSpec.Item(id: "off", name: "Off", description: nil),
+                ChipSpec.Item(id: "fast", name: "Fast", description: nil),
+            ],
+            currentId: "off")
+        let normalFast = ChipSpec(
+            source: .configOption(id: "fast"),
+            options: [
+                ChipSpec.Item(id: "normal", name: "Normal", description: nil),
+                ChipSpec.Item(id: "fast", name: "Fast", description: nil),
+            ],
+            currentId: "fast")
+
+        #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: offOn) == "fast")
+        #expect(ACPComposerControlPresentation.canRenderFastModeButton(for: offOn))
+        #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: normalFast) == nil)
+        #expect(!ACPComposerControlPresentation.canRenderFastModeButton(for: normalFast))
+    }
+
     @Test("cursor-agent: no brackets -> no synthesized chips")
     func cursorNoBracketsNoOverlay() {
         let state = ACPChipState.normalize(
