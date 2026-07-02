@@ -20,6 +20,13 @@ struct ACPChipStateTests {
             options: options.map { ACPConfigOptionItem(id: $0.0, name: $0.1) })
     }
 
+    private func booleanOption(_ id: String,
+                               current: Bool,
+                               category: String? = nil) -> ACPConfigOption {
+        ACPConfigOption(id: id, name: id.capitalized, type: "boolean",
+                        category: category, currentValue: .boolean(current))
+    }
+
     @Test("claude: modes -> Mode chip, effort configOption -> Thinking chip")
     func claudeFullHouse() {
         let state = ACPChipState.normalize(
@@ -135,6 +142,27 @@ struct ACPChipStateTests {
         if case .configOption(let id)? = state.models?.source {
             #expect(id == "preset")
         } else { Issue.record("expected configOption source for model chip") }
+    }
+
+    @Test("canonical category lookup skips boolean options")
+    func canonicalCategorySkipsBooleanOptions() {
+        let state = ACPChipState.normalize(
+            agentId: "future-agent",
+            availableModels: [],
+            currentModel: nil,
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [
+                booleanOption("fast_model", current: false, category: "model"),
+                configOption("preset",
+                             current: "sonnet",
+                             options: [("opus","Opus"),("sonnet","Sonnet")],
+                             category: "model"),
+            ])
+        #expect(state.models?.currentId == "sonnet")
+        if case .configOption(let id)? = state.models?.source {
+            #expect(id == "preset")
+        } else { Issue.record("expected select configOption source for model chip") }
     }
 
     @Test("Mode chip sources from category=mode configOption when present")

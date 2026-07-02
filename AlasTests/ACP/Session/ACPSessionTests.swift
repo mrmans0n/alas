@@ -374,7 +374,7 @@ struct ACPSessionTests {
                                   options: [ACPConfigOptionItem(id: "high", name: "High")])
         session.apply(.sessionConfigOptionsUpdate([opt]))
         #expect(session.availableConfigOptions.count == 1)
-        #expect(session.availableConfigOptions[0].currentValue == "high")
+        #expect(session.availableConfigOptions[0].currentValue == .string("high"))
     }
 
     @Test("chipState reflects current ACPSession fields")

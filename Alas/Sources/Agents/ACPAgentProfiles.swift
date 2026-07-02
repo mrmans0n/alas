@@ -68,13 +68,22 @@ enum ACPAgentProfiles {
     static func heuristicThinkingId(from options: [ACPConfigOption]) -> String? {
         let knownIds: Set<String> = ["effort", "reasoning_effort", "thinking", "thinking_level"]
         let thoughtCategories: Set<String> = ["thought_level", "ThoughtLevel"]
-        if let byId = options.first(where: { knownIds.contains($0.id) }) { return byId.id }
+        if let byId = options.first(where: {
+            knownIds.contains($0.id) && isUsableSelectOption($0)
+        }) {
+            return byId.id
+        }
         if let byCategory = options.first(where: {
+            guard isUsableSelectOption($0) else { return false }
             guard let c = $0.category else { return false }
             return thoughtCategories.contains(c)
         }) {
             return byCategory.id
         }
         return nil
+    }
+
+    private static func isUsableSelectOption(_ option: ACPConfigOption) -> Bool {
+        option.type == "select" && !option.options.isEmpty
     }
 }

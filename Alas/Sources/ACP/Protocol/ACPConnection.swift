@@ -79,9 +79,14 @@ final class ACPConnection: @unchecked Sendable {
     /// implementations) in which case the caller's optimistic local update
     /// stands; on a full echo the caller should overwrite local state so
     /// dependent options stay in sync.
-    func setConfigOption(sessionId: String, configId: String, value: String) async throws -> [ACPConfigOption] {
+    func setConfigOption(sessionId: String,
+                         configId: String,
+                         value: ACPConfigValue) async throws -> [ACPConfigOption] {
         let resp = try await client.send(ACPRequest(method: "session/set_config_option",
-                                                    params: ACPSessionSetConfigOptionParams(sessionId: sessionId, configId: configId, value: value)))
+                                                    params: ACPSessionSetConfigOptionParams(
+                                                        sessionId: sessionId,
+                                                        configId: configId,
+                                                        value: value)))
         let result = try? JSONDecoder().decode(ACPSessionSetConfigOptionResult.self, from: resp.body)
         return result?.configOptions ?? []
     }

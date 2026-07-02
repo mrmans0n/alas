@@ -176,6 +176,9 @@ struct ACPComposer: View {
                 ForEach(session.chipState.parameters) { parameter in
                     parameterChip(parameter)
                 }
+                ForEach(booleanConfigOptions) { option in
+                    booleanConfigToggle(option)
+                }
                 if let mode = session.chipState.mode {
                     modeChip(mode)
                 }
@@ -397,6 +400,25 @@ struct ACPComposer: View {
         Color(.sRGB, red: 0.48, green: 0.82, blue: 0.42, opacity: 1)
     }
 
+    private var booleanConfigOptions: [ACPConfigOption] {
+        session.availableConfigOptions.filter {
+            $0.type == "boolean" && $0.currentBoolValue != nil
+        }
+    }
+
+    private func booleanConfigToggle(_ option: ACPConfigOption) -> some View {
+        Toggle(isOn: Binding(
+            get: { option.currentBoolValue ?? false },
+            set: { apply(configOptionId: option.id, value: .boolean($0)) }
+        )) {
+            Text(option.name.isEmpty ? option.id : option.name)
+                .font(.system(size: 11, weight: .medium))
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .help(option.name.isEmpty ? option.id : option.name)
+    }
+
     private func iconChipLabel(icon: String, spec: ChipSpec, fallback: String) -> String {
         "\(icon) \(selectedName(spec: spec, fallback: fallback))"
     }
@@ -452,7 +474,7 @@ struct ACPComposer: View {
                 let old = session.availableConfigOptions[idx]
                 session.availableConfigOptions[idx] = ACPConfigOption(
                     id: old.id, name: old.name, type: old.type,
-                    category: old.category, currentValue: selectedId,
+                    category: old.category, currentValue: .string(selectedId),
                     options: old.options)
             }
         }
@@ -471,18 +493,52 @@ struct ACPComposer: View {
                 // value for the option just set. Keep the successful selection
                 // for that option while still accepting dependent updates.
                 if let updated = try? await runner.connection.setConfigOption(
-                    sessionId: remoteId, configId: id, value: selectedId),
+                    sessionId: remoteId,
+                    configId: id,
+                    value: .string(selectedId)),
                    !updated.isEmpty {
                     guard let merged = ACPConfigOption.mergingSuccessfulSetResponse(
                         updated,
                         configId: id,
-                        selectedValue: selectedId,
+                        selectedValue: .string(selectedId),
                         currentConfigOptions: session.availableConfigOptions) else {
                         return
                     }
                     session.availableConfigOptions = merged
                     manager.persist(session)
                 }
+            }
+        }
+    }
+
+    private func apply(configOptionId id: String, value: ACPConfigValue) {
+        let sid = session.id
+        let remoteId = session.remoteSessionId ?? sid
+        if let idx = session.availableConfigOptions.firstIndex(where: { $0.id == id }) {
+            let old = session.availableConfigOptions[idx]
+            session.availableConfigOptions[idx] = ACPConfigOption(
+                id: old.id, name: old.name, type: old.type,
+                category: old.category, currentValue: value,
+                options: old.options)
+        }
+        manager.persist(session)
+
+        Task { @MainActor in
+            guard let runner = manager.runners[sid] else { return }
+            if let updated = try? await runner.connection.setConfigOption(
+                sessionId: remoteId,
+                configId: id,
+                value: value),
+               !updated.isEmpty {
+                guard let merged = ACPConfigOption.mergingSuccessfulSetResponse(
+                    updated,
+                    configId: id,
+                    selectedValue: value,
+                    currentConfigOptions: session.availableConfigOptions) else {
+                    return
+                }
+                session.availableConfigOptions = merged
+                manager.persist(session)
             }
         }
     }

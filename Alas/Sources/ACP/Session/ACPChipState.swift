@@ -145,8 +145,7 @@ extension ACPChipState {
 
     private static func selectOption(id: String,
                                      in configOptions: [ACPConfigOption]) -> ChipSpec? {
-        guard let opt = configOptions.first(where: { $0.id == id }),
-              opt.type == "select", !opt.options.isEmpty else {
+        guard let opt = configOptions.first(where: { $0.id == id && isUsableSelectOption($0) }) else {
             return nil
         }
         return ChipSpec(
@@ -154,7 +153,7 @@ extension ACPChipState {
             options: opt.options.map {
                 ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
             },
-            currentId: opt.currentValue)
+            currentId: opt.currentStringValue)
     }
 
     /// Finds a configOption that advertises itself for the given category
@@ -167,10 +166,15 @@ extension ACPChipState {
         in options: [ACPConfigOption]
     ) -> ChipSpec? {
         guard let opt = options.first(where: {
+            guard isUsableSelectOption($0) else { return false }
             guard let c = $0.category else { return false }
             return categoryMatches(c, category)
         }) else { return nil }
         return selectOption(id: opt.id, in: options)
+    }
+
+    private static func isUsableSelectOption(_ option: ACPConfigOption) -> Bool {
+        option.type == "select" && !option.options.isEmpty
     }
 
     private static func parameterChips(
@@ -194,7 +198,7 @@ extension ACPChipState {
                     options: opt.options.map {
                         ChipSpec.Item(id: $0.id, name: $0.name, description: $0.description)
                     },
-                    currentId: opt.currentValue))
+                    currentId: opt.currentStringValue))
         }
     }
 

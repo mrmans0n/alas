@@ -32,7 +32,7 @@ struct ACPSessionLifecycleTests {
         let r = try #require(env.result)
         #expect(r.configOptions.count == 1)
         #expect(r.configOptions[0].id == "effort")
-        #expect(r.configOptions[0].currentValue == "medium")
+        #expect(r.configOptions[0].currentValue == .string("medium"))
         #expect(r.configOptions[0].options.count == 3)
     }
 
