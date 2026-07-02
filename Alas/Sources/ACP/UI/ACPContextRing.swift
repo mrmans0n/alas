@@ -64,6 +64,7 @@ struct ACPContextRing: View {
         }
         .frame(width: diameter, height: diameter)
         .animation(.easeOut(duration: 0.25), value: ratio)
+        .contentShape(Circle())
 
         labeledRing(ring)
     }
