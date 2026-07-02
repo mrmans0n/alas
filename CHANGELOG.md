@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-07-02
+
+### ✨ Features
+
+- Support boolean ACP configuration options (#616).
+
+### 🐛 Fixes
+
+- Make the ACP context ring fully clickable (#617).
+- Stop the tab strip from collapsing to a 1px sliver (#611).
+
+### 🏗️ Internal
+
+- Make `AGENTS.md` a symlink to `CLAUDE.md`.
+- Update `actions/cache` to v6 (#610).
+
 ## [0.8.8] - 2026-06-22
 
 ### ✨ Features
