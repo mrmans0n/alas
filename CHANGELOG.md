@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-07-02
+
+### 🐛 Fixes
+
+- Make fast mode a composer button (#618).
+
 ## [0.8.9] - 2026-07-02
 
 ### ✨ Features
