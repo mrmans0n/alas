@@ -106,7 +106,7 @@ struct ACPConnectionTests {
         }
 
         let conn = ACPConnection(client: mock)
-        _ = try await conn.setConfigOption(sessionId: "sess-1", configId: "effort", value: "high")
+        _ = try await conn.setConfigOption(sessionId: "sess-1", configId: "effort", value: .string("high"))
 
         let req = try #require(mock.sent.last)
         #expect(req.method == "session/set_config_option")
@@ -114,7 +114,7 @@ struct ACPConnectionTests {
         let params = try #require(req.params as? ACPSessionSetConfigOptionParams)
         #expect(params.sessionId == "sess-1")
         #expect(params.configId == "effort")
-        #expect(params.value == "high")
+        #expect(params.value == .string("high"))
     }
 
     @Test("setConfigOption returns refreshed configOptions from response")
@@ -130,9 +130,9 @@ struct ACPConnectionTests {
         }
 
         let conn = ACPConnection(client: mock)
-        let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: "high")
+        let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))
         #expect(result.count == 1)
-        #expect(result[0].currentValue == "high")
+        #expect(result[0].currentValue == .string("high"))
         #expect(result[0].options.count == 2)
     }
 
@@ -141,7 +141,7 @@ struct ACPConnectionTests {
         let mock = ACPMockClient()
         mock.script(method: "session/set_config_option") { _ in Data() }
         let conn = ACPConnection(client: mock)
-        let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: "high")
+        let result = try await conn.setConfigOption(sessionId: "s", configId: "effort", value: .string("high"))
         #expect(result.isEmpty)
     }
 }

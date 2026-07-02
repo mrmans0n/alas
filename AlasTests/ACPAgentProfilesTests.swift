@@ -53,6 +53,18 @@ struct ACPAgentProfilesTests {
         #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "effort")
     }
 
+    @Test("heuristic skips boolean known id and picks selectable thought category")
+    func heuristicSkipsBooleanKnownId() {
+        let opts = [
+            ACPConfigOption(id: "effort", name: "Effort", type: "boolean",
+                            currentValue: .boolean(false)),
+            ACPConfigOption(id: "reasoning", name: "Reasoning", category: "thought_level",
+                            currentValue: "high",
+                            options: [ACPConfigOptionItem(id: "high", name: "High")]),
+        ]
+        #expect(ACPAgentProfiles.heuristicThinkingId(from: opts) == "reasoning")
+    }
+
     @Test("heuristic picks ThoughtLevel-category option when no known id")
     func heuristicByCategory() {
         let opts = [

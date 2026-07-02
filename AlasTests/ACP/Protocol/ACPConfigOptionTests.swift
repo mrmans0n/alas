@@ -25,7 +25,7 @@ struct ACPConfigOptionTests {
         #expect(opt.name == "Effort")
         #expect(opt.type == "select")
         #expect(opt.category == "ThoughtLevel")
-        #expect(opt.currentValue == "medium")
+        #expect(opt.currentValue == .string("medium"))
         #expect(opt.options.count == 3)
         #expect(opt.options[2].description == "Use more reasoning")
     }
@@ -60,14 +60,50 @@ struct ACPConfigOptionTests {
         #expect(opt.options.isEmpty)
     }
 
+    @Test("boolean config option decodes a boolean current value")
+    func decodeBooleanCurrentValue() throws {
+        let json = """
+        {
+          "id": "fast-mode",
+          "name": "Fast mode",
+          "type": "boolean",
+          "category": "model_config",
+          "currentValue": true
+        }
+        """.data(using: .utf8)!
+
+        let opt = try JSONDecoder().decode(ACPConfigOption.self, from: json)
+
+        #expect(opt.type == "boolean")
+        #expect(opt.currentValue == .boolean(true))
+        #expect(opt.currentStringValue == nil)
+        #expect(opt.currentBoolValue == true)
+    }
+
     @Test("encodes setConfigOption params")
     func encodeSetParams() throws {
-        let params = ACPSessionSetConfigOptionParams(sessionId: "s", configId: "effort", value: "high")
+        let params = ACPSessionSetConfigOptionParams(
+            sessionId: "s", configId: "effort", value: .string("high"))
         let data = try JSONEncoder().encode(params)
-        let s = String(data: data, encoding: .utf8)!
-        #expect(s.contains("\"sessionId\":\"s\""))
-        #expect(s.contains("\"configId\":\"effort\""))
-        #expect(s.contains("\"value\":\"high\""))
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(json["sessionId"] as? String == "s")
+        #expect(json["configId"] as? String == "effort")
+        #expect(json["type"] as? String == "id")
+        #expect(json["value"] as? String == "high")
+    }
+
+    @Test("encodes boolean setConfigOption params")
+    func encodeBooleanSetParams() throws {
+        let params = ACPSessionSetConfigOptionParams(
+            sessionId: "s", configId: "fast-mode", value: .boolean(false))
+        let data = try JSONEncoder().encode(params)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(json["sessionId"] as? String == "s")
+        #expect(json["configId"] as? String == "fast-mode")
+        #expect(json["type"] as? String == "boolean")
+        #expect(json["value"] as? Bool == false)
     }
 
     @Test("successful set response preserves the selected config value")
@@ -91,12 +127,12 @@ struct ACPConfigOptionTests {
         let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
             [staleFast, refreshedContext],
             configId: "fast",
-            selectedValue: "true",
+            selectedValue: .string("true"),
             currentConfigOptions: [currentFast, refreshedContext]))
 
         #expect(merged.map(\.id) == ["fast", "context"])
-        #expect(merged.first(where: { $0.id == "fast" })?.currentValue == "true")
-        #expect(merged.first(where: { $0.id == "context" })?.currentValue == "1m")
+        #expect(merged.first(where: { $0.id == "fast" })?.currentValue == .string("true"))
+        #expect(merged.first(where: { $0.id == "context" })?.currentValue == .string("1m"))
     }
 
     @Test("stale set response is ignored after a newer local selection")
@@ -114,9 +150,25 @@ struct ACPConfigOptionTests {
         let merged = ACPConfigOption.mergingSuccessfulSetResponse(
             [oldResponse],
             configId: "fast",
-            selectedValue: "true",
+            selectedValue: .string("true"),
             currentConfigOptions: [currentFast])
 
         #expect(merged == nil)
+    }
+
+    @Test("successful boolean set response preserves the selected config value")
+    func mergeSuccessfulBooleanSetResponsePreservesSelectedValue() throws {
+        let staleFast = ACPConfigOption(
+            id: "fast-mode", name: "Fast mode", type: "boolean", currentValue: .boolean(false))
+        let currentFast = ACPConfigOption(
+            id: "fast-mode", name: "Fast mode", type: "boolean", currentValue: .boolean(true))
+
+        let merged = try #require(ACPConfigOption.mergingSuccessfulSetResponse(
+            [staleFast],
+            configId: "fast-mode",
+            selectedValue: .boolean(true),
+            currentConfigOptions: [currentFast]))
+
+        #expect(merged.first?.currentValue == .boolean(true))
     }
 }

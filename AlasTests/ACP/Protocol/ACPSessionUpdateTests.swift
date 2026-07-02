@@ -58,7 +58,7 @@ struct ACPSessionUpdateTests {
         if case .sessionConfigOptionsUpdate(let opts) = env.params!.update {
             #expect(opts.count == 1)
             #expect(opts[0].id == "effort")
-            #expect(opts[0].currentValue == "high")
+            #expect(opts[0].currentValue == .string("high"))
         } else { Issue.record("expected sessionConfigOptionsUpdate") }
     }
 

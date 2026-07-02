@@ -39,6 +39,52 @@ struct ACPInitializeTests {
         #expect(env.params?.clientCapabilities.meta.terminalAuth == false)
     }
 
+    @Test("decoding empty session capabilities does not imply boolean config support")
+    func decodeEmptySessionCapabilities() throws {
+        let data = Data("""
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": {
+              "fs": { "readTextFile": true, "writeTextFile": true },
+              "terminal": true,
+              "session": {}
+            }
+          }
+        }
+        """.utf8)
+
+        let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPInitializeParams>.self, from: data)
+
+        #expect(env.params?.clientCapabilities.session.configOptions.boolean == nil)
+    }
+
+    @Test("decoding null configOptions does not imply boolean config support")
+    func decodeNullSessionConfigOptions() throws {
+        let data = Data("""
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "protocolVersion": 1,
+            "clientCapabilities": {
+              "fs": { "readTextFile": true, "writeTextFile": true },
+              "terminal": true,
+              "session": { "configOptions": null }
+            }
+          }
+        }
+        """.utf8)
+
+        let env = try JSONDecoder().decode(JSONRPCEnvelope<ACPInitializeParams>.self, from: data)
+
+        #expect(env.params?.clientCapabilities.session.configOptions.boolean == nil)
+    }
+
     @Test("initialize request advertises terminal auth capabilities")
     func initializeRequestAdvertisesAuth() throws {
         let params = ACPInitializeParams(
@@ -64,6 +110,9 @@ struct ACPInitializeTests {
         #expect(auth["terminal"] as? Bool == true)
         #expect(meta["terminal-auth"] as? Bool == true)
         #expect(meta["parameterizedModelPicker"] as? Bool == true)
+        let session = try #require(capabilities["session"] as? [String: Any])
+        let configOptions = try #require(session["configOptions"] as? [String: Any])
+        #expect(configOptions["boolean"] as? [String: Any] != nil)
         #expect(capabilities["terminal"] as? Bool == true)
         let fs = try #require(capabilities["fs"] as? [String: Any])
         #expect(fs["readTextFile"] as? Bool == true)

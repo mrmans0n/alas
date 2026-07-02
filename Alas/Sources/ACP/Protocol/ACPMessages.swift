@@ -57,22 +57,25 @@ struct ACPClientCapabilities: Codable, Equatable {
     /// and only invoke `terminal/*` methods when it is true (ACP spec).
     let terminal: Bool
     let auth: ACPAuthCapabilities
+    let session: ACPSessionCapabilities
     let meta: ACPClientCapabilitiesMeta
 
     init(
         fs: ACPFsCapabilities,
         terminal: Bool,
         auth: ACPAuthCapabilities = .init(terminal: true),
+        session: ACPSessionCapabilities = .booleanConfigOptions,
         meta: ACPClientCapabilitiesMeta = .terminalAuth
     ) {
         self.fs = fs
         self.terminal = terminal
         self.auth = auth
+        self.session = session
         self.meta = meta
     }
 
     enum CodingKeys: String, CodingKey {
-        case fs, terminal, auth
+        case fs, terminal, auth, session
         case meta = "_meta"
     }
 
@@ -82,6 +85,8 @@ struct ACPClientCapabilities: Codable, Equatable {
         terminal = try c.decode(Bool.self, forKey: .terminal)
         auth = try c.decodeIfPresent(ACPAuthCapabilities.self, forKey: .auth)
             ?? .init(terminal: false)
+        session = try c.decodeIfPresent(ACPSessionCapabilities.self, forKey: .session)
+            ?? .init(configOptions: .init(boolean: nil))
         meta = try c.decodeIfPresent(ACPClientCapabilitiesMeta.self, forKey: .meta)
             ?? .init(terminalAuth: false)
     }
@@ -91,6 +96,33 @@ struct ACPClientCapabilities: Codable, Equatable {
         let writeTextFile: Bool
     }
 }
+
+struct ACPSessionCapabilities: Codable, Equatable {
+    static let booleanConfigOptions = ACPSessionCapabilities(
+        configOptions: .init(boolean: .init()))
+
+    let configOptions: ConfigOptions
+
+    init(configOptions: ConfigOptions = .init(boolean: nil)) {
+        self.configOptions = configOptions
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case configOptions
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        configOptions = try c.decodeIfPresent(ConfigOptions.self, forKey: .configOptions)
+            ?? .init(boolean: nil)
+    }
+
+    struct ConfigOptions: Codable, Equatable {
+        let boolean: EmptyObject?
+    }
+}
+
+struct EmptyObject: Codable, Equatable {}
 
 struct ACPAuthCapabilities: Codable, Equatable {
     let terminal: Bool

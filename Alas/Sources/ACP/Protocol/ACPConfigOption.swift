@@ -1,16 +1,50 @@
 import Foundation
 
+enum ACPConfigValue: Codable, Equatable, Hashable {
+    case string(String)
+    case boolean(Bool)
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if let b = try? c.decode(Bool.self) {
+            self = .boolean(b)
+            return
+        }
+        self = .string(try c.decode(String.self))
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try c.encode(value)
+        case .boolean(let value):
+            try c.encode(value)
+        }
+    }
+}
+
 /// Per-session configurable option advertised by the agent in
 /// `session/new`. Wire format follows
 /// https://agentclientprotocol.com/protocol/session-config-options —
-/// we only render select-style options today.
+/// select options are rendered as chips, boolean options as toggles.
 struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
     let id: String
     let name: String
-    let type: String           // "select" today; other shapes accepted but rendered as empty
+    let type: String           // "select" or negotiated "boolean"; other shapes ignored
     let category: String?      // e.g. "ThoughtLevel" — used as a routing hint
-    let currentValue: String?
+    let currentValue: ACPConfigValue?
     let options: [ACPConfigOptionItem]
+
+    var currentStringValue: String? {
+        guard case .string(let value) = currentValue else { return nil }
+        return value
+    }
+
+    var currentBoolValue: Bool? {
+        guard case .boolean(let value) = currentValue else { return nil }
+        return value
+    }
 
     enum CodingKeys: String, CodingKey {
         case id, name, type, category, currentValue, options
@@ -22,12 +56,24 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
         name = try c.decode(String.self, forKey: .name)
         type = (try? c.decode(String.self, forKey: .type)) ?? "select"
         category = try? c.decode(String.self, forKey: .category)
-        currentValue = try? c.decode(String.self, forKey: .currentValue)
+        currentValue = try? c.decode(ACPConfigValue.self, forKey: .currentValue)
         options = (try? c.decode([ACPConfigOptionItem].self, forKey: .options)) ?? []
     }
 
     init(id: String, name: String, type: String = "select",
          category: String? = nil, currentValue: String? = nil,
+         options: [ACPConfigOptionItem] = []) {
+        self.init(
+            id: id,
+            name: name,
+            type: type,
+            category: category,
+            currentValue: currentValue.map(ACPConfigValue.string),
+            options: options)
+    }
+
+    init(id: String, name: String, type: String = "select",
+         category: String? = nil, currentValue: ACPConfigValue?,
          options: [ACPConfigOptionItem] = []) {
         self.id = id
         self.name = name
@@ -50,7 +96,7 @@ struct ACPConfigOption: Codable, Equatable, Identifiable, Hashable {
     static func mergingSuccessfulSetResponse(
         _ configOptions: [ACPConfigOption],
         configId: String,
-        selectedValue: String,
+        selectedValue: ACPConfigValue,
         currentConfigOptions: [ACPConfigOption]
     ) -> [ACPConfigOption]? {
         guard currentConfigOptions.first(where: { $0.id == configId })?.currentValue == selectedValue else {
@@ -107,7 +153,37 @@ struct ACPConfigOptionItem: Codable, Equatable, Identifiable, Hashable {
 struct ACPSessionSetConfigOptionParams: Codable, Equatable {
     let sessionId: String
     let configId: String
-    let value: String
+    let value: ACPConfigValue
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, configId, type, value
+    }
+
+    init(sessionId: String, configId: String, value: ACPConfigValue) {
+        self.sessionId = sessionId
+        self.configId = configId
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try c.decode(String.self, forKey: .sessionId)
+        configId = try c.decode(String.self, forKey: .configId)
+        value = try c.decode(ACPConfigValue.self, forKey: .value)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(sessionId, forKey: .sessionId)
+        try c.encode(configId, forKey: .configId)
+        switch value {
+        case .string:
+            try c.encode("id", forKey: .type)
+        case .boolean:
+            try c.encode("boolean", forKey: .type)
+        }
+        try c.encode(value, forKey: .value)
+    }
 }
 
 /// Result of `session/set_config_option`. The agent returns the complete
