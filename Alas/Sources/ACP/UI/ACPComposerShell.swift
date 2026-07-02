@@ -17,14 +17,12 @@ enum ACPComposerControlPresentation {
     }
 
     static func canRenderFastModeButton(for spec: ChipSpec) -> Bool {
-        fastModeToggleTarget(for: spec) != nil
+        isFastModeToggleSelect(spec) && rawFastModeToggleTarget(for: spec) != nil
     }
 
     static func fastModeToggleTarget(for spec: ChipSpec) -> String? {
-        if isFastModeEnabled(spec) {
-            return spec.options.first(where: { isFastModeOff(id: $0.id, name: $0.name) })?.id
-        }
-        return spec.options.first(where: { isFastModeOn(id: $0.id, name: $0.name) })?.id
+        guard isFastModeToggleSelect(spec) else { return nil }
+        return rawFastModeToggleTarget(for: spec)
     }
 
     static func isFastModeEnabled(_ spec: ChipSpec) -> Bool {
@@ -33,6 +31,31 @@ enum ACPComposerControlPresentation {
             return isFastModeOn(id: item.id, name: item.name)
         }
         return isFastModeOn(id: currentId, name: currentId)
+    }
+
+    private static func isFastModeToggleSelect(_ spec: ChipSpec) -> Bool {
+        guard !spec.options.isEmpty else { return false }
+
+        var hasOnOption = false
+        var hasOffOption = false
+        for option in spec.options {
+            if isFastModeOn(id: option.id, name: option.name) {
+                hasOnOption = true
+            } else if isFastModeOff(id: option.id, name: option.name) {
+                hasOffOption = true
+            } else {
+                return false
+            }
+        }
+
+        return hasOnOption && hasOffOption
+    }
+
+    private static func rawFastModeToggleTarget(for spec: ChipSpec) -> String? {
+        if isFastModeEnabled(spec) {
+            return spec.options.first(where: { isFastModeOff(id: $0.id, name: $0.name) })?.id
+        }
+        return spec.options.first(where: { isFastModeOn(id: $0.id, name: $0.name) })?.id
     }
 
     private static func isFastModeOn(id: String, name: String) -> Bool {

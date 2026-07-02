@@ -411,11 +411,21 @@ extension ACPChipStateTests {
                 ChipSpec.Item(id: "fast", name: "Fast", description: nil),
             ],
             currentId: "fast")
+        let slowNormalFast = ChipSpec(
+            source: .configOption(id: "fast"),
+            options: [
+                ChipSpec.Item(id: "slow", name: "Slow", description: nil),
+                ChipSpec.Item(id: "normal", name: "Normal", description: nil),
+                ChipSpec.Item(id: "fast", name: "Fast", description: nil),
+            ],
+            currentId: "slow")
 
         #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: offOn) == "fast")
         #expect(ACPComposerControlPresentation.canRenderFastModeButton(for: offOn))
         #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: normalFast) == nil)
         #expect(!ACPComposerControlPresentation.canRenderFastModeButton(for: normalFast))
+        #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: slowNormalFast) == nil)
+        #expect(!ACPComposerControlPresentation.canRenderFastModeButton(for: slowNormalFast))
     }
 
     @Test("cursor-agent: no brackets -> no synthesized chips")
