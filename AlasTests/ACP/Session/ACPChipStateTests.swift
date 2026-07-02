@@ -300,11 +300,11 @@ extension ACPChipStateTests {
         #expect(state.thinking?.options.map { $0.name } == ["None", "Low", "Medium", "High", "Extra High"])
         #expect(state.parameters.map { $0.label } == ["Context", "Fast"])
         #expect(state.parameters.map { $0.spec.currentId } == ["272k", "false"])
-        #expect(state.parameters.map { $0.presentation } == [.cursorContextWindow, .cursorFast])
+        #expect(state.parameters.map { $0.presentation } == [.cursorContextWindow, .fastMode])
     }
 
-    @Test("non-cursor agent: context and fast remain generic parameters")
-    func nonCursorContextAndFastRemainGeneric() {
+    @Test("agents with fast select options expose a fast mode parameter")
+    func agentsWithFastSelectOptionsExposeFastModeParameter() {
         let state = ACPChipState.normalize(
             agentId: "future-agent",
             availableModels: [],
@@ -320,7 +320,112 @@ extension ACPChipStateTests {
                              options: [("false", "Off"), ("true", "On")]),
             ])
 
-        #expect(state.parameters.map { $0.presentation } == [.standard, .standard])
+        #expect(state.parameters.map { $0.presentation } == [.standard, .fastMode])
+    }
+
+    @Test("fast mode detection accepts common config option spellings")
+    func fastModeDetectionAcceptsCommonSpellings() {
+        let state = ACPChipState.normalize(
+            agentId: "claude",
+            availableModels: [],
+            currentModel: nil,
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [
+                ACPConfigOption(
+                    id: "fast-mode",
+                    name: "Fast mode",
+                    type: "select",
+                    currentValue: "off",
+                    options: [
+                        ACPConfigOptionItem(id: "off", name: "Off"),
+                        ACPConfigOptionItem(id: "on", name: "On"),
+                    ]),
+            ])
+
+        #expect(state.parameters.first?.presentation == .fastMode)
+    }
+
+    @Test("fast mode detection ignores unrelated fast model selectors")
+    func fastModeDetectionIgnoresUnrelatedFastModelSelectors() {
+        let state = ACPChipState.normalize(
+            agentId: "codex",
+            availableModels: [],
+            currentModel: nil,
+            availableModes: [],
+            currentMode: nil,
+            configOptions: [
+                configOption("fast_model",
+                             current: "enabled",
+                             options: [("disabled", "Disabled"), ("enabled", "Enabled")]),
+            ])
+
+        #expect(state.parameters.first?.presentation == .standard)
+    }
+
+    @Test("fast mode detection recognizes boolean options")
+    func fastModeDetectionRecognizesBooleanOptions() {
+        let fastMode = ACPConfigOption(
+            id: "fast-mode",
+            name: "Fast mode",
+            type: "boolean",
+            currentValue: .boolean(false))
+        let fastModel = ACPConfigOption(
+            id: "fast_model",
+            name: "Fast model",
+            type: "boolean",
+            currentValue: .boolean(false))
+
+        #expect(ACPChipState.isFastModeConfigOption(fastMode))
+        #expect(!ACPChipState.isFastModeConfigOption(fastModel))
+    }
+
+    @Test("composer fast and auto-run controls use distinct icon semantics")
+    func composerControlIconSemantics() {
+        #expect(ACPComposerControlPresentation.fastModeIconName(isEnabled: false) == "bolt")
+        #expect(ACPComposerControlPresentation.fastModeIconName(isEnabled: true) == "bolt.fill")
+        #expect(ACPComposerControlPresentation.autoRunIconName(isEnabled: false) == "play")
+        #expect(ACPComposerControlPresentation.autoRunIconName(isEnabled: true) == "play.fill")
+    }
+
+    @Test("composer fast mode help explains the hover action")
+    func composerFastModeHelpExplainsHoverAction() {
+        #expect(ACPComposerControlPresentation.fastModeHelp(isEnabled: false, canToggle: true) == "Click to enable fast mode")
+        #expect(ACPComposerControlPresentation.fastModeHelp(isEnabled: true, canToggle: true) == "Fast mode is ON — click to disable")
+        #expect(ACPComposerControlPresentation.fastModeHelp(isEnabled: false, canToggle: false) == "Fast mode cannot be changed")
+    }
+
+    @Test("composer fast mode select toggles only when both directions are known")
+    func composerFastModeSelectToggleAvailability() {
+        let offOn = ChipSpec(
+            source: .configOption(id: "fast"),
+            options: [
+                ChipSpec.Item(id: "off", name: "Off", description: nil),
+                ChipSpec.Item(id: "fast", name: "Fast", description: nil),
+            ],
+            currentId: "off")
+        let normalFast = ChipSpec(
+            source: .configOption(id: "fast"),
+            options: [
+                ChipSpec.Item(id: "normal", name: "Normal", description: nil),
+                ChipSpec.Item(id: "fast", name: "Fast", description: nil),
+            ],
+            currentId: "fast")
+        let slowNormalFast = ChipSpec(
+            source: .configOption(id: "fast"),
+            options: [
+                ChipSpec.Item(id: "slow", name: "Slow", description: nil),
+                ChipSpec.Item(id: "normal", name: "Normal", description: nil),
+                ChipSpec.Item(id: "fast", name: "Fast", description: nil),
+            ],
+            currentId: "slow")
+
+        #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: offOn) == "fast")
+        #expect(ACPComposerControlPresentation.canRenderFastModeButton(for: offOn))
+        #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: normalFast) == nil)
+        #expect(!ACPComposerControlPresentation.canRenderFastModeButton(for: normalFast))
+        #expect(ACPComposerControlPresentation.fastModeToggleTarget(for: slowNormalFast) == nil)
+        #expect(!ACPComposerControlPresentation.canRenderFastModeButton(for: slowNormalFast))
     }
 
     @Test("cursor-agent: no brackets -> no synthesized chips")
