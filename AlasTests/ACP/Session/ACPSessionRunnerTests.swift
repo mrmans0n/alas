@@ -608,6 +608,61 @@ struct ACPSessionRunnerTests {
         #expect(row.title == "t")
     }
 
+    @Test("session_info_update null title clears generated title")
+    func sessionInfoUpdateNullTitleClearsGeneratedTitle() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-title-clear-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "Generated title",
+            titleSource: .generated,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        var callbackTitles: [String] = []
+        let mock = ACPMockClient()
+        let session = ACPSession(
+            id: "s",
+            agentId: "claude",
+            worktreeId: "wt",
+            title: "Generated title",
+            titleSource: .generated
+        )
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSessionTitleUpdated: { callbackTitles.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(title: .null, updatedAt: nil))
+        ))
+
+        try await waitUntil {
+            session.title == "New session"
+                && session.titleSource == .placeholder
+                && callbackTitles == ["New session"]
+        }
+
+        let row = try #require(try store.loadSession(id: "s"))
+        #expect(row.title == "New session")
+        #expect(row.titleSource == .placeholder)
+    }
+
     @Test("streaming chunks are persisted in a batch when streaming ends")
     func streamingChunksPersistAsBatchOnIdle() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

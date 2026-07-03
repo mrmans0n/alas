@@ -526,7 +526,17 @@ final class ACPSessionRunner {
 
     func applySessionInfoTitle(_ info: ACPSessionInfoUpdate) {
         guard holdsLeaseForWrite() else { return }
-        guard let rawTitle = info.title else { return }
+        switch info.title {
+        case .absent:
+            return
+        case .null:
+            clearSessionInfoTitle()
+        case .value(let rawTitle):
+            applySessionInfoTitleValue(rawTitle)
+        }
+    }
+
+    private func applySessionInfoTitleValue(_ rawTitle: String) {
         let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard session.titleSource != .manual else { return }
@@ -548,6 +558,27 @@ final class ACPSessionRunner {
         session.title = trimmed
         session.titleSource = .generated
         onSessionTitleUpdated?(trimmed)
+    }
+
+    private func clearSessionInfoTitle() {
+        guard session.titleSource != .manual else { return }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        guard (try? store.clearGeneratedTitleIfNotManual(
+            id: sessionId,
+            updatedAt: now
+        )) == true else {
+            guard let row = try? store.loadSession(id: sessionId) else { return }
+            if row.titleSource == .manual {
+                session.title = row.title
+                session.titleSource = row.titleSource
+            }
+            return
+        }
+
+        session.title = "New session"
+        session.titleSource = .placeholder
+        onSessionTitleUpdated?("New session")
     }
 
     /// Returns `absolutePath` relative to the runner's worktree, or

@@ -28,7 +28,19 @@ struct ACPSessionInfoUpdateDecodeTests {
         """)
 
         #expect(update == .sessionInfoUpdate(.init(
-            title: nil,
+            title: .absent,
+            updatedAt: "2026-06-25T12:34:56Z"
+        )))
+    }
+
+    @Test("decodes null title as an explicit clear")
+    func nullTitle() throws {
+        let update = try decode("""
+        {"sessionId":"s1","update":{"sessionUpdate":"session_info_update","title":null,"updatedAt":"2026-06-25T12:34:56Z"}}
+        """)
+
+        #expect(update == .sessionInfoUpdate(.init(
+            title: .null,
             updatedAt: "2026-06-25T12:34:56Z"
         )))
     }
@@ -40,7 +52,7 @@ struct ACPSessionInfoUpdateDecodeTests {
         """)
 
         #expect(update == .sessionInfoUpdate(.init(
-            title: nil,
+            title: .absent,
             updatedAt: "2026-06-25T12:34:56Z"
         )))
     }
