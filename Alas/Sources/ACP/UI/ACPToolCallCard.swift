@@ -7,6 +7,7 @@ import AppKit
 /// renders an animated spinner instead of a static glyph.
 struct ACPToolCallCard: View {
     let toolCall: ACPMessage.ToolCall
+    var trustedImageRoot: URL? = nil
     /// Closure that returns the full persisted `content` for the tool call
     /// whose in-memory `content` was truncated when its row left the render
     /// window. Invoked the first time the card expands; the result is cached
@@ -141,7 +142,7 @@ struct ACPToolCallCard: View {
     private var assetBody: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(toolCall.assets.enumerated()), id: \.offset) { entry in
-                ACPToolCallAssetView(asset: entry.element)
+                ACPToolCallAssetView(asset: entry.element, trustedImageRoot: trustedImageRoot)
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
@@ -198,12 +199,13 @@ struct ACPToolCallCard: View {
 
 private struct ACPToolCallAssetView: View {
     let asset: ACPMessage.ToolCallAsset
+    let trustedImageRoot: URL?
     @Environment(\.theme) private var theme
 
     var body: some View {
         switch asset.kind {
         case .image:
-            if let image = asset.loadedImage {
+            if let image = asset.loadedImage(trustedRoot: trustedImageRoot) {
                 imageThumbnail(image)
                     .help(asset.displayText)
             } else {
@@ -260,7 +262,7 @@ private struct ACPToolCallAssetView: View {
 }
 
 private extension ACPMessage.ToolCallAsset {
-    var loadedImage: NSImage? {
+    func loadedImage(trustedRoot: URL?) -> NSImage? {
         if let data, let decoded = Self.decodeBase64ImageData(data), let image = NSImage(data: decoded) {
             return image
         }
@@ -270,7 +272,8 @@ private extension ACPMessage.ToolCallAsset {
            let image = NSImage(data: decoded) {
             return image
         }
-        return nil
+        guard let url = Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) else { return nil }
+        return NSImage(contentsOf: url)
     }
 
     var displayTitle: String {
@@ -307,6 +310,25 @@ private extension ACPMessage.ToolCallAsset {
             base64 = trimmed
         }
         return Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
+    }
+
+    private static func trustedLocalURL(from value: String, trustedRoot: URL?) -> URL? {
+        guard let trustedRoot else { return nil }
+        let candidate: URL
+        if let url = URL(string: value), let scheme = url.scheme {
+            guard scheme.lowercased() == "file" else { return nil }
+            candidate = url
+        } else if value.hasPrefix("/") {
+            candidate = URL(fileURLWithPath: value)
+        } else {
+            candidate = URL(fileURLWithPath: value, relativeTo: trustedRoot)
+        }
+        let root = trustedRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+        let rootPath = root.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard resolved.path == rootPath || resolved.path.hasPrefix(rootPrefix) else { return nil }
+        return resolved
     }
 
     private static func displayURL(from value: String) -> URL? {

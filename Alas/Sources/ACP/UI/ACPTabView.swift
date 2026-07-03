@@ -254,6 +254,7 @@ private struct ACPSessionView: View {
                                 // lives) — otherwise the user's click can't resolve the
                                 // pending permission request.
                                 policy: manager.runners[sessionId]?.policy,
+                                trustedImageRoot: worktree.path,
                                 scopeKey: scopeKey(for: session.transcript.pendingPermission),
                                 onQuestionResponse: { response in
                                     manager.runners[sessionId]?.answerQuestion(response)
