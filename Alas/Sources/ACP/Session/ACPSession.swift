@@ -257,6 +257,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
+                isLikelyReplay: { text in messageExists(kind: .agent, containing: text) },
                 makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
                 return []
             }
@@ -278,6 +279,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
+                isLikelyReplay: { text in messageExists(kind: .thought, containing: text) },
                 makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
                 return []
             }
@@ -873,7 +875,9 @@ final class ACPSession: ObservableObject, Identifiable {
             return i
         }
 
-        if messageId != nil, !allowsStreamingBoundaryCrossing {
+        if messageId != nil,
+           !allowsStreamingBoundaryCrossing,
+           userMessageExists(containing: addition, attachments: newAttachments) {
             return nil
         }
 
@@ -937,11 +941,36 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    private func messageExists(kind: TextMessageKind, containing text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        return transcript.messages.contains { message in
+            switch (kind, message) {
+            case (.agent, .agent(_, _, let existing)),
+                 (.thought, .thought(_, _, let existing)):
+                return existing.value.contains(text)
+            default:
+                return false
+            }
+        }
+    }
+
+    private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
+        guard !text.isEmpty || !attachments.isEmpty else { return false }
+        return transcript.messages.contains { message in
+            guard case .user(_, _, let existing, let existingAttachments) = message else { return false }
+            if !text.isEmpty, existing.contains(text) {
+                return true
+            }
+            return !attachments.isEmpty && attachments.allSatisfy { existingAttachments.contains($0) }
+        }
+    }
+
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
                                  messageId: String?,
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,
+                                 isLikelyReplay: (String) -> Bool,
                                  makeNew: () -> ACPMessage) -> Int? {
         let located = if let messageId {
             locateByMessageId(messageId)
@@ -972,7 +1001,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 }
             }
         }
-        if messageId != nil, !allowsStreamingBoundaryCrossing {
+        if messageId != nil, !allowsStreamingBoundaryCrossing, isLikelyReplay(addition) {
             return nil
         }
         transcript.messages.append(makeNew())
