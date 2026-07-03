@@ -95,6 +95,27 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("chunked user_message_chunk echo updates local prompt instead of duplicating")
+    func chunkedUserMessageChunkEchoUpdatesLocalPrompt() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.recordUserPrompt(text: "hello world", attachments: [])
+
+        let firstChanged = s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("hello "))))
+        let secondChanged = s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("world"))))
+
+        #expect(firstChanged == [0])
+        #expect(secondChanged == [0])
+        #expect(s.transcript.messages.count == 1)
+        #expect(s.transcript.messages[0].stableId == "acp-user:user-1")
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == "user-1")
+            #expect(text == "hello world")
+            #expect(attachments.isEmpty)
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("legacy user_message_chunk echo without messageId does not duplicate local prompt")
     func legacyUserMessageChunkEchoDoesNotDuplicateLocalPrompt() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

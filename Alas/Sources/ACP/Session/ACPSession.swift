@@ -94,6 +94,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// check is never reached).
     var allowsStreamingBoundaryCrossing: Bool = true
 
+    private var reconciledLocalUserPromptMessageIds: Set<String> = []
+
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
     /// explicit force-send remains next.
@@ -792,7 +794,11 @@ final class ACPSession: ObservableObject, Identifiable {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
-            if text == addition {
+            let isReconciledEchoChunk = existingMessageId.map {
+                reconciledLocalUserPromptMessageIds.contains($0) && text.contains(addition)
+            } == true
+            if text == addition
+                || isReconciledEchoChunk {
                 return i
             }
             transcript.messages[i] = .user(
@@ -806,12 +812,13 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if let i = lastEchoedLocalUserPromptIndex(matching: addition),
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
-            if existingMessageId == nil, messageId != nil {
+            if existingMessageId == nil, let messageId {
                 transcript.messages[i] = .user(
                     id: id,
                     messageId: messageId,
                     text: text,
                     attachments: attachments)
+                reconciledLocalUserPromptMessageIds.insert(messageId)
                 transcript.streamingTick &+= 1
             }
             return i
@@ -826,7 +833,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private func lastEchoedLocalUserPromptIndex(matching text: String) -> Int? {
         transcript.messages.indices.reversed().first { index in
             if case .user(_, let messageId, let existing, _) = transcript.messages[index] {
-                return messageId == nil && existing == text
+                return messageId == nil && existing.hasPrefix(text)
             }
             return false
         }
