@@ -172,6 +172,21 @@ struct ACPTerminalHostTests {
         #expect(host.terminals.count == ACPTerminalHost.maxRetainedFinishedTerminals)
     }
 
+    @Test("unfinished metadata terminal retention is capped")
+    func unfinishedMetadataTerminalRetentionIsCapped() throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+        for i in 0 ... ACPTerminalHost.maxMetadataTerminals {
+            host.appendMetadataOutput(
+                terminalId: "meta-\(i)",
+                data: Data("output-\(i)\n".utf8),
+                replace: false)
+        }
+
+        #expect(host.terminals.count == ACPTerminalHost.maxMetadataTerminals)
+        #expect(host.terminal(id: "meta-0") == nil)
+        #expect(host.terminal(id: "meta-\(ACPTerminalHost.maxMetadataTerminals)") != nil)
+    }
+
     #if DEBUG
     @Test("retained byte estimate includes terminal buffers")
     func retainedByteEstimateIncludesTerminalBuffers() async throws {

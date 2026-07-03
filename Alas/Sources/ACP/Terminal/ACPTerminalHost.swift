@@ -10,6 +10,7 @@ enum ACPTerminalHostError: Error, Equatable {
 final class ACPTerminalHost: ObservableObject {
     static let maxLiveTerminals = 32
     static let maxRetainedFinishedTerminals = 64
+    static let maxMetadataTerminals = 64
 
     private(set) var sessionCwd: String
     private(set) var sessionEnv: [String: String]
@@ -154,6 +155,7 @@ final class ACPTerminalHost: ObservableObject {
             self?.pruneFinishedTerminals()
         }
         terminals[terminalId] = term
+        pruneMetadataTerminals()
         return term
     }
 
@@ -164,6 +166,17 @@ final class ACPTerminalHost: ObservableObject {
         let overflow = finished.count - Self.maxRetainedFinishedTerminals
         guard overflow > 0 else { return }
         for term in finished.prefix(overflow) {
+            terminals.removeValue(forKey: term.id)
+        }
+    }
+
+    private func pruneMetadataTerminals() {
+        let unfinishedMetadata = terminals.values
+            .filter { !$0.isProcessBacked && $0.exitStatus == nil }
+            .sorted { $0.createdAt < $1.createdAt }
+        let overflow = unfinishedMetadata.count - Self.maxMetadataTerminals
+        guard overflow > 0 else { return }
+        for term in unfinishedMetadata.prefix(overflow) {
             terminals.removeValue(forKey: term.id)
         }
     }
