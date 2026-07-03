@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-07-03
+
+### ✨ Features
+
+- Support ACP message IDs (#619).
+- Update ACP session titles from session info notifications (#622).
+
+### 🐛 Fixes
+
+- Clear stranded transcript-restore spinners when ACP sessions are steered (#620).
+- Render subscript tags in markdown previews (#621).
+- Harden ACP JSON-RPC cancellation teardown (#624).
+- Trust Sparkle cask updates from the stable cask endpoint (#623).
+
 ## [0.8.10] - 2026-07-02
 
 ### 🐛 Fixes
