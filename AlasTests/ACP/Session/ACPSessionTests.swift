@@ -216,6 +216,33 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("post-load live chunk with existing messageId updates in-progress output")
+    func postLoadLiveExistingMessageIdChunkUpdatesInProgressOutput() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("first")),
+            .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Read file",
+                kind: "read",
+                status: "completed",
+                content: "done"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        let changed = session.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text(" follow-up"))))
+
+        #expect(changed == [0])
+        #expect(session.transcript.messages.count == 2)
+        if case .agent(_, let messageId, let text) = session.transcript.messages[0] {
+            #expect(messageId == "agent-1")
+            #expect(text.value == "first follow-up")
+        } else {
+            Issue.record("expected agent message")
+        }
+    }
+
     @Test("late replay user chunk with unknown messageId does not append prompt")
     func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

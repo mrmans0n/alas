@@ -186,6 +186,34 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("attachment-only replay does not mark hydrated user row as live")
+    func attachmentOnlyReplayDoesNotMarkHydratedUserRowAsLive() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let attachment = ACPMessage.Attachment(
+            uri: "file:///tmp/screenshot.jpg",
+            name: "screenshot.jpg",
+            mimeType: "image/jpeg")
+        s.transcript.messages = [
+            .user(id: UUID(), messageId: "user-1", text: "see this", attachments: [attachment])
+        ]
+
+        let attachmentChanged = s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .image(data: nil, uri: "file:///tmp/screenshot.jpg", mimeType: "image/jpeg"))))
+        let textChanged = s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("see this"))))
+
+        #expect(attachmentChanged == [0])
+        #expect(textChanged == [0])
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == "user-1")
+            #expect(text == "see this")
+            #expect(attachments == [attachment])
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("ACP messageIds are namespaced by text row kind")
     func messageIdStableIdsAreNamespaced() async {
         let user = ACPMessage.user(id: UUID(), messageId: "same", text: "u", attachments: [])

@@ -809,6 +809,10 @@ final class ACPSession: ObservableObject, Identifiable {
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
+            let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
+            if text == mergedText && attachments == mergedAttachments {
+                return i
+            }
             let isLiveUserChunk = existingMessageId.map {
                 liveUserChunkMessageIds.contains($0)
             } == true
@@ -831,7 +835,7 @@ final class ACPSession: ObservableObject, Identifiable {
             transcript.messages[i] = .user(
                 id: id,
                 messageId: existingMessageId,
-                text: text + Self.streamingSeparator(between: text, and: addition) + addition,
+                text: mergedText,
                 attachments: mergedAttachments)
             if let existingMessageId {
                 liveUserChunkMessageIds.insert(existingMessageId)
@@ -980,7 +984,9 @@ final class ACPSession: ObservableObject, Identifiable {
         if let i = located {
             let stableId = transcript.messages[i].stableId
             let crossesCompletedBoundary = transcript.completedOutputBoundaryMessageIds.contains(stableId)
-            if messageId != nil, !allowsStreamingBoundaryCrossing {
+            if messageId != nil,
+               !allowsStreamingBoundaryCrossing,
+               (crossesCompletedBoundary || hasUserAfterMessage(at: i)) {
                 return i
             }
             if crossesCompletedBoundary {
@@ -1008,6 +1014,19 @@ final class ACPSession: ObservableObject, Identifiable {
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }
+
+    private func hasUserAfterMessage(at index: Int) -> Bool {
+        guard transcript.messages.indices.contains(index), index < transcript.messages.index(before: transcript.messages.endIndex) else {
+            return false
+        }
+        return transcript.messages[(index + 1)...].contains { message in
+            if case .user = message {
+                return true
+            }
+            return false
+        }
+    }
+
     /// Returns the separator (if any) to insert between two streaming
     /// chunks before appending `next` to `previous`. Adapters sometimes
     /// split their stream at a sentence boundary and drop the trailing
