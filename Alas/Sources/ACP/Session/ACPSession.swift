@@ -387,8 +387,6 @@ final class ACPSession: ObservableObject, Identifiable {
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
             return []
-        case .sessionInfoUpdate:
-            return []
         case .unknown:
             return []
         }
@@ -821,11 +819,20 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     private func applySessionInfoUpdate(_ info: ACPSessionInfoUpdate) {
-        if let title = info.title?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !title.isEmpty,
-           titleSource != .manual {
-            self.title = title
-            titleSource = .generated
+        switch info.title {
+        case .absent:
+            break
+        case .null:
+            if titleSource != .manual {
+                title = "New session"
+                titleSource = .placeholder
+            }
+        case .value(let rawTitle):
+            let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, titleSource != .manual {
+                title = trimmed
+                titleSource = .generated
+            }
         }
         applyGoalMetadata(info.metadata)
     }

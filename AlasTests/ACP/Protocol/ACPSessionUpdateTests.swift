@@ -61,7 +61,7 @@ struct ACPSessionUpdateTests {
             Issue.record("expected sessionInfoUpdate")
             return
         }
-        #expect(info.title == "Investigate ACP events")
+        #expect(info.title == .value("Investigate ACP events"))
         let meta = try #require(info.metadata?.value as? [String: AnyCodable])
         let codex = try #require(meta["codex"]?.value as? [String: AnyCodable])
         let goal = try #require(codex["goal"]?.value as? [String: AnyCodable])
@@ -77,7 +77,7 @@ struct ACPSessionUpdateTests {
             Issue.record("expected sessionInfoUpdate")
             return
         }
-        #expect(info.title == "Title only")
+        #expect(info.title == .value("Title only"))
         #expect(info.metadata == nil)
     }
 
