@@ -369,15 +369,15 @@ enum ACPMarkdownInlineRenderer {
                 }
 
                 if !isSubscript,
-                   hasSubscriptOpenTag(in: source, at: index),
+                   let subscriptContentStart = subscriptOpenTagEnd(in: source, at: index),
                    let closeRange = source.range(
                        of: "</sub>",
                        options: [.caseInsensitive],
-                       range: source.index(index, offsetBy: 5)..<source.endIndex
+                       range: subscriptContentStart..<source.endIndex
                    ) {
                     let marker = makeSubscriptMarker()
                     output += marker.start
-                    output += render(String(source[source.index(index, offsetBy: 5)..<closeRange.lowerBound]), isSubscript: true)
+                    output += render(String(source[subscriptContentStart..<closeRange.lowerBound]), isSubscript: true)
                     output += marker.end
                     subscriptMarkers.append(marker)
                     index = closeRange.upperBound
@@ -403,11 +403,26 @@ enum ACPMarkdownInlineRenderer {
             return output
         }
 
-        private func hasSubscriptOpenTag(in source: String, at index: String.Index) -> Bool {
-            guard let end = source.index(index, offsetBy: 5, limitedBy: source.endIndex) else {
-                return false
+        private func subscriptOpenTagEnd(in source: String, at index: String.Index) -> String.Index? {
+            guard source[index...].hasPrefix("<"),
+                  let nameEnd = source.index(index, offsetBy: 4, limitedBy: source.endIndex),
+                  source[index..<nameEnd].caseInsensitiveCompare("<sub") == .orderedSame
+            else {
+                return nil
             }
-            return source[index..<end].caseInsensitiveCompare("<sub>") == .orderedSame
+
+            guard nameEnd < source.endIndex else { return nil }
+            let next = source[nameEnd]
+            guard next == ">" || next.isWhitespace else { return nil }
+
+            var cursor = nameEnd
+            while cursor < source.endIndex {
+                if source[cursor] == ">" {
+                    return source.index(after: cursor)
+                }
+                cursor = source.index(after: cursor)
+            }
+            return nil
         }
 
         mutating private func makeImagePlaceholder() -> String {

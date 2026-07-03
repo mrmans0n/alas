@@ -86,6 +86,20 @@ struct ACPMarkdownInlineRendererTests {
         #expect(image.isSubscript)
     }
 
+    @Test("subscript opening tag may include attributes")
+    func subscriptOpeningTagMayIncludeAttributes() throws {
+        let plain = ACPMarkdownInlineRenderer.plainText("Before <sub class=\"priority\">P2</sub> after")
+        #expect(plain == "Before P2 after")
+
+        let plan = ACPMarkdownInlineRenderer.makePlan(
+            "<sub class=\"priority\">![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub>"
+        )
+        let image = try #require(plan.images.first)
+        #expect(image.isSubscript)
+        #expect(plan.markdownSource.contains("<sub") == false)
+        #expect(plan.markdownSource.contains("</sub>") == false)
+    }
+
     @Test("malformed subscript remains visible")
     func malformedSubscriptRemainsVisible() {
         let plain = ACPMarkdownInlineRenderer.plainText("Before <sub>small after")
