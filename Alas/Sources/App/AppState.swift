@@ -3413,6 +3413,13 @@ final class AppState {
                 },
                 onLiveBufferRead: { [weak self] path in
                     self?.editorLiveBufferText(for: path, worktreeId: worktree.id)
+                },
+                onSessionTitleUpdated: { [weak self] sessionId, title in
+                    _ = self?.tabs.renameACPSessionTabs(
+                        worktreeId: worktree.id,
+                        sessionId: sessionId,
+                        title: title
+                    )
                 }
             )
             acpManagers[worktree.id] = mgr
