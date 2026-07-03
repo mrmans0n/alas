@@ -169,6 +169,9 @@ h1 { font-size: 22px; font-weight: 700; margin: 12px 4px 10px; }
 #attach:active, #config:active { color: var(--fg-muted); }
 
 /* Config sheet (⚙) — reuses .option-btn / .is-selected for the radio lists. */
+#cfg .sheet-card { max-height: min(85vh, 640px); display: flex; flex-direction: column; }
+#cfg-scroll { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+#cfg-close { flex: 0 0 auto; }
 #cfg-model-section, #cfg-mode-section { margin-bottom: 14px; }
 #cfg-autorun-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; margin: 6px 0; border: 1px solid var(--bg-4); border-radius: 10px; background: var(--bg-1); color: var(--fg); font-size: 15px; cursor: pointer; }
 #cfg-autorun { width: 20px; height: 20px; accent-color: var(--accent); cursor: pointer; }
