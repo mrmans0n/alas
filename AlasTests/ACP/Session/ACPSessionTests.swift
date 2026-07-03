@@ -774,6 +774,43 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("image-only toolCall content is preserved as assets without preview")
+    func imageOnlyToolCallContentPreservesAssetsWithoutPreview() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-image-only",
+            title: "screenshot",
+            kind: "read",
+            status: "completed",
+            content: [
+                .content(.image(data: "base64-data", uri: "/tmp/result.png", mimeType: "image/png")),
+                .content(.image(data: nil, uri: "file:///tmp/second-result.jpg", mimeType: "image/jpeg"))
+            ],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "")
+            #expect(tc.preview == nil)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(
+                    data: "base64-data",
+                    uri: "/tmp/result.png",
+                    mimeType: "image/png",
+                    name: "result.png"),
+                ACPMessage.ToolCallAsset.image(
+                    data: nil,
+                    uri: "file:///tmp/second-result.jpg",
+                    mimeType: "image/jpeg",
+                    name: "second-result.jpg")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("tool call metadata routes terminal output and exit")
     func toolCallMetadataRoutesTerminalOutputAndExit() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

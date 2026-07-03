@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Read / Search / Run / Edit tool invocation. Collapsed by default to
 /// one row showing verb + target + status; expanded shows the tool's
@@ -91,7 +92,7 @@ struct ACPToolCallCard: View {
     @ViewBuilder
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if displayContent.isEmpty && toolCall.terminalIds.isEmpty {
+            if !hasExpandedOutput {
                 HStack(spacing: 6) {
                     if toolCall.status == "in_progress" || toolCall.status == "pending" {
                         Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
@@ -121,6 +122,9 @@ struct ACPToolCallCard: View {
                     }
                     .background(theme.color("bg-0").opacity(0.55))
                 }
+                if !toolCall.assets.isEmpty {
+                    assetBody
+                }
                 if let host = terminalHost {
                     ForEach(toolCall.terminalIds, id: \.self) { tid in
                         ACPTerminalTailView(terminalId: tid, host: host)
@@ -128,6 +132,20 @@ struct ACPToolCallCard: View {
                 }
             }
         }
+    }
+
+    private var hasExpandedOutput: Bool {
+        !displayContent.isEmpty || !toolCall.assets.isEmpty || !toolCall.terminalIds.isEmpty
+    }
+
+    private var assetBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(toolCall.assets.enumerated()), id: \.offset) { entry in
+                ACPToolCallAssetView(asset: entry.element)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(theme.color("bg-0").opacity(0.55))
     }
 
     @ViewBuilder
@@ -175,6 +193,147 @@ struct ACPToolCallCard: View {
                 .foregroundStyle(theme.color("accent"))
         }
         .frame(width: 18, height: 18)
+    }
+}
+
+private struct ACPToolCallAssetView: View {
+    let asset: ACPMessage.ToolCallAsset
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        switch asset.kind {
+        case .image:
+            if let image = asset.loadedImage {
+                imageThumbnail(image)
+                    .help(asset.displayText)
+            } else {
+                compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
+            }
+        case .resource:
+            compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
+        }
+    }
+
+    private func imageThumbnail(_ image: NSImage) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(theme.color("bg-1").opacity(0.7))
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .padding(6)
+        }
+            .frame(width: 160, height: 120)
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+    }
+
+    private func compactRow(iconSystemName: String, title: String, detail: String?) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconSystemName)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 18, height: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .background(theme.color("bg-1").opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line-soft"), lineWidth: 0.5))
+        .help(asset.displayText)
+    }
+}
+
+private extension ACPMessage.ToolCallAsset {
+    var loadedImage: NSImage? {
+        if let data, let decoded = Self.decodeBase64ImageData(data), let image = NSImage(data: decoded) {
+            return image
+        }
+        guard let uri = nonEmpty(uri) else { return nil }
+        if uri.lowercased().hasPrefix("data:"),
+           let decoded = Self.decodeBase64ImageData(uri),
+           let image = NSImage(data: decoded) {
+            return image
+        }
+        guard let url = Self.localURL(from: uri) else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    var displayTitle: String {
+        if let name = nonEmpty(name) {
+            return name
+        }
+        if let uri = nonEmpty(uri) {
+            if let url = Self.displayURL(from: uri), !url.lastPathComponent.isEmpty {
+                return url.lastPathComponent
+            }
+            return uri
+        }
+        return kind == .image ? "Image" : "Resource"
+    }
+
+    var displayDetail: String? {
+        guard let uri = nonEmpty(uri), uri != displayTitle else { return nil }
+        return uri
+    }
+
+    var displayText: String {
+        if let detail = displayDetail {
+            return "\(displayTitle) \(detail)"
+        }
+        return displayTitle
+    }
+
+    private static func decodeBase64ImageData(_ value: String) -> Data? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base64: String
+        if let marker = trimmed.range(of: "base64,", options: .caseInsensitive) {
+            base64 = String(trimmed[marker.upperBound...])
+        } else {
+            base64 = trimmed
+        }
+        return Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
+    }
+
+    private static func localURL(from value: String) -> URL? {
+        if let url = URL(string: value), let scheme = url.scheme {
+            switch scheme.lowercased() {
+            case "file":
+                return url
+            case "data":
+                return nil
+            default:
+                return nil
+            }
+        }
+        return URL(fileURLWithPath: value)
+    }
+
+    private static func displayURL(from value: String) -> URL? {
+        if let url = URL(string: value), url.scheme != nil { return url }
+        return URL(fileURLWithPath: value)
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
 
