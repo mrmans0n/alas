@@ -509,6 +509,84 @@ struct ACPSessionTests {
         #expect(session.availableConfigOptions[0].currentValue == .string("high"))
     }
 
+    @Test("session info applies title and goal")
+    func sessionInfoAppliesTitleAndGoal() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "Old title")
+        session.apply(.sessionInfoUpdate(.init(
+            title: "Investigate ACP events",
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "goal": AnyCodable([
+                        "objective": AnyCodable("Surface richer ACP events"),
+                        "status": AnyCodable("in_progress"),
+                        "tokenBudget": AnyCodable(12_000)
+                    ])
+                ])
+            ]))))
+
+        let goal = try #require(session.currentGoal)
+        #expect(session.title == "Investigate ACP events")
+        #expect(session.titleSource == .generated)
+        #expect(goal.objective == "Surface richer ACP events")
+        #expect(goal.status == "in_progress")
+        #expect(goal.tokenBudget == 12_000)
+    }
+
+    @Test("session info clears goal on null goal")
+    func sessionInfoClearsGoalOnNullGoal() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "goal": AnyCodable([
+                        "objective": AnyCodable("Keep me"),
+                        "status": AnyCodable("in_progress")
+                    ])
+                ])
+            ]))))
+
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "goal": AnyCodable(NSNull())
+                ])
+            ]))))
+
+        #expect(session.currentGoal == nil)
+    }
+
+    @Test("session info without goal leaves existing goal unchanged")
+    func sessionInfoWithoutGoalLeavesExistingGoalUnchanged() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "Old title")
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "goal": AnyCodable([
+                        "objective": AnyCodable("Original goal"),
+                        "status": AnyCodable("in_progress"),
+                        "tokenBudget": AnyCodable(200)
+                    ])
+                ])
+            ]))))
+
+        session.apply(.sessionInfoUpdate(.init(
+            title: "Only title changed",
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "unrelated": AnyCodable(true)
+                ])
+            ]))))
+
+        let goal = try #require(session.currentGoal)
+        #expect(session.title == "Only title changed")
+        #expect(goal.objective == "Original goal")
+        #expect(goal.status == "in_progress")
+        #expect(goal.tokenBudget == 200)
+    }
+
     @Test("chipState reflects current ACPSession fields")
     func chipStateRecomputed() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
@@ -602,6 +680,126 @@ struct ACPSessionTests {
         if case .toolCall(let tc) = session.transcript.messages[0] {
             #expect(tc.rawInput?.hasSuffix("… [truncated]") == true)
             #expect((tc.rawInput?.count ?? 0) <= 4_096 + "… [truncated]".count)
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("toolCallUpdate mutates enriched fields")
+    func toolCallUpdateMutatesEnrichedFields() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let metadata = AnyCodable([
+            "terminal_exit": AnyCodable([
+                "terminal_id": AnyCodable("term-1"),
+                "exit_code": AnyCodable(0)
+            ])
+        ])
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-enriched",
+            title: "running",
+            kind: "execute",
+            status: "in_progress",
+            content: [
+                .terminal(terminalId: "stale-term"),
+                .content(.resourceLink(uri: "file:///tmp/stale.txt", name: "stale.txt"))
+            ],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-enriched",
+            status: "completed",
+            content: [
+                .content(.text("```swift\nlet ok = true\n```")),
+                .content(.image(data: "image-data", uri: "file:///tmp/result.png", mimeType: "image/png"))
+            ],
+            rawOutput: AnyCodable(["exit_code": AnyCodable(0)]),
+            title: "swift test --filter ACP",
+            locations: [ACPToolLocation(path: "AlasTests/ACP/Session/ACPSessionTests.swift", line: 12)],
+            rawInput: AnyCodable(["command": AnyCodable("swift test --filter ACP")]),
+            metadata: metadata)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "swift test --filter ACP")
+            #expect(tc.status == "completed")
+            #expect(tc.content == "let ok = true")
+            #expect(tc.preview == "let ok = true")
+            #expect(tc.contentLanguage == "swift")
+            #expect(tc.locations == ["AlasTests/ACP/Session/ACPSessionTests.swift"])
+            #expect(tc.rawInput?.contains(#""command":"swift test --filter ACP""#) == true)
+            #expect(tc.rawOutput?.contains(#""exit_code":0"#) == true)
+            #expect(tc.metadata == metadata)
+            #expect(tc.terminalIds.isEmpty)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(
+                    data: "image-data",
+                    uri: "file:///tmp/result.png",
+                    mimeType: "image/png",
+                    name: "result.png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("initial toolCall stores raw output and metadata")
+    func initialToolCallStoresRawOutputAndMetadata() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let metadata = AnyCodable([
+            "is_mcp_tool_call": AnyCodable(true),
+            "tool": AnyCodable("screenshot")
+        ])
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-output",
+            title: "screenshot",
+            kind: "read",
+            status: "completed",
+            content: [.content(.image(data: "base64-data", uri: nil, mimeType: "image/png"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: AnyCodable(["status": AnyCodable("ok")]),
+            metadata: metadata)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.rawOutput?.contains(#""status":"ok""#) == true)
+            #expect(tc.metadata == metadata)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "base64-data", uri: nil, mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("toolCall content preserves embedded resource text and asset")
+    func toolCallPreservesEmbeddedResourceTextAndAsset() async {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-resource",
+            title: "read resource",
+            kind: "read",
+            status: "completed",
+            content: [.content(.resource(
+                uri: "file:///tmp/File.swift",
+                mimeType: "text/plain",
+                text: "let value = 1\n"
+            ))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "let value = 1\n")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.resource(
+                    uri: "file:///tmp/File.swift",
+                    name: "File.swift",
+                    mimeType: "text/plain")
+            ])
         } else {
             Issue.record("expected toolCall message")
         }

@@ -22,6 +22,12 @@ enum ACPSessionTitleSource: String, Codable {
     case manual
 }
 
+struct ACPGoalState: Equatable, Hashable, Sendable {
+    let objective: String
+    let status: String?
+    let tokenBudget: Int?
+}
+
 @MainActor
 final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
@@ -43,6 +49,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
     @Published var currentMode: String?
+    @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false
     @Published var setupState: SetupState = .checking
@@ -299,6 +306,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 preview: Self.previewLine(full),
                 contentLanguage: Self.wrappingFenceLanguage(raw),
                 rawInput: Self.metadataString(payload.rawInput),
+                rawOutput: Self.metadataString(payload.rawOutput),
+                metadata: payload.metadata,
+                assets: Self.extractAssets(items),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: Self.extractTerminalIds(items))))
             didAppendTranscriptMessage()
@@ -307,7 +317,12 @@ final class ACPSession: ObservableObject, Identifiable {
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
+                if let title = u.title { tc.title = title }
                 if let s = u.status { tc.status = s }
+                if let locations = u.locations { tc.locations = locations.map(\.path) }
+                if let rawInput = u.rawInput { tc.rawInput = Self.metadataString(rawInput) }
+                if let rawOutput = u.rawOutput { tc.rawOutput = Self.metadataString(rawOutput) }
+                if let metadata = u.metadata { tc.metadata = metadata }
                 if let c = u.content {
                     // ACP content updates are full replacement snapshots,
                     // so terminalIds tracks the *current* content — assign
@@ -321,10 +336,12 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.preview = Self.previewLine(full)
                     tc.contentLanguage = Self.wrappingFenceLanguage(raw)
                     tc.terminalIds = Self.extractTerminalIds(c)
+                    tc.assets = Self.extractAssets(c)
                 }
             }
             return touched.map { [$0] } ?? []
-        case .sessionInfoUpdate:
+        case .sessionInfoUpdate(let info):
+            applySessionInfoUpdate(info)
             return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
@@ -644,12 +661,13 @@ final class ACPSession: ObservableObject, Identifiable {
             switch item {
             case .content(.text(let s)):
                 out.append(s)
-            case .content(.resourceLink(let uri, let name)):
-                out.append("[\(name ?? uri)]")
-            case .content(.image):
-                out.append("[image]")
-            case .content(.resource(let uri, _, _)):
-                out.append("[\(URL(string: uri)?.lastPathComponent ?? uri)]")
+            case .content(.resourceLink), .content(.image):
+                // Asset blocks are preserved on `ToolCall.assets`; including
+                // text placeholders here corrupts wrapped prose/code output
+                // when an update contains both text and assets.
+                continue
+            case .content(.resource(_, _, let text)):
+                out.append(text)
             case .diff(let path, let old, let new):
                 var lines: [String] = ["--- \(path)"]
                 if let old, !old.isEmpty {
@@ -710,6 +728,63 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private static func extractTerminalIds(_ items: [ACPToolCallContent]) -> [String] {
         items.compactMap { if case .terminal(let id) = $0 { return id } else { return nil } }
+    }
+
+    private static func extractAssets(_ items: [ACPToolCallContent]) -> [ACPMessage.ToolCallAsset] {
+        items.compactMap { item in
+            guard case .content(let block) = item else { return nil }
+            switch block {
+            case .image(let data, let uri, let mime):
+                return .image(data: data, uri: uri, mimeType: mime, name: Self.assetName(from: uri))
+            case .resourceLink(let uri, let name):
+                return .resource(uri: uri, name: name)
+            case .resource(let uri, let mime, _):
+                return .resource(uri: uri, name: Self.assetName(from: uri), mimeType: mime)
+            case .text:
+                return nil
+            }
+        }
+    }
+
+    private static func assetName(from uri: String?) -> String? {
+        guard let uri, !uri.isEmpty else { return nil }
+        return URL(string: uri)?.lastPathComponent
+            ?? URL(fileURLWithPath: uri).lastPathComponent
+    }
+
+    private func applySessionInfoUpdate(_ info: ACPSessionInfoUpdate) {
+        if let title = info.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty,
+           titleSource != .manual {
+            self.title = title
+            titleSource = .generated
+        }
+        applyGoalMetadata(info.metadata)
+    }
+
+    private func applyGoalMetadata(_ metadata: AnyCodable?) {
+        guard let metadata,
+              let root = metadata.value as? [String: AnyCodable]
+        else { return }
+
+        if let codex = root["codex"]?.value as? [String: AnyCodable],
+           let goal = codex["goal"] {
+            currentGoal = Self.goalState(from: goal)
+        }
+    }
+
+    private static func goalState(from value: AnyCodable) -> ACPGoalState? {
+        if value.value is NSNull { return nil }
+        guard let goal = value.value as? [String: AnyCodable],
+              let objective = goal["objective"]?.value as? String
+        else { return nil }
+        let trimmedObjective = objective.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedObjective.isEmpty else { return nil }
+
+        return ACPGoalState(
+            objective: trimmedObjective,
+            status: goal["status"]?.value as? String,
+            tokenBudget: goal["tokenBudget"]?.value as? Int)
     }
 
     /// Best-effort strip of a single pair of markdown code fences that
