@@ -940,6 +940,9 @@ final class ACPSession: ObservableObject, Identifiable {
         if let i = located {
             let stableId = transcript.messages[i].stableId
             let crossesCompletedBoundary = transcript.completedOutputBoundaryMessageIds.contains(stableId)
+            if messageId != nil, !allowsStreamingBoundaryCrossing {
+                return i
+            }
             if crossesCompletedBoundary {
                 // Discard if boundary crossings are not allowed — this chunk
                 // is a late replay frame arriving after load-replay suppression

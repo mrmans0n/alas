@@ -148,6 +148,26 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("late replay chunk with messageId does not mutate hydrated output")
+    func lateReplayMessageIdChunkDoesNotMutateHydratedOutput() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("earlier answer")),
+            .user(id: UUID(), messageId: "user-1", text: "next prompt", attachments: [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        let changed = session.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text(" replay"))))
+
+        #expect(changed == [0])
+        #expect(session.transcript.messages.count == 2)
+        if case .agent(_, _, let text) = session.transcript.messages[0] {
+            #expect(text.value == "earlier answer")
+        } else {
+            Issue.record("expected agent message")
+        }
+    }
+
     @Test("completed output boundary does not alter existing message text")
     func completedOutputBoundaryDoesNotAddBlankLines() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
