@@ -52,8 +52,8 @@ struct ACPMessageWireTests {
         #expect(decoded == tc)
     }
 
-    @Test("tool call decodes missing content language as nil")
-    func toolCallMissingContentLanguageDecodesAsNil() throws {
+    @Test("tool call decodes missing enriched fields as nil/empty")
+    func toolCallMissingEnrichedFieldsDecodeAsDefault() throws {
         let payload = """
         {
           "toolCallId": "tc1",
@@ -62,8 +62,7 @@ struct ACPMessageWireTests {
           "status": "completed",
           "content": "abc",
           "preview": "abc",
-          "locations": ["/a"],
-          "terminalIds": []
+          "locations": ["/a"]
         }
         """.data(using: .utf8)!
         let wire = try ACPMessageWire.decode(kind: "tool_call", payload: payload)
@@ -72,6 +71,66 @@ struct ACPMessageWireTests {
             return
         }
         #expect(decoded.contentLanguage == nil)
+        #expect(decoded.rawOutput == nil)
+        #expect(decoded.metadata == nil)
+        #expect(decoded.assets == [])
+        #expect(decoded.terminalIds.isEmpty)
+    }
+
+    @Test("tool call decodes enriched fields from wire payload")
+    func toolCallWireDecodesEnrichedFields() throws {
+        let payload = """
+        {
+          "toolCallId": "tc2",
+          "title": "read",
+          "kind": "fs.read",
+          "status": "completed",
+          "content": "raw",
+          "preview": "raw",
+          "contentLanguage": "plaintext",
+          "rawInput": "{\\\"command\\\":\\\"read_file\\\"}",
+          "rawOutput": "{\\\"status\\\":\\\"ok\\\"}",
+          "metadata": {
+            "is_mcp_tool_call": true
+          },
+          "assets": [
+            {
+              "kind": "image",
+              "data": "aGVsbG8=",
+              "uri": "file:///tmp/screenshot.png",
+              "mimeType": "image/png",
+              "name": "screenshot.png"
+            },
+            {
+              "kind": "resource",
+              "uri": "file:///tmp/resource.txt",
+              "mimeType": "text/plain",
+              "name": "resource.txt"
+            }
+          ],
+          "locations": ["/a", "/b"],
+          "terminalIds": ["term-1", "term-2"]
+        }
+        """.data(using: .utf8)!
+
+        let wire = try ACPMessageWire.decode(kind: "tool_call", payload: payload)
+        guard case let .toolCall(decoded) = wire else {
+            #expect(Bool(false), "expected .toolCall, got \(wire)")
+            return
+        }
+
+        #expect(decoded.contentLanguage == "plaintext")
+        #expect(decoded.rawInput == #"{\"command\":\"read_file\"}")
+        #expect(decoded.rawOutput == #"{\"status\":\"ok\"}")
+        #expect(decoded.metadata?.value as? [String: AnyCodable] != nil)
+        #expect((decoded.metadata?.value as? [String: AnyCodable])?["is_mcp_tool_call"]?.value as? Bool == true)
+        #expect(decoded.assets.count == 2)
+        #expect(decoded.assets[0].kind == .image)
+        #expect(decoded.assets[0].name == "screenshot.png")
+        #expect(decoded.assets[1].kind == .resource)
+        #expect(decoded.assets[1].name == "resource.txt")
+        #expect(decoded.locations == ["/a", "/b"])
+        #expect(decoded.terminalIds == ["term-1", "term-2"])
     }
 
     @Test("unknown kind decodes to system notice")
