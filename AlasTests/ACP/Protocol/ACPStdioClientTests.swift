@@ -57,8 +57,17 @@ struct ACPStdioClientTests {
     private final class ResultBox<T>: @unchecked Sendable {
         private let lock = NSLock()
         private var value: T?
-        func set(_ v: T) { lock.lock(); value = v; lock.unlock() }
-        func get() -> T? { lock.lock(); defer { lock.unlock() }; return value }
+        func set(_ v: T) {
+            lock.lock()
+            value = v
+            lock.unlock()
+        }
+
+        func get() -> T? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
     }
 
     /// Runs `work` in a detached task and returns its result, or nil if it
