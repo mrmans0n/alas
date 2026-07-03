@@ -302,6 +302,15 @@ extension ACPSessionStore {
                          ACPSessionTitleSource.placeholder.rawValue]) > 0
     }
 
+    func updateGeneratedTitleIfNotManual(id: String, title: String, updatedAt: Int64) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET title = ?, title_source = ?, updated_at = ?
+        WHERE id = ? AND archived = 0 AND title_source != ?
+        """, bindings: [title, ACPSessionTitleSource.generated.rawValue, updatedAt, id,
+                         ACPSessionTitleSource.manual.rawValue]) > 0
+    }
+
     func appendMessage(sessionId: String, id: String, kind: String, seq: Int64, payload: Data, createdAt: Int64) throws {
         try db.exec("""
         INSERT INTO messages (id, session_id, kind, seq, payload, created_at)
