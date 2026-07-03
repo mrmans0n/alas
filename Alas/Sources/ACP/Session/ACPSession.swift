@@ -324,6 +324,8 @@ final class ACPSession: ObservableObject, Identifiable {
                 }
             }
             return touched.map { [$0] } ?? []
+        case .sessionInfoUpdate:
+            return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }

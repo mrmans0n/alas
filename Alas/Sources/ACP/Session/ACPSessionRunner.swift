@@ -1376,7 +1376,7 @@ extension ACPSessionRunner {
         case .agentMessageChunk, .agentThoughtChunk, .toolCallUpdate:
             return true
         case .userMessageChunk, .toolCall, .plan, .availableModelsUpdate,
-             .currentModeUpdate, .currentModelUpdate,
+             .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
              .usageUpdate, .sessionInfoUpdate, .unknown:
             return false

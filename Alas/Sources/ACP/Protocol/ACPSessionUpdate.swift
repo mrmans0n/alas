@@ -35,16 +35,19 @@ enum ACPSessionUpdate: Codable, Equatable {
 
     private enum Keys: String, CodingKey {
         case sessionUpdate, content, availableModels, modeId, modelId,
-             entries, availableCommands, configOptions, title, updatedAt
+             entries, availableCommands, configOptions
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         let kind = try c.decode(String.self, forKey: .sessionUpdate)
         switch kind {
-        case "user_message_chunk":   self = .userMessageChunk(try ACPTextChunk(from: decoder))
-        case "agent_message_chunk":  self = .agentMessageChunk(try ACPTextChunk(from: decoder))
-        case "agent_thought_chunk":  self = .agentThoughtChunk(try ACPTextChunk(from: decoder))
+        case "user_message_chunk":
+            self = .userMessageChunk(try ACPTextChunk(from: decoder))
+        case "agent_message_chunk":
+            self = .agentMessageChunk(try ACPTextChunk(from: decoder))
+        case "agent_thought_chunk":
+            self = .agentThoughtChunk(try ACPTextChunk(from: decoder))
         case "tool_call":
             self = .toolCall(try ACPToolCallPayload(from: decoder))
         case "tool_call_update":
@@ -91,18 +94,24 @@ enum ACPSessionUpdate: Codable, Equatable {
         // Encoding not required for v1 (we only receive these). Implement when needed.
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
-        case .userMessageChunk(let b):  try c.encode("user_message_chunk", forKey: .sessionUpdate)
-        try b.encodeFields(to: encoder)
-        case .agentMessageChunk(let b): try c.encode("agent_message_chunk", forKey: .sessionUpdate)
-        try b.encodeFields(to: encoder)
-        case .agentThoughtChunk(let b): try c.encode("agent_thought_chunk", forKey: .sessionUpdate)
-        try b.encodeFields(to: encoder)
-        case .plan(let e):              try c.encode("plan", forKey: .sessionUpdate)
-        try c.encode(e, forKey: .entries)
-        case .availableModelsUpdate(let m): try c.encode("available_models_update", forKey: .sessionUpdate)
-        try c.encode(m, forKey: .availableModels)
-        case .currentModeUpdate(let m):     try c.encode("current_mode_update", forKey: .sessionUpdate)
-        try c.encode(m, forKey: .modeId)
+        case .userMessageChunk(let b):
+            try c.encode("user_message_chunk", forKey: .sessionUpdate)
+            try b.encodeFields(to: encoder)
+        case .agentMessageChunk(let b):
+            try c.encode("agent_message_chunk", forKey: .sessionUpdate)
+            try b.encodeFields(to: encoder)
+        case .agentThoughtChunk(let b):
+            try c.encode("agent_thought_chunk", forKey: .sessionUpdate)
+            try b.encodeFields(to: encoder)
+        case .plan(let e):
+            try c.encode("plan", forKey: .sessionUpdate)
+            try c.encode(e, forKey: .entries)
+        case .availableModelsUpdate(let m):
+            try c.encode("available_models_update", forKey: .sessionUpdate)
+            try c.encode(m, forKey: .availableModels)
+        case .currentModeUpdate(let m):
+            try c.encode("current_mode_update", forKey: .sessionUpdate)
+            try c.encode(m, forKey: .modeId)
         case .currentModelUpdate(let m):
             try c.encode("current_model_update", forKey: .sessionUpdate)
             try c.encode(m, forKey: .modelId)
@@ -111,17 +120,11 @@ enum ACPSessionUpdate: Codable, Equatable {
             try c.encode(opts, forKey: .configOptions)
         case .sessionInfoUpdate(let info):
             try c.encode("session_info_update", forKey: .sessionUpdate)
-            switch info.title {
-            case .absent:
-                break
-            case .null:
-                try c.encodeNil(forKey: .title)
-            case .value(let title):
-                try c.encode(title, forKey: .title)
-            }
-            try c.encodeIfPresent(info.updatedAt, forKey: .updatedAt)
-        case .availableCommandsUpdate: break // not produced by us
-        case .toolCall, .toolCallUpdate, .usageUpdate, .unknown: break
+            try info.encodeFields(to: encoder)
+        case .availableCommandsUpdate:
+            break
+        case .toolCall, .toolCallUpdate, .usageUpdate, .unknown:
+            break
         }
     }
 }
@@ -146,6 +149,72 @@ struct ACPTextChunk: Codable, Equatable {
     }
 }
 
+struct ACPSessionInfoUpdate: Codable, Equatable {
+    let title: ACPStringFieldUpdate
+    let updatedAt: String?
+    let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case title, updatedAt
+        case metadata = "_meta"
+    }
+
+    init(
+        title: ACPStringFieldUpdate = .absent,
+        updatedAt: String? = nil,
+        metadata: AnyCodable? = nil
+    ) {
+        self.title = title
+        self.updatedAt = updatedAt
+        self.metadata = metadata
+    }
+
+    init(title: String?, updatedAt: String? = nil, metadata: AnyCodable? = nil) {
+        self.title = title.map(ACPStringFieldUpdate.value) ?? .absent
+        self.updatedAt = updatedAt
+        self.metadata = metadata
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if !c.contains(.title) {
+            title = .absent
+        } else if (try? c.decodeNil(forKey: .title)) == true {
+            title = .null
+        } else if let value = try? c.decode(String.self, forKey: .title) {
+            title = .value(value)
+        } else {
+            title = .absent
+        }
+        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
+        metadata = try? c.decodeIfPresent(AnyCodable.self, forKey: .metadata)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try encodeFields(to: encoder)
+    }
+
+    func encodeFields(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch title {
+        case .absent:
+            break
+        case .null:
+            try c.encodeNil(forKey: .title)
+        case .value(let title):
+            try c.encode(title, forKey: .title)
+        }
+        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
+        try c.encodeIfPresent(metadata, forKey: .metadata)
+    }
+}
+
+enum ACPStringFieldUpdate: Equatable {
+    case absent
+    case null
+    case value(String)
+}
+
 struct ACPToolCallPayload: Codable, Equatable {
     let toolCallId: String
     let title: String
@@ -155,13 +224,70 @@ struct ACPToolCallPayload: Codable, Equatable {
     let locations: [ACPToolLocation]?
     let rawInput: AnyCodable?
     let rawOutput: AnyCodable?
+    let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+        case metadata = "_meta"
+    }
+
+    init(
+        toolCallId: String,
+        title: String,
+        kind: String?,
+        status: String,
+        content: [ACPToolCallContent]? = nil,
+        locations: [ACPToolLocation]? = nil,
+        rawInput: AnyCodable? = nil,
+        rawOutput: AnyCodable? = nil,
+        metadata: AnyCodable? = nil
+    ) {
+        self.toolCallId = toolCallId
+        self.title = title
+        self.kind = kind
+        self.status = status
+        self.content = content
+        self.locations = locations
+        self.rawInput = rawInput
+        self.rawOutput = rawOutput
+        self.metadata = metadata
+    }
 }
 
 struct ACPToolCallUpdate: Codable, Equatable {
     let toolCallId: String
+    let title: String?
     let status: String?
+    let locations: [ACPToolLocation]?
     let content: [ACPToolCallContent]?
     let rawOutput: AnyCodable?
+    let rawInput: AnyCodable?
+    let metadata: AnyCodable?
+
+    private enum CodingKeys: String, CodingKey {
+        case toolCallId, title, status, locations, content, rawInput, rawOutput
+        case metadata = "_meta"
+    }
+
+    init(
+        toolCallId: String,
+        status: String? = nil,
+        content: [ACPToolCallContent]? = nil,
+        rawOutput: AnyCodable? = nil,
+        title: String? = nil,
+        locations: [ACPToolLocation]? = nil,
+        rawInput: AnyCodable? = nil,
+        metadata: AnyCodable? = nil
+    ) {
+        self.toolCallId = toolCallId
+        self.title = title
+        self.status = status
+        self.locations = locations
+        self.content = content
+        self.rawOutput = rawOutput
+        self.rawInput = rawInput
+        self.metadata = metadata
+    }
 }
 
 struct ACPToolLocation: Codable, Equatable {
@@ -203,54 +329,4 @@ struct ACPUsageInfo: Codable, Equatable {
         size = try c.decode(Int.self, forKey: .size)
         cost = try? c.decodeIfPresent(Cost.self, forKey: .cost)
     }
-}
-
-struct ACPSessionInfoUpdate: Codable, Equatable {
-    let title: ACPStringFieldUpdate
-    let updatedAt: String?
-
-    private enum CodingKeys: String, CodingKey { case title, updatedAt }
-
-    init(title: ACPStringFieldUpdate = .absent, updatedAt: String?) {
-        self.title = title
-        self.updatedAt = updatedAt
-    }
-
-    init(title: String?, updatedAt: String?) {
-        self.title = title.map(ACPStringFieldUpdate.value) ?? .absent
-        self.updatedAt = updatedAt
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        if !c.contains(.title) {
-            title = .absent
-        } else if (try? c.decodeNil(forKey: .title)) == true {
-            title = .null
-        } else if let value = try? c.decode(String.self, forKey: .title) {
-            title = .value(value)
-        } else {
-            title = .absent
-        }
-        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        switch title {
-        case .absent:
-            break
-        case .null:
-            try c.encodeNil(forKey: .title)
-        case .value(let title):
-            try c.encode(title, forKey: .title)
-        }
-        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
-    }
-}
-
-enum ACPStringFieldUpdate: Equatable {
-    case absent
-    case null
-    case value(String)
 }

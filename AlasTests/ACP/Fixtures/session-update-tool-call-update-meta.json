@@ -1,0 +1,14 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"s",
+  "update":{"sessionUpdate":"tool_call_update","toolCallId":"cmd-1","title":"swift test --filter ACP","status":"completed","locations":[{"path":"AlasTests/ACP/Session/ACPSessionTests.swift","line":12}],"rawInput":{"command":"swift test --filter ACP"},"rawOutput":{"exit_code":0},"_meta":{
+    "terminal_output_delta":{
+      "terminal_id":"cmd-1",
+      "data":"ok\n"
+    },
+    "terminal_exit":{
+      "terminal_id":"cmd-1",
+      "exit_code":0,
+      "signal":null
+    }
+  }}
+}}
