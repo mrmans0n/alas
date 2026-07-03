@@ -295,6 +295,25 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("repeated legacy user_message_chunk text is preserved")
+    func repeatedLegacyUserMessageChunkTextIsPreserved() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        let firstChanged = s.apply(.userMessageChunk(.text("ha")))
+        let secondChanged = s.apply(.userMessageChunk(.text("ha")))
+
+        #expect(firstChanged == [0])
+        #expect(secondChanged == [0])
+        #expect(s.transcript.messages.count == 1)
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == nil)
+            #expect(text == "haha")
+            #expect(attachments.isEmpty)
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("toolCall row stable id matches its toolCallId")
     func toolCallId() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

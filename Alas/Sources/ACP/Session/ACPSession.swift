@@ -919,7 +919,8 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !text.isEmpty || !attachments.isEmpty else { return nil }
         return transcript.messages.indices.reversed().first { index in
             if case .user(let id, let messageId, let existing, let existingAttachments) = transcript.messages[index] {
-                guard messageId == nil else { return false }
+                guard messageId == nil,
+                      !legacyUserChunkMessageIds.contains(id) else { return false }
                 if !text.isEmpty {
                     return existing.hasPrefix(text)
                         || (reconciledLegacyLocalUserPromptIds.contains(id) && existing.contains(text))
