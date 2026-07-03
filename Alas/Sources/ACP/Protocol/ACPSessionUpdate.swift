@@ -6,9 +6,9 @@ struct ACPSessionUpdateParams: Codable, Equatable {
 }
 
 enum ACPSessionUpdate: Codable, Equatable {
-    case userMessageChunk(ACPContentBlock)
-    case agentMessageChunk(ACPContentBlock)
-    case agentThoughtChunk(ACPContentBlock)
+    case userMessageChunk(ACPTextChunk)
+    case agentMessageChunk(ACPTextChunk)
+    case agentThoughtChunk(ACPTextChunk)
     case toolCall(ACPToolCallPayload)
     case toolCallUpdate(ACPToolCallUpdate)
     case plan([ACPPlanEntry])
@@ -20,6 +20,18 @@ enum ACPSessionUpdate: Codable, Equatable {
     case usageUpdate(ACPUsageInfo)
     case unknown(String)
 
+    static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
+        .userMessageChunk(.init(content: content))
+    }
+
+    static func agentMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
+        .agentMessageChunk(.init(content: content))
+    }
+
+    static func agentThoughtChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
+        .agentThoughtChunk(.init(content: content))
+    }
+
     private enum Keys: String, CodingKey {
         case sessionUpdate, content, availableModels, modeId, modelId,
              entries, availableCommands, configOptions
@@ -29,9 +41,9 @@ enum ACPSessionUpdate: Codable, Equatable {
         let c = try decoder.container(keyedBy: Keys.self)
         let kind = try c.decode(String.self, forKey: .sessionUpdate)
         switch kind {
-        case "user_message_chunk":   self = .userMessageChunk(try c.decode(ACPContentBlock.self, forKey: .content))
-        case "agent_message_chunk":  self = .agentMessageChunk(try c.decode(ACPContentBlock.self, forKey: .content))
-        case "agent_thought_chunk":  self = .agentThoughtChunk(try c.decode(ACPContentBlock.self, forKey: .content))
+        case "user_message_chunk":   self = .userMessageChunk(try ACPTextChunk(from: decoder))
+        case "agent_message_chunk":  self = .agentMessageChunk(try ACPTextChunk(from: decoder))
+        case "agent_thought_chunk":  self = .agentThoughtChunk(try ACPTextChunk(from: decoder))
         case "tool_call":
             self = .toolCall(try ACPToolCallPayload(from: decoder))
         case "tool_call_update":
@@ -77,11 +89,11 @@ enum ACPSessionUpdate: Codable, Equatable {
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
         case .userMessageChunk(let b):  try c.encode("user_message_chunk", forKey: .sessionUpdate)
-        try c.encode(b, forKey: .content)
+        try b.encodeFields(to: encoder)
         case .agentMessageChunk(let b): try c.encode("agent_message_chunk", forKey: .sessionUpdate)
-        try c.encode(b, forKey: .content)
+        try b.encodeFields(to: encoder)
         case .agentThoughtChunk(let b): try c.encode("agent_thought_chunk", forKey: .sessionUpdate)
-        try c.encode(b, forKey: .content)
+        try b.encodeFields(to: encoder)
         case .plan(let e):              try c.encode("plan", forKey: .sessionUpdate)
         try c.encode(e, forKey: .entries)
         case .availableModelsUpdate(let m): try c.encode("available_models_update", forKey: .sessionUpdate)
@@ -97,6 +109,26 @@ enum ACPSessionUpdate: Codable, Equatable {
         case .availableCommandsUpdate: break // not produced by us
         case .toolCall, .toolCallUpdate, .usageUpdate, .unknown: break
         }
+    }
+}
+
+struct ACPTextChunk: Codable, Equatable {
+    let messageId: String?
+    let content: ACPContentBlock
+
+    init(messageId: String? = nil, content: ACPContentBlock) {
+        self.messageId = messageId
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messageId, content
+    }
+
+    func encodeFields(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(messageId, forKey: .messageId)
+        try c.encode(content, forKey: .content)
     }
 }
 

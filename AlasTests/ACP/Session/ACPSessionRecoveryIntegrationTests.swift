@@ -73,7 +73,7 @@ struct ACPSessionRecoveryIntegrationTests {
 
         #expect(session.hydrationState == .ready)
         #expect(session.transcript.messages.count == 1)
-        if case .user(_, let text, _) = session.transcript.messages.first! {
+        if case .user(_, _, let text, _) = session.transcript.messages.first! {
             #expect(text == "persisted hello")
         } else {
             Issue.record("expected hydrated transcript head to be a user message")

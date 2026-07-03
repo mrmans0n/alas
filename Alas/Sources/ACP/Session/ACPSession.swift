@@ -157,9 +157,9 @@ final class ACPSession: ObservableObject, Identifiable {
     var hasConversationTranscript: Bool {
         transcript.messages.contains { message in
             switch message {
-            case .user(_, let text, _):
+            case .user(_, _, let text, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .agent(_, let buffer):
+            case .agent(_, _, let buffer):
                 return !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             default:
                 return false
@@ -218,7 +218,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
-        transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
+        transcript.messages.append(.user(id: UUID(), messageId: nil, text: text, attachments: attachments))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         if titleSource == .placeholder {
@@ -244,23 +244,29 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
         switch update {
-        case .agentMessageChunk(let block):
+        case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
-            let txt = text(of: block)
-            let i = appendStreaming(text: txt, locate: { lastAgent() },
-                                    makeNew: { .agent(id: UUID(), StreamingText(txt)) })
+            let txt = text(of: chunk.content)
+            let i = appendStreaming(
+                text: txt,
+                messageId: chunk.messageId,
+                locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
+                locateLegacy: { lastAgent() },
+                makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) })
             return [i]
-        case .userMessageChunk(let block):
-            // Agents rarely emit these; treat as informational.
-            transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
-            didAppendTranscriptMessage()
-            transcript.completedOutputBoundaryMessageIds.removeAll()
-            return [transcript.messages.count - 1]
-        case .agentThoughtChunk(let block):
+        case .userMessageChunk(let chunk):
+            let txt = text(of: chunk.content)
+            let i = appendUserChunk(text: txt, messageId: chunk.messageId)
+            return [i]
+        case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
-            let txt = text(of: block)
-            let i = appendStreaming(text: txt, locate: { lastThought() },
-                                    makeNew: { .thought(id: UUID(), StreamingText(txt)) })
+            let txt = text(of: chunk.content)
+            let i = appendStreaming(
+                text: txt,
+                messageId: chunk.messageId,
+                locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
+                locateLegacy: { lastThought() },
+                makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) })
             return [i]
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
@@ -762,11 +768,57 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         return nil
     }
+
+    private enum TextMessageKind {
+        case user
+        case agent
+        case thought
+    }
+
+    private func messageIndex(messageId: String, kind: TextMessageKind) -> Int? {
+        transcript.messages.firstIndex { message in
+            switch (kind, message) {
+            case (.user, .user(_, let existing, _, _)),
+                 (.agent, .agent(_, let existing, _)),
+                 (.thought, .thought(_, let existing, _)):
+                return existing == messageId
+            default:
+                return false
+            }
+        }
+    }
+
+    private func appendUserChunk(text addition: String, messageId: String?) -> Int {
+        let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
+        if let i = located,
+           case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            transcript.messages[i] = .user(
+                id: id,
+                messageId: existingMessageId,
+                text: text + Self.streamingSeparator(between: text, and: addition) + addition,
+                attachments: attachments)
+            transcript.streamingTick &+= 1
+            return i
+        }
+
+        transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: []))
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        return transcript.messages.count - 1
+    }
+
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
-                                locate: () -> Int?,
+                                messageId: String?,
+                                locateByMessageId: (String) -> Int?,
+                                locateLegacy: () -> Int?,
                                 makeNew: () -> ACPMessage) -> Int {
-        if let i = locate() {
+        let located = if let messageId {
+            locateByMessageId(messageId)
+        } else {
+            locateLegacy()
+        }
+        if let i = located {
             let stableId = transcript.messages[i].stableId
             if transcript.completedOutputBoundaryMessageIds.contains(stableId) {
                 // Discard if boundary crossings are not allowed — this chunk
@@ -776,7 +828,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 transcript.completedOutputBoundaryMessageIds.remove(stableId)
             } else {
                 switch transcript.messages[i] {
-                case .agent(_, let buf), .thought(_, let buf):
+                case .agent(_, _, let buf), .thought(_, _, let buf):
                     buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
                     transcript.streamingTick &+= 1
                     return i

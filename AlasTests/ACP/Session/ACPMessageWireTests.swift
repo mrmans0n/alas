@@ -13,7 +13,7 @@ struct ACPMessageWireTests {
             attachments: [.init(uri: "file:///x.txt", name: "x.txt")])
         let payload = try ACPMessageCodec.encode(original)
         let wire = try ACPMessageWire.decode(kind: "user", payload: payload)
-        guard case let .user(text, attachments) = wire else {
+        guard case let .user(_, text, attachments) = wire else {
             #expect(Bool(false), "expected .user, got \(wire)")
             return
         }
@@ -23,14 +23,16 @@ struct ACPMessageWireTests {
 
     @Test("decode round-trips agent text")
     func agentRoundTrip() throws {
-        let original: ACPMessage = .agent(id: UUID(), StreamingText("agent prose"))
+        let original: ACPMessage = .agent(id: UUID(), messageId: "agent-1", StreamingText("agent prose"))
         let payload = try ACPMessageCodec.encode(original)
         let wire = try ACPMessageWire.decode(kind: "agent", payload: payload)
-        guard case let .agent(text) = wire else {
+        guard case let .agent(messageId, text) = wire else {
             #expect(Bool(false), "expected .agent, got \(wire)")
             return
         }
+        #expect(messageId == "agent-1")
         #expect(text == "agent prose")
+        #expect(wire.toMessage().stableId == "agent-1")
     }
 
     @Test("decode round-trips tool call")
@@ -84,11 +86,11 @@ struct ACPMessageWireTests {
 
     @Test("toMessage produces ACPMessage with fresh ids")
     func toMessage() throws {
-        let wire: ACPMessageWire = .agent(text: "x")
+        let wire: ACPMessageWire = .agent(messageId: nil, text: "x")
         let m1 = wire.toMessage()
         let m2 = wire.toMessage()
         // Same wire, different UUIDs each call (matches existing decode behavior).
-        guard case let .agent(id1, _) = m1, case let .agent(id2, _) = m2 else {
+        guard case let .agent(id1, _, _) = m1, case let .agent(id2, _, _) = m2 else {
             #expect(Bool(false))
             return
         }

@@ -97,7 +97,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/load"])
         #expect(session.transcript.messages.count == 3)
         #expect(try store.loadMessages(sessionId: "local").count == 3)
-        guard case .user(_, let text, let attachments) = session.transcript.messages[0] else {
+        guard case .user(_, _, let text, let attachments) = session.transcript.messages[0] else {
             Issue.record("Expected hydrated user message to remain first")
             return
         }
@@ -108,7 +108,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
         client.emit(.init(sessionId: "remote-restored", update: .agentMessageChunk(.text("live follow-up"))))
         try await waitUntil { session.transcript.messages.count == 4 }
-        guard case .agent(_, let liveText) = session.transcript.messages[3] else {
+        guard case .agent(_, _, let liveText) = session.transcript.messages[3] else {
             Issue.record("Expected post-load live update to be applied")
             return
         }
@@ -238,7 +238,7 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.attach(to: session.id, freshlyCreated: true)
         try await waitUntil { session.transcript.messages.count == 1 }
 
-        guard case .agent(_, let text) = session.transcript.messages[0] else {
+        guard case .agent(_, _, let text) = session.transcript.messages[0] else {
             Issue.record("Expected fresh session update to be applied")
             return
         }
@@ -277,7 +277,7 @@ struct ACPSessionManagerAttachRestoreTests {
                 && session.queue.isEmpty
         }
         #expect(session.transcript.messages.count == 2)
-        guard case .user(_, let text, _) = session.transcript.messages[1] else {
+        guard case .user(_, _, let text, _) = session.transcript.messages[1] else {
             Issue.record("Expected queued prompt to append after hydrated transcript")
             return
         }

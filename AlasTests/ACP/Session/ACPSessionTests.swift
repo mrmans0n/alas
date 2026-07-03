@@ -11,7 +11,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("hello ")))
         session.apply(.agentMessageChunk(.text("world")))
         #expect(session.transcript.messages.count == 1)
-        if case .agent(_, let buf) = session.transcript.messages[0] { #expect(buf.value == "hello world") }
+        if case .agent(_, _, let buf) = session.transcript.messages[0] { #expect(buf.value == "hello world") }
         else { Issue.record("expected single agent message") }
     }
 
@@ -21,7 +21,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("Compacting completed.")))
         session.apply(.agentMessageChunk(.text("Running the pull tests.")))
         #expect(session.transcript.messages.count == 1)
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "Compacting completed.\nRunning the pull tests.")
         } else { Issue.record("expected single agent message") }
     }
@@ -31,7 +31,7 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.apply(.agentMessageChunk(.text("line one\n")))
         session.apply(.agentMessageChunk(.text("line two")))
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "line one\nline two")
         } else { Issue.record("expected single agent message") }
     }
@@ -42,7 +42,7 @@ struct ACPSessionTests {
         // Lowercase word before `!` with preceding whitespace → separator.
         session.apply(.agentMessageChunk(.text("All done!")))
         session.apply(.agentMessageChunk(.text("Next task")))
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "All done!\nNext task")
         } else { Issue.record("expected single agent message") }
     }
@@ -53,7 +53,7 @@ struct ACPSessionTests {
         // `Foo` is CamelCase → no separator (protects identifiers).
         session.apply(.agentMessageChunk(.text("Foo.")))
         session.apply(.agentMessageChunk(.text("Bar")))
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "Foo.Bar")
         } else { Issue.record("expected single agent message") }
     }
@@ -65,7 +65,7 @@ struct ACPSessionTests {
         // walking back past the punctuation and must not inject a newline.
         session.apply(.agentMessageChunk(.text(".")))
         session.apply(.agentMessageChunk(.text("Next task")))
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == ".Next task")
         } else { Issue.record("expected single agent message") }
     }
@@ -77,7 +77,7 @@ struct ACPSessionTests {
         // (qualified identifier at chunk start) → no separator.
         session.apply(.agentMessageChunk(.text("package.")))
         session.apply(.agentMessageChunk(.text("Type")))
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "package.Type")
         } else { Issue.record("expected single agent message") }
     }
@@ -88,7 +88,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("See the API docs.")))
         session.apply(.agentMessageChunk(.text("API")))
         // "API" — first char 'A' (upper), second char 'P' (upper, not [a-z]) → no separator
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "See the API docs.API")
         } else { Issue.record("expected single agent message") }
     }
@@ -99,7 +99,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("See https://example.com.")))
         session.apply(.agentMessageChunk(.text("Path")))
         // `com.` is preceded by `/` (URL tail) → no separator.
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "See https://example.com.Path")
         } else { Issue.record("expected single agent message") }
     }
@@ -110,7 +110,7 @@ struct ACPSessionTests {
         session.apply(.agentThoughtChunk(.text("First thought.")))
         session.apply(.agentThoughtChunk(.text("Second thought.")))
         #expect(session.transcript.messages.count == 1)
-        if case .thought(_, let buf) = session.transcript.messages[0] {
+        if case .thought(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "First thought.\nSecond thought.")
         } else { Issue.record("expected single thought message") }
     }
@@ -123,8 +123,8 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("next task output")))
 
         #expect(session.transcript.messages.count == 2)
-        if case .agent(_, let first) = session.transcript.messages[0],
-           case .agent(_, let second) = session.transcript.messages[1] {
+        if case .agent(_, _, let first) = session.transcript.messages[0],
+           case .agent(_, _, let second) = session.transcript.messages[1] {
             #expect(first.value == "first task output")
             #expect(second.value == "next task output")
         } else {
@@ -138,7 +138,7 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("line one\nline two")))
         session.markCompletedOutputBoundary()
 
-        if case .agent(_, let buf) = session.transcript.messages[0] {
+        if case .agent(_, _, let buf) = session.transcript.messages[0] {
             #expect(buf.value == "line one\nline two")
         } else {
             Issue.record("expected agent message")
@@ -154,9 +154,9 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("second task")))
 
         #expect(session.transcript.messages.count == 3)
-        if case .agent(_, let first) = session.transcript.messages[0],
+        if case .agent(_, _, let first) = session.transcript.messages[0],
            case .plan = session.transcript.messages[1],
-           case .agent(_, let second) = session.transcript.messages[2] {
+           case .agent(_, _, let second) = session.transcript.messages[2] {
             #expect(first.value == "first task")
             #expect(second.value == "second task")
         } else {
@@ -173,9 +173,9 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("next task")))
 
         #expect(session.transcript.messages.count == 3)
-        if case .agent(_, let first) = session.transcript.messages[0],
-           case .thought(_, let thought) = session.transcript.messages[1],
-           case .agent(_, let second) = session.transcript.messages[2] {
+        if case .agent(_, _, let first) = session.transcript.messages[0],
+           case .thought(_, _, let thought) = session.transcript.messages[1],
+           case .agent(_, _, let second) = session.transcript.messages[2] {
             #expect(first.value == "visible answer")
             #expect(thought.value == "trailing thought")
             #expect(second.value == "next task")
@@ -194,10 +194,10 @@ struct ACPSessionTests {
         session.apply(.agentMessageChunk(.text("second answer")))
 
         #expect(session.transcript.messages.count == 4)
-        if case .agent(_, let first) = session.transcript.messages[0],
-           case .thought(_, let firstThought) = session.transcript.messages[1],
-           case .thought(_, let secondThought) = session.transcript.messages[2],
-           case .agent(_, let second) = session.transcript.messages[3] {
+        if case .agent(_, _, let first) = session.transcript.messages[0],
+           case .thought(_, _, let firstThought) = session.transcript.messages[1],
+           case .thought(_, _, let secondThought) = session.transcript.messages[2],
+           case .agent(_, _, let second) = session.transcript.messages[3] {
             #expect(first.value == "first answer")
             #expect(firstThought.value == "first thought")
             #expect(secondThought.value == "next thought")
@@ -212,7 +212,7 @@ struct ACPSessionTests {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.recordUserPrompt(text: "hi", attachments: [])
         #expect(session.transcript.messages.count == 1)
-        if case .user(_, let text, _) = session.transcript.messages[0] { #expect(text == "hi") }
+        if case .user(_, _, let text, _) = session.transcript.messages[0] { #expect(text == "hi") }
         else { Issue.record("expected user message") }
     }
 

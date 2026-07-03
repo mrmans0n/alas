@@ -21,7 +21,8 @@ struct ACPGeminiE2ETests {
         let got = await withTimeout(seconds: 30) { () async -> String? in
             var collected = ""
             for await u in client.incomingUpdates {
-                if case .agentMessageChunk(.text(let s)) = u.update {
+                if case .agentMessageChunk(let chunk) = u.update,
+                   case .text(let s) = chunk.content {
                     collected += s
                     if collected.count > 3 { return collected }
                 }

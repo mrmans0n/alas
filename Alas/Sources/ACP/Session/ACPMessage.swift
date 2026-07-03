@@ -1,20 +1,34 @@
 import Foundation
 
 enum ACPMessage: Equatable {
-    case user(id: UUID, text: String, attachments: [Attachment])
-    case agent(id: UUID, StreamingText)
-    case thought(id: UUID, StreamingText)
+    case user(id: UUID, messageId: String?, text: String, attachments: [Attachment])
+    case agent(id: UUID, messageId: String?, StreamingText)
+    case thought(id: UUID, messageId: String?, StreamingText)
     case toolCall(ToolCall)
     case fileEdit(id: UUID, FileEdit)
     case plan(id: UUID, [PlanItem])
     case systemNotice(id: UUID, text: String)
 
+    static func user(id: UUID, text: String, attachments: [Attachment]) -> ACPMessage {
+        .user(id: id, messageId: nil, text: text, attachments: attachments)
+    }
+
+    static func agent(id: UUID, _ text: StreamingText) -> ACPMessage {
+        .agent(id: id, messageId: nil, text)
+    }
+
+    static func thought(id: UUID, _ text: StreamingText) -> ACPMessage {
+        .thought(id: id, messageId: nil, text)
+    }
+
     var stableId: String {
         switch self {
-        case .user(let id, _, _),
-             .agent(let id, _),
-             .thought(let id, _),
-             .fileEdit(let id, _),
+        case .user(let id, let messageId, _, _):
+            return messageId ?? id.uuidString
+        case .agent(let id, let messageId, _),
+             .thought(let id, let messageId, _):
+            return messageId ?? id.uuidString
+        case .fileEdit(let id, _),
              .plan(let id, _),
              .systemNotice(let id, _):
             return id.uuidString
@@ -224,9 +238,9 @@ enum ACPMessageCodec {
     @MainActor
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
-        case .user(_, let text, let atts): return try encoder.encode(UserPayload(text: text, attachments: atts))
-        case .agent(_, let buf):            return try encoder.encode(TextPayload(text: buf.value))
-        case .thought(_, let buf):          return try encoder.encode(TextPayload(text: buf.value))
+        case .user(_, let messageId, let text, let atts): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts))
+        case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
+        case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
         case .toolCall(let tc):             return try encoder.encode(tc)
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
         case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
@@ -239,11 +253,13 @@ enum ACPMessageCodec {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(id: UUID(), text: p.text, attachments: p.attachments)
+            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments)
         case "agent":
-            return .agent(id: UUID(), StreamingText(try JSONDecoder().decode(TextPayload.self, from: payload).text))
+            let p = try JSONDecoder().decode(TextPayload.self, from: payload)
+            return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text))
         case "thought":
-            return .thought(id: UUID(), StreamingText(try JSONDecoder().decode(TextPayload.self, from: payload).text))
+            let p = try JSONDecoder().decode(TextPayload.self, from: payload)
+            return .thought(id: UUID(), messageId: p.messageId, StreamingText(p.text))
         case "tool_call":
             return .toolCall(try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload))
         case "file_edit":
@@ -257,8 +273,25 @@ enum ACPMessageCodec {
         }
     }
 
-    private struct TextPayload: Codable { let text: String }
-    private struct UserPayload: Codable { let text: String
-    let attachments: [ACPMessage.Attachment] }
+    private struct TextPayload: Codable {
+        let messageId: String?
+        let text: String
+
+        init(messageId: String? = nil, text: String) {
+            self.messageId = messageId
+            self.text = text
+        }
+    }
+    private struct UserPayload: Codable {
+        let messageId: String?
+        let text: String
+        let attachments: [ACPMessage.Attachment]
+
+        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment]) {
+            self.messageId = messageId
+            self.text = text
+            self.attachments = attachments
+        }
+    }
     private struct PlanPayload: Codable { let items: [ACPMessage.PlanItem] }
 }

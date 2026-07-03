@@ -24,6 +24,47 @@ struct ACPMessageStableIdTests {
         #expect(s.transcript.messages[0].stableId == id1)
     }
 
+    @Test("agent chunks with messageId use it as stable id and append by id")
+    func agentChunksUseMessageId() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text("hello"))))
+        s.apply(.agentThoughtChunk(.init(messageId: "thought-1", content: .text("thinking"))))
+        s.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text(" world"))))
+
+        #expect(s.transcript.messages.count == 2)
+        #expect(s.transcript.messages[0].stableId == "agent-1")
+        if case .agent(_, _, let text) = s.transcript.messages[0] {
+            #expect(text.value == "hello world")
+        } else {
+            Issue.record("expected agent message")
+        }
+    }
+
+    @Test("different messageIds create separate transcript rows")
+    func differentMessageIdsCreateRows() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text("one"))))
+        s.apply(.agentMessageChunk(.init(messageId: "agent-2", content: .text("two"))))
+
+        #expect(s.transcript.messages.map(\.stableId) == ["agent-1", "agent-2"])
+    }
+
+    @Test("user chunks with messageId use it as stable id and append by id")
+    func userChunksUseMessageId() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("hello"))))
+        s.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text("reply"))))
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text(" world"))))
+
+        #expect(s.transcript.messages.map(\.stableId) == ["user-1", "agent-1"])
+        if case .user(_, _, let text, let attachments) = s.transcript.messages[0] {
+            #expect(text == "hello world")
+            #expect(attachments.isEmpty)
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("toolCall row stable id matches its toolCallId")
     func toolCallId() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

@@ -82,7 +82,7 @@ struct ACPMessageList: View {
         if let last = transcript.messages.last {
             hasher.combine(last.kind)
             switch last {
-            case .agent(_, let buf), .thought(_, let buf):
+            case .agent(_, _, let buf), .thought(_, _, let buf):
                 hasher.combine(buf.value.count)
             case .systemNotice(_, let t):
                 hasher.combine(t.count)
@@ -94,7 +94,7 @@ struct ACPMessageList: View {
                 hasher.combine(e.removed)
             case .plan:
                 break
-            case .user(_, let t, _):
+            case .user(_, _, let t, _):
                 hasher.combine(t.count)
             }
         }
@@ -734,7 +734,7 @@ struct ACPMessageList: View {
     @ViewBuilder
     private func row(for m: ACPMessage) -> some View {
         switch m {
-        case .user(_, let text, let attachments):
+        case .user(_, _, let text, let attachments):
             ACPMessageGutter(markdown: { text }) {
                 UserMessageRow(
                     text: text,
@@ -743,16 +743,16 @@ struct ACPMessageList: View {
                     typography: typography
                 )
             }
-        case .agent(let id, let buf):
+        case .agent(_, _, let buf):
             ACPMessageGutter(markdown: { buf.value }) {
                 AgentMessageRow(
-                    messageId: id.uuidString,
+                    messageId: Self.markdownCacheMessageId(for: m),
                     transcript: transcript,
                     buffer: buf,
                     typography: typography
                 )
             }
-        case .thought(_, let buf):
+        case .thought(_, _, let buf):
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
             ACPToolCallCard(
@@ -768,6 +768,10 @@ struct ACPMessageList: View {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }
+    }
+
+    static func markdownCacheMessageId(for message: ACPMessage) -> String {
+        message.stableId
     }
 }
 

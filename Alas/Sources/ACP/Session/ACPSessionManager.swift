@@ -457,9 +457,9 @@ final class ACPSessionManager: ObservableObject {
     private static func wireMessagesHaveConversation(_ wires: [ACPMessageWire]) -> Bool {
         wires.contains { wire in
             switch wire {
-            case let .user(text, _):
+            case let .user(_, text, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case let .agent(text):
+            case let .agent(_, text):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             default:
                 return false

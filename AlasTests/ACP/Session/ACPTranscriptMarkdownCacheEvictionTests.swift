@@ -27,6 +27,13 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         }
     }
 
+    @Test("agent rows with ACP messageId use stable id for markdown cache")
+    func agentMessageIdCacheKey() {
+        let message = ACPMessage.agent(id: UUID(), messageId: "agent-1", StreamingText("hello"))
+
+        #expect(ACPMessageList.markdownCacheMessageId(for: message) == "agent-1")
+    }
+
     @Test("setVisibleHead is idempotent at the same value")
     func idempotent() {
         let t = ACPTranscript()
