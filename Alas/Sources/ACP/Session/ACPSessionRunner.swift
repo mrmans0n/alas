@@ -1180,30 +1180,32 @@ extension ACPSessionRunner {
                 await MainActor.run {
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
-                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
                     }
-                    if !hasNewerActivePrompt {
-                        onCompleted?(isActivePrompt && !wasCancelled)
-                    }
+                    // Always resolve the recovery status, even when a newer
+                    // prompt (e.g. the user steered) has taken over the
+                    // transport. Unlike `sendNow`, whose completion legitimately
+                    // hands UI state to its successor turn, this callback is the
+                    // ONLY thing that clears the "Restoring…" spinner — skipping
+                    // it on supersession strands the spinner forever.
+                    onCompleted?(isActivePrompt && !wasCancelled)
                 }
             } catch {
                 await MainActor.run {
                     _ = self.cancelledPromptIDs.remove(promptID)
                     let isActivePrompt = self.activePromptID == promptID
-                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.flushStreamingPersist()
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
                     }
-                    if !hasNewerActivePrompt {
-                        onCompleted?(false)
-                    }
+                    // See the success path above: the recovery status must
+                    // resolve regardless of supersession or the spinner strands.
+                    onCompleted?(false)
                 }
             }
         }

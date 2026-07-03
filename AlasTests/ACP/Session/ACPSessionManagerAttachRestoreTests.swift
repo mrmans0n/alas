@@ -957,6 +957,60 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(second.prompt == [.text("normal prompt")])
     }
 
+    @Test("recovery context superseded by a steer clears the restoring status")
+    func recoveryContextSupersededBySteerClearsStatus() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-new"))
+        try appendMessage(
+            .user(id: UUID(), text: "What changed?", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let client = ACPMockClient()
+        let recoveryGate = PromptGate()
+        let steerGate = PromptGate()
+        let promptCount = PromptCounter()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
+        // Gate the first (recovery) prompt so it stays in flight while the
+        // user steers, and hold the steer's replacement prompt so it still
+        // owns the transport when the recovery RPC finally returns.
+        client.scriptAsync(method: "session/prompt") { _ in
+            switch await promptCount.next() {
+            case 1: await recoveryGate.waitInPrompt()
+            case 2: await steerGate.waitInPrompt()
+            default: break
+            }
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id])
+        session.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
+
+        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
+        #expect(session.contextRecoveryStatus == .sendingTranscript)
+        try await waitUntilAsync { await recoveryGate.hasEntered }
+
+        // User steers a new prompt while the recovery context is still in
+        // flight — the steer's replacement prompt takes over the transport.
+        runner.steer(blocks: [.text("actually do this instead")])
+        try await waitUntilAsync { await steerGate.hasEntered }
+
+        // The recovery RPC now returns, superseded by the steer. The
+        // "Restoring…" spinner must resolve rather than strand forever.
+        await recoveryGate.release()
+        try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
+
+        await steerGate.release()
+    }
+
     @Test("transcript context prompt requires conversation")
     func transcriptContextPromptRequiresConversation() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1224,6 +1278,15 @@ struct ACPSessionManagerAttachRestoreTests {
             released = true
             continuation?.resume()
             continuation = nil
+        }
+    }
+
+    private actor PromptCounter {
+        private var count = 0
+
+        func next() -> Int {
+            count += 1
+            return count
         }
     }
 }
