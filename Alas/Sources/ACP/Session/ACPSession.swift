@@ -815,14 +815,7 @@ final class ACPSession: ObservableObject, Identifiable {
             return i
         }
 
-        guard !addition.isEmpty else {
-            transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
-            didAppendTranscriptMessage()
-            transcript.completedOutputBoundaryMessageIds.removeAll()
-            return transcript.messages.count - 1
-        }
-
-        if let i = lastEchoedLocalUserPromptIndex(matching: addition),
+        if let i = lastEchoedLocalUserPromptIndex(matching: addition, attachments: newAttachments),
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
             if existingMessageId == nil {
                 if let messageId {
@@ -840,6 +833,13 @@ final class ACPSession: ObservableObject, Identifiable {
             return i
         }
 
+        guard !addition.isEmpty else {
+            transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
+            didAppendTranscriptMessage()
+            transcript.completedOutputBoundaryMessageIds.removeAll()
+            return transcript.messages.count - 1
+        }
+
         transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -855,13 +855,16 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func lastEchoedLocalUserPromptIndex(matching text: String) -> Int? {
-        guard !text.isEmpty else { return nil }
+    private func lastEchoedLocalUserPromptIndex(matching text: String, attachments: [ACPMessage.Attachment]) -> Int? {
+        guard !text.isEmpty || !attachments.isEmpty else { return nil }
         return transcript.messages.indices.reversed().first { index in
-            if case .user(let id, let messageId, let existing, _) = transcript.messages[index] {
-                return messageId == nil
-                    && (existing.hasPrefix(text)
-                        || (reconciledLegacyLocalUserPromptIds.contains(id) && existing.contains(text)))
+            if case .user(let id, let messageId, let existing, let existingAttachments) = transcript.messages[index] {
+                guard messageId == nil else { return false }
+                if !text.isEmpty {
+                    return existing.hasPrefix(text)
+                        || (reconciledLegacyLocalUserPromptIds.contains(id) && existing.contains(text))
+                }
+                return attachments.allSatisfy { existingAttachments.contains($0) }
             }
             return false
         }

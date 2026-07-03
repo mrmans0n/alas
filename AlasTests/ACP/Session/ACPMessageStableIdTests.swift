@@ -128,6 +128,30 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("attachment-only user_message_chunk echo updates local prompt instead of duplicating")
+    func attachmentOnlyUserMessageChunkEchoUpdatesLocalPrompt() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let attachment = ACPMessage.Attachment(
+            uri: "file:///tmp/screenshot.jpg",
+            name: "screenshot.jpg",
+            mimeType: "image/jpeg")
+        s.recordUserPrompt(text: "", attachments: [attachment])
+
+        let changed = s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .image(data: nil, uri: "file:///tmp/screenshot.jpg", mimeType: "image/jpeg"))))
+
+        #expect(changed == [0])
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == "user-1")
+            #expect(text == "")
+            #expect(attachments == [attachment])
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("ACP messageIds are namespaced by text row kind")
     func messageIdStableIdsAreNamespaced() async {
         let user = ACPMessage.user(id: UUID(), messageId: "same", text: "u", attachments: [])
