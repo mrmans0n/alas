@@ -18,11 +18,12 @@ enum ACPSessionUpdate: Codable, Equatable {
     case sessionConfigOptionsUpdate([ACPConfigOption])
     case availableCommandsUpdate([ACPPromptSuggestion])
     case usageUpdate(ACPUsageInfo)
+    case sessionInfoUpdate(ACPSessionInfoUpdate)
     case unknown(String)
 
     private enum Keys: String, CodingKey {
         case sessionUpdate, content, availableModels, modeId, modelId,
-             entries, availableCommands, configOptions
+             entries, availableCommands, configOptions, title, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +60,8 @@ enum ACPSessionUpdate: Codable, Equatable {
             })
         case "usage_update":
             self = .usageUpdate(try ACPUsageInfo(from: decoder))
+        case "session_info_update":
+            self = .sessionInfoUpdate(try ACPSessionInfoUpdate(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -94,6 +97,10 @@ enum ACPSessionUpdate: Codable, Equatable {
         case .sessionConfigOptionsUpdate(let opts):
             try c.encode("session_config_options_update", forKey: .sessionUpdate)
             try c.encode(opts, forKey: .configOptions)
+        case .sessionInfoUpdate(let info):
+            try c.encode("session_info_update", forKey: .sessionUpdate)
+            try c.encodeIfPresent(info.title, forKey: .title)
+            try c.encodeIfPresent(info.updatedAt, forKey: .updatedAt)
         case .availableCommandsUpdate: break // not produced by us
         case .toolCall, .toolCallUpdate, .usageUpdate, .unknown: break
         }
@@ -156,5 +163,23 @@ struct ACPUsageInfo: Codable, Equatable {
         used = try c.decode(Int.self, forKey: .used)
         size = try c.decode(Int.self, forKey: .size)
         cost = try? c.decodeIfPresent(Cost.self, forKey: .cost)
+    }
+}
+
+struct ACPSessionInfoUpdate: Codable, Equatable {
+    let title: String?
+    let updatedAt: String?
+
+    private enum CodingKeys: String, CodingKey { case title, updatedAt }
+
+    init(title: String?, updatedAt: String?) {
+        self.title = title
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        title = try? c.decodeIfPresent(String.self, forKey: .title)
+        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
     }
 }

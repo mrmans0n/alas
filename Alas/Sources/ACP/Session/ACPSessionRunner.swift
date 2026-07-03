@@ -1304,7 +1304,7 @@ extension ACPSessionRunner {
         case .userMessageChunk, .toolCall, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .unknown:
+             .usageUpdate, .sessionInfoUpdate, .unknown:
             return false
         }
     }
