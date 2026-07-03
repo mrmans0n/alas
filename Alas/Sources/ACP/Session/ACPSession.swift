@@ -800,7 +800,9 @@ final class ACPSession: ObservableObject, Identifiable {
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             let isReconciledEchoChunk = existingMessageId.map {
-                !addition.isEmpty && reconciledLocalUserPromptMessageIds.contains($0) && text.contains(addition)
+                !addition.isEmpty
+                    && text.contains(addition)
+                    && (reconciledLocalUserPromptMessageIds.contains($0) || text != addition)
             } == true && newAttachments.isEmpty
             if (text == addition && attachments == mergedAttachments)
                 || isReconciledEchoChunk {
