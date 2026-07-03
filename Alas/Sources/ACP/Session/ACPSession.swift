@@ -877,8 +877,10 @@ final class ACPSession: ObservableObject, Identifiable {
               let root = metadata.value as? [String: AnyCodable]
         else { return }
 
-        if let codex = root["codex"]?.value as? [String: AnyCodable],
-           let goal = codex["goal"] {
+        if let goal = root["goal"] {
+            currentGoal = Self.goalState(from: goal)
+        } else if let codex = root["codex"]?.value as? [String: AnyCodable],
+                  let goal = codex["goal"] {
             currentGoal = Self.goalState(from: goal)
         }
     }

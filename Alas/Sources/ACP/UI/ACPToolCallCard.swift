@@ -212,7 +212,12 @@ private struct ACPToolCallAssetView: View {
                 compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
             }
         case .resource:
-            compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
+            if asset.looksLikeImage, let image = asset.loadedImage(trustedRoot: trustedImageRoot) {
+                imageThumbnail(image)
+                    .help(asset.displayText)
+            } else {
+                compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
+            }
         }
     }
 
@@ -262,6 +267,17 @@ private struct ACPToolCallAssetView: View {
 }
 
 private extension ACPMessage.ToolCallAsset {
+    var looksLikeImage: Bool {
+        if mimeType?.lowercased().hasPrefix("image/") == true { return true }
+        guard let candidate = nonEmpty(uri) ?? nonEmpty(name) else { return false }
+        switch URL(fileURLWithPath: candidate).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp":
+            return true
+        default:
+            return false
+        }
+    }
+
     func loadedImage(trustedRoot: URL?) -> NSImage? {
         if let data, let decoded = Self.decodeBase64ImageData(data), let image = NSImage(data: decoded) {
             return image

@@ -532,6 +532,25 @@ struct ACPSessionTests {
         #expect(goal.tokenBudget == 12_000)
     }
 
+    @Test("session info applies top-level goal metadata")
+    func sessionInfoAppliesTopLevelGoalMetadata() async throws {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "goal": AnyCodable([
+                    "objective": AnyCodable("Surface generic ACP events"),
+                    "status": AnyCodable("in_progress"),
+                    "tokenBudget": AnyCodable(500)
+                ])
+            ]))))
+
+        let goal = try #require(session.currentGoal)
+        #expect(goal.objective == "Surface generic ACP events")
+        #expect(goal.status == "in_progress")
+        #expect(goal.tokenBudget == 500)
+    }
+
     @Test("session info clears goal on null goal")
     func sessionInfoClearsGoalOnNullGoal() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
