@@ -224,9 +224,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 try transport.send(body)
             } catch {
                 stateLock.lock()
-                pending.removeValue(forKey: id)
+                // If a concurrent drainPending (shutdown()/`.exited`) already
+                // removed and resumed this entry, `removeValue` returns nil
+                // here — in that case `cont` has already been resumed and we
+                // must not resume it again (that would trap).
+                let stillPending = pending.removeValue(forKey: id) != nil
                 stateLock.unlock()
-                cont.resume(throwing: error)
+                if stillPending { cont.resume(throwing: error) }
             }
         }
         return ACPResponse(body: data)
@@ -322,6 +326,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     /// Resumes and clears every pending outbound continuation exactly once.
     /// Safe to call from both `shutdown()` and the `.exited` handler; the
     /// second caller is a no-op (double-resuming a CheckedContinuation traps).
+    /// This can also race a concurrent `send(_:)` whose `transport.send`
+    /// subsequently throws for the same `id`; `send(_:)` guards against
+    /// double-resuming in that case by only resuming if its own
+    /// `pending.removeValue` still found the entry.
     private func drainPending(with error: Error) {
         stateLock.lock()
         if didDrainPending {

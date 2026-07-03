@@ -54,18 +54,31 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
-    /// Runs `work`, but returns nil if it doesn't finish within `timeout`.
-    private func firstToFinish<T: Sendable>(
-        _ timeout: Duration,
+    private final class ResultBox<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: T?
+        func set(_ v: T) { lock.lock(); value = v; lock.unlock() }
+        func get() -> T? { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    /// Runs `work` in a detached task and returns its result, or nil if it
+    /// does not finish within roughly `steps * step`. A work item that never
+    /// completes (e.g. a parked continuation on a regressed drain) is
+    /// abandoned rather than awaited, so a regression surfaces as a bounded
+    /// nil result instead of hanging the whole test run.
+    private func boundedResult<T: Sendable>(
+        steps: Int = 150,
+        step: Duration = .milliseconds(20),
         _ work: @escaping @Sendable () async -> T
     ) async -> T? {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask { await work() }
-            group.addTask { try? await Task.sleep(for: timeout); return nil }
-            let result = await group.next() ?? nil
-            group.cancelAll()
-            return result
+        let box = ResultBox<T>()
+        let task = Task.detached { box.set(await work()) }
+        for _ in 0..<steps {
+            if let v = box.get() { return v }
+            try? await Task.sleep(for: step)
         }
+        task.cancel()
+        return box.get()
     }
 
     @Test("shutdown resumes an in-flight request even when the transport never emits .exited")
@@ -76,7 +89,7 @@ struct ACPStdioClientTests {
         try? client.start()
 
         // Fire a request the fake never answers; shutdown must unblock it.
-        async let threw = firstToFinish(.seconds(3)) { () -> Bool in
+        async let threw = boundedResult { () -> Bool in
             do {
                 _ = try await client.send(ACPRequest(
                     method: "session/prompt",
@@ -98,7 +111,7 @@ struct ACPStdioClientTests {
         let client = ACPStdioClient.makeForTesting(transport: transport)
         try? client.start()
 
-        async let threw = firstToFinish(.seconds(3)) { () -> Bool in
+        async let threw = boundedResult { () -> Bool in
             do {
                 _ = try await client.send(ACPRequest(
                     method: "session/prompt",
@@ -121,7 +134,7 @@ struct ACPStdioClientTests {
         try? client.start()
         let connection = ACPConnection(client: client)
 
-        async let threw = firstToFinish(.seconds(3)) { () -> Bool in
+        async let threw = boundedResult { () -> Bool in
             do {
                 try await connection.prompt(sessionId: "s", blocks: [])
                 return false
