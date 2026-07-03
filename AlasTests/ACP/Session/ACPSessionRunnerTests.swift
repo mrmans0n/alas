@@ -663,6 +663,64 @@ struct ACPSessionRunnerTests {
         #expect(row.titleSource == .placeholder)
     }
 
+    @Test("session_info_update applies during load replay suppression")
+    func sessionInfoUpdateAppliesDuringLoadReplaySuppression() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-title-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "Old generated",
+            titleSource: .generated,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        var callbackTitles: [String] = []
+        let mock = ACPMockClient()
+        let session = ACPSession(
+            id: "s",
+            agentId: "claude",
+            worktreeId: "wt",
+            title: "Old generated",
+            titleSource: .generated
+        )
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true,
+            onSessionTitleUpdated: { callbackTitles.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(title: "Replayed Adapter Title", updatedAt: nil))
+        ))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("replayed"))))
+
+        try await waitUntil {
+            session.title == "Replayed Adapter Title"
+                && session.titleSource == .generated
+                && callbackTitles == ["Replayed Adapter Title"]
+        }
+
+        let row = try #require(try store.loadSession(id: "s"))
+        #expect(row.title == "Replayed Adapter Title")
+        #expect(row.titleSource == .generated)
+        #expect(session.transcript.messages.isEmpty)
+    }
+
     @Test("streaming chunks are persisted in a batch when streaming ends")
     func streamingChunksPersistAsBatchOnIdle() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

@@ -137,6 +137,14 @@ final class ACPSessionRunner {
                 await MainActor.run {
                     self.observedUpdateCount += 1
                     self.appliedUpdateCount += 1
+                    let handledSessionInfoUpdate: Bool
+                    if case .sessionInfoUpdate(let info) = u.update {
+                        self.flushStreamingPersist()
+                        self.applySessionInfoTitle(info)
+                        handledSessionInfoUpdate = true
+                    } else {
+                        handledSessionInfoUpdate = false
+                    }
                     if self.suppressingLoadReplay {
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
@@ -150,10 +158,7 @@ final class ACPSessionRunner {
                         }
                         return
                     }
-                    if case .sessionInfoUpdate(let info) = u.update {
-                        self.flushStreamingPersist()
-                        self.applySessionInfoTitle(info)
-                    } else {
+                    if !handledSessionInfoUpdate {
                         let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                         let dirty = self.session.apply(u.update)
                         if shouldBatchStreamingPersist {
