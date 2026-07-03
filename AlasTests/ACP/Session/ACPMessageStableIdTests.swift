@@ -65,6 +65,48 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("user chunks with resource links preserve attachments")
+    func userResourceChunksPreserveAttachments() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
+
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == "user-1")
+            #expect(text == "")
+            #expect(attachments == [
+                ACPMessage.Attachment(uri: "file:///tmp/example.swift", name: "example.swift")
+            ])
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
+    @Test("mixed user chunks with messageId keep text and attachments together")
+    func mixedUserChunksKeepTextAndAttachmentsTogether() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("see "))))
+        s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .image(data: nil, uri: "file:///tmp/screenshot.jpg", mimeType: "image/jpeg"))))
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("please"))))
+
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == "user-1")
+            #expect(text == "see please")
+            #expect(attachments == [
+                ACPMessage.Attachment(uri: "file:///tmp/screenshot.jpg", name: "screenshot.jpg", mimeType: "image/jpeg")
+            ])
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("ACP messageIds are namespaced by text row kind")
     func messageIdStableIdsAreNamespaced() async {
         let user = ACPMessage.user(id: UUID(), messageId: "same", text: "u", attachments: [])

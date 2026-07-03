@@ -259,7 +259,10 @@ final class ACPSession: ObservableObject, Identifiable {
             return [i]
         case .userMessageChunk(let chunk):
             let txt = text(of: chunk.content)
-            let i = appendUserChunk(text: txt, messageId: chunk.messageId)
+            let i = appendUserChunk(
+                text: txt,
+                attachments: ACPSessionRunner.attachments(of: [chunk.content]),
+                messageId: chunk.messageId)
             return [i]
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
@@ -791,14 +794,15 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func appendUserChunk(text addition: String, messageId: String?) -> Int {
+    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?) -> Int {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            let mergedAttachments = attachments + newAttachments
             let isReconciledEchoChunk = existingMessageId.map {
-                reconciledLocalUserPromptMessageIds.contains($0) && text.contains(addition)
-            } == true
-            if text == addition
+                !addition.isEmpty && reconciledLocalUserPromptMessageIds.contains($0) && text.contains(addition)
+            } == true && newAttachments.isEmpty
+            if (text == addition && attachments == mergedAttachments)
                 || isReconciledEchoChunk {
                 return i
             }
@@ -806,9 +810,16 @@ final class ACPSession: ObservableObject, Identifiable {
                 id: id,
                 messageId: existingMessageId,
                 text: text + Self.streamingSeparator(between: text, and: addition) + addition,
-                attachments: attachments)
+                attachments: mergedAttachments)
             transcript.streamingTick &+= 1
             return i
+        }
+
+        guard !addition.isEmpty else {
+            transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
+            didAppendTranscriptMessage()
+            transcript.completedOutputBoundaryMessageIds.removeAll()
+            return transcript.messages.count - 1
         }
 
         if let i = lastEchoedLocalUserPromptIndex(matching: addition),
@@ -819,7 +830,7 @@ final class ACPSession: ObservableObject, Identifiable {
                         id: id,
                         messageId: messageId,
                         text: text,
-                        attachments: attachments)
+                        attachments: attachments + newAttachments)
                     reconciledLocalUserPromptMessageIds.insert(messageId)
                     transcript.streamingTick &+= 1
                 } else {
@@ -829,14 +840,15 @@ final class ACPSession: ObservableObject, Identifiable {
             return i
         }
 
-        transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: []))
+        transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         return transcript.messages.count - 1
     }
 
     private func lastEchoedLocalUserPromptIndex(matching text: String) -> Int? {
-        transcript.messages.indices.reversed().first { index in
+        guard !text.isEmpty else { return nil }
+        return transcript.messages.indices.reversed().first { index in
             if case .user(let id, let messageId, let existing, _) = transcript.messages[index] {
                 return messageId == nil
                     && (existing.hasPrefix(text)
