@@ -28,7 +28,7 @@ struct ACPMessageTests {
             return
         }
         #expect(messageId == "agent-1")
-        #expect(back.stableId == "agent-1")
+        #expect(back.stableId == "acp-agent:agent-1")
         #expect(buf.value == "world")
     }
     @Test("tool call round-trips")

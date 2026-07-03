@@ -24,10 +24,11 @@ enum ACPMessage: Equatable {
     var stableId: String {
         switch self {
         case .user(let id, let messageId, _, _):
-            return messageId ?? id.uuidString
-        case .agent(let id, let messageId, _),
-             .thought(let id, let messageId, _):
-            return messageId ?? id.uuidString
+            return messageId.map { "acp-user:\($0)" } ?? id.uuidString
+        case .agent(let id, let messageId, _):
+            return messageId.map { "acp-agent:\($0)" } ?? id.uuidString
+        case .thought(let id, let messageId, _):
+            return messageId.map { "acp-thought:\($0)" } ?? id.uuidString
         case .fileEdit(let id, _),
              .plan(let id, _),
              .systemNotice(let id, _):

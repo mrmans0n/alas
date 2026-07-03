@@ -792,6 +792,9 @@ final class ACPSession: ObservableObject, Identifiable {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            if text == addition {
+                return i
+            }
             transcript.messages[i] = .user(
                 id: id,
                 messageId: existingMessageId,
@@ -801,10 +804,32 @@ final class ACPSession: ObservableObject, Identifiable {
             return i
         }
 
+        if let i = lastEchoedLocalUserPromptIndex(matching: addition),
+           case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            if existingMessageId == nil, messageId != nil {
+                transcript.messages[i] = .user(
+                    id: id,
+                    messageId: messageId,
+                    text: text,
+                    attachments: attachments)
+                transcript.streamingTick &+= 1
+            }
+            return i
+        }
+
         transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: []))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         return transcript.messages.count - 1
+    }
+
+    private func lastEchoedLocalUserPromptIndex(matching text: String) -> Int? {
+        transcript.messages.indices.reversed().first { index in
+            if case .user(_, let messageId, let existing, _) = transcript.messages[index] {
+                return messageId == nil && existing == text
+            }
+            return false
+        }
     }
 
     /// Returns the index of the message that was appended or mutated.

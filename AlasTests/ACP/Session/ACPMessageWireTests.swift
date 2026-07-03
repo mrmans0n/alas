@@ -32,7 +32,7 @@ struct ACPMessageWireTests {
         }
         #expect(messageId == "agent-1")
         #expect(text == "agent prose")
-        #expect(wire.toMessage().stableId == "agent-1")
+        #expect(wire.toMessage().stableId == "acp-agent:agent-1")
     }
 
     @Test("decode round-trips tool call")
