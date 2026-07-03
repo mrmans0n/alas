@@ -481,6 +481,133 @@ struct ACPSessionRunnerTests {
         #expect(rows[0].kind == "agent")
     }
 
+    @Test("session_info_update updates live session and persistence")
+    func sessionInfoUpdateRenamesGeneratedSession() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-title-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "Old generated",
+            titleSource: .generated,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        var callbackTitles: [String] = []
+        let mock = ACPMockClient()
+        let session = ACPSession(
+            id: "s",
+            agentId: "claude",
+            worktreeId: "wt",
+            title: "Old generated",
+            titleSource: .generated
+        )
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSessionTitleUpdated: { callbackTitles.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(title: "  Adapter Title  ", updatedAt: "2026-06-25T12:34:56Z"))
+        ))
+
+        try await waitUntil {
+            session.title == "Adapter Title"
+                && session.titleSource == .generated
+                && callbackTitles == ["Adapter Title"]
+        }
+
+        let row = try #require(try store.loadSession(id: "s"))
+        #expect(row.title == "Adapter Title")
+        #expect(row.titleSource == .generated)
+    }
+
+    @Test("session_info_update preserves manual title")
+    func sessionInfoUpdatePreservesManualTitle() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-title-manual-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "User Title",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        var callbackTitles: [String] = []
+        let mock = ACPMockClient()
+        let session = ACPSession(
+            id: "s",
+            agentId: "claude",
+            worktreeId: "wt",
+            title: "User Title",
+            titleSource: .manual
+        )
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            onSessionTitleUpdated: { callbackTitles.append($0) }
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(title: "Adapter Title", updatedAt: nil))
+        ))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let row = try #require(try store.loadSession(id: "s"))
+        #expect(session.title == "User Title")
+        #expect(session.titleSource == .manual)
+        #expect(row.title == "User Title")
+        #expect(row.titleSource == .manual)
+        #expect(callbackTitles.isEmpty)
+    }
+
+    @Test("session_info_update ignores empty title")
+    func sessionInfoUpdateIgnoresEmptyTitle() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(title: "   \n ", updatedAt: nil))
+        ))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let row = try #require(try runner.store.loadSession(id: "s"))
+        #expect(runner.session.title == "t")
+        #expect(row.title == "t")
+    }
+
     @Test("streaming chunks are persisted in a batch when streaming ends")
     func streamingChunksPersistAsBatchOnIdle() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

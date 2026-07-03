@@ -43,6 +43,7 @@ final class ACPSessionRunner {
     private let ownerInstanceId: String?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
+    private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var questionsTask: Task<Void, Never>?
@@ -92,6 +93,7 @@ final class ACPSessionRunner {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          ownerInstanceId: String? = nil)
@@ -105,6 +107,7 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
         self.onDirtyCheck = onDirtyCheck
@@ -147,13 +150,18 @@ final class ACPSessionRunner {
                         }
                         return
                     }
-                    let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
-                    let dirty = self.session.apply(u.update)
-                    if shouldBatchStreamingPersist {
-                        self.scheduleStreamingPersist(dirty)
-                    } else {
+                    if case .sessionInfoUpdate(let info) = u.update {
                         self.flushStreamingPersist()
-                        self.persistIndices(dirty)
+                        self.applySessionInfoTitle(info)
+                    } else {
+                        let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
+                        let dirty = self.session.apply(u.update)
+                        if shouldBatchStreamingPersist {
+                            self.scheduleStreamingPersist(dirty)
+                        } else {
+                            self.flushStreamingPersist()
+                            self.persistIndices(dirty)
+                        }
                     }
                     if self.applyPendingCompletedOutputBoundaryIfReady() {
                         self.flushQueueIfIdle()
@@ -514,6 +522,32 @@ final class ACPSessionRunner {
             }
             return
         }
+    }
+
+    func applySessionInfoTitle(_ info: ACPSessionInfoUpdate) {
+        guard holdsLeaseForWrite() else { return }
+        guard let rawTitle = info.title else { return }
+        let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard session.titleSource != .manual else { return }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        guard (try? store.updateGeneratedTitleIfNotManual(
+            id: sessionId,
+            title: trimmed,
+            updatedAt: now
+        )) == true else {
+            guard let row = try? store.loadSession(id: sessionId) else { return }
+            if row.titleSource == .manual {
+                session.title = row.title
+                session.titleSource = row.titleSource
+            }
+            return
+        }
+
+        session.title = trimmed
+        session.titleSource = .generated
+        onSessionTitleUpdated?(trimmed)
     }
 
     /// Returns `absolutePath` relative to the runner's worktree, or
