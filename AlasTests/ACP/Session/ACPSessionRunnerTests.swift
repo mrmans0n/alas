@@ -877,6 +877,34 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "hello world")
     }
 
+    @Test("stop() resolves a parked permission continuation as cancelled")
+    func stopResolvesParkedPermission() async throws {
+        let (runner, _) = try makeRunner()
+
+        // Park a permission decision: autoRun is off and nothing is logged,
+        // so evaluate() binds to the UI and suspends on its continuation.
+        let toolCall = ACPPermissionToolCall(
+            toolCallId: "call_1", title: nil, kind: nil, status: nil,
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: toolCall,
+            options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow_once"),
+                      ACPPermissionOption(optionId: "reject", name: "Reject", kind: "reject_once")])
+        async let decision = runner.policy.evaluate(
+            scopeKey: "scope",
+            options: params.options,
+            params: params)
+
+        // Give evaluate() a beat to register its continuation.
+        try? await Task.sleep(for: .milliseconds(100))
+
+        runner.stop()
+
+        let response = await decision
+        #expect(response.outcome == .cancelled)
+    }
+
     @Test("takeover flush excludes chunks received after lease loss")
     func takeoverFlushExcludesChunksReceivedAfterLeaseLoss() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

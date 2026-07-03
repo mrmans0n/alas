@@ -53,4 +53,106 @@ struct ACPStdioClientTests {
         } else { Issue.record("expected agent_message_chunk 'hi'") }
         await client.shutdown()
     }
+
+    private final class ResultBox<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: T?
+        func set(_ v: T) {
+            lock.lock()
+            value = v
+            lock.unlock()
+        }
+
+        func get() -> T? {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
+    /// Runs `work` in a detached task and returns its result, or nil if it
+    /// does not finish within roughly `steps * step`. A work item that never
+    /// completes (e.g. a parked continuation on a regressed drain) is
+    /// abandoned rather than awaited, so a regression surfaces as a bounded
+    /// nil result instead of hanging the whole test run.
+    private func boundedResult<T: Sendable>(
+        steps: Int = 150,
+        step: Duration = .milliseconds(20),
+        _ work: @escaping @Sendable () async -> T
+    ) async -> T? {
+        let box = ResultBox<T>()
+        let task = Task.detached { box.set(await work()) }
+        for _ in 0..<steps {
+            if let v = box.get() { return v }
+            try? await Task.sleep(for: step)
+        }
+        task.cancel()
+        return box.get()
+    }
+
+    @Test("shutdown resumes an in-flight request even when the transport never emits .exited")
+    func shutdownDrainsPendingWithoutExit() async {
+        let transport = FakeJSONRPCTransport()
+        transport.emitExitOnTerminate = false // real-transport behaviour: no synchronous .exited
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try? client.start()
+
+        // Fire a request the fake never answers; shutdown must unblock it.
+        async let threw = boundedResult { () -> Bool in
+            do {
+                _ = try await client.send(ACPRequest(
+                    method: "session/prompt",
+                    params: ACPSessionPromptParams(sessionId: "s", prompt: [])))
+                return false
+            } catch {
+                return true
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(100)) // let send() register in `pending`
+        await client.shutdown()
+
+        #expect(await threw == true)
+    }
+
+    @Test("shutdown drain is idempotent with a transport that also emits .exited")
+    func shutdownDrainIsIdempotent() async {
+        let transport = FakeJSONRPCTransport() // emitExitOnTerminate defaults to true
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try? client.start()
+
+        async let threw = boundedResult { () -> Bool in
+            do {
+                _ = try await client.send(ACPRequest(
+                    method: "session/prompt",
+                    params: ACPSessionPromptParams(sessionId: "s", prompt: [])))
+                return false
+            } catch { return true }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        await client.shutdown()
+        // If the .exited handler re-resumed the same continuation the process
+        // would have already trapped; reaching this line means it did not.
+        #expect(await threw == true)
+    }
+
+    @Test("ACPConnection.shutdown unwinds an in-flight prompt")
+    func connectionShutdownUnwindsPrompt() async {
+        let transport = FakeJSONRPCTransport()
+        transport.emitExitOnTerminate = false
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try? client.start()
+        let connection = ACPConnection(client: client)
+
+        async let threw = boundedResult { () -> Bool in
+            do {
+                try await connection.prompt(sessionId: "s", blocks: [])
+                return false
+            } catch {
+                return true
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        await connection.shutdown()
+        #expect(await threw == true)
+    }
 }

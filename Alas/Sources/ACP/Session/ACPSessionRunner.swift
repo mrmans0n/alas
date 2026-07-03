@@ -331,6 +331,10 @@ final class ACPSessionRunner {
         filesTask?.cancel()
         terminalsTask?.cancel()
         resolvePendingQuestion(.init(outcome: .cancelled), restorePreviousState: false)
+        // A detach/takeover can land while a permission prompt is parked.
+        // userCancel() already resolves it; stop() must too, or the policy's
+        // continuation is stranded when we tear the connection down.
+        policy.userCancelled()
         // Kill agent-spawned subprocesses now. ACPSessionManager keeps
         // the ACPSession cached after detach, so the session's deinit-
         // time killAll() won't fire on tab close — without this an

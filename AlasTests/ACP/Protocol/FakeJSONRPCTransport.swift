@@ -23,8 +23,15 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
         sentFrames.append(data)
     }
 
+    /// When false, `terminate()` does not synthesise an `.exited` event —
+    /// mirroring the real `JSONRPCStdioTransport`, whose SIGTERM is async and
+    /// whose `.exited` is delivered later (or never, for a wedged adapter).
+    var emitExitOnTerminate = true
+
     func terminate() {
-        cont.yield(.exited(0))
+        if emitExitOnTerminate {
+            cont.yield(.exited(0))
+        }
         cont.finish()
     }
 
