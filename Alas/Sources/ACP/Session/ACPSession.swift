@@ -346,7 +346,9 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.content = full
                     tc.preview = Self.previewLine(full)
                     tc.contentLanguage = Self.wrappingFenceLanguage(raw)
-                    tc.terminalIds = Self.mergeTerminalIds(Self.extractTerminalIds(c), metadataTerminalIds)
+                    tc.terminalIds = Self.mergeTerminalIds(
+                        Self.extractTerminalIds(c),
+                        Self.extractMetadataTerminalIds(tc.metadata))
                     tc.assets = Self.extractAssets(c)
                 }
             }

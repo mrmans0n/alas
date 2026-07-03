@@ -944,6 +944,47 @@ struct ACPSessionTests {
         #expect(term.snapshot(byteLimit: 1024).text == "ok\n")
     }
 
+    @Test("metadata terminal id survives later content-only update")
+    func metadataTerminalIdSurvivesLaterContentOnlyUpdate() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-meta-then-content",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-meta-then-content",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-meta-then-content"),
+                    "data": AnyCodable("building\n")
+                ])
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-meta-then-content",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            rawOutput: nil)))
+
+        let message = try #require(session.transcript.messages.first)
+        guard case .toolCall(let toolCall) = message else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        #expect(toolCall.terminalIds == ["term-meta-then-content"])
+        #expect(toolCall.content == "final output")
+
+        let term = try #require(session.terminalHost.terminal(id: "term-meta-then-content"))
+        #expect(term.snapshot(byteLimit: 1024).text == "building\n")
+    }
+
     @Test("terminal_output metadata replaces previous deltas")
     func terminalOutputMetadataReplacesPreviousDeltas() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
