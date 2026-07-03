@@ -53,4 +53,84 @@ struct ACPStdioClientTests {
         } else { Issue.record("expected agent_message_chunk 'hi'") }
         await client.shutdown()
     }
+
+    /// Runs `work`, but returns nil if it doesn't finish within `timeout`.
+    private func firstToFinish<T: Sendable>(
+        _ timeout: Duration,
+        _ work: @escaping @Sendable () async -> T
+    ) async -> T? {
+        await withTaskGroup(of: T?.self) { group in
+            group.addTask { await work() }
+            group.addTask { try? await Task.sleep(for: timeout); return nil }
+            let result = await group.next() ?? nil
+            group.cancelAll()
+            return result
+        }
+    }
+
+    @Test("shutdown resumes an in-flight request even when the transport never emits .exited")
+    func shutdownDrainsPendingWithoutExit() async {
+        let transport = FakeJSONRPCTransport()
+        transport.emitExitOnTerminate = false // real-transport behaviour: no synchronous .exited
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try? client.start()
+
+        // Fire a request the fake never answers; shutdown must unblock it.
+        async let threw = firstToFinish(.seconds(3)) { () -> Bool in
+            do {
+                _ = try await client.send(ACPRequest(
+                    method: "session/prompt",
+                    params: ACPSessionPromptParams(sessionId: "s", prompt: [])))
+                return false
+            } catch {
+                return true
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(100)) // let send() register in `pending`
+        await client.shutdown()
+
+        #expect(await threw == true)
+    }
+
+    @Test("shutdown drain is idempotent with a transport that also emits .exited")
+    func shutdownDrainIsIdempotent() async {
+        let transport = FakeJSONRPCTransport() // emitExitOnTerminate defaults to true
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try? client.start()
+
+        async let threw = firstToFinish(.seconds(3)) { () -> Bool in
+            do {
+                _ = try await client.send(ACPRequest(
+                    method: "session/prompt",
+                    params: ACPSessionPromptParams(sessionId: "s", prompt: [])))
+                return false
+            } catch { return true }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        await client.shutdown()
+        // If the .exited handler re-resumed the same continuation the process
+        // would have already trapped; reaching this line means it did not.
+        #expect(await threw == true)
+    }
+
+    @Test("ACPConnection.shutdown unwinds an in-flight prompt")
+    func connectionShutdownUnwindsPrompt() async {
+        let transport = FakeJSONRPCTransport()
+        transport.emitExitOnTerminate = false
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try? client.start()
+        let connection = ACPConnection(client: client)
+
+        async let threw = firstToFinish(.seconds(3)) { () -> Bool in
+            do {
+                try await connection.prompt(sessionId: "s", blocks: [])
+                return false
+            } catch {
+                return true
+            }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        await connection.shutdown()
+        #expect(await threw == true)
+    }
 }

@@ -25,6 +25,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private var nextId: Int = 0
     private var _yieldedUpdateCount = 0
     private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
+    private var didDrainPending = false
     private var dispatchTask: Task<Void, Never>?
 
     init(executable: URL, arguments: [String], environment: [String: String]?) throws {
@@ -117,11 +118,7 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         case .stderr(let data):
             stderrCont.yield(data)
         case .exited:
-            stateLock.lock()
-            let snapshot = pending
-            pending.removeAll()
-            stateLock.unlock()
-            for (_, cont) in snapshot { cont.resume(throwing: ACPClientError.notRunning) }
+            drainPending(with: ACPClientError.notRunning)
             updatesCont.finish()
             permsCont.finish()
             questionsCont.finish()
@@ -216,6 +213,11 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         let body = try Self.encode(envelopeFor: request, id: id)
         let data: Data = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
             stateLock.lock()
+            if didDrainPending {
+                stateLock.unlock()
+                cont.resume(throwing: ACPClientError.notRunning)
+                return
+            }
             pending[id] = cont
             stateLock.unlock()
             do {
@@ -317,7 +319,24 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         } catch {}
     }
 
+    /// Resumes and clears every pending outbound continuation exactly once.
+    /// Safe to call from both `shutdown()` and the `.exited` handler; the
+    /// second caller is a no-op (double-resuming a CheckedContinuation traps).
+    private func drainPending(with error: Error) {
+        stateLock.lock()
+        if didDrainPending {
+            stateLock.unlock()
+            return
+        }
+        didDrainPending = true
+        let snapshot = pending
+        pending.removeAll()
+        stateLock.unlock()
+        for (_, cont) in snapshot { cont.resume(throwing: error) }
+    }
+
     func shutdown() async {
+        drainPending(with: ACPClientError.notRunning)
         transport.terminate()
         dispatchTask?.cancel()
     }
