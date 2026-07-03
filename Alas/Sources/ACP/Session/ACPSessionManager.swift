@@ -27,6 +27,7 @@ final class ACPSessionManager: ObservableObject {
     /// the runner falls back to disk in that case. Lets agent reads see
     /// the user's unsaved edits rather than stale disk bytes.
     let onLiveBufferRead: ((String) -> String?)?
+    private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
@@ -198,6 +199,7 @@ final class ACPSessionManager: ObservableObject {
          hydratorPath: String? = nil,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
+         onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          connectionFactory: ACPConnectionFactory? = nil)
@@ -209,6 +211,7 @@ final class ACPSessionManager: ObservableObject {
         self.store = store
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.onSessionTitleUpdated = onSessionTitleUpdated
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
         self.setupEvaluator = setupEvaluator ?? { spec in
@@ -1247,6 +1250,9 @@ extension ACPSessionManager {
     /// by-index mutation avoids violating those invariants.
     func refreshMirror(sessionId: ACPSession.ID) async {
         guard let session = sessions[sessionId] else { return }
+        if let row = try? store.loadSession(id: sessionId) {
+            syncMirrorSessionMetadata(row, to: session)
+        }
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
@@ -1269,6 +1275,22 @@ extension ACPSessionManager {
             session.transcript.resetWindowToTail()
         } else {
             applyRememberedTranscriptScrollWindow(to: session)
+        }
+    }
+
+    private func syncMirrorSessionMetadata(_ row: ACPSessionRow, to session: ACPSession) {
+        let titleChanged = session.title != row.title || session.titleSource != row.titleSource
+        session.title = row.title
+        session.titleSource = row.titleSource
+        session.currentModel = row.currentModel
+        session.currentMode = row.currentMode
+        session.autoRunEnabled = row.autoRun
+        if session.remoteSessionId == nil || session.remoteSessionId == row.remoteSessionId {
+            session.remoteSessionId = row.remoteSessionId
+        }
+        recent = (try? store.recentSessions()) ?? []
+        if titleChanged {
+            onSessionTitleUpdated?(row.id, row.title)
         }
     }
 }
@@ -1434,6 +1456,11 @@ extension ACPSessionManager {
                                               )
                                           },
                                           onPersist: { [weak self] in self?.changeNotifier.post() },
+                                          onSessionTitleUpdated: { [weak self] title in
+                                              self?.refreshRecent()
+                                              self?.onSessionTitleUpdated?(sessionId, title)
+                                              self?.changeNotifier.post()
+                                          },
                                           onResumeTranscriptTail: { [weak self] in
                                               self?.rememberTranscriptScrollAnchor(
                                                 sessionId: sessionId,

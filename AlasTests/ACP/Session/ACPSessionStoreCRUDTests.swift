@@ -208,6 +208,112 @@ struct ACPSessionStoreCRUDTests {
         #expect(manual.titleSource == .manual)
     }
 
+    @Test("session info title update changes placeholder and generated rows")
+    func sessionInfoTitleUpdateChangesNonManualRows() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "placeholder",
+            agentId: "claude",
+            title: "New session",
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+        try store.upsertSession(.init(
+            id: "generated",
+            agentId: "claude",
+            title: "Old generated",
+            titleSource: .generated,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let placeholderChanged = try store.updateGeneratedTitleIfNotManual(
+            id: "placeholder",
+            title: "Adapter Title",
+            updatedAt: 10
+        )
+        let generatedChanged = try store.updateGeneratedTitleIfNotManual(
+            id: "generated",
+            title: "Better Adapter Title",
+            updatedAt: 11
+        )
+
+        let placeholder = try #require(try store.loadSession(id: "placeholder"))
+        let generated = try #require(try store.loadSession(id: "generated"))
+        #expect(placeholderChanged)
+        #expect(placeholder.title == "Adapter Title")
+        #expect(placeholder.titleSource == .generated)
+        #expect(placeholder.updatedAt == 10)
+        #expect(generatedChanged)
+        #expect(generated.title == "Better Adapter Title")
+        #expect(generated.titleSource == .generated)
+        #expect(generated.updatedAt == 11)
+    }
+
+    @Test("session info title update refuses manual and archived rows")
+    func sessionInfoTitleUpdateRefusesManualAndArchivedRows() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "manual",
+            agentId: "claude",
+            title: "User Title",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+        try store.upsertSession(.init(
+            id: "archived",
+            agentId: "claude",
+            title: "Archived Title",
+            titleSource: .generated,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: true
+        ))
+
+        let manualChanged = try store.updateGeneratedTitleIfNotManual(
+            id: "manual",
+            title: "Adapter Title",
+            updatedAt: 10
+        )
+        let archivedChanged = try store.updateGeneratedTitleIfNotManual(
+            id: "archived",
+            title: "Adapter Title",
+            updatedAt: 10
+        )
+
+        let manual = try #require(try store.loadSession(id: "manual"))
+        let archived = try #require(try store.loadSession(id: "archived"))
+        #expect(!manualChanged)
+        #expect(manual.title == "User Title")
+        #expect(manual.titleSource == .manual)
+        #expect(manual.updatedAt == 2)
+        #expect(!archivedChanged)
+        #expect(archived.title == "Archived Title")
+        #expect(archived.titleSource == .generated)
+        #expect(archived.updatedAt == 2)
+    }
+
     @Test("context recovery pending is stored separately from metadata upserts")
     func contextRecoveryPendingRoundTrip() throws {
         let store = try tmp()

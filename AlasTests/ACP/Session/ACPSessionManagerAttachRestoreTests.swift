@@ -126,6 +126,54 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    @Test("mirror refresh syncs generated title metadata")
+    func mirrorRefreshSyncsGeneratedTitleMetadata() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(.init(
+            id: "local",
+            agentId: "claude",
+            title: "Old generated",
+            titleSource: ACPSessionTitleSource.generated,
+            remoteSessionId: "remote-old",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        var titleCallbacks: [(ACPSession.ID, String)] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onSessionTitleUpdated: { titleCallbacks.append(($0, $1)) },
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _ in ACPConnection(client: ACPMockClient()) }
+        )
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        #expect(session.title == "Old generated")
+        #expect(session.titleSource == ACPSessionTitleSource.generated)
+
+        #expect(try store.updateGeneratedTitleIfNotManual(
+            id: "local",
+            title: "Adapter Title",
+            updatedAt: 10
+        ))
+
+        await manager.refreshMirror(sessionId: "local")
+
+        #expect(session.title == "Adapter Title")
+        #expect(session.titleSource == .generated)
+        #expect(manager.recent.first?.title == "Adapter Title")
+        #expect(titleCallbacks.count == 1)
+        #expect(titleCallbacks.first?.0 == "local")
+        #expect(titleCallbacks.first?.1 == "Adapter Title")
+    }
+
     @Test("fresh attach exposes initializing phase while initialize is pending")
     func freshAttachExposesInitializingPhaseWhileInitializeIsPending() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

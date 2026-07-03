@@ -362,6 +362,8 @@ final class ACPSession: ObservableObject, Identifiable {
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
             return []
+        case .sessionInfoUpdate:
+            return []
         case .unknown:
             return []
         }

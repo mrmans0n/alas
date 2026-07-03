@@ -18,6 +18,7 @@ enum ACPSessionUpdate: Codable, Equatable {
     case sessionConfigOptionsUpdate([ACPConfigOption])
     case availableCommandsUpdate([ACPPromptSuggestion])
     case usageUpdate(ACPUsageInfo)
+    case sessionInfoUpdate(ACPSessionInfoUpdate)
     case unknown(String)
 
     static func userMessageChunk(_ content: ACPContentBlock) -> ACPSessionUpdate {
@@ -34,7 +35,7 @@ enum ACPSessionUpdate: Codable, Equatable {
 
     private enum Keys: String, CodingKey {
         case sessionUpdate, content, availableModels, modeId, modelId,
-             entries, availableCommands, configOptions
+             entries, availableCommands, configOptions, title, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +72,8 @@ enum ACPSessionUpdate: Codable, Equatable {
             })
         case "usage_update":
             self = .usageUpdate(try ACPUsageInfo(from: decoder))
+        case "session_info_update":
+            self = .sessionInfoUpdate(try ACPSessionInfoUpdate(from: decoder))
         default:
             self = .unknown(kind)
         }
@@ -106,6 +109,17 @@ enum ACPSessionUpdate: Codable, Equatable {
         case .sessionConfigOptionsUpdate(let opts):
             try c.encode("session_config_options_update", forKey: .sessionUpdate)
             try c.encode(opts, forKey: .configOptions)
+        case .sessionInfoUpdate(let info):
+            try c.encode("session_info_update", forKey: .sessionUpdate)
+            switch info.title {
+            case .absent:
+                break
+            case .null:
+                try c.encodeNil(forKey: .title)
+            case .value(let title):
+                try c.encode(title, forKey: .title)
+            }
+            try c.encodeIfPresent(info.updatedAt, forKey: .updatedAt)
         case .availableCommandsUpdate: break // not produced by us
         case .toolCall, .toolCallUpdate, .usageUpdate, .unknown: break
         }
@@ -189,4 +203,54 @@ struct ACPUsageInfo: Codable, Equatable {
         size = try c.decode(Int.self, forKey: .size)
         cost = try? c.decodeIfPresent(Cost.self, forKey: .cost)
     }
+}
+
+struct ACPSessionInfoUpdate: Codable, Equatable {
+    let title: ACPStringFieldUpdate
+    let updatedAt: String?
+
+    private enum CodingKeys: String, CodingKey { case title, updatedAt }
+
+    init(title: ACPStringFieldUpdate = .absent, updatedAt: String?) {
+        self.title = title
+        self.updatedAt = updatedAt
+    }
+
+    init(title: String?, updatedAt: String?) {
+        self.title = title.map(ACPStringFieldUpdate.value) ?? .absent
+        self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if !c.contains(.title) {
+            title = .absent
+        } else if (try? c.decodeNil(forKey: .title)) == true {
+            title = .null
+        } else if let value = try? c.decode(String.self, forKey: .title) {
+            title = .value(value)
+        } else {
+            title = .absent
+        }
+        updatedAt = try? c.decodeIfPresent(String.self, forKey: .updatedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch title {
+        case .absent:
+            break
+        case .null:
+            try c.encodeNil(forKey: .title)
+        case .value(let title):
+            try c.encode(title, forKey: .title)
+        }
+        try c.encodeIfPresent(updatedAt, forKey: .updatedAt)
+    }
+}
+
+enum ACPStringFieldUpdate: Equatable {
+    case absent
+    case null
+    case value(String)
 }
