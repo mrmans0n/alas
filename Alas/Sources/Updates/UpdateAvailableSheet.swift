@@ -10,7 +10,7 @@ struct UpdateAvailableSheet: View {
     let onRunUpdate: () -> Void
     @Environment(\.theme) var theme
 
-    private let brewCommand = "brew upgrade --cask alas"
+    private let brewCommand = SelfUpdateCommand.homebrew.displayCommandLine
 
     private var subtitleText: String {
         switch info {

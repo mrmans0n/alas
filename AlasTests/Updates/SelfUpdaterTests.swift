@@ -7,8 +7,8 @@ struct SelfUpdaterTests {
     @Test("homebrew command has correct arguments and display line")
     func homebrewCommandShape() {
         let command = SelfUpdateCommand.homebrew
-        #expect(command.arguments == ["upgrade", "--cask", "alas"])
-        #expect(command.displayCommandLine == "brew upgrade --cask alas")
+        #expect(command.arguments == ["upgrade", "--cask", "mrmans0n/tap/alas"])
+        #expect(command.displayCommandLine == "brew upgrade --cask mrmans0n/tap/alas")
     }
 
     @Test("echo transitions idle → running → finished(0)")
