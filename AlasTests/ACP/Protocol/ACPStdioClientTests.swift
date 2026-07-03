@@ -48,7 +48,7 @@ struct ACPStdioClientTests {
             for await u in client.incomingUpdates { return u.update }
             return nil
         }()
-        if case .agentMessageChunk(let block) = firstUpdate, case .text(let t) = block {
+        if case .agentMessageChunk(let chunk) = firstUpdate, case .text(let t) = chunk.content {
             #expect(t == "hi")
         } else { Issue.record("expected agent_message_chunk 'hi'") }
         await client.shutdown()

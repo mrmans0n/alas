@@ -94,6 +94,11 @@ final class ACPSession: ObservableObject, Identifiable {
     /// check is never reached).
     var allowsStreamingBoundaryCrossing: Bool = true
 
+    private var reconciledLocalUserPromptMessageIds: Set<String> = []
+    private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
+    private var liveUserChunkMessageIds: Set<String> = []
+    private var legacyUserChunkMessageIds: Set<UUID> = []
+
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
     /// explicit force-send remains next.
@@ -157,9 +162,9 @@ final class ACPSession: ObservableObject, Identifiable {
     var hasConversationTranscript: Bool {
         transcript.messages.contains { message in
             switch message {
-            case .user(_, let text, _):
+            case .user(_, _, let text, _):
                 return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .agent(_, let buffer):
+            case .agent(_, _, let buffer):
                 return !buffer.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             default:
                 return false
@@ -218,7 +223,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
-        transcript.messages.append(.user(id: UUID(), text: text, attachments: attachments))
+        transcript.messages.append(.user(id: UUID(), messageId: nil, text: text, attachments: attachments))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         if titleSource == .placeholder {
@@ -244,23 +249,40 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
         switch update {
-        case .agentMessageChunk(let block):
+        case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
-            let txt = text(of: block)
-            let i = appendStreaming(text: txt, locate: { lastAgent() },
-                                    makeNew: { .agent(id: UUID(), StreamingText(txt)) })
+            let txt = text(of: chunk.content)
+            guard let i = appendStreaming(
+                text: txt,
+                messageId: chunk.messageId,
+                locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
+                locateLegacy: { lastAgent() },
+                isLikelyReplay: { text in messageExists(kind: .agent, containing: text) },
+                makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
+                return []
+            }
             return [i]
-        case .userMessageChunk(let block):
-            // Agents rarely emit these; treat as informational.
-            transcript.messages.append(.systemNotice(id: UUID(), text: text(of: block)))
-            didAppendTranscriptMessage()
-            transcript.completedOutputBoundaryMessageIds.removeAll()
-            return [transcript.messages.count - 1]
-        case .agentThoughtChunk(let block):
+        case .userMessageChunk(let chunk):
+            let txt = text(of: chunk.content)
+            guard let i = appendUserChunk(
+                text: txt,
+                attachments: ACPSessionRunner.attachments(of: [chunk.content]),
+                messageId: chunk.messageId) else {
+                return []
+            }
+            return [i]
+        case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
-            let txt = text(of: block)
-            let i = appendStreaming(text: txt, locate: { lastThought() },
-                                    makeNew: { .thought(id: UUID(), StreamingText(txt)) })
+            let txt = text(of: chunk.content)
+            guard let i = appendStreaming(
+                text: txt,
+                messageId: chunk.messageId,
+                locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
+                locateLegacy: { lastThought() },
+                isLikelyReplay: { text in messageExists(kind: .thought, containing: text) },
+                makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
+                return []
+            }
             return [i]
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
@@ -762,21 +784,222 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         return nil
     }
+
+    private enum TextMessageKind {
+        case user
+        case agent
+        case thought
+    }
+
+    private func messageIndex(messageId: String, kind: TextMessageKind) -> Int? {
+        transcript.messages.firstIndex { message in
+            switch (kind, message) {
+            case (.user, .user(_, let existing, _, _)),
+                 (.agent, .agent(_, let existing, _)),
+                 (.thought, .thought(_, let existing, _)):
+                return existing == messageId
+            default:
+                return false
+            }
+        }
+    }
+
+    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?) -> Int? {
+        let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
+        if let i = located,
+           case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
+            let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
+            if text == mergedText && attachments == mergedAttachments {
+                return i
+            }
+            let isLiveUserChunk = existingMessageId.map {
+                liveUserChunkMessageIds.contains($0)
+            } == true
+            let isReconciledEchoChunk = existingMessageId.map {
+                !addition.isEmpty
+                    && text.contains(addition)
+                    && reconciledLocalUserPromptMessageIds.contains($0)
+            } == true && newAttachments.isEmpty
+            let isHydratedReplayChunk = existingMessageId.map {
+                !addition.isEmpty
+                    && text.contains(addition)
+                    && !reconciledLocalUserPromptMessageIds.contains($0)
+                    && !liveUserChunkMessageIds.contains($0)
+            } == true && newAttachments.isEmpty
+            if (!isLiveUserChunk && text == addition && attachments == mergedAttachments)
+                || isHydratedReplayChunk
+                || isReconciledEchoChunk {
+                return i
+            }
+            transcript.messages[i] = .user(
+                id: id,
+                messageId: existingMessageId,
+                text: mergedText,
+                attachments: mergedAttachments)
+            if let existingMessageId {
+                liveUserChunkMessageIds.insert(existingMessageId)
+            }
+            transcript.streamingTick &+= 1
+            return i
+        }
+
+        if let i = lastEchoedLocalUserPromptIndex(matching: addition, attachments: newAttachments),
+           case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            if existingMessageId == nil {
+                if let messageId {
+                    transcript.messages[i] = .user(
+                        id: id,
+                        messageId: messageId,
+                        text: text,
+                        attachments: Self.mergingAttachments(attachments, newAttachments))
+                    reconciledLocalUserPromptMessageIds.insert(messageId)
+                    transcript.streamingTick &+= 1
+                } else {
+                    reconciledLegacyLocalUserPromptIds.insert(id)
+                }
+            }
+            return i
+        }
+
+        if messageId == nil,
+           let i = lastLegacyUserChunkIndex(),
+           case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
+            let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
+            if text == mergedText && attachments == mergedAttachments {
+                return i
+            }
+            transcript.messages[i] = .user(
+                id: id,
+                messageId: existingMessageId,
+                text: mergedText,
+                attachments: mergedAttachments)
+            transcript.streamingTick &+= 1
+            return i
+        }
+
+        if messageId != nil,
+           !allowsStreamingBoundaryCrossing,
+           userMessageExists(containing: addition, attachments: newAttachments) {
+            return nil
+        }
+
+        if addition.isEmpty {
+            guard !newAttachments.isEmpty else { return nil }
+            let id = UUID()
+            transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
+            if let messageId {
+                liveUserChunkMessageIds.insert(messageId)
+            } else {
+                legacyUserChunkMessageIds.insert(id)
+            }
+            didAppendTranscriptMessage()
+            transcript.completedOutputBoundaryMessageIds.removeAll()
+            return transcript.messages.count - 1
+        }
+
+        let id = UUID()
+        transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
+        if let messageId {
+            liveUserChunkMessageIds.insert(messageId)
+        } else {
+            legacyUserChunkMessageIds.insert(id)
+        }
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        return transcript.messages.count - 1
+    }
+
+    private static func mergingAttachments(_ existing: [ACPMessage.Attachment],
+                                           _ additions: [ACPMessage.Attachment]) -> [ACPMessage.Attachment] {
+        additions.reduce(into: existing) { result, attachment in
+            if !result.contains(attachment) {
+                result.append(attachment)
+            }
+        }
+    }
+
+    private func lastLegacyUserChunkIndex() -> Int? {
+        guard let index = transcript.messages.indices.last else { return nil }
+        if case .user(let id, let messageId, _, _) = transcript.messages[index],
+           messageId == nil,
+           legacyUserChunkMessageIds.contains(id) {
+            return index
+        }
+        return nil
+    }
+
+    private func lastEchoedLocalUserPromptIndex(matching text: String, attachments: [ACPMessage.Attachment]) -> Int? {
+        guard !text.isEmpty || !attachments.isEmpty else { return nil }
+        return transcript.messages.indices.reversed().first { index in
+            if case .user(let id, let messageId, let existing, let existingAttachments) = transcript.messages[index] {
+                guard messageId == nil,
+                      !legacyUserChunkMessageIds.contains(id) else { return false }
+                if !text.isEmpty {
+                    return existing.hasPrefix(text)
+                        || (reconciledLegacyLocalUserPromptIds.contains(id) && existing.contains(text))
+                }
+                return attachments.allSatisfy { existingAttachments.contains($0) }
+            }
+            return false
+        }
+    }
+
+    private func messageExists(kind: TextMessageKind, containing text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        return transcript.messages.contains { message in
+            switch (kind, message) {
+            case (.agent, .agent(_, _, let existing)),
+                 (.thought, .thought(_, _, let existing)):
+                return existing.value.contains(text)
+            default:
+                return false
+            }
+        }
+    }
+
+    private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
+        guard !text.isEmpty || !attachments.isEmpty else { return false }
+        return transcript.messages.contains { message in
+            guard case .user(_, _, let existing, let existingAttachments) = message else { return false }
+            if !text.isEmpty, existing.contains(text) {
+                return true
+            }
+            return !attachments.isEmpty && attachments.allSatisfy { existingAttachments.contains($0) }
+        }
+    }
+
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
-                                locate: () -> Int?,
-                                makeNew: () -> ACPMessage) -> Int {
-        if let i = locate() {
+                                 messageId: String?,
+                                 locateByMessageId: (String) -> Int?,
+                                 locateLegacy: () -> Int?,
+                                 isLikelyReplay: (String) -> Bool,
+                                 makeNew: () -> ACPMessage) -> Int? {
+        let located = if let messageId {
+            locateByMessageId(messageId)
+        } else {
+            locateLegacy()
+        }
+        if let i = located {
             let stableId = transcript.messages[i].stableId
-            if transcript.completedOutputBoundaryMessageIds.contains(stableId) {
+            let crossesCompletedBoundary = transcript.completedOutputBoundaryMessageIds.contains(stableId)
+            if messageId != nil,
+               !allowsStreamingBoundaryCrossing,
+               (crossesCompletedBoundary || hasUserAfterMessage(at: i)) {
+                return i
+            }
+            if crossesCompletedBoundary {
                 // Discard if boundary crossings are not allowed — this chunk
                 // is a late replay frame arriving after load-replay suppression
                 // ended. Return the existing message index without mutating.
                 guard allowsStreamingBoundaryCrossing else { return i }
                 transcript.completedOutputBoundaryMessageIds.remove(stableId)
-            } else {
+            }
+            if !crossesCompletedBoundary || messageId != nil {
                 switch transcript.messages[i] {
-                case .agent(_, let buf), .thought(_, let buf):
+                case .agent(_, _, let buf), .thought(_, _, let buf):
                     buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
                     transcript.streamingTick &+= 1
                     return i
@@ -785,10 +1008,26 @@ final class ACPSession: ObservableObject, Identifiable {
                 }
             }
         }
+        if messageId != nil, !allowsStreamingBoundaryCrossing, isLikelyReplay(addition) {
+            return nil
+        }
         transcript.messages.append(makeNew())
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }
+
+    private func hasUserAfterMessage(at index: Int) -> Bool {
+        guard transcript.messages.indices.contains(index), index < transcript.messages.index(before: transcript.messages.endIndex) else {
+            return false
+        }
+        return transcript.messages[(index + 1)...].contains { message in
+            if case .user = message {
+                return true
+            }
+            return false
+        }
+    }
+
     /// Returns the separator (if any) to insert between two streaming
     /// chunks before appending `next` to `previous`. Adapters sometimes
     /// split their stream at a sentence boundary and drop the trailing

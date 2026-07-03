@@ -10,13 +10,13 @@ extension ACPSession {
         var total: UInt64 = 0
         for m in transcript.messages {
             switch m {
-            case .user(_, let text, let atts):
+            case .user(_, _, let text, let atts):
                 total &+= UInt64(text.utf8.count)
                 for a in atts {
                     total &+= UInt64(a.uri.utf8.count)
                     total &+= UInt64(a.name?.utf8.count ?? 0)
                 }
-            case .agent(_, let buf), .thought(_, let buf):
+            case .agent(_, _, let buf), .thought(_, _, let buf):
                 total &+= UInt64(buf.value.utf8.count)
             case .toolCall(let tc):
                 total &+= UInt64(tc.content.utf8.count)

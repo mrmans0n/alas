@@ -7,9 +7,36 @@ struct ACPSessionUpdateTests {
     @Test("decodes agent message chunk")
     func agentChunk() throws {
         let env = try decode("session-update-agent-chunk")
-        if case .agentMessageChunk(let block) = env.params!.update {
-            if case .text(let s) = block { #expect(s == "hello ") } else { Issue.record("expected text") }
+        if case .agentMessageChunk(let chunk) = env.params!.update {
+            if case .text(let s) = chunk.content { #expect(s == "hello ") } else { Issue.record("expected text") }
         } else { Issue.record("expected agentMessageChunk") }
+    }
+
+    @Test("decodes messageId on text chunks")
+    func textChunkMessageId() throws {
+        let json = """
+        {
+          "jsonrpc": "2.0",
+          "method": "session/update",
+          "params": {
+            "sessionId": "s1",
+            "update": {
+              "sessionUpdate": "agent_message_chunk",
+              "messageId": "msg-agent-1",
+              "content": { "type": "text", "text": "hello" }
+            }
+          }
+        }
+        """
+        let env = try JSONDecoder().decode(
+            JSONRPCEnvelope<ACPSessionUpdateParams>.self,
+            from: Data(json.utf8))
+        if case .agentMessageChunk(let chunk) = env.params!.update {
+            #expect(chunk.messageId == "msg-agent-1")
+            #expect(chunk.content == .text("hello"))
+        } else {
+            Issue.record("expected agentMessageChunk")
+        }
     }
 
     @Test("decodes tool call (initial)")

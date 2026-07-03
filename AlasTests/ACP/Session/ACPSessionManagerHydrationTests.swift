@@ -66,7 +66,7 @@ struct ACPSessionManagerHydrationTests {
 
         #expect(s.hydrationState == .ready)
         #expect(s.transcript.messages.count == 1)
-        if case .user(_, let text, _) = s.transcript.messages.first! {
+        if case .user(_, _, let text, _) = s.transcript.messages.first! {
             #expect(text == "hi")
         } else {
             #expect(Bool(false), "expected user message")
@@ -195,12 +195,12 @@ struct ACPSessionManagerHydrationTests {
         #expect(s.hydrationState == .ready)
         #expect(s.transcript.messages.count == ACPTranscript.tailWindow)
         #expect(s.transcript.visibleHead == 0)
-        if case .user(_, let text, _) = s.transcript.messages.first {
+        if case .user(_, _, let text, _) = s.transcript.messages.first {
             #expect(text == "m70")
         } else {
             #expect(Bool(false), "expected first visible message to be .user m70")
         }
-        if case .user(_, let text, _) = s.transcript.messages.last {
+        if case .user(_, _, let text, _) = s.transcript.messages.last {
             #expect(text == "m99")
         } else {
             #expect(Bool(false), "expected last visible message to be .user m99")
@@ -211,17 +211,17 @@ struct ACPSessionManagerHydrationTests {
         await mgr.awaitBackfill(id: "s")
         #expect(s.transcript.messages.count == 100)
         #expect(s.transcript.visibleHead == 100 - ACPTranscript.tailWindow)
-        if case .user(_, let text, _) = s.transcript.messages.first {
+        if case .user(_, _, let text, _) = s.transcript.messages.first {
             #expect(text == "m0")
         } else {
             #expect(Bool(false), "expected first message to be .user m0 after backfill")
         }
-        if case .user(_, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
+        if case .user(_, _, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
             #expect(text == "m70")
         } else {
             #expect(Bool(false), "expected message at visibleHead to be .user m70")
         }
-        if case .user(_, let text, _) = s.transcript.messages.last {
+        if case .user(_, _, let text, _) = s.transcript.messages.last {
             #expect(text == "m99")
         } else {
             #expect(Bool(false), "expected last message to be .user m99 after backfill")
@@ -257,7 +257,7 @@ struct ACPSessionManagerHydrationTests {
 
         #expect(s.transcript.messages.count == ACPTranscript.tailWindow)
         #expect(s.transcript.visibleHead == 0)
-        if case .user(_, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
+        if case .user(_, _, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
             #expect(text == "m70")
         } else {
             #expect(Bool(false), "expected first tail message before backfill")
@@ -267,7 +267,7 @@ struct ACPSessionManagerHydrationTests {
 
         #expect(s.transcript.messages.count == 100)
         #expect(s.transcript.visibleHead == 5)
-        if case .user(_, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
+        if case .user(_, _, let text, _) = s.transcript.messages[s.transcript.visibleHead] {
             #expect(text == "m5")
         } else {
             #expect(Bool(false), "expected remembered absolute index after backfill")
@@ -312,7 +312,7 @@ struct ACPSessionManagerHydrationTests {
         await mgr.hydrateIfNeeded(id: "s")
         await mgr.awaitBackfill(id: "s")
 
-        if case .user(_, let text, _) = reopened.transcript.messages[reopened.transcript.visibleHead] {
+        if case .user(_, _, let text, _) = reopened.transcript.messages[reopened.transcript.visibleHead] {
             #expect(text == "m40")
         } else {
             #expect(Bool(false), "expected remembered anchor row to be a user message")

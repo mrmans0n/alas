@@ -207,7 +207,7 @@ struct ACPSessionRunnerTests {
         client.emitReserved(.agentMessageChunk(.text(" second")))
         try await waitUntil {
             guard session.transcript.messages.count == 2,
-                  case .agent(_, let buffer) = session.transcript.messages[1]
+                  case .agent(_, _, let buffer) = session.transcript.messages[1]
             else { return false }
             return buffer.value == "first second"
                 && session.transcript.completedOutputBoundaryMessageIds == [session.transcript.messages[1].stableId]
@@ -215,8 +215,8 @@ struct ACPSessionRunnerTests {
 
         client.emitFresh(.agentMessageChunk(.text("next task")))
         try await waitUntil { session.transcript.messages.count == 3 }
-        if case .agent(_, let first) = session.transcript.messages[1],
-           case .agent(_, let second) = session.transcript.messages[2] {
+        if case .agent(_, _, let first) = session.transcript.messages[1],
+           case .agent(_, _, let second) = session.transcript.messages[2] {
             #expect(first.value == "first second")
             #expect(second.value == "next task")
         } else {
@@ -265,9 +265,9 @@ struct ACPSessionRunnerTests {
                 && session.transcript.messages.count >= 3
         }
 
-        if case .user(_, let firstUser, _) = session.transcript.messages[0],
-           case .agent(_, let firstAnswer) = session.transcript.messages[1],
-           case .user(_, let secondUser, _) = session.transcript.messages[2] {
+        if case .user(_, _, let firstUser, _) = session.transcript.messages[0],
+           case .agent(_, _, let firstAnswer) = session.transcript.messages[1],
+           case .user(_, _, let secondUser, _) = session.transcript.messages[2] {
             #expect(firstUser == "hello")
             #expect(firstAnswer.value == "first second")
             #expect(secondUser == "next")
@@ -528,7 +528,7 @@ struct ACPSessionRunnerTests {
         let rows = try store.loadMessages(sessionId: "s")
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
         let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
-        guard case .agent(_, let text) = decoded else {
+        guard case .agent(_, _, let text) = decoded else {
             Issue.record("expected persisted agent message")
             return
         }
@@ -630,7 +630,7 @@ struct ACPSessionRunnerTests {
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
         let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
-        guard case .agent(_, let text) = decoded else {
+        guard case .agent(_, _, let text) = decoded else {
             Issue.record("expected persisted agent message")
             return
         }
@@ -683,7 +683,7 @@ struct ACPSessionRunnerTests {
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
         let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
-        guard case .agent(_, let text) = decoded else {
+        guard case .agent(_, _, let text) = decoded else {
             Issue.record("expected persisted agent message")
             return
         }
@@ -741,7 +741,7 @@ struct ACPSessionRunnerTests {
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
         let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
-        guard case .agent(_, let text) = decoded else {
+        guard case .agent(_, _, let text) = decoded else {
             Issue.record("expected persisted agent message")
             return
         }

@@ -22,9 +22,9 @@ enum ACPTranscriptMarkdown {
         var sections: [String] = ["# \(headerTitle(title))"]
         for message in messages {
             switch message {
-            case .user(_, let text, _):
+            case .user(_, _, let text, _):
                 sections.append("## You\n\n\(serializedBody(text))")
-            case .agent(_, let buffer):
+            case .agent(_, _, let buffer):
                 sections.append("## \(agentHeading)\n\n\(serializedBody(buffer.value))")
             default:
                 continue
@@ -37,8 +37,8 @@ enum ACPTranscriptMarkdown {
     @MainActor
     static func messageBody(_ message: ACPMessage) -> String? {
         switch message {
-        case .user(_, let text, _): return serializedBody(text)
-        case .agent(_, let buffer): return serializedBody(buffer.value)
+        case .user(_, _, let text, _): return serializedBody(text)
+        case .agent(_, _, let buffer): return serializedBody(buffer.value)
         default: return nil
         }
     }

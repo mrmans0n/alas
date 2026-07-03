@@ -10,7 +10,7 @@ struct ACPMessageTests {
         let m = ACPMessage.user(id: UUID(), text: "hello", attachments: [.init(uri: "file:///a.swift", name: "a.swift")])
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        guard case .user(_, let text, let atts) = back else {
+        guard case .user(_, _, let text, let atts) = back else {
             Issue.record("expected user message")
             return
         }
@@ -20,13 +20,15 @@ struct ACPMessageTests {
     }
     @Test("agent message round-trips")
     func agentRoundtrip() throws {
-        let m = ACPMessage.agent(id: UUID(), StreamingText("world"))
+        let m = ACPMessage.agent(id: UUID(), messageId: "agent-1", StreamingText("world"))
         let payload = try ACPMessageCodec.encode(m)
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
-        guard case .agent(_, let buf) = back else {
+        guard case .agent(_, let messageId, let buf) = back else {
             Issue.record("expected agent message")
             return
         }
+        #expect(messageId == "agent-1")
+        #expect(back.stableId == "acp-agent:agent-1")
         #expect(buf.value == "world")
     }
     @Test("tool call round-trips")

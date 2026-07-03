@@ -462,7 +462,7 @@ final class RemoteSessionGateway {
     static func toWire(_ message: ACPMessage, index: Int) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
-        case .user(_, let text, let attachments):
+        case .user(_, _, let text, let attachments):
             // The wire carries user text only; surface attachments as a labelled
             // placeholder so an image-only prompt isn't a blank bubble on the
             // phone (we don't serve the image bytes to the client in v1).
@@ -470,9 +470,9 @@ final class RemoteSessionGateway {
             if !text.isEmpty { parts.append(text) }
             parts.append(contentsOf: attachments.map { "🖼 \($0.name ?? "Image")" })
             return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil)
-        case .agent(_, let streaming):
+        case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil)
-        case .thought(_, let streaming):
+        case .thought(_, _, let streaming):
             return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil)
         case .systemNotice(_, let text):
             return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
