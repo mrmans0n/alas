@@ -1059,6 +1059,53 @@ struct ACPSessionManagerAttachRestoreTests {
         await steerGate.release()
     }
 
+    @Test("recovery context superseded by a newer prompt clears the restoring status")
+    func recoveryContextSupersededByNewerPromptClearsStatus() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-new"))
+        try appendMessage(
+            .user(id: UUID(), text: "What changed?", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let client = ACPMockClient()
+        let recoveryGate = PromptGate()
+        let newerPromptGate = PromptGate()
+        let promptCount = PromptCounter()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
+        client.scriptAsync(method: "session/prompt") { _ in
+            switch await promptCount.next() {
+            case 1: await recoveryGate.waitInPrompt()
+            case 2: await newerPromptGate.waitInPrompt()
+            default: break
+            }
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id])
+        session.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
+
+        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
+        #expect(session.contextRecoveryStatus == .sendingTranscript)
+        try await waitUntilAsync { await recoveryGate.hasEntered }
+
+        runner.sendNow(blocks: [.text("actually do this instead")], queuedItemId: nil)
+        try await waitUntilAsync { await newerPromptGate.hasEntered }
+
+        await recoveryGate.release()
+        try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
+
+        await newerPromptGate.release()
+    }
+
     @Test("transcript context prompt requires conversation")
     func transcriptContextPromptRequiresConversation() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1300,6 +1347,15 @@ struct ACPSessionManagerAttachRestoreTests {
         }
     }
 
+    private actor PromptCounter {
+        private var count = 0
+
+        func next() -> Int {
+            count += 1
+            return count
+        }
+    }
+
     private actor AuthPromptFailureGate {
         private var entered = false
         private var released = false
@@ -1326,15 +1382,6 @@ struct ACPSessionManagerAttachRestoreTests {
             released = true
             continuation?.resume()
             continuation = nil
-        }
-    }
-
-    private actor PromptCounter {
-        private var count = 0
-
-        func next() -> Int {
-            count += 1
-            return count
         }
     }
 }
