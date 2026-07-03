@@ -798,7 +798,7 @@ final class ACPSession: ObservableObject, Identifiable {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
-            let mergedAttachments = attachments + newAttachments
+            let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
             let isReconciledEchoChunk = existingMessageId.map {
                 !addition.isEmpty && reconciledLocalUserPromptMessageIds.contains($0) && text.contains(addition)
             } == true && newAttachments.isEmpty
@@ -830,7 +830,7 @@ final class ACPSession: ObservableObject, Identifiable {
                         id: id,
                         messageId: messageId,
                         text: text,
-                        attachments: attachments + newAttachments)
+                        attachments: Self.mergingAttachments(attachments, newAttachments))
                     reconciledLocalUserPromptMessageIds.insert(messageId)
                     transcript.streamingTick &+= 1
                 } else {
@@ -844,6 +844,15 @@ final class ACPSession: ObservableObject, Identifiable {
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         return transcript.messages.count - 1
+    }
+
+    private static func mergingAttachments(_ existing: [ACPMessage.Attachment],
+                                           _ additions: [ACPMessage.Attachment]) -> [ACPMessage.Attachment] {
+        additions.reduce(into: existing) { result, attachment in
+            if !result.contains(attachment) {
+                result.append(attachment)
+            }
+        }
     }
 
     private func lastEchoedLocalUserPromptIndex(matching text: String) -> Int? {

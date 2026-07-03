@@ -107,6 +107,27 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("echoed user chunks do not duplicate local prompt attachments")
+    func echoedUserChunksDoNotDuplicateLocalPromptAttachments() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let attachment = ACPMessage.Attachment(uri: "file:///tmp/example.swift", name: "example.swift")
+        s.recordUserPrompt(text: "see this", attachments: [attachment])
+
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("see this"))))
+        s.apply(.userMessageChunk(.init(
+            messageId: "user-1",
+            content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
+
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == "user-1")
+            #expect(text == "see this")
+            #expect(attachments == [attachment])
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("ACP messageIds are namespaced by text row kind")
     func messageIdStableIdsAreNamespaced() async {
         let user = ACPMessage.user(id: UUID(), messageId: "same", text: "u", attachments: [])
