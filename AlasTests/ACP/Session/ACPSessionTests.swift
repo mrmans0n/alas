@@ -132,6 +132,22 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("agent chunks with messageId after a completed output boundary update the same message")
+    func messageIdChunkAfterCompletedOutputBoundaryUpdatesMessage() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text("first"))))
+        session.markCompletedOutputBoundary()
+        session.apply(.agentMessageChunk(.init(messageId: "agent-1", content: .text(" task output"))))
+
+        #expect(session.transcript.messages.count == 1)
+        #expect(session.transcript.messages[0].stableId == "acp-agent:agent-1")
+        if case .agent(_, _, let text) = session.transcript.messages[0] {
+            #expect(text.value == "first task output")
+        } else {
+            Issue.record("expected agent message")
+        }
+    }
+
     @Test("completed output boundary does not alter existing message text")
     func completedOutputBoundaryDoesNotAddBlankLines() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

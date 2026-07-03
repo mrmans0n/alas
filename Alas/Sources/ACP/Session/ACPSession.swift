@@ -95,6 +95,7 @@ final class ACPSession: ObservableObject, Identifiable {
     var allowsStreamingBoundaryCrossing: Bool = true
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
+    private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -812,14 +813,18 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if let i = lastEchoedLocalUserPromptIndex(matching: addition),
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
-            if existingMessageId == nil, let messageId {
-                transcript.messages[i] = .user(
-                    id: id,
-                    messageId: messageId,
-                    text: text,
-                    attachments: attachments)
-                reconciledLocalUserPromptMessageIds.insert(messageId)
-                transcript.streamingTick &+= 1
+            if existingMessageId == nil {
+                if let messageId {
+                    transcript.messages[i] = .user(
+                        id: id,
+                        messageId: messageId,
+                        text: text,
+                        attachments: attachments)
+                    reconciledLocalUserPromptMessageIds.insert(messageId)
+                    transcript.streamingTick &+= 1
+                } else {
+                    reconciledLegacyLocalUserPromptIds.insert(id)
+                }
             }
             return i
         }
@@ -832,8 +837,10 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func lastEchoedLocalUserPromptIndex(matching text: String) -> Int? {
         transcript.messages.indices.reversed().first { index in
-            if case .user(_, let messageId, let existing, _) = transcript.messages[index] {
-                return messageId == nil && existing.hasPrefix(text)
+            if case .user(let id, let messageId, let existing, _) = transcript.messages[index] {
+                return messageId == nil
+                    && (existing.hasPrefix(text)
+                        || (reconciledLegacyLocalUserPromptIds.contains(id) && existing.contains(text)))
             }
             return false
         }
@@ -852,13 +859,15 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         if let i = located {
             let stableId = transcript.messages[i].stableId
-            if transcript.completedOutputBoundaryMessageIds.contains(stableId) {
+            let crossesCompletedBoundary = transcript.completedOutputBoundaryMessageIds.contains(stableId)
+            if crossesCompletedBoundary {
                 // Discard if boundary crossings are not allowed — this chunk
                 // is a late replay frame arriving after load-replay suppression
                 // ended. Return the existing message index without mutating.
                 guard allowsStreamingBoundaryCrossing else { return i }
                 transcript.completedOutputBoundaryMessageIds.remove(stableId)
-            } else {
+            }
+            if !crossesCompletedBoundary || messageId != nil {
                 switch transcript.messages[i] {
                 case .agent(_, _, let buf), .thought(_, _, let buf):
                     buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
