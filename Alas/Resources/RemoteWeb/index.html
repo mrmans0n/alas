@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=33" />
+  <link rel="stylesheet" href="/style.css?v=34" />
 </head>
 <body>
   <header id="bar">
@@ -67,18 +67,20 @@
   </div>
   <div id="cfg" class="sheet hidden">
     <div class="sheet-card">
-      <div id="cfg-model-section">
-        <p class="sheet-title">Model</p>
-        <div id="cfg-models"></div>
+      <div id="cfg-scroll">
+        <div id="cfg-model-section">
+          <p class="sheet-title">Model</p>
+          <div id="cfg-models"></div>
+        </div>
+        <div id="cfg-mode-section">
+          <p class="sheet-title">Mode</p>
+          <div id="cfg-modes"></div>
+        </div>
+        <label id="cfg-autorun-row">
+          <span>Auto-run tools</span>
+          <input id="cfg-autorun" type="checkbox" />
+        </label>
       </div>
-      <div id="cfg-mode-section">
-        <p class="sheet-title">Mode</p>
-        <div id="cfg-modes"></div>
-      </div>
-      <label id="cfg-autorun-row">
-        <span>Auto-run tools</span>
-        <input id="cfg-autorun" type="checkbox" />
-      </label>
       <button id="cfg-close" class="sheet-close">Close</button>
     </div>
   </div>
