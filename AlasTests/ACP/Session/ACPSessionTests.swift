@@ -774,6 +774,45 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("toolCallUpdate merges metadata with existing tool metadata")
+    func toolCallUpdateMergesMetadataWithExistingToolMetadata() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-metadata",
+            title: "mcp tool",
+            kind: "other",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "is_mcp_tool_call": AnyCodable(true),
+                "tool": AnyCodable("screenshot")
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-metadata",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-metadata"),
+                    "data": AnyCodable("ok\n")
+                ])
+            ]))))
+
+        guard case .toolCall(let tc) = session.transcript.messages[0] else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        let metadata = try #require(tc.metadata?.value as? [String: AnyCodable])
+        #expect(metadata["is_mcp_tool_call"]?.value as? Bool == true)
+        #expect(metadata["tool"]?.value as? String == "screenshot")
+        let delta = try #require(metadata["terminal_output_delta"]?.value as? [String: AnyCodable])
+        #expect(delta["terminal_id"]?.value as? String == "term-metadata")
+    }
+
     @Test("image-only toolCall content is preserved as assets without preview")
     func imageOnlyToolCallContentPreservesAssetsWithoutPreview() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

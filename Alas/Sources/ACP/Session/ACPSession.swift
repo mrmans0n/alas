@@ -329,7 +329,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 if let rawInput = u.rawInput { tc.rawInput = Self.metadataString(rawInput) }
                 if let rawOutput = u.rawOutput { tc.rawOutput = Self.metadataString(rawOutput) }
                 if let metadata = u.metadata {
-                    tc.metadata = metadata
+                    tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
                     appliedMetadata = metadata
                     metadataTerminalIds = Self.extractMetadataTerminalIds(metadata)
                     tc.terminalIds = Self.mergeTerminalIds(tc.terminalIds, metadataTerminalIds)
@@ -738,6 +738,17 @@ final class ACPSession: ObservableObject, Identifiable {
             guard let object = Self.metadataObject(root[field]) else { return nil }
             return Self.metadataScalarString(object["terminal_id"])
         }
+    }
+
+    private static func mergeMetadata(_ existing: AnyCodable?, _ update: AnyCodable) -> AnyCodable {
+        guard var merged = Self.metadataObject(existing),
+              let updateObject = Self.metadataObject(update) else {
+            return update
+        }
+        for (key, value) in updateObject {
+            merged[key] = value
+        }
+        return AnyCodable(merged)
     }
 
     private static func metadataString(_ value: AnyCodable?) -> String? {
