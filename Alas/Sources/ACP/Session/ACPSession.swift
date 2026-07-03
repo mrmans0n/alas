@@ -263,10 +263,12 @@ final class ACPSession: ObservableObject, Identifiable {
             return [i]
         case .userMessageChunk(let chunk):
             let txt = text(of: chunk.content)
-            let i = appendUserChunk(
+            guard let i = appendUserChunk(
                 text: txt,
                 attachments: ACPSessionRunner.attachments(of: [chunk.content]),
-                messageId: chunk.messageId)
+                messageId: chunk.messageId) else {
+                return []
+            }
             return [i]
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
@@ -800,7 +802,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?) -> Int {
+    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?) -> Int? {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
@@ -869,6 +871,10 @@ final class ACPSession: ObservableObject, Identifiable {
                 attachments: mergedAttachments)
             transcript.streamingTick &+= 1
             return i
+        }
+
+        if messageId != nil, !allowsStreamingBoundaryCrossing {
+            return nil
         }
 
         guard !addition.isEmpty else {

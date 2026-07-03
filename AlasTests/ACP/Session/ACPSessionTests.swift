@@ -188,6 +188,27 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("late replay user chunk with unknown messageId does not append prompt")
+    func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .user(id: UUID(), messageId: "user-1", text: "earlier prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("earlier answer"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        let changed = session.apply(.userMessageChunk(.init(messageId: "regenerated-user-1", content: .text("earlier prompt"))))
+
+        #expect(changed.isEmpty)
+        #expect(session.transcript.messages.count == 2)
+        if case .user(_, _, let text, let attachments) = session.transcript.messages[0] {
+            #expect(text == "earlier prompt")
+            #expect(attachments.isEmpty)
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("completed output boundary does not alter existing message text")
     func completedOutputBoundaryDoesNotAddBlankLines() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
