@@ -297,6 +297,9 @@ final class ACPSession: ObservableObject, Identifiable {
             let raw = Self.flatten(items)
             let full = Self.stripWrappingFence(raw,
                                                isFinal: Self.isFinalStatus(payload.status))
+            let terminalIds = Self.mergeTerminalIds(
+                Self.extractTerminalIds(items),
+                Self.extractMetadataTerminalIds(payload.metadata))
             transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
                 title: payload.title,
@@ -310,7 +313,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 metadata: payload.metadata,
                 assets: Self.extractAssets(items),
                 locations: payload.locations?.map(\.path) ?? [],
-                terminalIds: Self.extractTerminalIds(items))))
+                terminalIds: terminalIds)))
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             applyToolCallMetadata(payload.metadata)
@@ -318,6 +321,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             var appliedMetadata: AnyCodable?
+            var metadataTerminalIds: [String] = []
             let touched = updateToolCall(id: u.toolCallId) { tc in
                 if let title = u.title { tc.title = title }
                 if let s = u.status { tc.status = s }
@@ -327,6 +331,8 @@ final class ACPSession: ObservableObject, Identifiable {
                 if let metadata = u.metadata {
                     tc.metadata = metadata
                     appliedMetadata = metadata
+                    metadataTerminalIds = Self.extractMetadataTerminalIds(metadata)
+                    tc.terminalIds = Self.mergeTerminalIds(tc.terminalIds, metadataTerminalIds)
                 }
                 if let c = u.content {
                     // ACP content updates are full replacement snapshots,
@@ -340,7 +346,7 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.content = full
                     tc.preview = Self.previewLine(full)
                     tc.contentLanguage = Self.wrappingFenceLanguage(raw)
-                    tc.terminalIds = Self.extractTerminalIds(c)
+                    tc.terminalIds = Self.mergeTerminalIds(Self.extractTerminalIds(c), metadataTerminalIds)
                     tc.assets = Self.extractAssets(c)
                 }
             }
@@ -714,6 +720,24 @@ final class ACPSession: ObservableObject, Identifiable {
         let s = String(firstLine).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !s.isEmpty else { return nil }
         return s.count > 80 ? String(s.prefix(80)) + "…" : s
+    }
+
+    private static func mergeTerminalIds(_ primary: [String], _ secondary: [String]) -> [String] {
+        var seen = Set<String>()
+        var merged: [String] = []
+        for terminalId in primary + secondary where seen.insert(terminalId).inserted {
+            merged.append(terminalId)
+        }
+        return merged
+    }
+
+    private static func extractMetadataTerminalIds(_ metadata: AnyCodable?) -> [String] {
+        guard let root = Self.metadataObject(metadata) else { return [] }
+        let fields = ["terminal_info", "terminal_output", "terminal_output_delta", "terminal_exit"]
+        return fields.compactMap { field in
+            guard let object = Self.metadataObject(root[field]) else { return nil }
+            return Self.metadataScalarString(object["terminal_id"])
+        }
     }
 
     private static func metadataString(_ value: AnyCodable?) -> String? {

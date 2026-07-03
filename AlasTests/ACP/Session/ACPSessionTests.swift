@@ -851,6 +851,41 @@ struct ACPSessionTests {
         #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
     }
 
+    @Test("metadata-only terminal output attaches terminal id to tool call")
+    func metadataOnlyTerminalOutputAttachesTerminalIdToToolCall() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-meta-only",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-meta-only",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("cmd-meta-only"),
+                    "data": AnyCodable("ok\n")
+                ])
+            ]))))
+
+        let message = try #require(session.transcript.messages.first)
+        guard case .toolCall(let toolCall) = message else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        #expect(toolCall.terminalIds == ["cmd-meta-only"])
+
+        let term = try #require(session.terminalHost.terminal(id: "cmd-meta-only"))
+        #expect(term.snapshot(byteLimit: 1024).text == "ok\n")
+    }
+
     @Test("terminal_output metadata replaces previous deltas")
     func terminalOutputMetadataReplacesPreviousDeltas() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
