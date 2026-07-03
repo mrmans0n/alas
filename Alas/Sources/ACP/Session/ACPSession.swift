@@ -96,6 +96,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
+    private var legacyUserChunkMessageIds: Set<UUID> = []
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -835,14 +836,39 @@ final class ACPSession: ObservableObject, Identifiable {
             return i
         }
 
+        if messageId == nil,
+           let i = lastLegacyUserChunkIndex(),
+           case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
+            let mergedText = text + Self.streamingSeparator(between: text, and: addition) + addition
+            let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
+            if text == mergedText && attachments == mergedAttachments {
+                return i
+            }
+            transcript.messages[i] = .user(
+                id: id,
+                messageId: existingMessageId,
+                text: mergedText,
+                attachments: mergedAttachments)
+            transcript.streamingTick &+= 1
+            return i
+        }
+
         guard !addition.isEmpty else {
-            transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
+            let id = UUID()
+            transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
+            if messageId == nil {
+                legacyUserChunkMessageIds.insert(id)
+            }
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
             return transcript.messages.count - 1
         }
 
-        transcript.messages.append(.user(id: UUID(), messageId: messageId, text: addition, attachments: newAttachments))
+        let id = UUID()
+        transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
+        if messageId == nil {
+            legacyUserChunkMessageIds.insert(id)
+        }
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         return transcript.messages.count - 1
@@ -855,6 +881,16 @@ final class ACPSession: ObservableObject, Identifiable {
                 result.append(attachment)
             }
         }
+    }
+
+    private func lastLegacyUserChunkIndex() -> Int? {
+        guard let index = transcript.messages.indices.last else { return nil }
+        if case .user(let id, let messageId, _, _) = transcript.messages[index],
+           messageId == nil,
+           legacyUserChunkMessageIds.contains(id) {
+            return index
+        }
+        return nil
     }
 
     private func lastEchoedLocalUserPromptIndex(matching text: String, attachments: [ACPMessage.Attachment]) -> Int? {

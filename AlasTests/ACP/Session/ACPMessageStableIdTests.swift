@@ -257,6 +257,28 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("legacy user_message_chunk blocks merge adjacent text and attachments")
+    func legacyUserMessageChunksMergeAdjacentTextAndAttachments() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let attachment = ACPMessage.Attachment(uri: "file:///tmp/example.swift", name: "example.swift")
+
+        let firstChanged = s.apply(.userMessageChunk(.text("see ")))
+        let secondChanged = s.apply(.userMessageChunk(.init(
+            messageId: nil,
+            content: .resourceLink(uri: "file:///tmp/example.swift", name: "example.swift"))))
+
+        #expect(firstChanged == [0])
+        #expect(secondChanged == [0])
+        #expect(s.transcript.messages.count == 1)
+        if case .user(_, let messageId, let text, let attachments) = s.transcript.messages[0] {
+            #expect(messageId == nil)
+            #expect(text == "see ")
+            #expect(attachments == [attachment])
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("toolCall row stable id matches its toolCallId")
     func toolCallId() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
