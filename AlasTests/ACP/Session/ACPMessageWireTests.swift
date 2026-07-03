@@ -120,8 +120,8 @@ struct ACPMessageWireTests {
         }
 
         #expect(decoded.contentLanguage == "plaintext")
-        #expect(decoded.rawInput == #"{\"command\":\"read_file\"}")
-        #expect(decoded.rawOutput == #"{\"status\":\"ok\"}")
+        #expect(decoded.rawInput == #"{"command":"read_file"}"#)
+        #expect(decoded.rawOutput == #"{"status":"ok"}"#)
         #expect(decoded.metadata?.value as? [String: AnyCodable] != nil)
         #expect((decoded.metadata?.value as? [String: AnyCodable])?["is_mcp_tool_call"]?.value as? Bool == true)
         #expect(decoded.assets.count == 2)
