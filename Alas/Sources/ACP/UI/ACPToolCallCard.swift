@@ -270,8 +270,7 @@ private extension ACPMessage.ToolCallAsset {
            let image = NSImage(data: decoded) {
             return image
         }
-        guard let url = Self.localURL(from: uri) else { return nil }
-        return NSImage(contentsOf: url)
+        return nil
     }
 
     var displayTitle: String {
@@ -308,20 +307,6 @@ private extension ACPMessage.ToolCallAsset {
             base64 = trimmed
         }
         return Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
-    }
-
-    private static func localURL(from value: String) -> URL? {
-        if let url = URL(string: value), let scheme = url.scheme {
-            switch scheme.lowercased() {
-            case "file":
-                return url
-            case "data":
-                return nil
-            default:
-                return nil
-            }
-        }
-        return URL(fileURLWithPath: value)
     }
 
     private static func displayURL(from value: String) -> URL? {

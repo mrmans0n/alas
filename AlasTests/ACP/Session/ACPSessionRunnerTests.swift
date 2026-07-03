@@ -536,6 +536,36 @@ struct ACPSessionRunnerTests {
         #expect(row.titleSource == .generated)
     }
 
+    @Test("session_info_update metadata updates live goal")
+    func sessionInfoUpdateMetadataUpdatesLiveGoal() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(
+                title: .absent,
+                metadata: AnyCodable([
+                    "codex": AnyCodable([
+                        "goal": AnyCodable([
+                            "objective": AnyCodable("Surface richer ACP events"),
+                            "status": AnyCodable("in_progress"),
+                            "tokenBudget": AnyCodable(12_000)
+                        ])
+                    ])
+                ])
+            ))
+        ))
+
+        try await waitUntil {
+            runner.session.currentGoal?.objective == "Surface richer ACP events"
+        }
+        let goal = try #require(runner.session.currentGoal)
+        #expect(goal.status == "in_progress")
+        #expect(goal.tokenBudget == 12_000)
+    }
+
     @Test("session_info_update preserves manual title")
     func sessionInfoUpdatePreservesManualTitle() async throws {
         let url = FileManager.default.temporaryDirectory
