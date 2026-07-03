@@ -733,7 +733,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private static func extractMetadataTerminalIds(_ metadata: AnyCodable?) -> [String] {
         guard let root = Self.metadataObject(metadata) else { return [] }
-        let fields = ["terminal_info", "terminal_output", "terminal_output_delta", "terminal_exit"]
+        let fields = ["terminal_info", "terminal_output", "terminal_output_delta"]
         return fields.compactMap { field in
             guard let object = Self.metadataObject(root[field]) else { return nil }
             return Self.metadataScalarString(object["terminal_id"])

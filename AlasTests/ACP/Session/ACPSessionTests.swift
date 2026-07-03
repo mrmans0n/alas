@@ -1070,6 +1070,34 @@ struct ACPSessionTests {
         } else { Issue.record("expected toolCall message") }
     }
 
+    @Test("terminal exit metadata does not reattach cleared terminalIds")
+    func terminalExitMetadataDoesNotReattachClearedTerminalIds() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-exit-clear", title: "run", kind: "execute", status: "in_progress",
+            content: [.terminal(terminalId: "term-exit")],
+            locations: nil, rawInput: nil, rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-exit-clear",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_exit": AnyCodable([
+                    "terminal_id": AnyCodable("term-exit"),
+                    "exit_code": AnyCodable(0)
+                ])
+            ]))))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds.isEmpty)
+            #expect(tc.content == "final output")
+        } else { Issue.record("expected toolCall message") }
+
+        let term = try #require(session.terminalHost.terminal(id: "term-exit"))
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
+    }
+
     @Test("completed toolCall strips wrapping markdown fences")
     func toolCallStripsBothFences() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
