@@ -28,12 +28,12 @@ final class ACPTerminalHost: ObservableObject {
     /// surface a `notFound` to the agent. Matches the ACP rule that a
     /// released id can no longer be used with `terminal/*` methods.
     private func liveTerminal(_ id: String) -> ACPTerminal? {
-        guard let term = terminals[id], !term.released else { return nil }
+        guard let term = terminals[id], !term.released, term.isProcessBacked else { return nil }
         return term
     }
 
     func create(_ p: ACPTerminalCreateParams) throws -> ACPTerminalCreateResult {
-        let liveCount = terminals.values.filter { $0.exitStatus == nil }.count
+        let liveCount = terminals.values.filter { $0.isProcessBacked && $0.exitStatus == nil }.count
         if liveCount >= Self.maxLiveTerminals {
             throw ACPTerminalHostError.tooManyTerminals
         }
@@ -57,6 +57,20 @@ final class ACPTerminalHost: ObservableObject {
         } catch {
             throw ACPTerminalHostError.spawnFailed(error.localizedDescription)
         }
+    }
+
+    func recordMetadataTerminalInfo(terminalId: String, cwd: String?) {
+        _ = metadataTerminal(terminalId: terminalId, cwd: cwd)
+    }
+
+    func appendMetadataOutput(terminalId: String, data: Data, replace: Bool) {
+        metadataTerminal(terminalId: terminalId, cwd: nil)
+            .appendMetadataOutput(data, replace: replace)
+    }
+
+    func recordMetadataExit(terminalId: String, exitStatus: ACPTerminalExitStatus) {
+        metadataTerminal(terminalId: terminalId, cwd: nil)
+            .finishMetadata(exitStatus: exitStatus)
     }
 
     func output(_ p: ACPTerminalOutputParams) throws -> ACPTerminalOutputResult {
@@ -124,6 +138,23 @@ final class ACPTerminalHost: ObservableObject {
         var out = sessionEnv
         for v in overlay ?? [] { out[v.name] = v.value }
         return out
+    }
+
+    private func metadataTerminal(terminalId: String, cwd: String?) -> ACPTerminal {
+        if let term = terminals[terminalId] {
+            if cwd != nil { term.updateMetadataCwd(cwd) }
+            return term
+        }
+
+        let term = ACPTerminal(
+            metadataId: terminalId,
+            cwd: cwd ?? sessionCwd,
+            outputByteLimit: 65_536)
+        term.onExit = { [weak self] in
+            self?.pruneFinishedTerminals()
+        }
+        terminals[terminalId] = term
+        return term
     }
 
     private func pruneFinishedTerminals() {

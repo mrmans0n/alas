@@ -774,6 +774,131 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("tool call metadata routes terminal output and exit")
+    func toolCallMetadataRoutesTerminalOutputAndExit() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-meta",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: [.terminal(terminalId: "cmd-meta")],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_info": AnyCodable([
+                    "terminal_id": AnyCodable("cmd-meta"),
+                    "cwd": AnyCodable("/repo")
+                ])
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-meta",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("cmd-meta"),
+                    "data": AnyCodable("ok\n")
+                ]),
+                "terminal_exit": AnyCodable([
+                    "terminal_id": AnyCodable("cmd-meta"),
+                    "exit_code": AnyCodable(0),
+                    "signal": AnyCodable(NSNull())
+                ])
+            ]))))
+
+        let term = try #require(session.terminalHost.terminal(id: "cmd-meta"))
+        #expect(term.snapshot(byteLimit: 1024).text == "ok\n")
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
+    }
+
+    @Test("terminal_output metadata replaces previous deltas")
+    func terminalOutputMetadataReplacesPreviousDeltas() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-replace",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: [.terminal(terminalId: "cmd-replace")],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-replace",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("cmd-replace"),
+                    "data": AnyCodable("stale\n")
+                ])
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-replace",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output": AnyCodable([
+                    "terminal_id": AnyCodable("cmd-replace"),
+                    "data": AnyCodable("fresh\n")
+                ])
+            ]))))
+
+        let term = try #require(session.terminalHost.terminal(id: "cmd-replace"))
+        #expect(term.snapshot(byteLimit: 1024).text == "fresh\n")
+    }
+
+    @Test("terminal metadata accepts raw Swift dictionaries")
+    func terminalMetadataAcceptsRawSwiftDictionaries() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-raw-meta",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: [.terminal(terminalId: "cmd-raw-meta")],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-raw-meta",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": [
+                    "terminal_id": "cmd-raw-meta",
+                    "data": "raw\n"
+                ]
+            ]))))
+
+        let term = try #require(session.terminalHost.terminal(id: "cmd-raw-meta"))
+        #expect(term.snapshot(byteLimit: 1024).text == "raw\n")
+    }
+
+    @Test("unknown tool call metadata does not create detached terminal")
+    func unknownToolCallMetadataDoesNotCreateDetachedTerminal() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        let touched = session.apply(.toolCallUpdate(.init(
+            toolCallId: "missing",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("missing"),
+                    "data": AnyCodable("orphan\n")
+                ])
+            ]))))
+
+        #expect(touched.isEmpty)
+        #expect(session.terminalHost.terminal(id: "missing") == nil)
+    }
+
     @Test("toolCall content preserves embedded resource text and asset")
     func toolCallPreservesEmbeddedResourceTextAndAsset() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

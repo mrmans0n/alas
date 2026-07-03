@@ -26,6 +26,53 @@ struct ACPTerminalHostTests {
         }
     }
 
+    @Test("metadata terminal appends output and records exit")
+    func metadataTerminalAppendsOutputAndExit() async throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+
+        host.recordMetadataTerminalInfo(terminalId: "meta-1", cwd: "/repo")
+        host.appendMetadataOutput(
+            terminalId: "meta-1",
+            data: Data("first\nsecond\n".utf8),
+            replace: false)
+        host.recordMetadataExit(
+            terminalId: "meta-1",
+            exitStatus: ACPTerminalExitStatus(exitCode: 7, signal: nil))
+
+        let term = try #require(host.terminal(id: "meta-1"))
+        #expect(term.snapshot(byteLimit: 1024).text == "first\nsecond\n")
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 7, signal: nil))
+        #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            _ = try host.output(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+        await #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            _ = try await host.waitForExit(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+        #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            try host.kill(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+        #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            try host.release(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+    }
+
+    @Test("metadata terminal replacement overwrites output")
+    func metadataTerminalReplacementOverwritesOutput() throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+
+        host.appendMetadataOutput(
+            terminalId: "meta-2",
+            data: Data("stale\n".utf8),
+            replace: false)
+        host.appendMetadataOutput(
+            terminalId: "meta-2",
+            data: Data("fresh\n".utf8),
+            replace: true)
+
+        let term = try #require(host.terminal(id: "meta-2"))
+        #expect(term.snapshot(byteLimit: 1024).text == "fresh\n")
+    }
+
     @Test("release retains the entry but invalidates the id for protocol calls")
     func releaseRetainsForUI() async throws {
         let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])

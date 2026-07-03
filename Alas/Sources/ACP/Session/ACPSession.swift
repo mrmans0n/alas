@@ -313,16 +313,21 @@ final class ACPSession: ObservableObject, Identifiable {
                 terminalIds: Self.extractTerminalIds(items))))
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
+            applyToolCallMetadata(payload.metadata)
             return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
+            var appliedMetadata: AnyCodable?
             let touched = updateToolCall(id: u.toolCallId) { tc in
                 if let title = u.title { tc.title = title }
                 if let s = u.status { tc.status = s }
                 if let locations = u.locations { tc.locations = locations.map(\.path) }
                 if let rawInput = u.rawInput { tc.rawInput = Self.metadataString(rawInput) }
                 if let rawOutput = u.rawOutput { tc.rawOutput = Self.metadataString(rawOutput) }
-                if let metadata = u.metadata { tc.metadata = metadata }
+                if let metadata = u.metadata {
+                    tc.metadata = metadata
+                    appliedMetadata = metadata
+                }
                 if let c = u.content {
                     // ACP content updates are full replacement snapshots,
                     // so terminalIds tracks the *current* content — assign
@@ -339,6 +344,7 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.assets = Self.extractAssets(c)
                 }
             }
+            applyToolCallMetadata(appliedMetadata)
             return touched.map { [$0] } ?? []
         case .sessionInfoUpdate(let info):
             applySessionInfoUpdate(info)
@@ -724,6 +730,68 @@ final class ACPSession: ObservableObject, Identifiable {
     private static func boundedMetadataPreview(_ string: String) -> String {
         guard string.count > metadataPreviewLimit else { return string }
         return String(string.prefix(metadataPreviewLimit)) + "… [truncated]"
+    }
+
+    private func applyToolCallMetadata(_ metadata: AnyCodable?) {
+        guard let root = Self.metadataObject(metadata) else { return }
+
+        if let info = Self.metadataObject(root["terminal_info"]),
+           let terminalId = Self.metadataScalarString(info["terminal_id"]) {
+            terminalHost.recordMetadataTerminalInfo(
+                terminalId: terminalId,
+                cwd: Self.metadataScalarString(info["cwd"]))
+        }
+
+        if let output = Self.metadataObject(root["terminal_output"]),
+           let terminalId = Self.metadataScalarString(output["terminal_id"]),
+           let text = Self.metadataScalarString(output["data"]) {
+            terminalHost.appendMetadataOutput(
+                terminalId: terminalId,
+                data: Data(text.utf8),
+                replace: true)
+        }
+
+        if let delta = Self.metadataObject(root["terminal_output_delta"]),
+           let terminalId = Self.metadataScalarString(delta["terminal_id"]),
+           let text = Self.metadataScalarString(delta["data"]) {
+            terminalHost.appendMetadataOutput(
+                terminalId: terminalId,
+                data: Data(text.utf8),
+                replace: false)
+        }
+
+        if let exit = Self.metadataObject(root["terminal_exit"]),
+           let terminalId = Self.metadataScalarString(exit["terminal_id"]) {
+            terminalHost.recordMetadataExit(
+                terminalId: terminalId,
+                exitStatus: ACPTerminalExitStatus(
+                    exitCode: Self.metadataInt(exit["exit_code"]),
+                    signal: Self.metadataScalarString(exit["signal"])))
+        }
+    }
+
+    private static func metadataObject(_ value: AnyCodable?) -> [String: AnyCodable]? {
+        if let dict = value?.value as? [String: AnyCodable] { return dict }
+        if let dict = value?.value as? [String: Any] {
+            return dict.mapValues { raw in
+                (raw as? AnyCodable) ?? AnyCodable(raw)
+            }
+        }
+        return nil
+    }
+
+    private static func metadataScalarString(_ value: AnyCodable?) -> String? {
+        guard let raw = value?.value, !(raw is NSNull) else { return nil }
+        return raw as? String
+    }
+
+    private static func metadataInt(_ value: AnyCodable?) -> Int? {
+        guard let raw = value?.value, !(raw is NSNull) else { return nil }
+        if let int = raw as? Int { return int }
+        if let double = raw as? Double, double.rounded(.towardZero) == double {
+            return Int(double)
+        }
+        return nil
     }
 
     private static func extractTerminalIds(_ items: [ACPToolCallContent]) -> [String] {
