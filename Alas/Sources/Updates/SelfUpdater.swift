@@ -1,10 +1,11 @@
 import Foundation
 import Observation
 
-/// Command shape for a self-update operation. For now this is always
-/// `brew upgrade --cask alas`, but wrapping it makes `SelfUpdater` testable
-/// and avoids scattering the command across views.
+/// Command shape for a self-update operation. Wrapping the Homebrew command
+/// makes `SelfUpdater` testable and avoids scattering it across views.
 struct SelfUpdateCommand: Equatable, Sendable {
+    static let alasHomebrewCask = "mrmans0n/tap/alas"
+
     let executable: String
     let arguments: [String]
 
@@ -17,7 +18,7 @@ struct SelfUpdateCommand: Equatable, Sendable {
         let executable = host.detected[.brew]?.executable ?? "/opt/homebrew/bin/brew"
         return SelfUpdateCommand(
             executable: executable,
-            arguments: ["upgrade", "--cask", "alas"]
+            arguments: ["upgrade", "--cask", alasHomebrewCask]
         )
     }
 
