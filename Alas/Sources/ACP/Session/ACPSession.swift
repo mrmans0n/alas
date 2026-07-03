@@ -252,12 +252,14 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
-            let i = appendStreaming(
+            guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
-                makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) })
+                makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
+                return []
+            }
             return [i]
         case .userMessageChunk(let chunk):
             let txt = text(of: chunk.content)
@@ -269,12 +271,14 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
-            let i = appendStreaming(
+            guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
-                makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) })
+                makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
+                return []
+            }
             return [i]
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
@@ -928,10 +932,10 @@ final class ACPSession: ObservableObject, Identifiable {
 
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
-                                messageId: String?,
-                                locateByMessageId: (String) -> Int?,
-                                locateLegacy: () -> Int?,
-                                makeNew: () -> ACPMessage) -> Int {
+                                 messageId: String?,
+                                 locateByMessageId: (String) -> Int?,
+                                 locateLegacy: () -> Int?,
+                                 makeNew: () -> ACPMessage) -> Int? {
         let located = if let messageId {
             locateByMessageId(messageId)
         } else {
@@ -960,6 +964,9 @@ final class ACPSession: ObservableObject, Identifiable {
                     break
                 }
             }
+        }
+        if messageId != nil, !allowsStreamingBoundaryCrossing {
+            return nil
         }
         transcript.messages.append(makeNew())
         didAppendTranscriptMessage()
