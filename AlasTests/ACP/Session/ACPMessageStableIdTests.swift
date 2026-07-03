@@ -119,6 +119,16 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("empty user chunk without attachments does not append")
+    func emptyUserChunkWithoutAttachmentsDoesNotAppend() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+
+        let changed = s.apply(.userMessageChunk(.text("")))
+
+        #expect(changed.isEmpty)
+        #expect(s.transcript.messages.isEmpty)
+    }
+
     @Test("mixed user chunks with messageId keep text and attachments together")
     func mixedUserChunksKeepTextAndAttachmentsTogether() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

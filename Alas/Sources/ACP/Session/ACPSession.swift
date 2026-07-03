@@ -885,7 +885,8 @@ final class ACPSession: ObservableObject, Identifiable {
             return nil
         }
 
-        guard !addition.isEmpty else {
+        if addition.isEmpty {
+            guard !newAttachments.isEmpty else { return nil }
             let id = UUID()
             transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
             if let messageId {
