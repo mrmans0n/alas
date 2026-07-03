@@ -31,12 +31,12 @@ struct ACPToolCallCard: View {
             } label: {
                 HStack(spacing: 8) {
                     glyph
-                    Text(verb)
+                    Text(presentation.label)
                         .font(.system(size: 10.5, weight: .semibold))
                         .tracking(0.6)
                         .textCase(.uppercase)
                         .foregroundStyle(theme.color("fg-faint"))
-                    if !toolCall.title.isEmpty && toolCall.title.lowercased() != verb.lowercased() {
+                    if !toolCall.title.isEmpty && toolCall.title.lowercased() != presentation.label.lowercased() {
                         FileChip(path: toolCall.title, lines: nil, iconSystemName: nil)
                     }
                     if let first = toolCall.locations.first {
@@ -161,24 +161,8 @@ struct ACPToolCallCard: View {
         expanded ? theme.color("bg-4") : theme.color("line")
     }
 
-    private var verb: String {
-        switch toolCall.kind {
-        case "read":          return "Read"
-        case "search":        return "Searched"
-        case "execute","run": return "Ran"
-        case "edit":          return "Edit"
-        default:              return toolCall.kind?.capitalized ?? "Tool"
-        }
-    }
-
-    private var iconSystemName: String {
-        switch toolCall.kind {
-        case "read":          return "doc.text"
-        case "search":        return "magnifyingglass"
-        case "execute","run": return "terminal"
-        case "edit":          return "pencil"
-        default:              return "gearshape"
-        }
+    private var presentation: ACPToolCallPresentation {
+        ACPToolCallPresentation.resolve(toolCall)
     }
 
     @ViewBuilder
@@ -186,7 +170,7 @@ struct ACPToolCallCard: View {
         ZStack {
             RoundedRectangle(cornerRadius: 4)
                 .fill(theme.color("bg-0").opacity(0.8))
-            Image(systemName: iconSystemName)
+            Image(systemName: presentation.iconSystemName)
                 .font(.system(size: 10))
                 .foregroundStyle(theme.color("accent"))
         }
