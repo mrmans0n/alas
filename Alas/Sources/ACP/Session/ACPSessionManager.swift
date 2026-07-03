@@ -1250,6 +1250,9 @@ extension ACPSessionManager {
     /// by-index mutation avoids violating those invariants.
     func refreshMirror(sessionId: ACPSession.ID) async {
         guard let session = sessions[sessionId] else { return }
+        if let row = try? store.loadSession(id: sessionId) {
+            syncMirrorSessionMetadata(row, to: session)
+        }
         // Always sync the queue — it can change (drain/clear) with no new
         // transcript rows, so this must run before any early-return below.
         let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
@@ -1272,6 +1275,22 @@ extension ACPSessionManager {
             session.transcript.resetWindowToTail()
         } else {
             applyRememberedTranscriptScrollWindow(to: session)
+        }
+    }
+
+    private func syncMirrorSessionMetadata(_ row: ACPSessionRow, to session: ACPSession) {
+        let titleChanged = session.title != row.title || session.titleSource != row.titleSource
+        session.title = row.title
+        session.titleSource = row.titleSource
+        session.currentModel = row.currentModel
+        session.currentMode = row.currentMode
+        session.autoRunEnabled = row.autoRun
+        if session.remoteSessionId == nil || session.remoteSessionId == row.remoteSessionId {
+            session.remoteSessionId = row.remoteSessionId
+        }
+        recent = (try? store.recentSessions()) ?? []
+        if titleChanged {
+            onSessionTitleUpdated?(row.id, row.title)
         }
     }
 }
