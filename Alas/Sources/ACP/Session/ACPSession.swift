@@ -96,6 +96,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
+    private var liveUserChunkMessageIds: Set<String> = []
     private var legacyUserChunkMessageIds: Set<UUID> = []
 
     /// Runtime-only marker for a forced queue item parked behind the current
@@ -800,12 +801,22 @@ final class ACPSession: ObservableObject, Identifiable {
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
             let mergedAttachments = Self.mergingAttachments(attachments, newAttachments)
+            let isLiveUserChunk = existingMessageId.map {
+                liveUserChunkMessageIds.contains($0)
+            } == true
             let isReconciledEchoChunk = existingMessageId.map {
                 !addition.isEmpty
                     && text.contains(addition)
-                    && (reconciledLocalUserPromptMessageIds.contains($0) || text != addition)
+                    && reconciledLocalUserPromptMessageIds.contains($0)
             } == true && newAttachments.isEmpty
-            if (text == addition && attachments == mergedAttachments)
+            let isHydratedReplayChunk = existingMessageId.map {
+                !addition.isEmpty
+                    && text.contains(addition)
+                    && !reconciledLocalUserPromptMessageIds.contains($0)
+                    && !liveUserChunkMessageIds.contains($0)
+            } == true && newAttachments.isEmpty
+            if (!isLiveUserChunk && text == addition && attachments == mergedAttachments)
+                || isHydratedReplayChunk
                 || isReconciledEchoChunk {
                 return i
             }
@@ -814,6 +825,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: existingMessageId,
                 text: text + Self.streamingSeparator(between: text, and: addition) + addition,
                 attachments: mergedAttachments)
+            if let existingMessageId {
+                liveUserChunkMessageIds.insert(existingMessageId)
+            }
             transcript.streamingTick &+= 1
             return i
         }
@@ -856,7 +870,9 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !addition.isEmpty else {
             let id = UUID()
             transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
-            if messageId == nil {
+            if let messageId {
+                liveUserChunkMessageIds.insert(messageId)
+            } else {
                 legacyUserChunkMessageIds.insert(id)
             }
             didAppendTranscriptMessage()
@@ -866,7 +882,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
         let id = UUID()
         transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
-        if messageId == nil {
+        if let messageId {
+            liveUserChunkMessageIds.insert(messageId)
+        } else {
             legacyUserChunkMessageIds.insert(id)
         }
         didAppendTranscriptMessage()

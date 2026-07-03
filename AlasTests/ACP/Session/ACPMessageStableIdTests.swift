@@ -65,10 +65,26 @@ struct ACPMessageStableIdTests {
         }
     }
 
+    @Test("repeated user chunks with messageId are preserved")
+    func repeatedUserChunksWithMessageIdArePreserved() async {
+        let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("a"))))
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("a"))))
+        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("a"))))
+
+        #expect(s.transcript.messages.map(\.stableId) == ["acp-user:user-1"])
+        if case .user(_, _, let text, let attachments) = s.transcript.messages[0] {
+            #expect(text == "aaa")
+            #expect(attachments.isEmpty)
+        } else {
+            Issue.record("expected user message")
+        }
+    }
+
     @Test("replayed user_message_chunk does not duplicate hydrated user text")
     func replayedUserMessageChunkDoesNotDuplicateHydratedUserText() async {
         let s = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
-        s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("hello world"))))
+        s.transcript.messages = [.user(id: UUID(), messageId: "user-1", text: "hello world", attachments: [])]
 
         let changed = s.apply(.userMessageChunk(.init(messageId: "user-1", content: .text("hello "))))
 
