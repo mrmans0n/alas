@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-07-04
+
+### ✨ Features
+
+- Enrich ACP transcript event handling (#627).
+
+### 🐛 Fixes
+
+- Stop remote web tool cards collapsing to 1px as the transcript fills (#628).
+- Make the remote web config sheet scrollable when the model list overflows (#626).
+
+### 🏗️ Internal
+
+- Cover superseded ACP transcript restore status in tests (#625).
+
 ## [0.8.11] - 2026-07-03
 
 ### ✨ Features
