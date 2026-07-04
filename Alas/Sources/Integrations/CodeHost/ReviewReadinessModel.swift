@@ -253,7 +253,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if request.worstCheckBucket == .pending {
                 actions.append(refreshAction)
             }
-            let canMergeNow = Self.canMergeReviewRequest(snapshot: snapshot, request: request)
+            let canMergeNow = Self.canMergeReviewRequest(snapshot: snapshot)
             if canMergeNow {
                 actions.append(Action(kind: .merge, title: request.provider.mergeReviewRequestTitle, isEnabled: true))
             }
@@ -274,8 +274,23 @@ struct ReviewReadinessModel: Equatable, Sendable {
         return actions.isEmpty ? [refreshAction] : actions
     }
 
-    private static func canMergeReviewRequest(snapshot: ReviewLoopSnapshot, request: ReviewRequest) -> Bool {
-        snapshot.providerCapabilities.canMerge
+    /// Single source of truth for "can this review request be merged now?".
+    /// Includes the local-sync preconditions (`makeActions` enforces these
+    /// structurally via its else-if chain, but the Inspect-tab button and the
+    /// merge handler reuse this helper directly, so the guards must live here
+    /// too): merging a green PR whose head predates unpushed local commits
+    /// would drop that work and delete the branch.
+    static func canMergeReviewRequest(snapshot: ReviewLoopSnapshot) -> Bool {
+        guard let request = snapshot.reviewRequest else { return false }
+        guard snapshot.remote != nil,
+              snapshot.providerAvailable,
+              snapshot.providerAuthenticated
+        else { return false }
+        guard snapshot.local.pushState != .diverged,
+              snapshot.local.pushState != .stale,
+              !snapshot.local.needsPush
+        else { return false }
+        return snapshot.providerCapabilities.canMerge
             && request.state == .open
             && !request.isDraft
             && request.mergeState == .clean

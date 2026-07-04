@@ -835,14 +835,33 @@ struct GitHubCLIProvider: CodeHostProvider {
         case .merge: args.append("--merge")
         case .rebase: args.append("--rebase")
         }
-        if deleteBranch {
-            args.append("--delete-branch")
+        // Pin the merge to the reviewed head so a push that lands between the
+        // snapshot load and the confirmation can't merge an unreviewed commit.
+        if let headSHA = request.headSHA {
+            args.append(contentsOf: ["--match-head-commit", headSHA])
         }
         args.append(contentsOf: ["-R", Self.highLevelRepositorySelector(remote: request.remote)])
 
         let result = try await runner.run("gh", args: args, cwd: cwd)
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh pr merge", stderr: result.stderr)
+        }
+
+        // Delete the remote branch only. `gh pr merge --delete-branch` also
+        // deletes the *local* branch, which fails in Alas' linked-worktree
+        // workflow when that branch is checked out — surfacing a false merge
+        // failure even though the PR already merged. Best-effort: the merge
+        // has succeeded, so ignore cleanup errors (e.g. a repo configured to
+        // auto-delete head branches will already have removed the ref).
+        if deleteBranch {
+            _ = try? await runner.run(
+                "gh",
+                args: [
+                    "api", "--method", "DELETE",
+                    "repos/\(Self.highLevelRepositorySelector(remote: request.remote))/git/refs/heads/\(request.headRefName)",
+                ],
+                cwd: cwd
+            )
         }
     }
 

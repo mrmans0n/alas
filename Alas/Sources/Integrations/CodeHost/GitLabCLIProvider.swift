@@ -141,6 +141,11 @@ struct GitLabCLIProvider: CodeHostProvider {
         if deleteBranch {
             args.append("--remove-source-branch")
         }
+        // Pin the merge to the reviewed head so a push landing between the
+        // snapshot load and the confirmation can't merge an unreviewed commit.
+        if let headSHA = request.headSHA {
+            args.append(contentsOf: ["--sha", headSHA])
+        }
         args.append("--yes")
         args.append(contentsOf: ["-R", request.remote.repositorySlug])
 

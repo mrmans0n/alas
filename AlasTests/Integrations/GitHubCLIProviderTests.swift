@@ -1563,8 +1563,11 @@ struct GitHubCLIProviderTests {
         ])
     }
 
-    @Test func mergeReviewRequestRunsSquashDeleteBranch() async throws {
-        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
+    @Test func mergeReviewRequestSquashesPinsHeadAndDeletesRemoteBranch() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
         let provider = GitHubCLIProvider(runner: runner)
         let request = Self.makeRequest()
 
@@ -1576,7 +1579,35 @@ struct GitHubCLIProviderTests {
                 args: [
                     "pr", "merge", "42",
                     "--squash",
-                    "--delete-branch",
+                    "--match-head-commit", "head-sha-42",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "api", "--method", "DELETE",
+                    "repos/mrmans0n/alas/git/refs/heads/feature/github-provider",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func mergeReviewRequestWithoutHeadSHAOmitsPinAndSkipsRemoteDelete() async throws {
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
+        let provider = GitHubCLIProvider(runner: runner)
+        let request = Self.makeRequest(headSHA: nil)
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: false, cwd: Self.cwd)
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "merge", "42",
+                    "--squash",
                     "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
@@ -1621,7 +1652,8 @@ struct GitHubCLIProviderTests {
     private static func makeRequest(
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = [],
-        reviewDecision: ReviewDecision = .approved
+        reviewDecision: ReviewDecision = .approved,
+        headSHA: String? = "head-sha-42"
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,
@@ -1632,7 +1664,7 @@ struct GitHubCLIProviderTests {
             isDraft: false,
             headRefName: "feature/github-provider",
             baseRefName: "main",
-            headSHA: "head-sha-42",
+            headSHA: headSHA,
             reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,

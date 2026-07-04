@@ -1779,6 +1779,7 @@ struct GitLabCLIProviderTests {
                     "mr", "merge", "42",
                     "--squash",
                     "--remove-source-branch",
+                    "--sha", "head123",
                     "--yes",
                     "-R", "platform/mobile/alas",
                 ],

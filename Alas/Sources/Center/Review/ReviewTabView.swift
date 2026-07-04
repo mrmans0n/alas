@@ -128,12 +128,8 @@ struct ReviewTabView: View {
     }
 
     private var canMergeReviewRequest: Bool {
-        guard let request = reviewRequest else { return false }
-        return capabilities.canMerge
-            && request.state == .open
-            && !request.isDraft
-            && request.mergeState == .clean
-            && (request.worstCheckBucket == nil || request.worstCheckBucket == .pass)
+        guard let snapshot = matchedSnapshot else { return false }
+        return ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
     }
 
     private var outdatedAndFileLevelThreads: [ReviewThread] {

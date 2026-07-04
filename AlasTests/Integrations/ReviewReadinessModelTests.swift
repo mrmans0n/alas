@@ -305,6 +305,29 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func unpushedLocalCommitsSuppressMergeEvenWhenPRIsGreen() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(
+            local: Self.makeLocal(needsPush: true),
+            reviewRequest: request
+        )
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        // Local head is ahead of what the green PR reviewed — merging now
+        // would ship the old head and delete the branch, dropping the
+        // unpushed commits. The gate (shared with the Inspect-tab button and
+        // the merge handler) must suppress merge here.
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
     @Test func pendingChecksDoNotExposeMerge() {
         let request = Self.makeReviewRequest(
             mergeState: .clean,

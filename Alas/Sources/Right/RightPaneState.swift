@@ -331,7 +331,7 @@ final class RightPaneState {
             }
         case .merge:
             guard let snapshot = reviewLoop.snapshot,
-                  snapshot.reviewRequest != nil
+                  ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
             else { return }
             pendingMerge = snapshot
         }
