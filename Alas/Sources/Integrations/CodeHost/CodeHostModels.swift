@@ -39,6 +39,10 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
     var openReviewRequestTitle: String {
         "Open \(reviewRequestLabel)"
     }
+
+    var mergeReviewRequestTitle: String {
+        "Merge \(reviewRequestLabel)"
+    }
 }
 
 struct CodeHostRemote: Equatable, Sendable {
@@ -72,6 +76,7 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
     let canFetchAnnotations: Bool
     let canEditComment: Bool
     let canDeleteComment: Bool
+    let canMerge: Bool
 
     static let readOnly = CodeHostProviderCapabilities(
         canCreateReviewRequest: false,
@@ -83,7 +88,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canSubmitReview: false,
         canFetchAnnotations: false,
         canEditComment: false,
-        canDeleteComment: false
+        canDeleteComment: false,
+        canMerge: false
     )
 
     static let githubCLI = CodeHostProviderCapabilities(
@@ -96,7 +102,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canSubmitReview: true,
         canFetchAnnotations: true,
         canEditComment: true,
-        canDeleteComment: true
+        canDeleteComment: true,
+        canMerge: true
     )
 
     static let gitlabCLI = CodeHostProviderCapabilities(
@@ -109,7 +116,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canSubmitReview: true,
         canFetchAnnotations: false,
         canEditComment: true,
-        canDeleteComment: true
+        canDeleteComment: true,
+        canMerge: true
     )
 }
 
@@ -138,6 +146,12 @@ enum ReviewMergeState: String, Codable, Equatable, Sendable {
     case dirty
     case unstable
     case unknown
+}
+
+enum ReviewMergeMethod: String, Codable, Equatable, Sendable {
+    case squash
+    case merge
+    case rebase
 }
 
 enum ReviewCheckBucket: String, Codable, Equatable, Sendable {

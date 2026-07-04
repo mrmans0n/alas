@@ -137,7 +137,8 @@ struct ReviewReadinessModelTests {
             canSubmitReview: true,
             canFetchAnnotations: false,
             canEditComment: true,
-            canDeleteComment: true
+            canDeleteComment: true,
+            canMerge: true
         )
 
         let model = ReviewReadinessModel(

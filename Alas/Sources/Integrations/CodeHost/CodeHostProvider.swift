@@ -130,6 +130,13 @@ protocol CodeHostProvider: Sendable {
         cwd: URL
     ) async throws
 
+    func mergeReviewRequest(
+        _ request: ReviewRequest,
+        method: ReviewMergeMethod,
+        deleteBranch: Bool,
+        cwd: URL
+    ) async throws
+
     func startReview(
         remote: CodeHostRemote,
         request: ReviewRequest,
@@ -279,6 +286,15 @@ extension CodeHostProvider {
         cwd: URL
     ) async throws {
         throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func mergeReviewRequest(
+        _ request: ReviewRequest,
+        method: ReviewMergeMethod,
+        deleteBranch: Bool,
+        cwd: URL
+    ) async throws {
+        throw CodeHostProviderError.unsupportedProvider(request.remote.kind)
     }
 
     func startReview(
