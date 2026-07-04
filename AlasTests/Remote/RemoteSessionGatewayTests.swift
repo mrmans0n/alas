@@ -811,6 +811,13 @@ struct RemoteSessionGatewayTests {
             status: "completed",
             content: "",
             preview: nil,
+            rawOutput: #"{"b64_json":"raw-output-base64"}"#,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-remote"),
+                    "data": AnyCodable("large terminal output")
+                ])
+            ]),
             assets: [
                 .image(
                     data: "base64-image-data",
@@ -823,9 +830,13 @@ struct RemoteSessionGatewayTests {
         let wire = RemoteSessionGateway.toWire(msg, index: 0)
         let json = try #require(wire.json)
         #expect(!json.contains("base64-image-data"))
+        #expect(!json.contains("raw-output-base64"))
+        #expect(!json.contains("large terminal output"))
 
         let payload = try #require(json.data(using: .utf8))
         let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload)
+        #expect(decoded.rawOutput == nil)
+        #expect(decoded.metadata == nil)
         #expect(decoded.assets == [
             .image(
                 data: nil,

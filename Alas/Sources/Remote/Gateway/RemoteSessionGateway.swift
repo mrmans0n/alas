@@ -487,6 +487,8 @@ final class RemoteSessionGateway {
 
     private static func remoteToolCall(_ call: ACPMessage.ToolCall) -> ACPMessage.ToolCall {
         var remote = call
+        remote.rawOutput = nil
+        remote.metadata = nil
         remote.assets = call.assets.map { asset in
             ACPMessage.ToolCallAsset(
                 kind: asset.kind,

@@ -1115,6 +1115,61 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("suppressed tool update replay does not downgrade completed output")
+    func suppressedToolUpdateReplayDoesNotDowngradeCompletedOutput() async throws {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-update-replay-downgrade",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: [.init(path: "Sources/Final.swift", line: 10)],
+            rawInput: AnyCodable(["command": AnyCodable("swift test")]),
+            rawOutput: nil)))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "tc-update-replay-downgrade",
+            status: "in_progress",
+            content: [.content(.text("partial output"))],
+            rawOutput: AnyCodable([
+                "data": AnyCodable([
+                    AnyCodable([
+                        "b64_json": AnyCodable("raw-output-data")
+                    ])
+                ])
+            ]),
+            title: "Initial command",
+            locations: [.init(path: "Sources/Stale.swift", line: 1)],
+            rawInput: AnyCodable(["command": AnyCodable("stale")]),
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay"),
+                    "data": AnyCodable("delta")
+                ])
+            ]))))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.kind == "execute")
+            #expect(tc.status == "completed")
+            #expect(tc.content == "final output")
+            #expect(tc.locations == ["Sources/Final.swift"])
+            #expect(tc.rawInput?.contains("swift test") == true)
+            #expect(tc.rawInput?.contains("stale") == false)
+            #expect(tc.terminalIds == ["term-replay"])
+            let metadata = try #require(tc.metadata?.value as? [String: AnyCodable])
+            #expect(metadata["terminal_output_delta"] != nil)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("content update does not preserve stale content image assets")
     func contentUpdateDoesNotPreserveStaleContentImageAssets() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
