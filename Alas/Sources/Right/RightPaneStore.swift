@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 @Observable
 @MainActor
@@ -16,31 +17,104 @@ final class RightPaneStore {
     /// retain the app.
     weak var appState: AppState?
 
+    private let git: GitService
+
+    init(git: GitService = GitService()) {
+        self.git = git
+    }
+
+    /// Returns the branch name the Commits section should compare HEAD against
+    /// when no user override has been set. If the worktree is checked out on the
+    /// configured base branch itself, prefer `origin/<baseBranch>` so the
+    /// comparison is meaningful instead of `branch..branch`.
+    static func effectiveBaseBranch(worktree: Worktree, baseBranch: String) -> String {
+        guard !baseBranch.isEmpty else { return baseBranch }
+        guard worktree.branch == baseBranch else { return baseBranch }
+        return "origin/\(baseBranch)"
+    }
+
+    /// Verifies whether `origin/<baseBranch>` resolves in the worktree. If it
+    /// does not, returns the original `baseBranch`. Errors are swallowed and
+    /// logged so the UI never crashes on a bad git probe.
+    ///
+    /// This probe specifically checks the remote-tracking ref
+    /// `refs/remotes/origin/<baseBranch>` rather than delegating to the generic
+    /// `resolveBaseRef` helper, so slash-named branches such as `release/1.0`
+    /// do not accidentally resolve to the local branch of the same name.
+    private func resolveEffectiveBaseBranch(
+        worktreePath: URL,
+        baseBranch: String
+    ) async -> String {
+        guard !baseBranch.isEmpty else { return baseBranch }
+        do {
+            let result = try await git.resolveRevision(
+                at: worktreePath,
+                ref: "refs/remotes/origin/\(baseBranch)"
+            )
+            guard !result.isEmpty else { return baseBranch }
+            return "origin/\(baseBranch)"
+        } catch {
+            logger.error("Failed to resolve effective base branch for \(worktreePath.path): \(error.localizedDescription)")
+        }
+        return baseBranch
+    }
+
+    private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
+
     func state(for worktree: Worktree, baseBranch: String, trackUpstreamForCommits: Bool) -> RightPaneState {
         let id = worktree.id
         let result: RightPaneState
+        let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
         if let existing = states[id] {
             let trackUpstreamChanged = existing.trackUpstreamForCommits != trackUpstreamForCommits
-            // If the global config base branch changed (Settings → Worktrees),
-            // honor the new value and clear the user override. If it didn't
-            // change, leave the state's baseBranch alone so a user-picked
-            // override survives across renders.
+
+            // Settings change: the configured base branch changed. Reset to the
+            // new default unless the user picked a branch themselves.
             if existing.lastConfigBaseBranch != baseBranch {
-                let clearedUserOverride = existing.userOverrodeBaseBranch
-                let baseChanged = existing.baseBranch != baseBranch
                 existing.lastConfigBaseBranch = baseBranch
+                existing.lastEffectiveBaseBranch = rawDefault
                 existing.userOverrodeBaseBranch = false
-                if baseChanged {
-                    existing.baseBranch = baseBranch
+                existing.baseBranch = rawDefault
+                existing.reviewLoop.updateBaseBranch(baseBranch)
+                existing.behindBase = nil
+                existing.baseBranchProbeTask?.cancel()
+                existing.isAwaitingBaseBranchProbe = false
+                Task { @MainActor in
+                    await existing.refresh()
+                    await existing.refreshSyncStatus()
                 }
-                if baseChanged || clearedUserOverride {
-                    // Clear the prior probe so the chip doesn't show a stale
-                    // count while comparison semantics are changing.
-                    existing.behindBase = nil
-                    Task { @MainActor in
-                        await existing.refresh()
-                        await existing.refreshSyncStatus()
-                    }
+
+                // If the new default points to a guessed origin ref, verify it
+                // asynchronously and fall back to the configured base branch
+                // if the remote ref does not exist.
+                if rawDefault != baseBranch {
+                    scheduleBaseBranchProbe(
+                        for: existing,
+                        worktreePath: worktree.path,
+                        rawBaseBranch: baseBranch
+                    )
+                }
+            } else if !existing.userOverrodeBaseBranch && existing.lastEffectiveBaseBranch != rawDefault {
+                // The configured base didn't change, but the effective default
+                // did (e.g. the worktree branch changed). Follow it without
+                // discarding a verified fallback.
+                existing.lastEffectiveBaseBranch = rawDefault
+                existing.baseBranch = rawDefault
+                // The review loop tracks the configured base branch, not the
+                // comparison ref, so PR actions target the right remote base.
+                existing.behindBase = nil
+                existing.baseBranchProbeTask?.cancel()
+                Task { @MainActor in
+                    await existing.refresh()
+                    await existing.refreshSyncStatus()
+                }
+
+                if rawDefault != baseBranch {
+                    scheduleBaseBranchProbe(
+                        for: existing,
+                        worktreePath: worktree.path,
+                        rawBaseBranch: baseBranch
+                    )
                 }
             }
             if trackUpstreamChanged {
@@ -49,9 +123,19 @@ final class RightPaneStore {
             }
             result = existing
         } else {
+            // First activation for this worktree. If the effective default is a
+            // guessed origin ref, don't start the initial refresh until the
+            // probe either confirms it or falls back. That avoids racing two
+            // refreshes with different base refs.
+            let shouldDeferInitialRefresh = rawDefault != baseBranch
             let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
+            // The commits comparison starts from the effective default, while
+            // the review loop keeps the configured base branch for PR actions.
+            new.baseBranch = rawDefault
             new.lastConfigBaseBranch = baseBranch
+            new.lastEffectiveBaseBranch = rawDefault
             new.trackUpstreamForCommits = trackUpstreamForCommits
+            new.isAwaitingBaseBranchProbe = shouldDeferInitialRefresh
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
                 app.tabs.closeDiffTabs(worktreeId: id, relativePaths: paths)
@@ -66,23 +150,83 @@ final class RightPaneStore {
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
             }
+
+            if shouldDeferInitialRefresh {
+                new.baseBranchProbeTask = Task { @MainActor [weak self, weak new] in
+                    guard let state = new else { return }
+                    defer { state.isAwaitingBaseBranchProbe = false }
+                    let confirmed = await self?.resolveEffectiveBaseBranch(
+                        worktreePath: worktree.path,
+                        baseBranch: baseBranch
+                    ) ?? baseBranch
+                    guard !Task.isCancelled,
+                          !state.userOverrodeBaseBranch,
+                          confirmed != state.baseBranch else {
+                        // Even if we didn't change the base branch, kick off
+                        // the deferred initial refresh now that verification
+                        // is done, but only if this state is still active.
+                        guard self?.activeId == id else { return }
+                        state.start()
+                        return
+                    }
+                    // Invalidate any snapshot state populated with the guessed
+                    // origin ref before the fallback, then start with the
+                    // real base branch.
+                    state.markSnapshotUnknown()
+                    state.baseBranch = confirmed
+                    state.behindBase = nil
+                    guard self?.activeId == id else { return }
+                    state.start()
+                    await state.refresh()
+                    await state.refreshSyncStatus()
+                }
+            }
+
             states[id] = new
             result = new
         }
-        activate(id, on: result)
+        if activeId != id {
+            if let prev = activeId, let prevState = states[prev] {
+                prevState.stop()
+            }
+            activeId = id
+            // Don't start the state's background work here if we deferred it
+            // above to wait for the base-branch probe; the probe's task will
+            // call start() once it knows the real comparison ref.
+            if !result.isAwaitingBaseBranchProbe {
+                result.start()
+            }
+        }
         return result
     }
 
-    /// Marks `id` as the currently-displayed worktree. Stops the previously
-    /// active state's filesystem watcher and sync timer so background work
-    /// doesn't leak across every worktree the user has ever opened.
-    private func activate(_ id: String, on state: RightPaneState) {
-        guard activeId != id else { return }
-        if let prev = activeId, let prevState = states[prev] {
-            prevState.stop()
+    /// Verifies whether `origin/<rawBaseBranch>` resolves in the worktree. If
+    /// it does not, applies the original `rawBaseBranch` as the fallback.
+    /// Cancels any previous probe on the state first.
+    private func scheduleBaseBranchProbe(
+        for state: RightPaneState,
+        worktreePath: URL,
+        rawBaseBranch: String
+    ) {
+        state.baseBranchProbeTask?.cancel()
+        state.baseBranchProbeTask = Task { @MainActor [weak state] in
+            guard let state = state else { return }
+            defer { state.baseBranchProbeTask = nil }
+            let confirmed = await self.resolveEffectiveBaseBranch(
+                worktreePath: worktreePath,
+                baseBranch: rawBaseBranch
+            )
+            guard !Task.isCancelled,
+                  !state.userOverrodeBaseBranch,
+                  confirmed != state.baseBranch else { return }
+            // Invalidate any in-flight refresh that may have been started with
+            // the guessed origin ref before it falls back.
+            state.markSnapshotUnknown()
+            state.baseBranch = confirmed
+            state.behindBase = nil
+            await state.refresh()
+            await state.refreshSyncStatus()
         }
-        state.start()
-        activeId = id
     }
 
     /// Refreshes the cached `RightPaneState` for `worktreeId` if one exists.

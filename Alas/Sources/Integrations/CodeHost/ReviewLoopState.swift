@@ -34,6 +34,9 @@ final class ReviewLoopState {
         isExpanded = expanded
     }
 
+    /// The base branch currently used for review lookup/creation.
+    var currentBaseBranch: String { baseBranch }
+
     func updateBaseBranch(_ branch: String) {
         baseBranch = branch
         if let current = snapshot?.local {
