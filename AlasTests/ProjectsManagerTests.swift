@@ -25,6 +25,35 @@ struct ProjectsManagerTests {
         #expect(project.name == "alpha")
     }
 
+    @Test func addProjectUsesProvidedIconAndMirrorsColor() async throws {
+        let repo = try await makeRepo(name: "lambda")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let icon = ProjectIcon(mode: .emoji, color: "#112233", emoji: "🚀")
+
+        let project = try await mgr.addProject(path: repo, displayName: "lambda", icon: icon)
+
+        #expect(project.icon == icon)
+        #expect(project.color == "#112233")
+    }
+
+    @Test func addProjectUsesProvidedIdForPreStagedIconStorage() async throws {
+        let repo = try await makeRepo(name: "staged-icon")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let icon = ProjectIcon(mode: .image, color: "#112233", imagePath: "project-1/icon.png")
+
+        let project = try await mgr.addProject(
+            path: repo,
+            displayName: "staged-icon",
+            icon: icon,
+            id: "project-1"
+        )
+
+        #expect(project.id == "project-1")
+        #expect(project.icon.imagePath == "project-1/icon.png")
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -47,7 +76,7 @@ struct ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: project.id).isEmpty)
     }
 
-    @Test func updateProjectUpdatesNameAndColorOnly() {
+    @Test func updateProjectUpdatesNameIconAndStartupScriptsOnly() {
         let addedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let project = ProjectConfig(
             id: "project-1",
@@ -66,15 +95,17 @@ struct ProjectsManagerTests {
             hiddenWorktreePaths: []
         )
         let mgr = ProjectsManager(persistedProjects: [project, other])
+        let icon = ProjectIcon(mode: .symbol, color: "#d77b88", symbolName: "terminal")
 
         mgr.updateProject(
             id: project.id,
-            update: ProjectUpdate(name: "After", color: "#d77b88")
+            update: ProjectUpdate(name: "After", icon: icon)
         )
 
         #expect(mgr.projects[0].id == project.id)
         #expect(mgr.projects[0].name == "After")
         #expect(mgr.projects[0].path == project.path)
+        #expect(mgr.projects[0].icon == icon)
         #expect(mgr.projects[0].color == "#d77b88")
         #expect(mgr.projects[0].addedAt == project.addedAt)
         #expect(mgr.projects[0].hiddenWorktreePaths == project.hiddenWorktreePaths)
@@ -83,11 +114,11 @@ struct ProjectsManagerTests {
 
         mgr.updateProject(
             id: "missing",
-            update: ProjectUpdate(name: "Ignored", color: "#7fb978")
+            update: ProjectUpdate(name: "Ignored", icon: ProjectIcon.default(color: "#7fb978"))
         )
 
         #expect(mgr.projects[0].name == "After")
-        #expect(mgr.projects[0].color == "#d77b88")
+        #expect(mgr.projects[0].icon == icon)
         #expect(mgr.projects[1] == other)
     }
 

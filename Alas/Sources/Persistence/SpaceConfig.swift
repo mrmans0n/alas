@@ -47,9 +47,18 @@ struct SpaceConfig: Codable, Equatable, Identifiable {
 }
 
 enum SpaceIcon {
-    static let emojiOptions = ["🏠", "💼", "✨", "🚀", "🧪", "🎨", "📚", "🔧", "🌱", "🔥", "⭐️", "🧠"]
+    static let emojiOptions = EmojiIcon.emojiOptions
 
     static func sanitized(_ rawValue: String, fallback: String = SpaceConfig.defaultEmoji) -> String {
+        EmojiIcon.sanitized(rawValue, fallback: fallback) ?? fallback
+    }
+}
+
+enum EmojiIcon {
+    static let emojiOptions = ["🏠", "💼", "✨", "🚀", "🧪", "🎨", "📚", "🔧", "🌱", "🔥", "⭐️", "🧠"]
+
+    static func sanitized(_ rawValue: String?, fallback: String? = nil) -> String? {
+        guard let rawValue else { return fallback }
         for character in rawValue.trimmingCharacters(in: .whitespacesAndNewlines) where isAllowed(character) {
             return String(character)
         }

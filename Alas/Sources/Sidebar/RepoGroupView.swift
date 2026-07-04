@@ -55,7 +55,8 @@ struct RepoGroupView: View {
                 Icon(name: collapsed ? "chev-right" : "chev-down", size: 10, color: theme.color("fg-faint"))
                     .frame(width: 14, height: 14)
                     .contentShape(Rectangle())
-                RepoDot(color: project.color, letter: letter)
+                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
+                    .accessibilityLabel(ProjectIconView.accessibilityLabel(project: project))
                 Text(project.name)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
@@ -164,11 +165,6 @@ struct RepoGroupView: View {
                 .padding(.horizontal, 6)
             }
         }
-    }
-
-    private var letter: String {
-        let after = project.name.split(separator: "/").last ?? Substring(project.name)
-        return after.prefix(1).uppercased()
     }
 
     private var summaries: [HarnessService.WorktreeHarnessSummary] {

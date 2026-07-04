@@ -3,8 +3,18 @@ import Observation
 
 struct ProjectUpdate: Equatable {
     var name: String
-    var color: String
+    var icon: ProjectIcon
     var startupScripts: ProjectStartupScripts = .defaults
+
+    init(name: String, icon: ProjectIcon, startupScripts: ProjectStartupScripts = .defaults) {
+        self.name = name
+        self.icon = icon
+        self.startupScripts = startupScripts
+    }
+
+    init(name: String, color: String, startupScripts: ProjectStartupScripts = .defaults) {
+        self.init(name: name, icon: ProjectIcon.default(color: color), startupScripts: startupScripts)
+    }
 }
 
 enum WorktreeOperationState: Equatable {
@@ -47,21 +57,41 @@ final class ProjectsManager {
         self.defaultOrderingSource = source
     }
 
-    func addProject(path: URL, displayName: String, color: String) async throws -> ProjectConfig {
+    func addProject(
+        path: URL,
+        displayName: String,
+        icon: ProjectIcon,
+        id: String = UUID().uuidString
+    ) async throws -> ProjectConfig {
         let isRepo = try await git.isGitRepository(path)
         guard isRepo else {
             throw NSError(domain: "ProjectsManager", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
         }
         let project = ProjectConfig(
-            id: UUID().uuidString,
+            id: id,
             name: displayName,
             path: path.path,
-            color: color,
-            addedAt: Date()
+            color: icon.color,
+            addedAt: Date(),
+            icon: icon
         )
         projects.append(project)
         return project
+    }
+
+    func addProject(
+        path: URL,
+        displayName: String,
+        color: String,
+        id: String = UUID().uuidString
+    ) async throws -> ProjectConfig {
+        try await addProject(
+            path: path,
+            displayName: displayName,
+            icon: ProjectIcon.default(color: color),
+            id: id
+        )
     }
 
     func removeProject(id: String) {
@@ -74,7 +104,8 @@ final class ProjectsManager {
     func updateProject(id: String, update: ProjectUpdate) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].name = update.name
-        projects[idx].color = update.color
+        projects[idx].icon = update.icon
+        projects[idx].color = update.icon.color
         projects[idx].startupScripts = update.startupScripts
     }
 

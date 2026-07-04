@@ -72,3 +72,11 @@ extension Paths {
         acpAttachmentsRoot.appendingPathComponent(id, isDirectory: true)
     }
 }
+
+extension Paths {
+    static var projectIconsRoot: URL { appSupportRoot.appendingPathComponent("project-icons", isDirectory: true) }
+
+    static func projectIconsDir(forProjectId id: String) -> URL {
+        projectIconsRoot.appendingPathComponent(id, isDirectory: true)
+    }
+}

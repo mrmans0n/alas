@@ -126,3 +126,112 @@ struct ProjectConfigTests {
         #expect(decoded.projects[0].worktreeDefaultLauncherMode == .acp)
     }
 }
+
+extension ProjectConfigTests {
+    @Test func decodingOlderProjectWithoutIconSynthesizesLetterIcon() throws {
+        let json = """
+        {
+          "version": 1,
+          "projects": [{
+            "id": "abc",
+            "name": "alpha",
+            "path": "/tmp/alpha",
+            "color": "#5fb7c4",
+            "addedAt": 0
+          }]
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let file = try decoder.decode(ProjectsFile.self, from: json)
+
+        #expect(file.projects[0].icon.mode == .letter)
+        #expect(file.projects[0].icon.color == "#5fb7c4")
+        #expect(file.projects[0].icon.label == nil)
+    }
+
+    @Test func roundTripPreservesProjectIconAndMirrorsLegacyColor() throws {
+        let project = ProjectConfig(
+            id: "abc",
+            name: "alpha",
+            path: "/tmp/alpha",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0),
+            icon: ProjectIcon(
+                mode: .symbol,
+                color: "#112233",
+                symbolName: "terminal"
+            )
+        )
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(ProjectsFile(projects: [project]))
+
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("\"color\":\"#112233\""))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(ProjectsFile.self, from: data)
+        #expect(decoded.projects[0].color == "#112233")
+        #expect(decoded.projects[0].icon.mode == .symbol)
+        #expect(decoded.projects[0].icon.symbolName == "terminal")
+    }
+
+    @Test func decodingPartialIconFallsBackToLegacyColor() throws {
+        let json = """
+        {
+          "version": 1,
+          "projects": [{
+            "id": "abc",
+            "name": "alpha",
+            "path": "/tmp/alpha",
+            "color": "#112233",
+            "icon": {
+              "mode": "emoji",
+              "emoji": "🚀"
+            },
+            "addedAt": 0
+          }]
+        }
+        """.data(using: .utf8)!
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let file = try decoder.decode(ProjectsFile.self, from: json)
+
+        #expect(file.projects[0].color == "#112233")
+        #expect(file.projects[0].icon.color == "#112233")
+        #expect(file.projects[0].icon.mode == .emoji)
+        #expect(file.projects[0].icon.emoji == "🚀")
+    }
+
+    @Test func legacyColorMutationUpdatesIconColorBeforeEncoding() throws {
+        var project = ProjectConfig(
+            id: "abc",
+            name: "alpha",
+            path: "/tmp/alpha",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0),
+            icon: ProjectIcon(mode: .symbol, color: "#5fb7c4", symbolName: "terminal")
+        )
+
+        project.color = "#112233"
+
+        #expect(project.icon.mode == .symbol)
+        #expect(project.icon.symbolName == "terminal")
+        #expect(project.icon.color == "#112233")
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(ProjectsFile(projects: [project]))
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(ProjectsFile.self, from: data)
+        #expect(decoded.projects[0].icon.color == "#112233")
+        #expect(decoded.projects[0].color == "#112233")
+    }
+}
