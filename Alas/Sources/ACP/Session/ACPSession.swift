@@ -894,10 +894,20 @@ final class ACPSession: ObservableObject, Identifiable {
                 assets.append(.image(data: data, mimeType: "image/png"))
             }
             let rawData = metadataScalarString(object["data"])
-            let consumedDataImage = rawData.flatMap(dataImageMimeType) != nil
+            let mimeDataType = rawOutputMimeType(object)
+            let consumedDataImage: Bool
             if let data = rawData,
                let mimeType = dataImageMimeType(data) {
                 assets.append(.image(data: data, mimeType: mimeType))
+                consumedDataImage = true
+            } else if let data = rawData,
+                      let mimeType = mimeDataType,
+                      mimeType.lowercased().hasPrefix("image/"),
+                      !data.isEmpty {
+                assets.append(.image(data: data, mimeType: mimeType))
+                consumedDataImage = true
+            } else {
+                consumedDataImage = false
             }
             if let uri = metadataScalarString(object["url"]),
                rawOutputURLLooksLikeImage(uri, in: object) {
@@ -974,9 +984,18 @@ final class ACPSession: ObservableObject, Identifiable {
         guard lower.contains("\"b64_json\"")
             || lower.contains("data:image/")
             || lower.contains("\"url\"")
+            || lower.contains("\"mimetype\"")
+            || lower.contains("\"mime_type\"")
         else { return [] }
         return existingAssets.filter { asset in
-            asset.kind == .image && (asset.data != nil || asset.uri != nil)
+            guard asset.kind == .image else { return false }
+            if let data = asset.data,
+               !data.isEmpty,
+               rawOutput.contains(String(data.prefix(128))) {
+                return true
+            }
+            if let uri = asset.uri, rawOutput.contains(uri) { return true }
+            return false
         }
     }
 

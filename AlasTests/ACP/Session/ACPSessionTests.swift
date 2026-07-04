@@ -891,6 +891,32 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("raw output bare image data result is preserved as an asset")
+    func rawOutputBareImageDataResultPreservesAsset() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-image-data",
+            title: "Image generation",
+            kind: "other",
+            status: "completed",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: AnyCodable([
+                "data": AnyCodable("base64-data"),
+                "mime_type": AnyCodable("image/png")
+            ]))))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "base64-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("raw output image asset survives later content update")
     func rawOutputImageAssetSurvivesLaterContentUpdate() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -924,6 +950,50 @@ struct ACPSessionTests {
             #expect(tc.content == "final output")
             #expect(tc.assets == [
                 ACPMessage.ToolCallAsset.image(data: "base64-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
+    @Test("content update does not preserve stale content image assets")
+    func contentUpdateDoesNotPreserveStaleContentImageAssets() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-stale-content-image",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: [.content(.image(data: "stale-data", uri: nil, mimeType: "image/png"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-stale-content-image",
+            status: "in_progress",
+            rawOutput: AnyCodable([
+                "data": AnyCodable([
+                    AnyCodable([
+                        "url": AnyCodable("https://example.com/generated"),
+                        "revised_prompt": AnyCodable("A useful screenshot")
+                    ])
+                ])
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-stale-content-image",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "final output")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(
+                    data: nil,
+                    uri: "https://example.com/generated",
+                    mimeType: nil,
+                    name: "generated")
             ])
         } else {
             Issue.record("expected toolCall message")
