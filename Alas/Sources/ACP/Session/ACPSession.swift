@@ -885,7 +885,11 @@ final class ACPSession: ObservableObject, Identifiable {
         if let output = Self.metadataObject(root["terminal_output"]),
            let terminalId = Self.metadataScalarString(output["terminal_id"]),
            let text = Self.metadataScalarString(output["data"]) {
-            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
+            if shouldApplyMetadataTerminalSideEffect(
+                terminalId: terminalId,
+                replaying: replaying,
+                replace: true
+            ) {
                 terminalHost.appendMetadataOutput(
                     terminalId: terminalId,
                     data: Data(text.utf8),
@@ -896,7 +900,11 @@ final class ACPSession: ObservableObject, Identifiable {
         if let delta = Self.metadataObject(root["terminal_output_delta"]),
            let terminalId = Self.metadataScalarString(delta["terminal_id"]),
            let text = Self.metadataScalarString(delta["data"]) {
-            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
+            if shouldApplyMetadataTerminalSideEffect(
+                terminalId: terminalId,
+                replaying: replaying,
+                replace: false
+            ) {
                 terminalHost.appendMetadataOutput(
                     terminalId: terminalId,
                     data: Data(text.utf8),
@@ -916,8 +924,13 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func shouldApplyMetadataTerminalSideEffect(terminalId: String, replaying: Bool) -> Bool {
+    private func shouldApplyMetadataTerminalSideEffect(
+        terminalId: String,
+        replaying: Bool,
+        replace: Bool = false
+    ) -> Bool {
         guard replaying else { return true }
+        if replace { return true }
         if replayCreatedMetadataTerminalIds.contains(terminalId) { return true }
         if let terminal = terminalHost.terminal(id: terminalId),
            !terminal.buffer.isEmpty || terminal.exitStatus != nil {

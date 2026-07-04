@@ -1425,6 +1425,45 @@ struct ACPSessionTests {
         #expect(term.snapshot(byteLimit: 1024).text == "building\n")
     }
 
+    @Test("suppressed replay replacement terminal output refreshes existing buffer")
+    func suppressedReplayReplacementTerminalOutputRefreshesExistingBuffer() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-replay-terminal-snapshot",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-terminal-snapshot",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-terminal-snapshot"),
+                    "data": AnyCodable("partial\n")
+                ])
+            ]))))
+
+        session.beginSuppressedReplaySideEffects()
+        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-terminal-snapshot",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-terminal-snapshot"),
+                    "data": AnyCodable("partial\ncomplete\n")
+                ])
+            ]))))
+
+        let term = try #require(session.terminalHost.terminal(id: "term-replay-terminal-snapshot"))
+        #expect(term.snapshot(byteLimit: 1024).text == "partial\ncomplete\n")
+    }
+
     @Test("suppressed replay rebuilds terminal metadata across replay frames")
     func suppressedReplayRebuildsTerminalMetadataAcrossReplayFrames() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
