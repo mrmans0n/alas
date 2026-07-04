@@ -417,7 +417,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if canReplaceSnapshot, let locations = payload.locations { tc.locations = locations.map(\.path) }
         if canReplaceSnapshot, let rawInput = payload.rawInput { tc.rawInput = Self.metadataString(rawInput) }
         var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
-        if let rawOutput = payload.rawOutput {
+        if (canReplaceSnapshot || Self.isFinalStatus(payload.status)), let rawOutput = payload.rawOutput {
             tc.rawOutput = Self.metadataString(rawOutput)
             rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
             tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
@@ -466,7 +466,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if canReplaceSnapshot, let status = update.status { tc.status = status }
         if canReplaceSnapshot, let locations = update.locations { tc.locations = locations.map(\.path) }
         if canReplaceSnapshot, let rawInput = update.rawInput { tc.rawInput = Self.metadataString(rawInput) }
-        if let rawOutput = update.rawOutput {
+        if (canReplaceSnapshot || update.status.map(Self.isFinalStatus) == true), let rawOutput = update.rawOutput {
             tc.rawOutput = Self.metadataString(rawOutput)
             rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
             tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)

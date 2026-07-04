@@ -1141,9 +1141,8 @@ struct ACPSessionTests {
             #expect(tc.kind == "read")
             #expect(tc.status == "completed")
             #expect(tc.content == "final output")
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
-            ])
+            #expect(tc.rawOutput == nil)
+            #expect(tc.assets == [])
         } else {
             Issue.record("expected toolCall message")
         }
@@ -1196,9 +1195,8 @@ struct ACPSessionTests {
             #expect(tc.terminalIds == ["term-replay"])
             let metadata = try #require(tc.metadata?.value as? [String: AnyCodable])
             #expect(metadata["terminal_output_delta"] != nil)
-            #expect(tc.assets == [
-                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
-            ])
+            #expect(tc.rawOutput == nil)
+            #expect(tc.assets == [])
         } else {
             Issue.record("expected toolCall message")
         }
