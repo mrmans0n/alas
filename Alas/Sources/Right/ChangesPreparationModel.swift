@@ -78,10 +78,10 @@ struct ChangesPreparationModel: Equatable {
            effectiveAheadCommitCount == 0 {
             reviewRequestAction = nil
         } else if builtReviewRequestAction?.kind == .pushBranch,
-                   builtReviewRequestAction?.isInFlight != true,
-                   local?.needsPush == false,
-                   builtReviewAction == nil,
-                   builtDraftAction == nil {
+                    builtReviewRequestAction?.isInFlight != true,
+                    builtReviewAction == nil,
+                    builtDraftAction == nil,
+                    Self.pushHasNothingToPush(local: local, aheadCommitCount: effectiveAheadCommitCount) {
             reviewRequestAction = nil
         } else {
             reviewRequestAction = builtReviewRequestAction
@@ -123,4 +123,20 @@ struct ChangesPreparationModel: Equatable {
         .openReviewRequest,
         .refresh,
     ]
+
+    /// A `pushBranch` action is only useful when there's something to push.
+    /// `GitService.needsPush` returns `true` whenever the branch has no
+    /// upstream (so a fresh branch with no commits still reports "needs
+    /// push"), which surfaces a no-op Push button on clean worktrees. Hide
+    /// it when there's no upstream and no commits ahead of base — pushing
+    /// in that state has nothing to send. When an upstream exists, trust
+    /// `needsPush` since `@{u}..HEAD` reflects real unpushed commits.
+    private static func pushHasNothingToPush(
+        local: ReviewLoopLocalState?,
+        aheadCommitCount: Int
+    ) -> Bool {
+        guard let local else { return aheadCommitCount == 0 }
+        if local.needsPush == false { return true }
+        return !local.hasUpstream && local.aheadCommitCount == 0
+    }
 }

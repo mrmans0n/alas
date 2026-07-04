@@ -362,6 +362,36 @@ struct ReviewChangesModelsTests {
         #expect(model.isVisible)
     }
 
+    @Test func preparationModelHidesPushWhenBranchHasNoUpstreamAndNoCommits() {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+        let local = ReviewLoopLocalState(
+            branchName: "feature",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: false,
+            needsPush: true
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 0,
+            local: local,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        #expect(model.reviewRequestAction == nil)
+        #expect(!model.isVisible)
+    }
+
     @Test func preparationModelShowsPushUsingLocalStateCommitCount() throws {
         let actions = [
             ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
