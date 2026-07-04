@@ -871,19 +871,27 @@ final class RightPaneState {
     func performMerge() {
         guard pendingMerge != nil else { return }
         pendingMerge = nil
-        // Re-validate against the CURRENT snapshot, not the one captured when
-        // the dialog opened. The review-loop watcher may have refreshed while
-        // the confirmation was up (a new unpushed commit, checks or review
-        // becoming blocking), which would make the captured snapshot stale.
-        // Merge the fresh snapshot only if it still qualifies.
-        guard let snapshot = reviewLoop.snapshot,
-              ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot) else {
-            sidebarError = "Merge is no longer available — the branch or review state changed."
+        // Fast reject against the currently-cached snapshot (also re-validates
+        // if the dialog captured a now-stale snapshot).
+        guard let cached = reviewLoop.snapshot,
+              ReviewReadinessModel.canMergeReviewRequest(snapshot: cached) else {
+            sidebarError = Self.mergeUnavailableMessage
             return
         }
         guard reviewLoop.beginAction(.merge) else { return }
         Task { @MainActor in
             defer { reviewLoop.endAction(.merge) }
+            // The cached snapshot can still lag reality: WorktreeWatcher
+            // debounces change events up to ~2s, so a commit created just
+            // before confirming may not have flipped `needsPush` yet. Force a
+            // live refresh (recomputes HEAD/upstream + provider checks and
+            // mergeability), then re-validate and merge the fresh snapshot.
+            await refresh()
+            guard let snapshot = reviewLoop.snapshot,
+                  ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot) else {
+                sidebarError = Self.mergeUnavailableMessage
+                return
+            }
             if await reviewLoop.merge(snapshot: snapshot) {
                 await refresh()
             } else {
@@ -891,6 +899,9 @@ final class RightPaneState {
             }
         }
     }
+
+    private static let mergeUnavailableMessage =
+        "Merge is no longer available — the branch or review state changed."
 
     func requestCherryPick(sha: String) {
         pendingCherryPickSHA = sha
