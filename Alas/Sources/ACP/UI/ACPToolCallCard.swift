@@ -266,7 +266,7 @@ private struct ACPToolCallAssetView: View {
     }
 }
 
-private extension ACPMessage.ToolCallAsset {
+extension ACPMessage.ToolCallAsset {
     var looksLikeImage: Bool {
         if mimeType?.lowercased().hasPrefix("image/") == true { return true }
         guard let candidate = nonEmpty(uri) ?? nonEmpty(name) else { return false }
@@ -337,7 +337,7 @@ private extension ACPMessage.ToolCallAsset {
         } else if value.hasPrefix("/") {
             candidate = URL(fileURLWithPath: value)
         } else {
-            candidate = URL(fileURLWithPath: value, relativeTo: trustedRoot)
+            candidate = trustedRoot.appendingPathComponent(value)
         }
         let root = trustedRoot.resolvingSymlinksInPath().standardizedFileURL
         let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL

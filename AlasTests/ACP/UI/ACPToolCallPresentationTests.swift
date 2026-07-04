@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import Alas
@@ -157,6 +158,31 @@ struct ACPToolCallPresentationTests {
         }
     }
 
+    @Test("relative image resource loads under trusted root")
+    func relativeImageResourceLoadsUnderTrustedRoot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-tool-asset-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let imageURL = root
+            .appendingPathComponent("screenshots", isDirectory: true)
+            .appendingPathComponent("out.png")
+        try FileManager.default.createDirectory(
+            at: imageURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try writePNG(width: 12, height: 8, to: imageURL)
+
+        let asset = ACPMessage.ToolCallAsset.resource(
+            uri: "screenshots/out.png",
+            name: "out.png",
+            mimeType: "image/png")
+
+        let image = try #require(asset.loadedImage(trustedRoot: root))
+        #expect(image.size.width > 0)
+        #expect(image.size.height > 0)
+    }
+
     private func toolCall(
         title: String,
         kind: String? = nil,
@@ -173,5 +199,26 @@ struct ACPToolCallPresentationTests {
             metadata: metadata,
             assets: assets
         )
+    }
+
+    private func writePNG(width: Int, height: Int, to url: URL) throws {
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: height,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0))
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        NSGraphicsContext.restoreGraphicsState()
+        let png = try #require(rep.representation(using: .png, properties: [:]))
+        try png.write(to: url)
     }
 }
