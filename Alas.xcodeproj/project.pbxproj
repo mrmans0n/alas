@@ -667,6 +667,7 @@
 		98CCFEFD7D0E8C27C6B373F6 /* ShortcutRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05B122F66B2DEA7853804624 /* ShortcutRecorder.swift */; };
 		98ED89EA20255EBB9D186AD5 /* MergeConflictBinaryDetectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31CE012ED93AA22C257FEB8A /* MergeConflictBinaryDetectionTests.swift */; };
 		9927E3934D3CAA9055EF5E44 /* DiffOpenFileAvailabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */; };
+		99613CF61A0F19105D8E7A71 /* EmojiPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEC4E033DB3BA44C825D453 /* EmojiPickerButton.swift */; };
 		99711AA1B0FB450D32770415 /* ZmxSunPathBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A40BDC5115B641AB26220D9 /* ZmxSunPathBudget.swift */; };
 		999C8421F3610FF682CE9D0E /* ReviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 500B60003934104E2CA5A895 /* ReviewTabView.swift */; };
 		9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */; };
@@ -1016,6 +1017,7 @@
 		E30832C33A680645C481826F /* ANSIStreamTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86CB3F953562BAFB284B5DB7 /* ANSIStreamTests.swift */; };
 		E31120BCB281A62D767D85BC /* HunkPatchBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA486F66BE4CEB2A16EB148B /* HunkPatchBuilderTests.swift */; };
 		E3158A4D8FBD36D06D421D28 /* RepoSelectorRecents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA420C011D4235E47A3FB1B /* RepoSelectorRecents.swift */; };
+		E3217588485CC96AB05AA5B9 /* DialogChromeLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */; };
 		E395C1299D215BA0EC4760E8 /* SpaceConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7963D4DD10B67EB683510FF6 /* SpaceConfig.swift */; };
 		E3B38707284D08326C3183E4 /* FuzzyMatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */; };
 		E3C34254BA474878AEC6683D /* PendingReviewTray.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDFF1C68250433F4B9891F1A /* PendingReviewTray.swift */; };
@@ -1433,6 +1435,7 @@
 		3F4C58E8C0B1BC5B7CB2BBCB /* Code.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Code.swift; sourceTree = "<group>"; };
 		3F79A184C86BE6C6BF72EB57 /* ACPMessageList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageList.swift; sourceTree = "<group>"; };
 		3F8435ABAF423A6F5BC28E4C /* DiffPreferenceBindings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPreferenceBindings.swift; sourceTree = "<group>"; };
+		40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DialogChromeLayoutTests.swift; sourceTree = "<group>"; };
 		4068B3E83F9A82C2E3F8A6A1 /* OpenSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenSessions.swift; sourceTree = "<group>"; };
 		4069925EE709DD18AEA810B3 /* ShortcutResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutResolver.swift; sourceTree = "<group>"; };
 		408F9FF672160D96B1C22648 /* FilesTabCompactChainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTabCompactChainTests.swift; sourceTree = "<group>"; };
@@ -1684,6 +1687,7 @@
 		7A240CD3EF074300828A1214 /* CommitReviewLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitReviewLoader.swift; sourceTree = "<group>"; };
 		7A2B4B719D9F4EAAE84B14D1 /* ProjectAvatarPresetProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectAvatarPresetProvider.swift; sourceTree = "<group>"; };
 		7B22D5EBE7EDAC07C943C91D /* WebSocketFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketFrame.swift; sourceTree = "<group>"; };
+		7BEC4E033DB3BA44C825D453 /* EmojiPickerButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPickerButton.swift; sourceTree = "<group>"; };
 		7BF6F2D792F7DFAE3DA8E597 /* ThemeEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEnvironment.swift; sourceTree = "<group>"; };
 		7C38FA009B7044E9DC5480A7 /* ACPSessionsButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionsButton.swift; sourceTree = "<group>"; };
 		7C3A8A65C6EC8182FD23AE97 /* CodeTextViewAutoPairTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeTextViewAutoPairTests.swift; sourceTree = "<group>"; };
@@ -2487,6 +2491,7 @@
 				AA98E1DB8D77DE67918D6B9F /* CopilotInstallerTests.swift */,
 				BF3F87CE04B7E98606BF76CA /* CursorInstallerTests.swift */,
 				179A74F3A825DA1EC4C4E0FC /* DebounceTimerTests.swift */,
+				40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */,
 				2B9CB2A64E9E16A2DE3A6272 /* DiffContextExpansionTests.swift */,
 				6181842BEA798CB8606F222B /* DiffDisplayModelBuilderTests.swift */,
 				729DDA22CA94FA0DC8810057 /* DiffInlineCommentModelTests.swift */,
@@ -2892,6 +2897,7 @@
 				524926F2D16B1AD83FC234AB /* ChangeSummaryVisibility.swift */,
 				0E6600436B01C75D85C01FFA /* Clipboard.swift */,
 				5C8BF1EC24E449A302A1E25C /* CopyFeedbackState.swift */,
+				7BEC4E033DB3BA44C825D453 /* EmojiPickerButton.swift */,
 				16CA8FEE64D73BDEBAF74878 /* Kbd.swift */,
 				7D4A000B32C3BF0E253BB0B6 /* PointingHandCursor.swift */,
 				EECB91379591DA21D216A894 /* RelativeTime.swift */,
@@ -4764,6 +4770,7 @@
 				395BC74AF07FD44D67DBE579 /* EditorOverlayPanel.swift in Sources */,
 				1066AF44E2FCA9B1B2DDE9D7 /* EditorTabView.swift in Sources */,
 				41F7A0E0854B545F99062BDC /* EditorTheme.swift in Sources */,
+				99613CF61A0F19105D8E7A71 /* EmojiPickerButton.swift in Sources */,
 				7CDFA95F095090FF242B8248 /* EmptyState.swift in Sources */,
 				950C937884477417569DC20B /* EmptyTabView.swift in Sources */,
 				7A0D3E122F34EF1A2A04984F /* EnvBuilder.swift in Sources */,
@@ -5299,6 +5306,7 @@
 				25347EFEF1B5F7F4915DB120 /* DebounceTimerTests.swift in Sources */,
 				7EB64E55CE27886D660C5D0C /* DefinitionSnippetCacheTests.swift in Sources */,
 				BFF99F8FDEA5D05EF4E1EEC3 /* DiagnosticsRangeTests.swift in Sources */,
+				E3217588485CC96AB05AA5B9 /* DialogChromeLayoutTests.swift in Sources */,
 				9DDA9F2462746F06A652973A /* DiffContextExpansionTests.swift in Sources */,
 				899FB89D155619CF846C6BDC /* DiffDisplayModelBuilderTests.swift in Sources */,
 				FD5B6E7F566A9D0BACD19267 /* DiffInlineCommentModelTests.swift in Sources */,

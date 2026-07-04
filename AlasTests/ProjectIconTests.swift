@@ -36,4 +36,10 @@ struct ProjectIconTests {
         #expect(ProjectIcon.sanitizedColor("nope", fallback: "#112233") == "#112233")
         #expect(ProjectIcon.sanitizedColor("nope", fallback: "also-bad") == ProjectIcon.defaultColor)
     }
+
+    @Test func sanitizedEmojiUsesFirstValidEmojiOnly() {
+        #expect(ProjectIcon.sanitizedEmoji("abc 🚀") == "🚀")
+        #expect(ProjectIcon.sanitizedEmoji("abc") == nil)
+        #expect(ProjectIcon(mode: .emoji, color: "#112233", emoji: "abc").emoji == nil)
+    }
 }

@@ -53,7 +53,7 @@ struct ProjectIcon: Codable, Equatable {
         self.color = Self.sanitizedColor(color, fallback: fallbackColor)
         self.label = Self.sanitizedLabel(label)
         self.symbolName = Self.sanitizedNonEmpty(symbolName)
-        self.emoji = Self.sanitizedNonEmpty(emoji)
+        self.emoji = Self.sanitizedEmoji(emoji)
         self.imagePath = Self.sanitizedNonEmpty(imagePath)
     }
 
@@ -136,5 +136,9 @@ struct ProjectIcon: Codable, Equatable {
         guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func sanitizedEmoji(_ raw: String?) -> String? {
+        EmojiIcon.sanitized(raw)
     }
 }

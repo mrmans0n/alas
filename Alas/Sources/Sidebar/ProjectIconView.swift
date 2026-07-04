@@ -114,14 +114,6 @@ struct ProjectIconView: View {
     }
 
     nonisolated static func renderableEmoji(_ raw: String?) -> String? {
-        guard let value = ProjectIcon.sanitizedNonEmpty(raw),
-              value.count == 1,
-              value.unicodeScalars.contains(where: { scalar in
-                  scalar.properties.isEmojiPresentation || scalar.properties.isEmoji
-              })
-        else {
-            return nil
-        }
-        return value
+        ProjectIcon.sanitizedEmoji(raw)
     }
 }

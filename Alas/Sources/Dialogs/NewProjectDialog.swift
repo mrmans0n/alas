@@ -81,6 +81,7 @@ private struct ProjectDialog: View {
         DialogContainer(
             title: title,
             subtitle: subtitle,
+            width: DialogContainerLayout.projectWidth,
             content: {
                 DialogField(label: "Repository path") {
                     switch mode {
@@ -200,8 +201,10 @@ private struct ProjectDialog: View {
                 symbolQuickChoices
             }
         case .emoji:
-            AlasField(text: $iconEmoji, placeholder: "🚀")
-                .frame(width: 90)
+            EmojiPickerButton(selection: ProjectIcon.sanitizedEmoji(iconEmoji) ?? "🚀") { emoji in
+                iconEmoji = emoji
+            }
+            .accessibilityLabel("Project icon emoji")
         case .image:
             imageControls
         }
