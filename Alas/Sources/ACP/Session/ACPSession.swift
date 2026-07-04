@@ -380,13 +380,13 @@ final class ACPSession: ObservableObject, Identifiable {
             guard let touched = updateToolCall(id: payload.toolCallId, { tc in
                 Self.applyToolCallPayloadFields(payload, to: &tc)
             }) else { return [] }
-            applyToolCallMetadata(payload.metadata)
+            applyToolCallMetadata(payload.metadata, replaying: true)
             return [touched]
         case .toolCallUpdate(let update):
             guard let touched = updateToolCall(id: update.toolCallId, { tc in
                 Self.applyToolCallUpdateFields(update, to: &tc, allowFinalSnapshotReplacement: false)
             }) else { return [] }
-            applyToolCallMetadata(update.metadata)
+            applyToolCallMetadata(update.metadata, replaying: true)
             return [touched]
         default:
             return []
@@ -422,7 +422,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
         guard let items = payload.content else { return }
         if !canReplaceSnapshot {
-            tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(items))
+            if Self.isFinalStatus(payload.status) {
+                tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(items))
+            }
             return
         }
         let raw = Self.flatten(items)
@@ -434,7 +436,7 @@ final class ACPSession: ObservableObject, Identifiable {
         tc.contentLanguage = Self.wrappingFenceLanguage(raw)
         tc.terminalIds = Self.mergeTerminalIds(
             Self.extractTerminalIds(items),
-            Self.extractMetadataTerminalIds(tc.metadata))
+            Self.extractMetadataTerminalIds(tc.metadata, includeExit: false))
         let preservedRawOutputAssets = rawOutputAssets.isEmpty
             ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
             : rawOutputAssets
@@ -465,7 +467,9 @@ final class ACPSession: ObservableObject, Identifiable {
         }
         if let content = update.content {
             if !canReplaceSnapshot {
-                tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(content))
+                if let status = update.status, Self.isFinalStatus(status) {
+                    tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(content))
+                }
                 return
             }
             let raw = Self.flatten(content)
@@ -477,7 +481,7 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.contentLanguage = Self.wrappingFenceLanguage(raw)
             tc.terminalIds = Self.mergeTerminalIds(
                 Self.extractTerminalIds(content),
-                Self.extractMetadataTerminalIds(tc.metadata))
+                Self.extractMetadataTerminalIds(tc.metadata, includeExit: false))
             let preservedRawOutputAssets = rawOutputAssets.isEmpty
                 ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
                 : rawOutputAssets
@@ -818,9 +822,11 @@ final class ACPSession: ObservableObject, Identifiable {
         return merged
     }
 
-    private static func extractMetadataTerminalIds(_ metadata: AnyCodable?) -> [String] {
+    private static func extractMetadataTerminalIds(_ metadata: AnyCodable?, includeExit: Bool = true) -> [String] {
         guard let root = Self.metadataObject(metadata) else { return [] }
-        let fields = ["terminal_info", "terminal_output", "terminal_output_delta"]
+        let fields = includeExit
+            ? ["terminal_info", "terminal_output", "terminal_output_delta", "terminal_exit"]
+            : ["terminal_info", "terminal_output", "terminal_output_delta"]
         return fields.compactMap { field in
             guard let object = Self.metadataObject(root[field]) else { return nil }
             return Self.metadataScalarString(object["terminal_id"])
@@ -852,41 +858,52 @@ final class ACPSession: ObservableObject, Identifiable {
         return String(string.prefix(metadataPreviewLimit)) + "… [truncated]"
     }
 
-    private func applyToolCallMetadata(_ metadata: AnyCodable?) {
+    private func applyToolCallMetadata(_ metadata: AnyCodable?, replaying: Bool = false) {
         guard let root = Self.metadataObject(metadata) else { return }
+        let replayExistingTerminalIds = replaying
+            ? Set(Self.extractMetadataTerminalIds(metadata).filter { terminalHost.terminal(id: $0) != nil })
+            : []
 
         if let info = Self.metadataObject(root["terminal_info"]),
            let terminalId = Self.metadataScalarString(info["terminal_id"]) {
-            terminalHost.recordMetadataTerminalInfo(
-                terminalId: terminalId,
-                cwd: Self.metadataScalarString(info["cwd"]))
+            if !replayExistingTerminalIds.contains(terminalId) {
+                terminalHost.recordMetadataTerminalInfo(
+                    terminalId: terminalId,
+                    cwd: Self.metadataScalarString(info["cwd"]))
+            }
         }
 
         if let output = Self.metadataObject(root["terminal_output"]),
            let terminalId = Self.metadataScalarString(output["terminal_id"]),
            let text = Self.metadataScalarString(output["data"]) {
-            terminalHost.appendMetadataOutput(
-                terminalId: terminalId,
-                data: Data(text.utf8),
-                replace: true)
+            if !replayExistingTerminalIds.contains(terminalId) {
+                terminalHost.appendMetadataOutput(
+                    terminalId: terminalId,
+                    data: Data(text.utf8),
+                    replace: true)
+            }
         }
 
         if let delta = Self.metadataObject(root["terminal_output_delta"]),
            let terminalId = Self.metadataScalarString(delta["terminal_id"]),
            let text = Self.metadataScalarString(delta["data"]) {
-            terminalHost.appendMetadataOutput(
-                terminalId: terminalId,
-                data: Data(text.utf8),
-                replace: false)
+            if !replayExistingTerminalIds.contains(terminalId) {
+                terminalHost.appendMetadataOutput(
+                    terminalId: terminalId,
+                    data: Data(text.utf8),
+                    replace: false)
+            }
         }
 
         if let exit = Self.metadataObject(root["terminal_exit"]),
            let terminalId = Self.metadataScalarString(exit["terminal_id"]) {
-            terminalHost.recordMetadataExit(
-                terminalId: terminalId,
-                exitStatus: ACPTerminalExitStatus(
-                    exitCode: Self.metadataInt(exit["exit_code"]),
-                    signal: Self.metadataScalarString(exit["signal"])))
+            if !replayExistingTerminalIds.contains(terminalId) {
+                terminalHost.recordMetadataExit(
+                    terminalId: terminalId,
+                    exitStatus: ACPTerminalExitStatus(
+                        exitCode: Self.metadataInt(exit["exit_code"]),
+                        signal: Self.metadataScalarString(exit["signal"])))
+            }
         }
     }
 
