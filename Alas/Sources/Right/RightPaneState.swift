@@ -116,10 +116,29 @@ final class RightPaneState {
     /// the global config default on the next render.
     var userOverrodeBaseBranch: Bool = false
 
-    /// The last base branch value that came from `AppConfig` (not from the
-    /// selector). Used by `RightPaneStore` to distinguish a Settings change
-    /// (new config value) from a normal render (same config value).
+    /// The last raw base branch value that came from `AppConfig` (not from the
+    /// selector, and not the effective `origin/<base>` default). Used by
+    /// `RightPaneStore` to distinguish a Settings change (new config value)
+    /// from a normal render (same config value).
     var lastConfigBaseBranch: String = ""
+
+    /// The last effective base branch default applied by `RightPaneStore`
+    /// (e.g. `origin/main` when on the base branch). Used to detect when the
+    /// effective default changed because the worktree branch changed, without
+    /// overwriting a verified fallback on every render.
+    var lastEffectiveBaseBranch: String = ""
+
+    /// Task handle for the async origin-ref probe, if one is in flight.
+    /// Cancelled when the base branch changes again before verification
+    /// finishes, so stale probe results never overwrite a newer default.
+    @ObservationIgnored
+    var baseBranchProbeTask: Task<Void, Never>? = nil
+
+    /// True for newly-created states whose initial `start()` is being deferred
+    /// until the `origin/<base>` probe confirms or falls back. Prevents
+    /// activation from starting an unverified refresh.
+    @ObservationIgnored
+    var isAwaitingBaseBranchProbe: Bool = false
 
     /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
     /// `RightPaneStore` on every `state(for:)` call. When false (the
@@ -557,7 +576,7 @@ final class RightPaneState {
         let local = ReviewLoopLocalState(
             branchName: currentBranch,
             headSHA: headSHA,
-            baseBranch: baseBranch,
+            baseBranch: reviewLoop.currentBaseBranch,
             hasWorkingTreeChanges: !changes.isEmpty,
             hasStagedChanges: changes.contains { $0.stage == .staged },
             aheadCommitCount: Self.reviewLoopAheadCommitCount(

@@ -88,19 +88,22 @@ struct RightPaneStoreBaseBranchTests {
         let wt = makeWorktree(at: repo, branch: "main")
         let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
         #expect(state.baseBranch == "origin/main")
-        #expect(state.lastConfigBaseBranch == "origin/main")
+        #expect(state.lastConfigBaseBranch == "main")
 
         try await Task.sleep(nanoseconds: 200_000_000)
         #expect(state.baseBranch == "main")
         #expect(state.lastConfigBaseBranch == "main")
 
-        // Simulate a subsequent render with the same configured base branch.
-        // The store must not reset baseBranch back to the non-existent origin/main.
-        _ = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
-        try await Task.sleep(nanoseconds: 50_000_000)
-        #expect(state.baseBranch == "main")
-        #expect(state.lastConfigBaseBranch == "main")
-        #expect(state.userOverrodeBaseBranch == false)
+        // Simulate repeated renders with the same configured base branch. The
+        // store must not reset baseBranch back to the non-existent origin/main
+        // or re-trigger fallback probes each time.
+        for _ in 0..<3 {
+            _ = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+            try await Task.sleep(nanoseconds: 50_000_000)
+            #expect(state.baseBranch == "main")
+            #expect(state.lastConfigBaseBranch == "main")
+            #expect(state.userOverrodeBaseBranch == false)
+        }
     }
 
     @Test func asyncProbeConfirmsOriginMainWhenRefExists() async throws {
