@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-07-04
+
+### ✨ Features
+
+- Add custom project icons (#630).
+
+### 🐛 Fixes
+
+- Hide Prepare/Push affordances when there is nothing to push (#629).
+
 ## [0.8.12] - 2026-07-04
 
 ### ✨ Features
