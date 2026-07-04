@@ -126,6 +126,30 @@ struct GitLabCLIProvider: CodeHostProvider {
         return try Self.parseCreateOutput(result.stdout)
     }
 
+    func mergeReviewRequest(
+        _ request: ReviewRequest,
+        method: ReviewMergeMethod,
+        deleteBranch: Bool,
+        cwd: URL
+    ) async throws {
+        var args = ["mr", "merge", "\(request.number)"]
+        switch method {
+        case .squash: args.append("--squash")
+        case .merge: break
+        case .rebase: args.append("--rebase")
+        }
+        if deleteBranch {
+            args.append("--remove-source-branch")
+        }
+        args.append("--yes")
+        args.append(contentsOf: ["-R", request.remote.repositorySlug])
+
+        let result = try await runner.run("glab", args: args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "glab mr merge", stderr: result.stderr)
+        }
+    }
+
     func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] {
         let result = try await runner.run(
             "glab",
