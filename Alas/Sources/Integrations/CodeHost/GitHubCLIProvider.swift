@@ -853,7 +853,15 @@ struct GitHubCLIProvider: CodeHostProvider {
         // failure even though the PR already merged. Best-effort: the merge
         // has succeeded, so ignore cleanup errors (e.g. a repo configured to
         // auto-delete head branches will already have removed the ref).
-        if deleteBranch {
+        //
+        // Only delete when the head lives in the base repo. For forked PRs the
+        // head branch is in a different repo (`headRepositoryOwner != remote.owner`);
+        // the DELETE ref endpoint is scoped by `{owner}/{repo}`, so targeting
+        // the base repo there would either miss the fork branch or delete an
+        // unrelated same-named base-repo branch. Leave fork branches alone.
+        if deleteBranch,
+           let headOwner = request.headRepositoryOwner,
+           headOwner == request.remote.owner {
             _ = try? await runner.run(
                 "gh",
                 args: [
@@ -1189,6 +1197,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
             headSHA: normalizedOptionalString(item.headRefOid),
+            headRepositoryOwner: item.headRepositoryOwner?.login,
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -1226,6 +1235,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
             headSHA: normalizedOptionalString(item.headRefOid),
+            headRepositoryOwner: item.headRepositoryOwner?.login,
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],

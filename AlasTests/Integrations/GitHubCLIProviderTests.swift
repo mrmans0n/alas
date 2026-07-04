@@ -1595,6 +1595,29 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func mergeReviewRequestForForkedHeadSkipsRemoteDelete() async throws {
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
+        let provider = GitHubCLIProvider(runner: runner)
+        // Head lives in a fork (owner != base repo owner) — deleting a base-repo
+        // ref by name here could remove an unrelated branch, so cleanup is skipped.
+        let request = Self.makeRequest(headRepositoryOwner: "fork-owner")
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "merge", "42",
+                    "--squash",
+                    "--match-head-commit", "head-sha-42",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
     @Test func mergeReviewRequestWithoutHeadSHAOmitsPinAndSkipsRemoteDelete() async throws {
         let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
         let provider = GitHubCLIProvider(runner: runner)
@@ -1653,7 +1676,8 @@ struct GitHubCLIProviderTests {
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = [],
         reviewDecision: ReviewDecision = .approved,
-        headSHA: String? = "head-sha-42"
+        headSHA: String? = "head-sha-42",
+        headRepositoryOwner: String? = "mrmans0n"
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,
@@ -1665,6 +1689,7 @@ struct GitHubCLIProviderTests {
             headRefName: "feature/github-provider",
             baseRefName: "main",
             headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
             reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,

@@ -385,6 +385,10 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let headRefName: String
     let baseRefName: String
     let headSHA: String?
+    /// Owner (login) of the repository the head branch lives in. Differs from
+    /// `remote.owner` for forked pull requests. Used to scope remote-branch
+    /// cleanup so a same-named branch in the base repo is never deleted.
+    let headRepositoryOwner: String?
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
@@ -404,6 +408,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         headRefName: String,
         baseRefName: String,
         headSHA: String? = nil,
+        headRepositoryOwner: String? = nil,
         reviewDecision: ReviewDecision,
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
@@ -418,6 +423,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         self.headRefName = headRefName
         self.baseRefName = baseRefName
         self.headSHA = headSHA
+        self.headRepositoryOwner = headRepositoryOwner
         self.reviewDecision = reviewDecision
         self.mergeState = mergeState
         self.checks = checks
