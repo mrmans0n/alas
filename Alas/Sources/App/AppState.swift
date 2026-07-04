@@ -330,7 +330,7 @@ final class AppState {
                 id: project.id,
                 update: ProjectUpdate(
                     name: project.name,
-                    color: project.color,
+                    icon: project.icon,
                     startupScripts: updated
                 )
             )
@@ -1175,8 +1175,18 @@ final class AppState {
         }
     }
 
-    func addProject(path: URL, displayName: String, icon: ProjectIcon) async throws {
-        let project = try await projectsManager.addProject(path: path, displayName: displayName, icon: icon)
+    func addProject(
+        path: URL,
+        displayName: String,
+        icon: ProjectIcon,
+        id: String = UUID().uuidString
+    ) async throws {
+        let project = try await projectsManager.addProject(
+            path: path,
+            displayName: displayName,
+            icon: icon,
+            id: id
+        )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()
         saveSpaces()
@@ -1186,8 +1196,18 @@ final class AppState {
         startProjectGitWatcher(for: project)
     }
 
-    func addProject(path: URL, displayName: String, color: String) async throws {
-        try await addProject(path: path, displayName: displayName, icon: ProjectIcon.default(color: color))
+    func addProject(
+        path: URL,
+        displayName: String,
+        color: String,
+        id: String = UUID().uuidString
+    ) async throws {
+        try await addProject(
+            path: path,
+            displayName: displayName,
+            icon: ProjectIcon.default(color: color),
+            id: id
+        )
     }
 
     @discardableResult

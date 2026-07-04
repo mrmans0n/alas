@@ -40,11 +40,12 @@ private struct ProjectDialog: View {
     @State private var iconSymbolName: String = "folder"
     @State private var iconEmoji: String = "🚀"
     @State private var iconImagePath: String?
-    @State private var pendingIconStorageId = "pending-\(UUID().uuidString)"
+    @State private var pendingProjectId = UUID().uuidString
     @State private var avatarPreset: ProjectAvatarPreset?
     @State private var avatarPresetData: Data?
     @State private var avatarPresetLoading = false
     @State private var avatarPresetError = false
+    @State private var avatarPresetRequestId = UUID()
     @State private var sessionOpenMode: ProjectStartupScriptMode = .useGlobal
     @State private var sessionOpenScript: String = ""
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
@@ -384,33 +385,52 @@ private struct ProjectDialog: View {
 
     private func existingProjectIdForIconStorage() -> String {
         if case .edit(let project) = mode { return project.id }
-        return pendingIconStorageId
+        return pendingProjectId
     }
 
     private func loadAvatarPresetIfAvailable() async {
+        let requestId = UUID()
+        avatarPresetRequestId = requestId
         avatarPreset = nil
         avatarPresetData = nil
         avatarPresetError = false
+        avatarPresetLoading = false
 
-        let repoURL: URL
-        switch mode {
-        case .add:
-            guard !path.isEmpty else { return }
-            repoURL = URL(fileURLWithPath: path)
-        case .edit(let project):
-            repoURL = URL(fileURLWithPath: project.path)
-        }
+        guard let repoURL = currentAvatarPresetRepoURL() else { return }
+        let requestedPath = repoURL.path
 
         avatarPresetLoading = true
-        defer { avatarPresetLoading = false }
+        defer {
+            if avatarPresetRequestId == requestId {
+                avatarPresetLoading = false
+            }
+        }
 
         do {
             let remotes = try await GitService().remotes(worktreePath: repoURL)
             guard let preset = ProjectAvatarPresetProvider.candidate(from: remotes) else { return }
+            let data = try await ProjectAvatarPresetProvider.fetch(preset)
+            guard avatarPresetRequestId == requestId,
+                  currentAvatarPresetRepoURL()?.path == requestedPath
+            else {
+                return
+            }
             avatarPreset = preset
-            avatarPresetData = try await ProjectAvatarPresetProvider.fetch(preset)
+            avatarPresetData = data
         } catch {
-            avatarPresetError = true
+            if avatarPresetRequestId == requestId {
+                avatarPresetError = true
+            }
+        }
+    }
+
+    private func currentAvatarPresetRepoURL() -> URL? {
+        switch mode {
+        case .add:
+            guard !path.isEmpty else { return nil }
+            return URL(fileURLWithPath: path)
+        case .edit(let project):
+            return URL(fileURLWithPath: project.path)
         }
     }
 
@@ -439,7 +459,12 @@ private struct ProjectDialog: View {
             Task {
                 do {
                     let url = URL(fileURLWithPath: path)
-                    try await state.addProject(path: url, displayName: name, icon: draftIcon)
+                    try await state.addProject(
+                        path: url,
+                        displayName: name,
+                        icon: draftIcon,
+                        id: pendingProjectId
+                    )
                     presented = false
                 } catch {
                     errorMessage = error.localizedDescription

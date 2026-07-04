@@ -37,6 +37,23 @@ struct ProjectsManagerTests {
         #expect(project.color == "#112233")
     }
 
+    @Test func addProjectUsesProvidedIdForPreStagedIconStorage() async throws {
+        let repo = try await makeRepo(name: "staged-icon")
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let mgr = ProjectsManager(persistedProjects: [])
+        let icon = ProjectIcon(mode: .image, color: "#112233", imagePath: "project-1/icon.png")
+
+        let project = try await mgr.addProject(
+            path: repo,
+            displayName: "staged-icon",
+            icon: icon,
+            id: "project-1"
+        )
+
+        #expect(project.id == "project-1")
+        #expect(project.icon.imagePath == "project-1/icon.png")
+    }
+
     @Test func refreshWorktreesPopulatesIt() async throws {
         let repo = try await makeRepo(name: "beta")
         defer { try? FileManager.default.removeItem(at: repo) }

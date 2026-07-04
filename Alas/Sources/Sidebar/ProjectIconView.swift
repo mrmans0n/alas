@@ -49,13 +49,13 @@ struct ProjectIconView: View {
         case .letter:
             labelView(ProjectIcon.sanitizedLabel(icon.label) ?? ProjectIcon.fallbackLabel(projectName: fallbackName))
         case .symbol:
-            if let symbolName = icon.symbolName {
+            if let symbolName = icon.symbolName, Self.canRenderSymbol(symbolName) {
                 symbolView(symbolName)
             } else {
                 labelView(ProjectIcon.fallbackLabel(projectName: fallbackName))
             }
         case .emoji:
-            if let emoji = icon.emoji, !emoji.isEmpty {
+            if let emoji = Self.renderableEmoji(icon.emoji) {
                 emojiView(emoji)
             } else {
                 labelView(ProjectIcon.fallbackLabel(projectName: fallbackName))
@@ -105,5 +105,23 @@ struct ProjectIconView: View {
 
     nonisolated static func accessibilityLabel(project: ProjectConfig) -> String {
         "\(project.name) project icon"
+    }
+
+    @MainActor
+    static func canRenderSymbol(_ name: String) -> Bool {
+        if Icon.rendersCustomGlyph(for: name) { return true }
+        return NSImage(systemSymbolName: Icon.symbol(for: name), accessibilityDescription: nil) != nil
+    }
+
+    nonisolated static func renderableEmoji(_ raw: String?) -> String? {
+        guard let value = ProjectIcon.sanitizedNonEmpty(raw),
+              value.count == 1,
+              value.unicodeScalars.contains(where: { scalar in
+                  scalar.properties.isEmojiPresentation || scalar.properties.isEmoji
+              })
+        else {
+            return nil
+        }
+        return value
     }
 }

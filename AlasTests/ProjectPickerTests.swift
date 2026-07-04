@@ -62,6 +62,16 @@ struct ProjectPickerTests {
         #expect(ProjectIconView.accessibilityLabel(project: project) == "Alpha project icon")
     }
 
+    @MainActor
+    @Test func projectIconRendererRejectsInvalidSymbolAndEmojiValues() {
+        #expect(ProjectIconView.canRenderSymbol("terminal"))
+        #expect(ProjectIconView.canRenderSymbol("github"))
+        #expect(!ProjectIconView.canRenderSymbol("not-a-real-symbol"))
+        #expect(ProjectIconView.renderableEmoji("🚀") == "🚀")
+        #expect(ProjectIconView.renderableEmoji("abc") == nil)
+        #expect(ProjectIconView.renderableEmoji("🚀🚀") == nil)
+    }
+
     private static func project(name: String) -> ProjectConfig {
         ProjectConfig(
             id: UUID().uuidString,

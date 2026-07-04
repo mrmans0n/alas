@@ -57,14 +57,19 @@ final class ProjectsManager {
         self.defaultOrderingSource = source
     }
 
-    func addProject(path: URL, displayName: String, icon: ProjectIcon) async throws -> ProjectConfig {
+    func addProject(
+        path: URL,
+        displayName: String,
+        icon: ProjectIcon,
+        id: String = UUID().uuidString
+    ) async throws -> ProjectConfig {
         let isRepo = try await git.isGitRepository(path)
         guard isRepo else {
             throw NSError(domain: "ProjectsManager", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
         }
         let project = ProjectConfig(
-            id: UUID().uuidString,
+            id: id,
             name: displayName,
             path: path.path,
             color: icon.color,
@@ -75,8 +80,18 @@ final class ProjectsManager {
         return project
     }
 
-    func addProject(path: URL, displayName: String, color: String) async throws -> ProjectConfig {
-        try await addProject(path: path, displayName: displayName, icon: ProjectIcon.default(color: color))
+    func addProject(
+        path: URL,
+        displayName: String,
+        color: String,
+        id: String = UUID().uuidString
+    ) async throws -> ProjectConfig {
+        try await addProject(
+            path: path,
+            displayName: displayName,
+            icon: ProjectIcon.default(color: color),
+            id: id
+        )
     }
 
     func removeProject(id: String) {
