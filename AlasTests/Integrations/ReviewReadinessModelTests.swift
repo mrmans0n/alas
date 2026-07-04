@@ -305,6 +305,27 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func reviewRequiredSuppressesMergeOnGreenPR() {
+        // Host requires a review that hasn't happened (e.g. GitLab approvalsLeft
+        // > 0 maps to .reviewRequired while mergeState stays clean). Offering
+        // Merge here is a false affordance the host would reject and bypasses a
+        // pending review policy. A no-policy solo PR is .unknown, not
+        // .reviewRequired, so it is unaffected.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .reviewRequired,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
     @Test func actionableFeedbackSuppressesMergeOnGreenPR() {
         // Green + mergeable, but a reviewer has requested changes. Even in a
         // repo that doesn't enforce reviews as a merge block (mergeState stays
