@@ -914,7 +914,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 assets.append(.image(
                     data: nil,
                     uri: uri,
-                    mimeType: rawOutputMimeType(object),
+                    mimeType: dataImageMimeType(uri) ?? rawOutputMimeType(object),
                     name: assetName(from: uri)))
             }
 
@@ -953,6 +953,7 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     private static func rawOutputURLLooksLikeImage(_ uri: String, in object: [String: AnyCodable]) -> Bool {
+        if dataImageMimeType(uri) != nil { return true }
         if rawOutputMimeType(object)?.lowercased().hasPrefix("image/") == true { return true }
         if metadataScalarString(object["type"])?.lowercased() == "image" { return true }
         if object["revised_prompt"] != nil { return true }

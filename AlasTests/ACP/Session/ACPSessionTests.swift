@@ -891,6 +891,39 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("raw output data URI URL result is preserved as an asset")
+    func rawOutputDataURIURLResultPreservesAsset() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-data-uri-url",
+            title: "Image generation",
+            kind: "other",
+            status: "completed",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: AnyCodable([
+                "data": AnyCodable([
+                    AnyCodable([
+                        "url": AnyCodable("data:image/png;base64,base64-data")
+                    ])
+                ])
+            ]))))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(
+                    data: nil,
+                    uri: "data:image/png;base64,base64-data",
+                    mimeType: "image/png",
+                    name: nil)
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("raw output bare image data result is preserved as an asset")
     func rawOutputBareImageDataResultPreservesAsset() async {
         let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
