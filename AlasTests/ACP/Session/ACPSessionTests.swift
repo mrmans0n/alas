@@ -1389,10 +1389,62 @@ struct ACPSessionTests {
             rawInput: nil,
             rawOutput: nil)))
         session.apply(update)
+        session.beginSuppressedReplaySideEffects()
         session.applySuppressedReplaySideEffects(update)
 
         let term = try #require(session.terminalHost.terminal(id: "term-replay-terminal"))
         #expect(term.snapshot(byteLimit: 1024).text == "building\n")
+    }
+
+    @Test("suppressed replay rebuilds terminal metadata across replay frames")
+    func suppressedReplayRebuildsTerminalMetadataAcrossReplayFrames() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-replay-frames",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        session.beginSuppressedReplaySideEffects()
+        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-frames",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_info": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-frames"),
+                    "cwd": AnyCodable("/tmp/project")
+                ])
+            ]))))
+        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-frames",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-frames"),
+                    "data": AnyCodable("building\n")
+                ])
+            ]))))
+        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-frames",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_exit": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-frames"),
+                    "exit_code": AnyCodable(0)
+                ])
+            ]))))
+
+        let term = try #require(session.terminalHost.terminal(id: "term-replay-frames"))
+        #expect(term.cwd == "/tmp/project")
+        #expect(term.snapshot(byteLimit: 1024).text == "building\n")
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
     }
 
     @Test("metadata terminal id survives later content-only update")
@@ -1469,6 +1521,47 @@ struct ACPSessionTests {
 
         let term = try #require(session.terminalHost.terminal(id: "term-exit-only"))
         #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 1, signal: nil))
+    }
+
+    @Test("suppressed replay payload content excludes exit-only terminal id")
+    func suppressedReplayPayloadContentExcludesExitOnlyTerminalId() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-payload-exit-content",
+            title: "swift test",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.beginSuppressedReplaySideEffects()
+        session.applySuppressedReplaySideEffects(.toolCall(.init(
+            toolCallId: "cmd-payload-exit-content",
+            title: "swift test",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_exit": AnyCodable([
+                    "terminal_id": AnyCodable("term-payload-exit-only"),
+                    "exit_code": AnyCodable(0)
+                ])
+            ]))))
+
+        let message = try #require(session.transcript.messages.first)
+        guard case .toolCall(let toolCall) = message else {
+            Issue.record("expected toolCall message")
+            return
+        }
+        #expect(toolCall.terminalIds == [])
+
+        let term = try #require(session.terminalHost.terminal(id: "term-payload-exit-only"))
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
     }
 
     @Test("terminal_output metadata replaces previous deltas")

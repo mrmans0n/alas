@@ -105,6 +105,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
     private var liveUserChunkMessageIds: Set<String> = []
     private var legacyUserChunkMessageIds: Set<UUID> = []
+    private var replayCreatedMetadataTerminalIds: Set<String> = []
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -393,6 +394,14 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    func beginSuppressedReplaySideEffects() {
+        replayCreatedMetadataTerminalIds.removeAll()
+    }
+
+    func endSuppressedReplaySideEffects() {
+        replayCreatedMetadataTerminalIds.removeAll()
+    }
+
     private static func applyToolCallPayloadFields(
         _ payload: ACPToolCallPayload,
         to tc: inout ACPMessage.ToolCall
@@ -417,7 +426,7 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
             tc.terminalIds = Self.mergeTerminalIds(
                 tc.terminalIds,
-            Self.extractMetadataTerminalIds(metadata))
+                Self.extractMetadataTerminalIds(metadata, includeExit: payload.content == nil))
         }
 
         guard let items = payload.content else { return }
@@ -860,13 +869,10 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func applyToolCallMetadata(_ metadata: AnyCodable?, replaying: Bool = false) {
         guard let root = Self.metadataObject(metadata) else { return }
-        let replayExistingTerminalIds = replaying
-            ? Set(Self.extractMetadataTerminalIds(metadata).filter { terminalHost.terminal(id: $0) != nil })
-            : []
 
         if let info = Self.metadataObject(root["terminal_info"]),
            let terminalId = Self.metadataScalarString(info["terminal_id"]) {
-            if !replayExistingTerminalIds.contains(terminalId) {
+            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
                 terminalHost.recordMetadataTerminalInfo(
                     terminalId: terminalId,
                     cwd: Self.metadataScalarString(info["cwd"]))
@@ -876,7 +882,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if let output = Self.metadataObject(root["terminal_output"]),
            let terminalId = Self.metadataScalarString(output["terminal_id"]),
            let text = Self.metadataScalarString(output["data"]) {
-            if !replayExistingTerminalIds.contains(terminalId) {
+            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
                 terminalHost.appendMetadataOutput(
                     terminalId: terminalId,
                     data: Data(text.utf8),
@@ -887,7 +893,7 @@ final class ACPSession: ObservableObject, Identifiable {
         if let delta = Self.metadataObject(root["terminal_output_delta"]),
            let terminalId = Self.metadataScalarString(delta["terminal_id"]),
            let text = Self.metadataScalarString(delta["data"]) {
-            if !replayExistingTerminalIds.contains(terminalId) {
+            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
                 terminalHost.appendMetadataOutput(
                     terminalId: terminalId,
                     data: Data(text.utf8),
@@ -897,7 +903,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if let exit = Self.metadataObject(root["terminal_exit"]),
            let terminalId = Self.metadataScalarString(exit["terminal_id"]) {
-            if !replayExistingTerminalIds.contains(terminalId) {
+            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
                 terminalHost.recordMetadataExit(
                     terminalId: terminalId,
                     exitStatus: ACPTerminalExitStatus(
@@ -905,6 +911,17 @@ final class ACPSession: ObservableObject, Identifiable {
                         signal: Self.metadataScalarString(exit["signal"])))
             }
         }
+    }
+
+    private func shouldApplyMetadataTerminalSideEffect(terminalId: String, replaying: Bool) -> Bool {
+        guard replaying else { return true }
+        if replayCreatedMetadataTerminalIds.contains(terminalId) { return true }
+        if let terminal = terminalHost.terminal(id: terminalId),
+           !terminal.buffer.isEmpty || terminal.exitStatus != nil {
+            return false
+        }
+        replayCreatedMetadataTerminalIds.insert(terminalId)
+        return true
     }
 
     private static func metadataObject(_ value: AnyCodable?) -> [String: AnyCodable]? {

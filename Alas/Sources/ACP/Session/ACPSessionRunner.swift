@@ -110,6 +110,9 @@ final class ACPSessionRunner {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
+        if suppressingLoadReplay {
+            session.beginSuppressedReplaySideEffects()
+        }
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onResumeTranscriptTail = onResumeTranscriptTail
@@ -152,6 +155,7 @@ final class ACPSessionRunner {
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
+                            self.session.endSuppressedReplaySideEffects()
                             // Disallow streaming boundary crossings until the next prompt
                             // starts. Any agentMessageChunk that would cross a completed-
                             // output boundary in this window is a late replay slip — the
@@ -324,6 +328,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
+            session.endSuppressedReplaySideEffects()
             session.allowsStreamingBoundaryCrossing = false
         }
     }
