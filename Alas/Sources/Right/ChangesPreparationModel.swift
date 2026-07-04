@@ -146,6 +146,8 @@ struct ChangesPreparationModel: Equatable {
     }
 
     private static let compactActionPriority: [ReviewReadinessActionKind] = [
+        // `.merge` is handled by the pair path before the single-action
+        // fallback runs, so this entry is defensive and never actually matches.
         .merge,
         .createReviewRequest,
         .pushBranch,

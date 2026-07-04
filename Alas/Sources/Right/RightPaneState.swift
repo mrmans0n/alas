@@ -868,8 +868,7 @@ final class RightPaneState {
         pendingMerge = nil
     }
 
-    func performMerge(appState: AppState) {
-        _ = appState
+    func performMerge() {
         guard let snapshot = pendingMerge else { return }
         pendingMerge = nil
         guard reviewLoop.beginAction(.merge) else { return }

@@ -192,6 +192,28 @@ struct RootView: View {
                 Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
             }
         )
+        .confirmationDialog(
+            "Merge review request?",
+            isPresented: Binding(
+                get: { activeMergeState()?.pendingMerge != nil },
+                set: { if !$0 { activeMergeState()?.cancelMerge() } }
+            ),
+            titleVisibility: .visible,
+            presenting: activeMergeState()?.pendingMerge
+        ) { snapshot in
+            Button("Merge", role: .destructive) {
+                activeMergeState()?.performMerge()
+            }
+            Button("Cancel", role: .cancel) {
+                activeMergeState()?.cancelMerge()
+            }
+        } message: { snapshot in
+            if let request = snapshot.reviewRequest {
+                Text("Squash-merge \(request.displayIdentity) into \(request.baseRefName) and delete the branch.")
+            } else {
+                Text("Squash-merge this review request and delete the branch.")
+            }
+        }
         .onAppear {
             state.updates.checkOnLaunch()
         }
@@ -283,6 +305,11 @@ struct RootView: View {
                 newAgentChatShortcut: nil
             )
         }
+    }
+
+    private func activeMergeState() -> RightPaneState? {
+        guard let id = state.selectedWorktreeId else { return nil }
+        return state.rightPaneStore.activeState(worktreeId: id)
     }
 
     private func selectedWorktree() -> Worktree? {
