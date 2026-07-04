@@ -9,6 +9,7 @@ struct ACPMessageList: View {
     let onOpenDiff: (String) -> Void
     let onOpenTranscriptLink: (URL) -> Bool
     let policy: ACPPermissionPolicy?
+    let trustedImageRoot: URL?
     let scopeKey: String
     let onQuestionResponse: (ACPQuestionResponse) -> Void
     /// Callbacks invoked by the pending bubbles + header. The host wires
@@ -757,6 +758,7 @@ struct ACPMessageList: View {
         case .toolCall(let tc):
             ACPToolCallCard(
                 toolCall: tc,
+                trustedImageRoot: trustedImageRoot,
                 loadFullContent: tc.isContentTruncated
                     ? { [tcid = tc.toolCallId] in onLoadFullToolCallContent(tcid) }
                     : nil)

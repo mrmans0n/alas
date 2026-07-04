@@ -20,6 +20,9 @@ struct ACPToolbar: View {
                 agentLookup: agentLookup
             )
             ACPRecoveryPill(session: session)
+            if let currentGoal = session.currentGoal {
+                ACPGoalPill(goal: currentGoal)
+            }
             ACPPlanPill(
                 transcript: session.transcript,
                 sidebarUserMinimized: planSidebarUserMinimized,

@@ -26,6 +26,53 @@ struct ACPTerminalHostTests {
         }
     }
 
+    @Test("metadata terminal appends output and records exit")
+    func metadataTerminalAppendsOutputAndExit() async throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+
+        host.recordMetadataTerminalInfo(terminalId: "meta-1", cwd: "/repo")
+        host.appendMetadataOutput(
+            terminalId: "meta-1",
+            data: Data("first\nsecond\n".utf8),
+            replace: false)
+        host.recordMetadataExit(
+            terminalId: "meta-1",
+            exitStatus: ACPTerminalExitStatus(exitCode: 7, signal: nil))
+
+        let term = try #require(host.terminal(id: "meta-1"))
+        #expect(term.snapshot(byteLimit: 1024).text == "first\nsecond\n")
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 7, signal: nil))
+        #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            _ = try host.output(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+        await #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            _ = try await host.waitForExit(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+        #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            try host.kill(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+        #expect(throws: ACPTerminalHostError.notFound("meta-1")) {
+            try host.release(.init(sessionId: "s", terminalId: "meta-1"))
+        }
+    }
+
+    @Test("metadata terminal replacement overwrites output")
+    func metadataTerminalReplacementOverwritesOutput() throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+
+        host.appendMetadataOutput(
+            terminalId: "meta-2",
+            data: Data("stale\n".utf8),
+            replace: false)
+        host.appendMetadataOutput(
+            terminalId: "meta-2",
+            data: Data("fresh\n".utf8),
+            replace: true)
+
+        let term = try #require(host.terminal(id: "meta-2"))
+        #expect(term.snapshot(byteLimit: 1024).text == "fresh\n")
+    }
+
     @Test("release retains the entry but invalidates the id for protocol calls")
     func releaseRetainsForUI() async throws {
         let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
@@ -123,6 +170,45 @@ struct ACPTerminalHostTests {
         }
 
         #expect(host.terminals.count == ACPTerminalHost.maxRetainedFinishedTerminals)
+    }
+
+    @Test("unfinished metadata terminal retention is capped")
+    func unfinishedMetadataTerminalRetentionIsCapped() throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+        for i in 0 ... ACPTerminalHost.maxMetadataTerminals {
+            host.appendMetadataOutput(
+                terminalId: "meta-\(i)",
+                data: Data("output-\(i)\n".utf8),
+                replace: false)
+        }
+
+        #expect(host.terminals.count == ACPTerminalHost.maxMetadataTerminals)
+        #expect(host.terminal(id: "meta-0") == nil)
+        #expect(host.terminal(id: "meta-\(ACPTerminalHost.maxMetadataTerminals)") != nil)
+    }
+
+    @Test("finished metadata terminal retention does not prune process terminals")
+    func finishedMetadataTerminalRetentionDoesNotPruneProcessTerminals() async throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+        let process = try host.create(.init(
+            sessionId: "s",
+            command: "/bin/echo",
+            args: ["process-output"],
+            env: nil,
+            cwd: nil,
+            outputByteLimit: nil
+        ))
+        _ = await host.terminal(id: process.terminalId)?.waitForExit()
+
+        for i in 0 ... ACPTerminalHost.maxMetadataTerminals {
+            host.recordMetadataExit(
+                terminalId: "meta-finished-\(i)",
+                exitStatus: ACPTerminalExitStatus(exitCode: 0, signal: nil))
+        }
+
+        #expect(host.terminal(id: process.terminalId) != nil)
+        #expect(host.terminal(id: "meta-finished-0") == nil)
+        #expect(host.terminal(id: "meta-finished-\(ACPTerminalHost.maxMetadataTerminals)") != nil)
     }
 
     #if DEBUG

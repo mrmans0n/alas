@@ -22,6 +22,12 @@ enum ACPSessionTitleSource: String, Codable {
     case manual
 }
 
+struct ACPGoalState: Equatable, Hashable, Sendable {
+    let objective: String
+    let status: String?
+    let tokenBudget: Int?
+}
+
 @MainActor
 final class ACPSession: ObservableObject, Identifiable {
     typealias ID = String
@@ -43,6 +49,7 @@ final class ACPSession: ObservableObject, Identifiable {
     @Published var currentModel: String?
     @Published var contextUsage: ACPUsageInfo?
     @Published var currentMode: String?
+    @Published var currentGoal: ACPGoalState?
     @Published var promptSuggestions: [ACPPromptSuggestion] = []
     @Published var autoRunEnabled: Bool = false
     @Published var setupState: SetupState = .checking
@@ -98,6 +105,7 @@ final class ACPSession: ObservableObject, Identifiable {
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
     private var liveUserChunkMessageIds: Set<String> = []
     private var legacyUserChunkMessageIds: Set<UUID> = []
+    private var replayCreatedMetadataTerminalIds: Set<String> = []
 
     /// Runtime-only marker for a forced queue item parked behind the current
     /// `.sending` head. If that head fails, it moves behind this item so the
@@ -290,6 +298,10 @@ final class ACPSession: ObservableObject, Identifiable {
             let raw = Self.flatten(items)
             let full = Self.stripWrappingFence(raw,
                                                isFinal: Self.isFinalStatus(payload.status))
+            let terminalIds = Self.mergeTerminalIds(
+                Self.extractTerminalIds(items),
+                Self.extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
+            let rawOutputAssets = Self.extractRawOutputAssets(payload.rawOutput)
             transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
                 title: payload.title,
@@ -299,31 +311,27 @@ final class ACPSession: ObservableObject, Identifiable {
                 preview: Self.previewLine(full),
                 contentLanguage: Self.wrappingFenceLanguage(raw),
                 rawInput: Self.metadataString(payload.rawInput),
+                rawOutput: Self.metadataString(payload.rawOutput),
+                metadata: payload.metadata,
+                assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
                 locations: payload.locations?.map(\.path) ?? [],
-                terminalIds: Self.extractTerminalIds(items))))
+                terminalIds: terminalIds)))
             didAppendTranscriptMessage()
             transcript.completedOutputBoundaryMessageIds.removeAll()
+            applyToolCallMetadata(payload.metadata)
             return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
-                if let s = u.status { tc.status = s }
-                if let c = u.content {
-                    // ACP content updates are full replacement snapshots,
-                    // so terminalIds tracks the *current* content — assign
-                    // unconditionally, including the empty case, so a
-                    // text/diff-only final update doesn't leave a stale
-                    // terminal tail rendering in the card.
-                    let raw = Self.flatten(c)
-                    let full = Self.stripWrappingFence(raw,
-                                                      isFinal: Self.isFinalStatus(tc.status))
-                    tc.content = full
-                    tc.preview = Self.previewLine(full)
-                    tc.contentLanguage = Self.wrappingFenceLanguage(raw)
-                    tc.terminalIds = Self.extractTerminalIds(c)
-                }
+                Self.applyToolCallUpdateFields(u, to: &tc)
+            }
+            if touched != nil {
+                applyToolCallMetadata(u.metadata)
             }
             return touched.map { [$0] } ?? []
+        case .sessionInfoUpdate(let info):
+            applySessionInfoUpdate(info)
+            return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
             let items = entries.map { ACPMessage.PlanItem(content: $0.content, status: $0.status) }
@@ -362,10 +370,137 @@ final class ACPSession: ObservableObject, Identifiable {
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
             return []
-        case .sessionInfoUpdate:
-            return []
         case .unknown:
             return []
+        }
+    }
+
+    func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {
+        switch update {
+        case .toolCall(let payload):
+            guard let touched = updateToolCall(id: payload.toolCallId, { tc in
+                Self.applyToolCallPayloadFields(payload, to: &tc)
+            }) else { return [] }
+            applyToolCallMetadata(payload.metadata, replaying: true)
+            return [touched]
+        case .toolCallUpdate(let update):
+            guard let touched = updateToolCall(id: update.toolCallId, { tc in
+                Self.applyToolCallUpdateFields(update, to: &tc, allowFinalSnapshotReplacement: false)
+            }) else { return [] }
+            applyToolCallMetadata(update.metadata, replaying: true)
+            return [touched]
+        default:
+            return []
+        }
+    }
+
+    func beginSuppressedReplaySideEffects() {
+        replayCreatedMetadataTerminalIds.removeAll()
+    }
+
+    func endSuppressedReplaySideEffects() {
+        replayCreatedMetadataTerminalIds.removeAll()
+    }
+
+    private static func applyToolCallPayloadFields(
+        _ payload: ACPToolCallPayload,
+        to tc: inout ACPMessage.ToolCall
+    ) {
+        let canReplaceSnapshot = !Self.isFinalStatus(tc.status)
+        if canReplaceSnapshot {
+            tc.title = payload.title
+            tc.kind = payload.kind
+        }
+        if canReplaceSnapshot {
+            tc.status = payload.status
+        }
+        if canReplaceSnapshot, let locations = payload.locations { tc.locations = locations.map(\.path) }
+        if canReplaceSnapshot, let rawInput = payload.rawInput { tc.rawInput = Self.metadataString(rawInput) }
+        var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
+        if (canReplaceSnapshot || Self.isFinalStatus(payload.status)), let rawOutput = payload.rawOutput {
+            tc.rawOutput = Self.metadataString(rawOutput)
+            rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
+            tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
+        }
+        if let metadata = payload.metadata {
+            tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
+            tc.terminalIds = Self.mergeTerminalIds(
+                tc.terminalIds,
+                Self.extractMetadataTerminalIds(metadata, includeExit: payload.content == nil))
+        }
+
+        guard let items = payload.content else { return }
+        if !canReplaceSnapshot {
+            tc.terminalIds = Self.mergeTerminalIds(
+                tc.terminalIds,
+                Self.extractTerminalIds(items))
+            if Self.isFinalStatus(payload.status) {
+                tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(items))
+            }
+            return
+        }
+        let raw = Self.flatten(items)
+        let full = Self.stripWrappingFence(raw,
+                                           isFinal: Self.isFinalStatus(payload.status))
+        tc.content = full
+        tc.isContentTruncated = false
+        tc.preview = Self.previewLine(full)
+        tc.contentLanguage = Self.wrappingFenceLanguage(raw)
+        tc.terminalIds = Self.mergeTerminalIds(
+            Self.extractTerminalIds(items),
+            Self.extractMetadataTerminalIds(tc.metadata, includeExit: false))
+        let preservedRawOutputAssets = rawOutputAssets.isEmpty
+            ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
+            : rawOutputAssets
+        tc.assets = Self.mergeAssets(Self.extractAssets(items), preservedRawOutputAssets)
+    }
+
+    private static func applyToolCallUpdateFields(
+        _ update: ACPToolCallUpdate,
+        to tc: inout ACPMessage.ToolCall,
+        allowFinalSnapshotReplacement: Bool = true
+    ) {
+        let canReplaceSnapshot = allowFinalSnapshotReplacement || !Self.isFinalStatus(tc.status)
+        var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
+        if canReplaceSnapshot, let title = update.title { tc.title = title }
+        if canReplaceSnapshot, let status = update.status { tc.status = status }
+        if canReplaceSnapshot, let locations = update.locations { tc.locations = locations.map(\.path) }
+        if canReplaceSnapshot, let rawInput = update.rawInput { tc.rawInput = Self.metadataString(rawInput) }
+        if (canReplaceSnapshot || update.status.map(Self.isFinalStatus) == true), let rawOutput = update.rawOutput {
+            tc.rawOutput = Self.metadataString(rawOutput)
+            rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
+            tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
+        }
+        if let metadata = update.metadata {
+            tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
+            tc.terminalIds = Self.mergeTerminalIds(
+                tc.terminalIds,
+                Self.extractMetadataTerminalIds(metadata, includeExit: update.content == nil))
+        }
+        if let content = update.content {
+            if !canReplaceSnapshot {
+                if let status = update.status, Self.isFinalStatus(status) {
+                    tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(content))
+                    tc.terminalIds = Self.mergeTerminalIds(
+                        tc.terminalIds,
+                        Self.extractTerminalIds(content))
+                }
+                return
+            }
+            let raw = Self.flatten(content)
+            let full = Self.stripWrappingFence(raw,
+                                               isFinal: Self.isFinalStatus(tc.status))
+            tc.content = full
+            tc.isContentTruncated = false
+            tc.preview = Self.previewLine(full)
+            tc.contentLanguage = Self.wrappingFenceLanguage(raw)
+            tc.terminalIds = Self.mergeTerminalIds(
+                Self.extractTerminalIds(content),
+                Self.extractMetadataTerminalIds(tc.metadata, includeExit: false))
+            let preservedRawOutputAssets = rawOutputAssets.isEmpty
+                ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
+                : rawOutputAssets
+            tc.assets = Self.mergeAssets(Self.extractAssets(content), preservedRawOutputAssets)
         }
     }
 
@@ -642,12 +777,13 @@ final class ACPSession: ObservableObject, Identifiable {
             switch item {
             case .content(.text(let s)):
                 out.append(s)
-            case .content(.resourceLink(let uri, let name)):
-                out.append("[\(name ?? uri)]")
-            case .content(.image):
-                out.append("[image]")
-            case .content(.resource(let uri, _, _)):
-                out.append("[\(URL(string: uri)?.lastPathComponent ?? uri)]")
+            case .content(.resourceLink), .content(.image):
+                // Asset blocks are preserved on `ToolCall.assets`; including
+                // text placeholders here corrupts wrapped prose/code output
+                // when an update contains both text and assets.
+                continue
+            case .content(.resource(_, _, let text)):
+                out.append(text)
             case .diff(let path, let old, let new):
                 var lines: [String] = ["--- \(path)"]
                 if let old, !old.isEmpty {
@@ -692,6 +828,37 @@ final class ACPSession: ObservableObject, Identifiable {
         return s.count > 80 ? String(s.prefix(80)) + "…" : s
     }
 
+    private static func mergeTerminalIds(_ primary: [String], _ secondary: [String]) -> [String] {
+        var seen = Set<String>()
+        var merged: [String] = []
+        for terminalId in primary + secondary where seen.insert(terminalId).inserted {
+            merged.append(terminalId)
+        }
+        return merged
+    }
+
+    private static func extractMetadataTerminalIds(_ metadata: AnyCodable?, includeExit: Bool = true) -> [String] {
+        guard let root = Self.metadataObject(metadata) else { return [] }
+        let fields = includeExit
+            ? ["terminal_info", "terminal_output", "terminal_output_delta", "terminal_exit"]
+            : ["terminal_info", "terminal_output", "terminal_output_delta"]
+        return fields.compactMap { field in
+            guard let object = Self.metadataObject(root[field]) else { return nil }
+            return Self.metadataScalarString(object["terminal_id"])
+        }
+    }
+
+    private static func mergeMetadata(_ existing: AnyCodable?, _ update: AnyCodable) -> AnyCodable {
+        guard var merged = Self.metadataObject(existing),
+              let updateObject = Self.metadataObject(update) else {
+            return update
+        }
+        for (key, value) in updateObject {
+            merged[key] = value
+        }
+        return AnyCodable(merged)
+    }
+
     private static func metadataString(_ value: AnyCodable?) -> String? {
         guard let value else { return nil }
         if let string = value.value as? String { return boundedMetadataPreview(string) }
@@ -706,8 +873,351 @@ final class ACPSession: ObservableObject, Identifiable {
         return String(string.prefix(metadataPreviewLimit)) + "… [truncated]"
     }
 
+    private func applyToolCallMetadata(_ metadata: AnyCodable?, replaying: Bool = false) {
+        guard let root = Self.metadataObject(metadata) else { return }
+
+        if let info = Self.metadataObject(root["terminal_info"]),
+           let terminalId = Self.metadataScalarString(info["terminal_id"]) {
+            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
+                terminalHost.recordMetadataTerminalInfo(
+                    terminalId: terminalId,
+                    cwd: Self.metadataScalarString(info["cwd"]))
+            }
+        }
+
+        if let output = Self.metadataObject(root["terminal_output"]),
+           let terminalId = Self.metadataScalarString(output["terminal_id"]),
+           let text = Self.metadataScalarString(output["data"]) {
+            if shouldApplyMetadataTerminalSideEffect(
+                terminalId: terminalId,
+                replaying: replaying,
+                replace: true
+            ) {
+                terminalHost.appendMetadataOutput(
+                    terminalId: terminalId,
+                    data: Data(text.utf8),
+                    replace: true)
+            }
+        }
+
+        if let delta = Self.metadataObject(root["terminal_output_delta"]),
+           let terminalId = Self.metadataScalarString(delta["terminal_id"]),
+           let text = Self.metadataScalarString(delta["data"]) {
+            if shouldApplyMetadataTerminalSideEffect(
+                terminalId: terminalId,
+                replaying: replaying,
+                replace: false
+            ) {
+                terminalHost.appendMetadataOutput(
+                    terminalId: terminalId,
+                    data: Data(text.utf8),
+                    replace: false)
+            }
+        }
+
+        if let exit = Self.metadataObject(root["terminal_exit"]),
+           let terminalId = Self.metadataScalarString(exit["terminal_id"]) {
+            if shouldApplyMetadataTerminalExitSideEffect(terminalId: terminalId, replaying: replaying) {
+                terminalHost.recordMetadataExit(
+                    terminalId: terminalId,
+                    exitStatus: ACPTerminalExitStatus(
+                        exitCode: Self.metadataInt(exit["exit_code"]),
+                        signal: Self.metadataScalarString(exit["signal"])))
+            }
+        }
+    }
+
+    private func shouldApplyMetadataTerminalSideEffect(
+        terminalId: String,
+        replaying: Bool,
+        replace: Bool = false
+    ) -> Bool {
+        guard replaying else { return true }
+        if replace { return true }
+        if replayCreatedMetadataTerminalIds.contains(terminalId) { return true }
+        if let terminal = terminalHost.terminal(id: terminalId),
+           !terminal.buffer.isEmpty || terminal.exitStatus != nil {
+            return false
+        }
+        replayCreatedMetadataTerminalIds.insert(terminalId)
+        return true
+    }
+
+    private func shouldApplyMetadataTerminalExitSideEffect(terminalId: String, replaying: Bool) -> Bool {
+        guard replaying else { return true }
+        if replayCreatedMetadataTerminalIds.contains(terminalId) { return true }
+        if let terminal = terminalHost.terminal(id: terminalId) {
+            return terminal.exitStatus == nil
+        }
+        replayCreatedMetadataTerminalIds.insert(terminalId)
+        return true
+    }
+
+    private static func metadataObject(_ value: AnyCodable?) -> [String: AnyCodable]? {
+        if let dict = value?.value as? [String: AnyCodable] { return dict }
+        if let dict = value?.value as? [String: Any] {
+            return dict.mapValues { raw in
+                (raw as? AnyCodable) ?? AnyCodable(raw)
+            }
+        }
+        return nil
+    }
+
+    private static func metadataScalarString(_ value: AnyCodable?) -> String? {
+        guard let raw = value?.value, !(raw is NSNull) else { return nil }
+        return raw as? String
+    }
+
+    private static func metadataInt(_ value: AnyCodable?) -> Int? {
+        guard let raw = value?.value, !(raw is NSNull) else { return nil }
+        if let int = raw as? Int { return int }
+        if let double = raw as? Double, double.rounded(.towardZero) == double {
+            return Int(double)
+        }
+        return nil
+    }
+
+    private static func metadataArray(_ value: AnyCodable?) -> [AnyCodable]? {
+        if let array = value?.value as? [AnyCodable] { return array }
+        if let array = value?.value as? [Any] {
+            return array.map { raw in
+                (raw as? AnyCodable) ?? AnyCodable(raw)
+            }
+        }
+        return nil
+    }
+
     private static func extractTerminalIds(_ items: [ACPToolCallContent]) -> [String] {
         items.compactMap { if case .terminal(let id) = $0 { return id } else { return nil } }
+    }
+
+    private static func mergeAssets(
+        _ primary: [ACPMessage.ToolCallAsset],
+        _ secondary: [ACPMessage.ToolCallAsset]
+    ) -> [ACPMessage.ToolCallAsset] {
+        var seen = Set<ACPMessage.ToolCallAsset>()
+        var merged: [ACPMessage.ToolCallAsset] = []
+        for asset in primary + secondary where seen.insert(asset).inserted {
+            merged.append(asset)
+        }
+        return merged
+    }
+
+    private static func extractAssets(_ items: [ACPToolCallContent]) -> [ACPMessage.ToolCallAsset] {
+        items.compactMap { item in
+            guard case .content(let block) = item else { return nil }
+            switch block {
+            case .image(let data, let uri, let mime):
+                return .image(data: data, uri: uri, mimeType: mime, name: Self.assetName(from: uri))
+            case .resourceLink(let uri, let name):
+                return .resource(uri: uri, name: name)
+            case .resource(let uri, let mime, _):
+                return .resource(uri: uri, name: Self.assetName(from: uri), mimeType: mime)
+            case .text:
+                return nil
+            }
+        }
+    }
+
+    private static func extractRawOutputAssets(_ value: AnyCodable?) -> [ACPMessage.ToolCallAsset] {
+        var assets: [ACPMessage.ToolCallAsset] = []
+        collectRawOutputAssets(value, into: &assets)
+        return mergeAssets([], assets)
+    }
+
+    private static func collectRawOutputAssets(_ value: AnyCodable?, into assets: inout [ACPMessage.ToolCallAsset]) {
+        guard let value else { return }
+
+        if let object = metadataObject(value) {
+            if let data = metadataScalarString(object["b64_json"]), !data.isEmpty {
+                assets.append(.image(data: data, mimeType: "image/png"))
+            }
+            let rawData = metadataScalarString(object["data"])
+            let mimeDataType = rawOutputMimeType(object)
+            let consumedDataImage: Bool
+            if let data = rawData,
+               let mimeType = dataImageMimeType(data) {
+                assets.append(.image(data: data, mimeType: mimeType))
+                consumedDataImage = true
+            } else if let data = rawData,
+                      let mimeType = mimeDataType,
+                      mimeType.lowercased().hasPrefix("image/"),
+                      !data.isEmpty {
+                assets.append(.image(data: data, mimeType: mimeType))
+                consumedDataImage = true
+            } else {
+                consumedDataImage = false
+            }
+            if let uri = metadataScalarString(object["url"]),
+               rawOutputURLLooksLikeImage(uri, in: object) {
+                assets.append(.image(
+                    data: nil,
+                    uri: uri,
+                    mimeType: dataImageMimeType(uri) ?? rawOutputMimeType(object),
+                    name: assetName(from: uri)))
+            }
+
+            for (key, child) in object
+                where key != "b64_json"
+                    && key != "url"
+                    && !(key == "data" && consumedDataImage) {
+                collectRawOutputAssets(child, into: &assets)
+            }
+            return
+        }
+
+        if let array = metadataArray(value) {
+            for child in array {
+                collectRawOutputAssets(child, into: &assets)
+            }
+            return
+        }
+
+        if let string = metadataScalarString(value),
+           let mimeType = dataImageMimeType(string) {
+            assets.append(.image(data: string, mimeType: mimeType))
+        } else if let string = metadataScalarString(value),
+                  let data = string.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) {
+            collectRawOutputAssets(AnyCodable(json), into: &assets)
+        }
+    }
+
+    private static func dataImageMimeType(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("data:image/"),
+              let semicolon = trimmed.firstIndex(of: ";")
+        else { return nil }
+        return String(trimmed[..<semicolon].dropFirst("data:".count))
+    }
+
+    private static func rawOutputURLLooksLikeImage(_ uri: String, in object: [String: AnyCodable]) -> Bool {
+        if dataImageMimeType(uri) != nil { return true }
+        if rawOutputMimeType(object)?.lowercased().hasPrefix("image/") == true { return true }
+        if metadataScalarString(object["type"])?.lowercased() == "image" { return true }
+        if object["revised_prompt"] != nil { return true }
+        let pathExtension = URL(string: uri)?.pathExtension.lowercased()
+            ?? URL(fileURLWithPath: uri).pathExtension.lowercased()
+        switch pathExtension {
+        case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func rawOutputMimeType(_ object: [String: AnyCodable]) -> String? {
+        metadataScalarString(object["mimeType"])
+            ?? metadataScalarString(object["mime_type"])
+            ?? metadataScalarString(object["mimetype"])
+    }
+
+    private static func extractStoredRawOutputAssets(
+        _ rawOutput: String?,
+        existingAssets: [ACPMessage.ToolCallAsset]
+    ) -> [ACPMessage.ToolCallAsset] {
+        guard let rawOutput else { return [] }
+        let parsedAssets = extractRawOutputAssets(AnyCodable(rawOutput))
+        if !parsedAssets.isEmpty { return parsedAssets }
+
+        let lower = rawOutput.lowercased()
+        guard lower.contains("\"b64_json\"")
+            || lower.contains("data:image/")
+            || lower.contains("\"data\"")
+            || lower.contains("\"url\"")
+            || lower.contains("\"mimetype\"")
+            || lower.contains("\"mime_type\"")
+        else { return [] }
+        return existingAssets.filter { asset in
+            guard asset.kind == .image else { return false }
+            if let data = asset.data,
+               !data.isEmpty,
+               rawOutput.contains(String(data.prefix(128))) {
+                return true
+            }
+            if let uri = asset.uri, rawOutput.contains(uri) { return true }
+            if let uri = asset.uri,
+               Self.rawOutputContainsStableURIPrefix(rawOutput, uri: uri) {
+                return true
+            }
+            return false
+        }
+    }
+
+    private static func rawOutputContainsStableURIPrefix(_ rawOutput: String, uri: String) -> Bool {
+        guard uri.count >= 128 else { return false }
+        if dataImageMimeType(uri) != nil {
+            return rawOutput.contains(String(uri.prefix(128)))
+        }
+        guard let components = URLComponents(string: uri),
+              components.scheme != nil,
+              components.host != nil
+        else { return false }
+        return rawOutput.contains(String(uri.prefix(128)))
+    }
+
+    private static func assetName(from uri: String?) -> String? {
+        guard let uri, !uri.isEmpty else { return nil }
+        if uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") {
+            return nil
+        }
+        return URL(string: uri)?.lastPathComponent
+            ?? URL(fileURLWithPath: uri).lastPathComponent
+    }
+
+    private func applySessionInfoUpdate(_ info: ACPSessionInfoUpdate) {
+        switch info.title {
+        case .absent:
+            break
+        case .null:
+            if titleSource != .manual {
+                title = "New session"
+                titleSource = .placeholder
+            }
+        case .value(let rawTitle):
+            let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, titleSource != .manual {
+                title = trimmed
+                titleSource = .generated
+            }
+        }
+        applyGoalMetadata(info.metadata)
+    }
+
+    private func applyGoalMetadata(_ metadata: AnyCodable?) {
+        guard let metadata,
+              let root = Self.metadataObject(metadata)
+        else { return }
+
+        if let goal = root["goal"] {
+            applyGoalValue(goal)
+        } else if let codex = Self.metadataObject(root["codex"]),
+                  let goal = codex["goal"] {
+            applyGoalValue(goal)
+        }
+    }
+
+    private func applyGoalValue(_ value: AnyCodable) {
+        if value.value is NSNull {
+            currentGoal = nil
+            return
+        }
+        guard let goal = Self.metadataObject(value) else { return }
+
+        let objective: String
+        if let rawObjective = Self.metadataScalarString(goal["objective"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawObjective.isEmpty {
+            objective = rawObjective
+        } else if let existing = currentGoal {
+            objective = existing.objective
+        } else {
+            return
+        }
+
+        currentGoal = ACPGoalState(
+            objective: objective,
+            status: goal.keys.contains("status") ? Self.metadataScalarString(goal["status"]) : currentGoal?.status,
+            tokenBudget: goal.keys.contains("tokenBudget") ? Self.metadataInt(goal["tokenBudget"]) : currentGoal?.tokenBudget)
     }
 
     /// Best-effort strip of a single pair of markdown code fences that

@@ -536,6 +536,36 @@ struct ACPSessionRunnerTests {
         #expect(row.titleSource == .generated)
     }
 
+    @Test("session_info_update metadata updates live goal")
+    func sessionInfoUpdateMetadataUpdatesLiveGoal() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .sessionInfoUpdate(.init(
+                title: .absent,
+                metadata: AnyCodable([
+                    "codex": AnyCodable([
+                        "goal": AnyCodable([
+                            "objective": AnyCodable("Surface richer ACP events"),
+                            "status": AnyCodable("in_progress"),
+                            "tokenBudget": AnyCodable(12_000)
+                        ])
+                    ])
+                ])
+            ))
+        ))
+
+        try await waitUntil {
+            runner.session.currentGoal?.objective == "Surface richer ACP events"
+        }
+        let goal = try #require(runner.session.currentGoal)
+        #expect(goal.status == "in_progress")
+        #expect(goal.tokenBudget == 12_000)
+    }
+
     @Test("session_info_update preserves manual title")
     func sessionInfoUpdatePreservesManualTitle() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -721,6 +751,237 @@ struct ACPSessionRunnerTests {
         #expect(session.transcript.messages.isEmpty)
     }
 
+    @Test("tool metadata side effects apply during load replay suppression")
+    func toolMetadataSideEffectsApplyDuringLoadReplaySuppression() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-tool-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "t",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replay",
+            title: "Run command",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .toolCallUpdate(.init(
+                toolCallId: "tc-replay",
+                metadata: AnyCodable([
+                    "terminal_output_delta": AnyCodable([
+                        "terminal_id": AnyCodable("term-replay"),
+                        "data": AnyCodable("replayed output\n")
+                    ])
+                ])))))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
+
+        try await waitUntil {
+            session.terminalHost.terminal(id: "term-replay")?.snapshot(byteLimit: 1024).text == "replayed output\n"
+        }
+
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds == ["term-replay"])
+        } else {
+            Issue.record("expected restored toolCall message")
+        }
+    }
+
+    @Test("tool image enrichments apply during load replay suppression")
+    func toolImageEnrichmentsApplyDuringLoadReplaySuppression() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-tool-image-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "codex",
+            title: "t",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-image-replay",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .toolCallUpdate(.init(
+                toolCallId: "tc-image-replay",
+                status: "completed",
+                content: [
+                    .content(.image(data: "content-image-data", uri: nil, mimeType: "image/png"))
+                ],
+                rawOutput: AnyCodable([
+                    "data": AnyCodable([
+                        AnyCodable([
+                            "b64_json": AnyCodable("raw-output-data")
+                        ])
+                    ])
+                ])))))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
+
+        try await waitUntil {
+            guard case .toolCall(let tc) = session.transcript.messages.first else { return false }
+            return tc.status == "completed"
+                && tc.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
+                && tc.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
+        }
+
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "")
+            #expect(tc.rawOutput?.contains(#""b64_json":"raw-output-data""#) == true)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "content-image-data", mimeType: "image/png"),
+                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected restored toolCall message")
+        }
+    }
+
+    @Test("initial tool image enrichments apply during load replay suppression")
+    func initialToolImageEnrichmentsApplyDuringLoadReplaySuppression() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-tool-initial-image-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "codex",
+            title: "t",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-initial-image-replay",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .toolCall(.init(
+                toolCallId: "tc-initial-image-replay",
+                title: "Image generation",
+                kind: "other",
+                status: "completed",
+                content: [
+                    .content(.image(data: "content-image-data", uri: nil, mimeType: "image/png"))
+                ],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: AnyCodable([
+                    "data": AnyCodable([
+                        AnyCodable([
+                            "b64_json": AnyCodable("raw-output-data")
+                        ])
+                    ])
+                ])))))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
+
+        try await waitUntil {
+            guard case .toolCall(let tc) = session.transcript.messages.first else { return false }
+            return tc.status == "completed"
+                && tc.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
+                && tc.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
+        }
+
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "")
+            #expect(tc.rawOutput?.contains(#""b64_json":"raw-output-data""#) == true)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "content-image-data", mimeType: "image/png"),
+                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected restored toolCall message")
+        }
+
+        try await waitUntil {
+            guard let row = try? store.loadMessages(sessionId: "s").first,
+                  let decoded = try? ACPMessageCodec.decode(kind: row.kind, payload: row.payload),
+                  case .toolCall(let persisted) = decoded
+            else { return false }
+            return persisted.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
+                && persisted.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
+        }
+    }
+
     @Test("streaming chunks are persisted in a batch when streaming ends")
     func streamingChunksPersistAsBatchOnIdle() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
@@ -875,6 +1136,87 @@ struct ACPSessionRunnerTests {
             return
         }
         #expect(text.value == "hello world")
+    }
+
+    @Test("takeover snapshot preserves stored full tool content")
+    func takeoverSnapshotPreservesStoredFullToolContent() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-takeover-tool-snapshot-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+
+        let fullContent = String(repeating: "full-content-line\n", count: 400)
+        let original = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Run",
+            kind: "execute",
+            status: "completed",
+            content: fullContent
+        ))
+        session.replaceTranscriptMessages([original])
+        runner.persistIndices([0])
+        session.transcript.setVisibleHead(1)
+        guard case .toolCall(let truncated) = session.transcript.messages[0] else {
+            Issue.record("expected tool call")
+            return
+        }
+        #expect(truncated.isContentTruncated)
+        #expect(truncated.content.count < fullContent.count)
+
+        runner.start()
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        mock.emitToolCallUpdate(.init(
+            toolCallId: "tool-1",
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-1"),
+                    "data": AnyCodable("tail\n")
+                ])
+            ])
+        ))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == fullContent)
+        #expect(persisted.terminalIds == ["term-1"])
     }
 
     @Test("stop() resolves a parked permission continuation as cancelled")
@@ -1196,6 +1538,116 @@ struct ACPSessionRunnerTests {
         session.appendSystemNotice("hello")
         runner.persistIndices([0])
         #expect(posts >= 1)
+    }
+
+    @Test("persistIndices preserves stored full tool content after metadata-only update")
+    func persistIndicesPreservesStoredFullToolContentAfterMetadataOnlyUpdate() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-persist-truncated-tool-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        let fullContent = String(repeating: "full-content-line\n", count: 400)
+        let original = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Run",
+            kind: "execute",
+            status: "completed",
+            content: fullContent
+        ))
+        session.replaceTranscriptMessages([original])
+        runner.persistIndices([0])
+
+        session.transcript.setVisibleHead(1)
+        guard case .toolCall(let truncated) = session.transcript.messages[0] else {
+            Issue.record("expected tool call")
+            return
+        }
+        #expect(truncated.isContentTruncated)
+        #expect(truncated.content.count < fullContent.count)
+
+        let dirty = session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1",
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-1"),
+                    "data": AnyCodable("tail\n")
+                ])
+            ])
+        )))
+        runner.persistIndices(dirty)
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == fullContent)
+        #expect(persisted.terminalIds == ["term-1"])
+    }
+
+    @Test("persistIndices stores replacement tool content after truncation")
+    func persistIndicesStoresReplacementToolContentAfterTruncation() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-persist-replacement-tool-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        let originalContent = String(repeating: "old-content-line\n", count: 400)
+        let replacementContent = String(repeating: "new-content-line\n", count: 350)
+        let original = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Run",
+            kind: "execute",
+            status: "completed",
+            content: originalContent
+        ))
+        session.replaceTranscriptMessages([original])
+        runner.persistIndices([0])
+
+        session.transcript.setVisibleHead(1)
+        let dirty = session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1",
+            status: "completed",
+            content: [.content(.text(replacementContent))]
+        )))
+        runner.persistIndices(dirty)
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == replacementContent)
+        #expect(persisted.isContentTruncated == false)
     }
 
     @Test("persistIndices updates deterministic row kind that appeared after runner initialization")
@@ -1659,6 +2111,10 @@ private final class StreamingBatchACPClient: ACPClient {
 
     func emitAgentChunk(_ text: String) {
         updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text(text))))
+    }
+
+    func emitToolCallUpdate(_ update: ACPToolCallUpdate) {
+        updatesCont.yield(.init(sessionId: "s", update: .toolCallUpdate(update)))
     }
 
     func notify(_ request: ACPRequest) async throws {}

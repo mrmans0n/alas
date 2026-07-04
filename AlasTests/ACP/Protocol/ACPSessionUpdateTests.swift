@@ -46,11 +46,98 @@ struct ACPSessionUpdateTests {
             #expect(tc.toolCallId == "tc-1")
             #expect(tc.title == "read_file")
             #expect(tc.status == "in_progress")
+            #expect(tc.metadata == nil)
             #expect(tc.content?.count == 1)
             if case .content(.text(let s)) = tc.content?.first {
                 #expect(s == "reading…")
             } else { Issue.record("expected wrapped text content") }
         } else { Issue.record("expected toolCall") }
+    }
+
+    @Test("decodes session_info_update with metadata")
+    func sessionInfoUpdate() throws {
+        let env = try decode("session-update-session-info-goal")
+        guard case .sessionInfoUpdate(let info) = env.params!.update else {
+            Issue.record("expected sessionInfoUpdate")
+            return
+        }
+        #expect(info.title == .value("Investigate ACP events"))
+        let meta = try #require(info.metadata?.value as? [String: AnyCodable])
+        let codex = try #require(meta["codex"]?.value as? [String: AnyCodable])
+        let goal = try #require(codex["goal"]?.value as? [String: AnyCodable])
+        #expect(goal["objective"]?.value as? String == "Surface richer ACP events")
+        #expect(goal["status"]?.value as? String == "in_progress")
+        #expect(goal["tokenBudget"]?.value as? Int == 12000)
+    }
+
+    @Test("decodes session_info_update without metadata")
+    func sessionInfoUpdateWithoutMetadata() throws {
+        let env = try decode("session-update-session-info-no-meta")
+        guard case .sessionInfoUpdate(let info) = env.params!.update else {
+            Issue.record("expected sessionInfoUpdate")
+            return
+        }
+        #expect(info.title == .value("Title only"))
+        #expect(info.metadata == nil)
+    }
+
+    @Test("decodes tool call metadata")
+    func toolCallMetadata() throws {
+        let env = try decode("session-update-tool-call-meta")
+        guard case .toolCall(let tc) = env.params!.update else {
+            Issue.record("expected toolCall")
+            return
+        }
+        #expect(tc.toolCallId == "cmd-1")
+        #expect(tc.metadata != nil)
+        let meta = try #require(tc.metadata?.value as? [String: AnyCodable])
+        let terminalInfo = try #require(meta["terminal_info"]?.value as? [String: AnyCodable])
+        #expect(terminalInfo["terminal_id"]?.value as? String == "cmd-1")
+        #expect(terminalInfo["cwd"]?.value as? String == "/repo")
+    }
+
+    @Test("decodes tool call update metadata and mutable fields")
+    func toolCallUpdateMetadata() throws {
+        let env = try decode("session-update-tool-call-update-meta")
+        guard case .toolCallUpdate(let update) = env.params!.update else {
+            Issue.record("expected toolCallUpdate")
+            return
+        }
+        #expect(update.toolCallId == "cmd-1")
+        #expect(update.title == "swift test --filter ACP")
+        #expect(update.locations?.first?.path == "AlasTests/ACP/Session/ACPSessionTests.swift")
+        #expect(update.locations?.first?.line == 12)
+        let rawInput = try #require(update.rawInput?.value as? [String: AnyCodable])
+        #expect(rawInput["command"]?.value as? String == "swift test --filter ACP")
+        let rawOutput = try #require(update.rawOutput?.value as? [String: AnyCodable])
+        #expect(rawOutput["exit_code"]?.value as? Int == 0)
+        let meta = try #require(update.metadata?.value as? [String: AnyCodable])
+        let outputDelta = try #require(meta["terminal_output_delta"]?.value as? [String: AnyCodable])
+        #expect(outputDelta["terminal_id"]?.value as? String == "cmd-1")
+        #expect(outputDelta["data"]?.value as? String == "ok\n")
+        let terminalExit = try #require(meta["terminal_exit"]?.value as? [String: AnyCodable])
+        #expect(terminalExit["terminal_id"]?.value as? String == "cmd-1")
+        #expect(terminalExit["exit_code"]?.value as? Int == 0)
+        let signal = terminalExit["signal"]?.value
+        #expect(signal == nil || signal is NSNull)
+    }
+
+    @Test("decodes legacy tool call update without metadata")
+    func toolCallUpdateNoMetadata() throws {
+        let env = try decode("session-update-tool-call-update-no-meta")
+        guard case .toolCallUpdate(let update) = env.params!.update else {
+            Issue.record("expected toolCallUpdate")
+            return
+        }
+        #expect(update.toolCallId == "cmd-legacy")
+        #expect(update.title == "read_file")
+        #expect(update.status == "completed")
+        #expect(update.locations?.first?.path == "AlasTests/ACP/Protocol/ACPSessionUpdateTests.swift")
+        #expect(update.locations?.first?.line == 7)
+        #expect(update.content?.count == 1)
+        #expect(update.rawInput != nil)
+        #expect(update.rawOutput != nil)
+        #expect(update.metadata == nil)
     }
 
     @Test("decodes plan update")

@@ -41,6 +41,227 @@ struct ACPMessageTests {
         let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
         #expect(back == m)
     }
+
+    @Test("tool call enriched fields round-trip")
+    func toolCallEnrichedRoundtrip() throws {
+        let metadata = AnyCodable([
+            "is_mcp_tool_call": AnyCodable(true),
+            "tool": AnyCodable("read_file")
+        ])
+        let assets: [ACPMessage.ToolCallAsset] = [
+            .image(
+                data: "aGVsbG8=",
+                uri: "file:///tmp/screenshot.png",
+                mimeType: "image/png",
+                name: "screenshot.png"
+            ),
+            .resource(uri: "file:///tmp/result.txt", name: nil, mimeType: "text/plain"),
+            .resource(uri: "file:///tmp/result-named.txt", name: "result.txt", mimeType: "text/plain")
+        ]
+        let m = ACPMessage.toolCall(.init(
+            toolCallId: "tc-2",
+            title: "read_file",
+            kind: "read",
+            status: "completed",
+            content: "response text",
+            preview: "response text",
+            rawInput: #"{\"command\":\"read_file\"}"#,
+            rawOutput: #"{\"status\":\"ok\"}"#,
+            metadata: metadata,
+            assets: assets,
+            locations: ["file://x"],
+            terminalIds: ["term-1"]))
+        let payload = try ACPMessageCodec.encode(m)
+        let back = try ACPMessageCodec.decode(kind: m.kind, payload: payload)
+        #expect(back == m)
+    }
+
+    @Test("legacy contentSummary decode keeps backward-compatible preview")
+    func toolCallLegacyContentSummary() throws {
+        let payload = """
+        {
+          "toolCallId": "tc-legacy-summary",
+          "title": "read_file",
+          "kind": "read",
+          "status": "completed",
+          "content": "raw output",
+          "contentSummary": "legacy summary",
+          "locations": ["/x"]
+        }
+        """.data(using: .utf8)!
+        let back = try ACPMessageCodec.decode(kind: "tool_call", payload: payload)
+        guard case .toolCall(let tc) = back else {
+            Issue.record("expected toolCall")
+            return
+        }
+        #expect(tc.preview == "legacy summary")
+        #expect(tc.rawOutput == nil)
+        #expect(tc.metadata == nil)
+        #expect(tc.assets == [])
+    }
+
+    @Test("tool call equality differs on terminalIds")
+    func toolCallTerminalIdAffectsEquality() throws {
+        let a = ACPMessage.ToolCall(
+            toolCallId: "tc-1", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            terminalIds: ["term-a"])
+        let b = ACPMessage.ToolCall(
+            toolCallId: "tc-1", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            terminalIds: ["term-b"])
+        #expect(a != b)
+    }
+
+    @Test("tool call equality and hash align for same metadata")
+    func toolCallMetadataEqualityAndHash() throws {
+        let metadata = AnyCodable(["is_mcp_tool_call": AnyCodable(true)])
+        let a = ACPMessage.ToolCall(
+            toolCallId: "tc-2", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            rawOutput: #"{\"ok\":true}"#,
+            metadata: metadata)
+        let b = ACPMessage.ToolCall(
+            toolCallId: "tc-2", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            rawOutput: #"{\"ok\":true}"#,
+            metadata: metadata)
+        #expect(a == b)
+
+        var ha = Hasher()
+        a.hash(into: &ha)
+        var hb = Hasher()
+        b.hash(into: &hb)
+        #expect(ha.finalize() == hb.finalize())
+    }
+
+    @Test("tool call metadata order does not affect equality or hash")
+    func toolCallMetadataDictionaryOrderIsDeterministic() throws {
+        var first: [String: AnyCodable] = [:]
+        first["first"] = AnyCodable("value")
+        first["second"] = AnyCodable(99)
+
+        var second: [String: AnyCodable] = [:]
+        second["second"] = AnyCodable(99)
+        second["first"] = AnyCodable("value")
+
+        #expect(AnyCodable(first) == AnyCodable(second))
+
+        let a = ACPMessage.ToolCall(
+            toolCallId: "tc-order", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            metadata: AnyCodable(first))
+        let b = ACPMessage.ToolCall(
+            toolCallId: "tc-order", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            metadata: AnyCodable(second))
+        #expect(a == b)
+
+        var ha = Hasher()
+        a.hash(into: &ha)
+        var hb = Hasher()
+        b.hash(into: &hb)
+        #expect(ha.finalize() == hb.finalize())
+    }
+
+    @Test("AnyCodable supports raw Swift dictionary literals")
+    func anyCodableSupportsRawSwiftDictionaries() throws {
+        let prewrapped: [String: AnyCodable] = [
+            "tool": AnyCodable("read"),
+            "is_mcp_tool_call": AnyCodable(true),
+            "args": AnyCodable([AnyCodable(1), AnyCodable("two"), AnyCodable(["nested": AnyCodable(false)])])
+        ]
+        let a = AnyCodable(prewrapped)
+        let b = AnyCodable(["is_mcp_tool_call": true, "args": [1, "two", ["nested": false]], "tool": "read"])
+        #expect(a == b)
+
+        var ha = Hasher()
+        a.hash(into: &ha)
+        var hb = Hasher()
+        b.hash(into: &hb)
+        #expect(ha.finalize() == hb.finalize())
+
+        let payload = try JSONEncoder().encode(a)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: payload)
+        #expect(decoded == a)
+        #expect(decoded == b)
+
+        let arrayPayload = try JSONEncoder().encode(AnyCodable([1, "two", ["nested": false]]))
+        let decodedArray = try JSONDecoder().decode(AnyCodable.self, from: arrayPayload)
+        #expect(decodedArray == AnyCodable([1, "two", ["nested": false]]))
+
+        var hc = Hasher()
+        a.hash(into: &hc)
+        var hd = Hasher()
+        decoded.hash(into: &hd)
+        #expect(hc.finalize() == hd.finalize())
+    }
+
+    @Test("AnyCodable keeps distinct dictionaries from comparing equal")
+    func anyCodableDistinctDictionariesAreDistinct() throws {
+        let a = AnyCodable(["a": 1, "b": 2])
+        let b = AnyCodable(["a": 1, "b": 3])
+        #expect(a != b)
+    }
+
+    @Test("AnyCodable preserves numeric NSNumbers")
+    func anyCodablePreservesNumericNSNumbers() throws {
+        let value = AnyCodable([
+            "exit_code": NSNumber(value: 1),
+            "ok": NSNumber(value: true)
+        ])
+
+        let payload = try JSONEncoder().encode(value)
+        let json = try #require(String(data: payload, encoding: .utf8))
+        #expect(json.contains(#""exit_code":1"#))
+        #expect(json.contains(#""ok":true"#))
+    }
+
+    @Test("tool call equality differs on rawOutput")
+    func toolCallRawOutputAffectsEquality() throws {
+        let a = ACPMessage.ToolCall(
+            toolCallId: "tc-3", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            rawOutput: #"{\"ok\":true}"#)
+        let b = ACPMessage.ToolCall(
+            toolCallId: "tc-3", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            rawOutput: #"{\"ok\":false}"#)
+        #expect(a != b)
+    }
+
+    @Test("tool call equality differs on assets")
+    func toolCallAssetsAffectEquality() throws {
+        let a = ACPMessage.ToolCall(
+            toolCallId: "tc-4", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            assets: [.image(data: "aGVsbG8=", uri: "file:///a.png", mimeType: "image/png", name: "a.png")])
+        let b = ACPMessage.ToolCall(
+            toolCallId: "tc-4", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output",
+            assets: [.resource(uri: "file:///a.txt", name: "a.txt")])
+        #expect(a != b)
+    }
+
+    @Test("tool call truncation flag is excluded from equality and hashing")
+    func toolCallTruncatedFlagExcludedFromEqualityAndHash() throws {
+        var a = ACPMessage.ToolCall(
+            toolCallId: "tc-5", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output")
+        var b = ACPMessage.ToolCall(
+            toolCallId: "tc-5", title: "read", kind: "read",
+            status: "completed", content: "output", preview: "output")
+        b.isContentTruncated = true
+
+        #expect(a == b)
+
+        var ha = Hasher()
+        a.hash(into: &ha)
+        var hb = Hasher()
+        b.hash(into: &hb)
+        #expect(ha.finalize() == hb.finalize())
+    }
+
     @Test("file edit round-trips")
     func editRoundtrip() throws {
         let m = ACPMessage.fileEdit(id: UUID(), .init(

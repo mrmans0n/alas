@@ -1,0 +1,4 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"s",
+  "update":{"sessionUpdate":"tool_call_update","toolCallId":"cmd-legacy","title":"read_file","status":"completed","locations":[{"path":"AlasTests/ACP/Protocol/ACPSessionUpdateTests.swift","line":7}],"content":[{"type":"content","content":{"type":"text","text":"legacy output"}}],"rawInput":{"path":"/legacy/file.swift"},"rawOutput":{"exit_code":0}}
+}}

@@ -66,6 +66,50 @@ enum ACPMessage: Equatable {
         }
     }
 
+    struct ToolCallAsset: Codable, Equatable, Hashable, Sendable {
+        enum Kind: String, Codable, Equatable, Hashable, Sendable {
+            case image
+            case resource
+        }
+
+        let kind: Kind
+        let data: String?
+        let uri: String?
+        let mimeType: String?
+        let name: String?
+
+        init(
+            kind: Kind,
+            data: String? = nil,
+            uri: String? = nil,
+            mimeType: String? = nil,
+            name: String? = nil
+        ) {
+            self.kind = kind
+            self.data = data
+            self.uri = uri
+            self.mimeType = mimeType
+            self.name = name
+        }
+
+        static func image(
+            data: String? = nil,
+            uri: String? = nil,
+            mimeType: String? = nil,
+            name: String? = nil
+        ) -> ToolCallAsset {
+            .init(kind: .image, data: data, uri: uri, mimeType: mimeType, name: name)
+        }
+
+        static func resource(
+            uri: String,
+            name: String?,
+            mimeType: String? = nil
+        ) -> ToolCallAsset {
+            .init(kind: .resource, uri: uri, mimeType: mimeType, name: name)
+        }
+    }
+
     struct ToolCall: Codable, Equatable, Hashable, Sendable {
         let toolCallId: String
         var title: String
@@ -85,6 +129,13 @@ enum ACPMessage: Equatable {
         /// Compact JSON/string form of the tool input reported by ACP. Kept so
         /// remote mirrors can show useful params even before output arrives.
         var rawInput: String?
+        /// Compact JSON/string form of the tool output reported by ACP.
+        var rawOutput: String?
+        /// Structured metadata emitted by protocol payloads. Persisted for
+        /// richer rendering and replay.
+        var metadata: AnyCodable?
+        /// Preserved assets produced with the tool call.
+        var assets: [ToolCallAsset]
         var locations: [String]
         /// Terminal IDs referenced by this call's structured content, in
         /// declaration order. The expanded card renders one
@@ -114,19 +165,24 @@ enum ACPMessage: Equatable {
         }
 
         init(toolCallId: String, title: String, kind: String? = nil,
-             status: String, content: String = "", preview: String? = nil,
+             status: String, content: String? = nil, preview: String? = nil,
              contentLanguage: String? = nil, rawInput: String? = nil,
-             locations: [String] = [], terminalIds: [String] = [])
+             rawOutput: String? = nil, metadata: AnyCodable? = nil,
+             assets: [ToolCallAsset] = [],
+             locations: [String]? = nil, terminalIds: [String] = [])
         {
             self.toolCallId = toolCallId
             self.title = title
             self.kind = kind
             self.status = status
-            self.content = content
+            self.content = content ?? ""
             self.preview = preview
             self.contentLanguage = contentLanguage
             self.rawInput = rawInput
-            self.locations = locations
+            self.rawOutput = rawOutput
+            self.metadata = metadata
+            self.assets = assets
+            self.locations = locations ?? []
             self.terminalIds = terminalIds
         }
 
@@ -135,7 +191,8 @@ enum ACPMessage: Equatable {
         // session history doesn't go blank after upgrade.
         enum CodingKeys: String, CodingKey {
             case toolCallId, title, kind, status, content, preview,
-                 contentSummary, contentLanguage, rawInput, locations, terminalIds
+                 contentSummary, contentLanguage, rawInput, rawOutput, metadata,
+                 assets, locations, terminalIds
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -148,6 +205,9 @@ enum ACPMessage: Equatable {
                 ?? (try? c.decode(String.self, forKey: .contentSummary))
             contentLanguage = try? c.decode(String.self, forKey: .contentLanguage)
             rawInput = try? c.decode(String.self, forKey: .rawInput)
+            rawOutput = try? c.decode(String.self, forKey: .rawOutput)
+            metadata = try? c.decode(AnyCodable.self, forKey: .metadata)
+            assets = (try? c.decode([ToolCallAsset].self, forKey: .assets)) ?? []
             locations = (try? c.decode([String].self, forKey: .locations)) ?? []
             terminalIds = (try? c.decode([String].self, forKey: .terminalIds)) ?? []
         }
@@ -161,6 +221,9 @@ enum ACPMessage: Equatable {
             try c.encodeIfPresent(preview, forKey: .preview)
             try c.encodeIfPresent(contentLanguage, forKey: .contentLanguage)
             try c.encodeIfPresent(rawInput, forKey: .rawInput)
+            try c.encodeIfPresent(rawOutput, forKey: .rawOutput)
+            try c.encodeIfPresent(metadata, forKey: .metadata)
+            try c.encode(assets, forKey: .assets)
             try c.encode(locations, forKey: .locations)
             try c.encode(terminalIds, forKey: .terminalIds)
         }
@@ -178,7 +241,11 @@ enum ACPMessage: Equatable {
                 && lhs.preview == rhs.preview
                 && lhs.contentLanguage == rhs.contentLanguage
                 && lhs.rawInput == rhs.rawInput
+                && lhs.rawOutput == rhs.rawOutput
+                && lhs.metadata == rhs.metadata
+                && lhs.assets == rhs.assets
                 && lhs.locations == rhs.locations
+                && lhs.terminalIds == rhs.terminalIds
         }
 
         func hash(into hasher: inout Hasher) {
@@ -190,7 +257,11 @@ enum ACPMessage: Equatable {
             hasher.combine(preview)
             hasher.combine(contentLanguage)
             hasher.combine(rawInput)
+            hasher.combine(rawOutput)
+            hasher.combine(metadata)
+            hasher.combine(assets)
             hasher.combine(locations)
+            hasher.combine(terminalIds)
         }
     }
 

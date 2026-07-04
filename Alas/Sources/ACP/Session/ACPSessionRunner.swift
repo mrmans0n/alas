@@ -110,6 +110,9 @@ final class ACPSessionRunner {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
+        if suppressingLoadReplay {
+            session.beginSuppressedReplaySideEffects()
+        }
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onResumeTranscriptTail = onResumeTranscriptTail
@@ -137,18 +140,22 @@ final class ACPSessionRunner {
                 await MainActor.run {
                     self.observedUpdateCount += 1
                     self.appliedUpdateCount += 1
-                    let handledSessionInfoUpdate: Bool
+                    let preAppliedSessionInfoDirty: Set<Int>?
                     if case .sessionInfoUpdate(let info) = u.update {
                         self.flushStreamingPersist()
+                        preAppliedSessionInfoDirty = self.session.apply(u.update)
                         self.applySessionInfoTitle(info)
-                        handledSessionInfoUpdate = true
                     } else {
-                        handledSessionInfoUpdate = false
+                        preAppliedSessionInfoDirty = nil
                     }
                     if self.suppressingLoadReplay {
+                        let dirty = preAppliedSessionInfoDirty
+                            ?? self.session.applySuppressedReplaySideEffects(u.update)
+                        self.persistIndices(dirty)
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
+                            self.session.endSuppressedReplaySideEffects()
                             // Disallow streaming boundary crossings until the next prompt
                             // starts. Any agentMessageChunk that would cross a completed-
                             // output boundary in this window is a late replay slip — the
@@ -158,7 +165,9 @@ final class ACPSessionRunner {
                         }
                         return
                     }
-                    if !handledSessionInfoUpdate {
+                    if let dirty = preAppliedSessionInfoDirty {
+                        self.persistIndices(dirty)
+                    } else {
                         let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
                         let dirty = self.session.apply(u.update)
                         if shouldBatchStreamingPersist {
@@ -319,6 +328,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
+            session.endSuppressedReplaySideEffects()
             session.allowsStreamingBoundaryCrossing = false
         }
     }
@@ -1376,9 +1386,9 @@ extension ACPSessionRunner {
         case .agentMessageChunk, .agentThoughtChunk, .toolCallUpdate:
             return true
         case .userMessageChunk, .toolCall, .plan, .availableModelsUpdate,
-             .currentModeUpdate, .currentModelUpdate,
+             .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .sessionInfoUpdate, .unknown:
+             .usageUpdate, .unknown:
             return false
         }
     }
@@ -1430,7 +1440,7 @@ extension ACPSessionRunner {
         let messages = session.transcript.messages
         for i in indices {
             guard i >= 0, i < messages.count else { continue }
-            let message = messages[i]
+            let message = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
             let id = "msg-\(sessionId)-\(i)"
             let basePayload = i < persistedMessageCount ? try? store.loadMessagePayload(id: id) : nil
@@ -1486,7 +1496,7 @@ extension ACPSessionRunner {
         let now = Int64(Date().timeIntervalSince1970)
         for i in indices.sorted() {
             guard i >= 0, i < messages.count else { continue }
-            let m = messages[i]
+            let m = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
             if i < persistedMessageCount {
@@ -1505,6 +1515,20 @@ extension ACPSessionRunner {
         }
         onPersist?()
         return true
+    }
+
+    private func messageForPersistence(_ message: ACPMessage) -> ACPMessage {
+        guard case .toolCall(var toolCall) = message,
+              toolCall.isContentTruncated,
+              let storedContent = try? store.loadToolCallContent(
+                sessionId: sessionId,
+                toolCallId: toolCall.toolCallId
+              )
+        else {
+            return message
+        }
+        toolCall.content = storedContent
+        return .toolCall(toolCall)
     }
 
     /// Persist messages from the apply() boundary. Three cases:

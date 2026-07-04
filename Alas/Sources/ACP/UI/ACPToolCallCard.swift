@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Read / Search / Run / Edit tool invocation. Collapsed by default to
 /// one row showing verb + target + status; expanded shows the tool's
@@ -6,6 +7,7 @@ import SwiftUI
 /// renders an animated spinner instead of a static glyph.
 struct ACPToolCallCard: View {
     let toolCall: ACPMessage.ToolCall
+    var trustedImageRoot: URL? = nil
     /// Closure that returns the full persisted `content` for the tool call
     /// whose in-memory `content` was truncated when its row left the render
     /// window. Invoked the first time the card expands; the result is cached
@@ -31,12 +33,12 @@ struct ACPToolCallCard: View {
             } label: {
                 HStack(spacing: 8) {
                     glyph
-                    Text(verb)
+                    Text(presentation.label)
                         .font(.system(size: 10.5, weight: .semibold))
                         .tracking(0.6)
                         .textCase(.uppercase)
                         .foregroundStyle(theme.color("fg-faint"))
-                    if !toolCall.title.isEmpty && toolCall.title.lowercased() != verb.lowercased() {
+                    if !toolCall.title.isEmpty && toolCall.title.lowercased() != presentation.label.lowercased() {
                         FileChip(path: toolCall.title, lines: nil, iconSystemName: nil)
                     }
                     if let first = toolCall.locations.first {
@@ -91,7 +93,7 @@ struct ACPToolCallCard: View {
     @ViewBuilder
     private var expandedBody: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if displayContent.isEmpty && toolCall.terminalIds.isEmpty {
+            if !hasExpandedOutput {
                 HStack(spacing: 6) {
                     if toolCall.status == "in_progress" || toolCall.status == "pending" {
                         Spinner(lineWidth: 1.5, duration: 0.7).frame(width: 10, height: 10)
@@ -121,6 +123,9 @@ struct ACPToolCallCard: View {
                     }
                     .background(theme.color("bg-0").opacity(0.55))
                 }
+                if !toolCall.assets.isEmpty {
+                    assetBody
+                }
                 if let host = terminalHost {
                     ForEach(toolCall.terminalIds, id: \.self) { tid in
                         ACPTerminalTailView(terminalId: tid, host: host)
@@ -128,6 +133,20 @@ struct ACPToolCallCard: View {
                 }
             }
         }
+    }
+
+    private var hasExpandedOutput: Bool {
+        !displayContent.isEmpty || !toolCall.assets.isEmpty || !toolCall.terminalIds.isEmpty
+    }
+
+    private var assetBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(toolCall.assets.enumerated()), id: \.offset) { entry in
+                ACPToolCallAssetView(asset: entry.element, trustedImageRoot: trustedImageRoot)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(theme.color("bg-0").opacity(0.55))
     }
 
     @ViewBuilder
@@ -161,24 +180,8 @@ struct ACPToolCallCard: View {
         expanded ? theme.color("bg-4") : theme.color("line")
     }
 
-    private var verb: String {
-        switch toolCall.kind {
-        case "read":          return "Read"
-        case "search":        return "Searched"
-        case "execute","run": return "Ran"
-        case "edit":          return "Edit"
-        default:              return toolCall.kind?.capitalized ?? "Tool"
-        }
-    }
-
-    private var iconSystemName: String {
-        switch toolCall.kind {
-        case "read":          return "doc.text"
-        case "search":        return "magnifyingglass"
-        case "execute","run": return "terminal"
-        case "edit":          return "pencil"
-        default:              return "gearshape"
-        }
+    private var presentation: ACPToolCallPresentation {
+        ACPToolCallPresentation.resolve(toolCall)
     }
 
     @ViewBuilder
@@ -186,11 +189,184 @@ struct ACPToolCallCard: View {
         ZStack {
             RoundedRectangle(cornerRadius: 4)
                 .fill(theme.color("bg-0").opacity(0.8))
-            Image(systemName: iconSystemName)
+            Image(systemName: presentation.iconSystemName)
                 .font(.system(size: 10))
                 .foregroundStyle(theme.color("accent"))
         }
         .frame(width: 18, height: 18)
+    }
+}
+
+private struct ACPToolCallAssetView: View {
+    let asset: ACPMessage.ToolCallAsset
+    let trustedImageRoot: URL?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        switch asset.kind {
+        case .image:
+            if let image = asset.loadedImage(trustedRoot: trustedImageRoot) {
+                imageThumbnail(image)
+                    .help(asset.displayText)
+            } else {
+                compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
+            }
+        case .resource:
+            if asset.looksLikeImage, let image = asset.loadedImage(trustedRoot: trustedImageRoot) {
+                imageThumbnail(image)
+                    .help(asset.displayText)
+            } else {
+                compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
+            }
+        }
+    }
+
+    private func imageThumbnail(_ image: NSImage) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(theme.color("bg-1").opacity(0.7))
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .padding(6)
+        }
+            .frame(width: 160, height: 120)
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+    }
+
+    private func compactRow(iconSystemName: String, title: String, detail: String?) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconSystemName)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 18, height: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .background(theme.color("bg-1").opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line-soft"), lineWidth: 0.5))
+        .help(asset.displayText)
+    }
+}
+
+extension ACPMessage.ToolCallAsset {
+    var looksLikeImage: Bool {
+        if mimeType?.lowercased().hasPrefix("image/") == true { return true }
+        guard let candidate = nonEmpty(uri) ?? nonEmpty(name) else { return false }
+        switch URL(fileURLWithPath: candidate).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp":
+            return true
+        default:
+            return false
+        }
+    }
+
+    func loadedImage(trustedRoot: URL?) -> NSImage? {
+        if let data, let decoded = Self.decodeBase64ImageData(data), let image = NSImage(data: decoded) {
+            return image
+        }
+        guard let uri = nonEmpty(uri) else { return nil }
+        if uri.lowercased().hasPrefix("data:"),
+           let decoded = Self.decodeBase64ImageData(uri),
+           let image = NSImage(data: decoded) {
+            return image
+        }
+        guard let url = Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    var displayTitle: String {
+        if let name = nonEmpty(name) {
+            return name
+        }
+        if let uri = nonEmpty(uri) {
+            if Self.isDataURI(uri) {
+                return kind == .image ? "Image" : "Resource"
+            }
+            if let url = Self.displayURL(from: uri), !url.lastPathComponent.isEmpty {
+                return url.lastPathComponent
+            }
+            return uri
+        }
+        return kind == .image ? "Image" : "Resource"
+    }
+
+    var displayDetail: String? {
+        guard let uri = nonEmpty(uri), uri != displayTitle else { return nil }
+        guard !Self.isDataURI(uri) else { return nil }
+        return uri
+    }
+
+    var displayText: String {
+        if let detail = displayDetail {
+            return "\(displayTitle) \(detail)"
+        }
+        return displayTitle
+    }
+
+    private static func decodeBase64ImageData(_ value: String) -> Data? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base64: String
+        if let marker = trimmed.range(of: "base64,", options: .caseInsensitive) {
+            base64 = String(trimmed[marker.upperBound...])
+        } else {
+            base64 = trimmed
+        }
+        return Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
+    }
+
+    private static func isDataURI(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("data:")
+    }
+
+    private static func trustedLocalURL(from value: String, trustedRoot: URL?) -> URL? {
+        guard let trustedRoot else { return nil }
+        let candidate: URL
+        if let url = URL(string: value), let scheme = url.scheme {
+            guard scheme.lowercased() == "file" else { return nil }
+            candidate = url
+        } else if value.hasPrefix("/") {
+            candidate = URL(fileURLWithPath: value)
+        } else {
+            candidate = trustedRoot.appendingPathComponent(value)
+        }
+        let root = trustedRoot.resolvingSymlinksInPath().standardizedFileURL
+        let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+        let rootPath = root.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard resolved.path == rootPath || resolved.path.hasPrefix(rootPrefix) else { return nil }
+        return resolved
+    }
+
+    private static func displayURL(from value: String) -> URL? {
+        if let url = URL(string: value), url.scheme != nil { return url }
+        return URL(fileURLWithPath: value)
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 }
 

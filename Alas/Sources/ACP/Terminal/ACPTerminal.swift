@@ -16,6 +16,7 @@ final class ACPTerminal: ObservableObject {
     let createdAt: Date
     let outputByteLimit: Int
 
+    @Published private(set) var cwd: String?
     @Published private(set) var buffer: Data = Data()
     @Published private(set) var truncated: Bool = false
     @Published private(set) var exitStatus: ACPTerminalExitStatus?
@@ -24,9 +25,11 @@ final class ACPTerminal: ObservableObject {
     /// the UI render the retained buffer.
     private(set) var released: Bool = false
     var onExit: (() -> Void)?
+    var isProcessBacked: Bool { process != nil }
+    var isMetadataBacked: Bool { process == nil }
 
-    private let process: Process
-    private let pipe: Pipe
+    private let process: Process?
+    private let pipe: Pipe?
     private var exitWaiters: [CheckedContinuation<ACPTerminalExitStatus, Never>] = []
     /// True once the readability handler has observed an empty chunk —
     /// the canonical EOF signal. `handleExit` polls this before
@@ -64,6 +67,7 @@ final class ACPTerminal: ObservableObject {
     {
         self.id = id
         self.createdAt = Date()
+        self.cwd = cwd
         // Cap against the internal buffer so an agent can't ask us to
         // return more than we ever retain. Floor at 1 so callers that
         // pass 0 or negative don't trip divide-by-zero / nonsense math
@@ -72,8 +76,10 @@ final class ACPTerminal: ObservableObject {
         // tail). Per ACP `outputByteLimit` contract.
         self.outputByteLimit = max(1, min(outputByteLimit, Self.internalBufferCap))
 
-        self.process = Process()
-        self.pipe = Pipe()
+        let process = Process()
+        let pipe = Pipe()
+        self.process = process
+        self.pipe = pipe
         // Spawn via /usr/bin/env so bare commands (npm, cargo, etc.) are
         // resolved against PATH. Foundation's Process only looks at the
         // exact URL otherwise, which would fail every non-absolute command
@@ -132,6 +138,15 @@ final class ACPTerminal: ObservableObject {
         _ = setpgid(process.processIdentifier, process.processIdentifier)
     }
 
+    init(metadataId id: String, cwd: String?, outputByteLimit: Int = 65_536) {
+        self.id = id
+        self.createdAt = Date()
+        self.cwd = cwd
+        self.outputByteLimit = max(1, min(outputByteLimit, Self.internalBufferCap))
+        self.process = nil
+        self.pipe = nil
+    }
+
     func waitForExit() async -> ACPTerminalExitStatus {
         if let s = exitStatus { return s }
         return await withCheckedContinuation { cont in
@@ -140,6 +155,7 @@ final class ACPTerminal: ObservableObject {
     }
 
     func kill() {
+        guard let process else { return }
         let pid = process.processIdentifier
         // `pid > 0` guards against signalling pid 0 (our own group)
         // when the process never launched. We intentionally do NOT
@@ -188,6 +204,7 @@ final class ACPTerminal: ObservableObject {
     }
 
     private func startDescendantTracker() {
+        guard let process else { return }
         descendantTracker = Task { @MainActor [weak self] in
             // Walk the live process tree every second while the root is
             // alive, accumulating every descendant we observe. The last
@@ -197,13 +214,14 @@ final class ACPTerminal: ObservableObject {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.refreshOrphanSet()
-                if !self.process.isRunning { return }
+                if !process.isRunning { return }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }
 
     private func refreshOrphanSet() {
+        guard let process else { return }
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         for d in Self.collectDescendants(of: pid) {
@@ -292,6 +310,33 @@ final class ACPTerminal: ObservableObject {
     func release() {
         released = true
         kill()
+    }
+
+    func updateMetadataCwd(_ cwd: String?) {
+        guard !isProcessBacked else { return }
+        self.cwd = cwd
+    }
+
+    func appendMetadataOutput(_ data: Data, replace: Bool) {
+        guard !isProcessBacked else { return }
+        if replace {
+            buffer.removeAll(keepingCapacity: true)
+            truncated = false
+        }
+        appendChunk(data)
+    }
+
+    func finishMetadata(exitStatus status: ACPTerminalExitStatus) {
+        guard !isProcessBacked else { return }
+        if exitStatus != nil {
+            exitStatus = status
+            return
+        }
+        exitStatus = status
+        onExit?()
+        let waiters = exitWaiters
+        exitWaiters.removeAll()
+        for c in waiters { c.resume(returning: status) }
     }
 
     /// Returns the last `byteLimit` bytes of the buffer as ANSI-stripped
@@ -392,6 +437,7 @@ final class ACPTerminal: ObservableObject {
     }
 
     private func handleExit(status: ACPTerminalExitStatus) async {
+        guard let pipe else { return }
         descendantTracker?.cancel()
         // Close the parent-side write end so the read end can EOF after
         // the kernel buffer drains. `Pipe()` retains both ends; if we
