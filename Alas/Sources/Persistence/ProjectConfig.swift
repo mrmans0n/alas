@@ -78,6 +78,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var name: String         // display name, defaulting to the repo directory name
     var path: String         // absolute repo path
     var color: String        // hex string, e.g. "#5fb7c4"
+    var icon: ProjectIcon
     var addedAt: Date
     var hiddenWorktreePaths: [String] = []
     var worktreeOrder: [String] = []
@@ -93,7 +94,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var worktreeDefaultLauncherMode: AppConfig.LauncherMode?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, path, color, addedAt, hiddenWorktreePaths, worktreeOrder,
+        case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              worktreeOrderIsManual, startupScripts,
              worktreeOpenAfterCreate, worktreeDefaultLauncherMode
     }
@@ -104,6 +105,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         path: String,
         color: String,
         addedAt: Date,
+        icon: ProjectIcon? = nil,
         hiddenWorktreePaths: [String] = [],
         worktreeOrder: [String] = [],
         worktreeOrderIsManual: Bool = false,
@@ -114,7 +116,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.id = id
         self.name = name
         self.path = path
-        self.color = color
+        self.icon = icon ?? ProjectIcon.default(color: color)
+        self.color = self.icon.color
         self.addedAt = addedAt
         self.hiddenWorktreePaths = hiddenWorktreePaths
         self.worktreeOrder = worktreeOrder
@@ -131,7 +134,11 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         id = try c.decode(String.self, forKey: .id)
         name = try c.decode(String.self, forKey: .name)
         path = try c.decode(String.self, forKey: .path)
-        color = try c.decode(String.self, forKey: .color)
+        let decodedColor = try c.decode(String.self, forKey: .color)
+        let decodedIcon = (try? c.decode(ProjectIcon.self, forKey: .icon))
+            ?? ProjectIcon.default(color: decodedColor)
+        icon = decodedIcon
+        color = decodedIcon.color
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         hiddenWorktreePaths = (try? c.decode([String].self, forKey: .hiddenWorktreePaths)) ?? []
         worktreeOrder = (try? c.decode([String].self, forKey: .worktreeOrder)) ?? []
@@ -140,5 +147,21 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
             ?? .defaults
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(path, forKey: .path)
+        try c.encode(icon.color, forKey: .color)
+        try c.encode(icon, forKey: .icon)
+        try c.encode(addedAt, forKey: .addedAt)
+        try c.encode(hiddenWorktreePaths, forKey: .hiddenWorktreePaths)
+        try c.encode(worktreeOrder, forKey: .worktreeOrder)
+        try c.encode(worktreeOrderIsManual, forKey: .worktreeOrderIsManual)
+        try c.encode(startupScripts, forKey: .startupScripts)
+        try c.encodeIfPresent(worktreeOpenAfterCreate, forKey: .worktreeOpenAfterCreate)
+        try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
     }
 }
