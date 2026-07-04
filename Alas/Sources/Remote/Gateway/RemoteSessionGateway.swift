@@ -477,12 +477,26 @@ final class RemoteSessionGateway {
         case .systemNotice(_, let text):
             return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
         case .toolCall(let call):
-            return .init(stableId: sid, kind: "toolCall", text: nil, json: Self.encodeJSON(call))
+            return .init(stableId: sid, kind: "toolCall", text: nil, json: Self.encodeJSON(remoteToolCall(call)))
         case .fileEdit(_, let edit):
             return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items))
         }
+    }
+
+    private static func remoteToolCall(_ call: ACPMessage.ToolCall) -> ACPMessage.ToolCall {
+        var remote = call
+        remote.assets = call.assets.map { asset in
+            ACPMessage.ToolCallAsset(
+                kind: asset.kind,
+                data: nil,
+                uri: asset.uri,
+                mimeType: asset.mimeType,
+                name: asset.name
+            )
+        }
+        return remote
     }
 
     private static func encodeJSON<T: Encodable>(_ value: T) -> String? {

@@ -397,14 +397,16 @@ final class ACPSession: ObservableObject, Identifiable {
         _ payload: ACPToolCallPayload,
         to tc: inout ACPMessage.ToolCall
     ) {
-        let canReplaceSnapshot = !Self.isFinalStatus(tc.status) || Self.isFinalStatus(payload.status)
-        tc.title = payload.title
-        tc.kind = payload.kind
+        let canReplaceSnapshot = !Self.isFinalStatus(tc.status)
+        if canReplaceSnapshot {
+            tc.title = payload.title
+            tc.kind = payload.kind
+        }
         if canReplaceSnapshot {
             tc.status = payload.status
         }
-        if let locations = payload.locations { tc.locations = locations.map(\.path) }
-        if let rawInput = payload.rawInput { tc.rawInput = Self.metadataString(rawInput) }
+        if canReplaceSnapshot, let locations = payload.locations { tc.locations = locations.map(\.path) }
+        if canReplaceSnapshot, let rawInput = payload.rawInput { tc.rawInput = Self.metadataString(rawInput) }
         var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
         if let rawOutput = payload.rawOutput {
             tc.rawOutput = Self.metadataString(rawOutput)
@@ -415,10 +417,14 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
             tc.terminalIds = Self.mergeTerminalIds(
                 tc.terminalIds,
-                Self.extractMetadataTerminalIds(metadata))
+            Self.extractMetadataTerminalIds(metadata))
         }
 
-        guard canReplaceSnapshot, let items = payload.content else { return }
+        guard let items = payload.content else { return }
+        if !canReplaceSnapshot {
+            tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(items))
+            return
+        }
         let raw = Self.flatten(items)
         let full = Self.stripWrappingFence(raw,
                                            isFinal: Self.isFinalStatus(payload.status))

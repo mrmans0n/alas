@@ -803,6 +803,39 @@ struct RemoteSessionGatewayTests {
         #expect((wire.text ?? "").isEmpty == false)
     }
 
+    @Test func toolCallWireOmitsInlineAssetData() throws {
+        let msg = ACPMessage.toolCall(.init(
+            toolCallId: "tc-image",
+            title: "Image generation",
+            kind: "other",
+            status: "completed",
+            content: "",
+            preview: nil,
+            assets: [
+                .image(
+                    data: "base64-image-data",
+                    uri: "file:///tmp/shot.png",
+                    mimeType: "image/png",
+                    name: "shot.png"
+                )
+            ]))
+
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+        let json = try #require(wire.json)
+        #expect(!json.contains("base64-image-data"))
+
+        let payload = try #require(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload)
+        #expect(decoded.assets == [
+            .image(
+                data: nil,
+                uri: "file:///tmp/shot.png",
+                mimeType: "image/png",
+                name: "shot.png"
+            )
+        ])
+    }
+
     @Test func tooManyAttachmentsRejected() async {
         // Count cap (parity with ACPComposer.maxImagesPerMessage) — a single
         // prompt can't write an unbounded number of tiny files.

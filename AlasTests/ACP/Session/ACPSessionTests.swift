@@ -1077,8 +1077,8 @@ struct ACPSessionTests {
 
         session.apply(.toolCall(.init(
             toolCallId: "tc-replay-downgrade",
-            title: "Image generation",
-            kind: "other",
+            title: "Final image generation",
+            kind: "read",
             status: "completed",
             content: [.content(.text("final output"))],
             locations: nil,
@@ -1087,7 +1087,7 @@ struct ACPSessionTests {
 
         let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
             toolCallId: "tc-replay-downgrade",
-            title: "Image generation",
+            title: "Initial tool",
             kind: "other",
             status: "in_progress",
             content: [.content(.text("partial output"))],
@@ -1103,6 +1103,8 @@ struct ACPSessionTests {
 
         #expect(touched == [0])
         if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final image generation")
+            #expect(tc.kind == "read")
             #expect(tc.status == "completed")
             #expect(tc.content == "final output")
             #expect(tc.assets == [
