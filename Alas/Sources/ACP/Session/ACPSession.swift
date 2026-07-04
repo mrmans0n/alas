@@ -876,29 +876,38 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private func applyGoalMetadata(_ metadata: AnyCodable?) {
         guard let metadata,
-              let root = metadata.value as? [String: AnyCodable]
+              let root = Self.metadataObject(metadata)
         else { return }
 
         if let goal = root["goal"] {
-            currentGoal = Self.goalState(from: goal)
-        } else if let codex = root["codex"]?.value as? [String: AnyCodable],
+            applyGoalValue(goal)
+        } else if let codex = Self.metadataObject(root["codex"]),
                   let goal = codex["goal"] {
-            currentGoal = Self.goalState(from: goal)
+            applyGoalValue(goal)
         }
     }
 
-    private static func goalState(from value: AnyCodable) -> ACPGoalState? {
-        if value.value is NSNull { return nil }
-        guard let goal = value.value as? [String: AnyCodable],
-              let objective = goal["objective"]?.value as? String
-        else { return nil }
-        let trimmedObjective = objective.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedObjective.isEmpty else { return nil }
+    private func applyGoalValue(_ value: AnyCodable) {
+        if value.value is NSNull {
+            currentGoal = nil
+            return
+        }
+        guard let goal = Self.metadataObject(value) else { return }
 
-        return ACPGoalState(
-            objective: trimmedObjective,
-            status: goal["status"]?.value as? String,
-            tokenBudget: goal["tokenBudget"]?.value as? Int)
+        let objective: String
+        if let rawObjective = Self.metadataScalarString(goal["objective"])?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawObjective.isEmpty {
+            objective = rawObjective
+        } else if let existing = currentGoal {
+            objective = existing.objective
+        } else {
+            return
+        }
+
+        currentGoal = ACPGoalState(
+            objective: objective,
+            status: goal.keys.contains("status") ? Self.metadataScalarString(goal["status"]) : currentGoal?.status,
+            tokenBudget: goal.keys.contains("tokenBudget") ? Self.metadataInt(goal["tokenBudget"]) : currentGoal?.tokenBudget)
     }
 
     /// Best-effort strip of a single pair of markdown code fences that

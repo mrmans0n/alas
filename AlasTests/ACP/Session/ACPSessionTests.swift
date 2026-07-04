@@ -606,6 +606,38 @@ struct ACPSessionTests {
         #expect(goal.tokenBudget == 200)
     }
 
+    @Test("session info partial goal metadata updates existing goal")
+    func sessionInfoPartialGoalMetadataUpdatesExistingGoal() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "goal": AnyCodable([
+                        "objective": AnyCodable("Original goal"),
+                        "status": AnyCodable("in_progress"),
+                        "tokenBudget": AnyCodable(200)
+                    ])
+                ])
+            ]))))
+
+        session.apply(.sessionInfoUpdate(.init(
+            title: nil,
+            metadata: AnyCodable([
+                "codex": AnyCodable([
+                    "goal": AnyCodable([
+                        "status": AnyCodable("completed"),
+                        "tokenBudget": AnyCodable(300)
+                    ])
+                ])
+            ]))))
+
+        let goal = try #require(session.currentGoal)
+        #expect(goal.objective == "Original goal")
+        #expect(goal.status == "completed")
+        #expect(goal.tokenBudget == 300)
+    }
+
     @Test("chipState reflects current ACPSession fields")
     func chipStateRecomputed() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
