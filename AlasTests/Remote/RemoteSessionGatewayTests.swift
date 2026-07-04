@@ -824,12 +824,19 @@ struct RemoteSessionGatewayTests {
                     uri: "file:///tmp/shot.png",
                     mimeType: "image/png",
                     name: "shot.png"
+                ),
+                .image(
+                    data: nil,
+                    uri: "data:image/png;base64,inline-uri-data",
+                    mimeType: "image/png",
+                    name: "inline-uri.png"
                 )
             ]))
 
         let wire = RemoteSessionGateway.toWire(msg, index: 0)
         let json = try #require(wire.json)
         #expect(!json.contains("base64-image-data"))
+        #expect(!json.contains("inline-uri-data"))
         #expect(!json.contains("raw-output-base64"))
         #expect(!json.contains("large terminal output"))
 
@@ -843,6 +850,12 @@ struct RemoteSessionGatewayTests {
                 uri: "file:///tmp/shot.png",
                 mimeType: "image/png",
                 name: "shot.png"
+            ),
+            .image(
+                data: nil,
+                uri: nil,
+                mimeType: "image/png",
+                name: "inline-uri.png"
             )
         ])
     }

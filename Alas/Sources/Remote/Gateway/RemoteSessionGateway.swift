@@ -493,12 +493,17 @@ final class RemoteSessionGateway {
             ACPMessage.ToolCallAsset(
                 kind: asset.kind,
                 data: nil,
-                uri: asset.uri,
+                uri: Self.remoteAssetURI(asset.uri),
                 mimeType: asset.mimeType,
                 name: asset.name
             )
         }
         return remote
+    }
+
+    private static func remoteAssetURI(_ uri: String?) -> String? {
+        guard let uri else { return nil }
+        return uri.lowercased().hasPrefix("data:image/") ? nil : uri
     }
 
     private static func encodeJSON<T: Encodable>(_ value: T) -> String? {
