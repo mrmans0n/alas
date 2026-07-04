@@ -10,7 +10,7 @@ struct ProjectIconTests {
         #expect(icon.label == nil)
         #expect(icon.symbolName == nil)
         #expect(icon.emoji == nil)
-        #expect(icon.imageAssetName == nil)
+        #expect(icon.imagePath == nil)
     }
 
     @Test func fallbackLabelUsesLastPathComponentInitial() {
@@ -29,5 +29,11 @@ struct ProjectIconTests {
         #expect(ProjectIcon.sanitizedColor("AABBCC") == "#AABBCC")
         #expect(ProjectIcon.sanitizedColor("bad") == ProjectIcon.defaultColor)
         #expect(ProjectIcon.sanitizedColor("#12345g") == ProjectIcon.defaultColor)
+    }
+
+    @Test func sanitizedColorCanUseCallerFallback() {
+        #expect(ProjectIcon.sanitizedColor(nil, fallback: "#112233") == "#112233")
+        #expect(ProjectIcon.sanitizedColor("nope", fallback: "#112233") == "#112233")
+        #expect(ProjectIcon.sanitizedColor("nope", fallback: "also-bad") == ProjectIcon.defaultColor)
     }
 }

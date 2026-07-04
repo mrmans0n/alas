@@ -15,10 +15,10 @@ struct ProjectIcon: Codable, Equatable {
     var label: String?
     var symbolName: String?
     var emoji: String?
-    var imageAssetName: String?
+    var imagePath: String?
 
     enum CodingKeys: String, CodingKey {
-        case mode, color, label, symbolName, emoji, imageAssetName
+        case mode, color, label, symbolName, emoji, imagePath, imageAssetName
     }
 
     init(
@@ -27,30 +27,77 @@ struct ProjectIcon: Codable, Equatable {
         label: String? = nil,
         symbolName: String? = nil,
         emoji: String? = nil,
-        imageAssetName: String? = nil
+        imagePath: String? = nil
+    ) {
+        self.init(
+            mode: mode,
+            color: color,
+            fallbackColor: Self.defaultColor,
+            label: label,
+            symbolName: symbolName,
+            emoji: emoji,
+            imagePath: imagePath
+        )
+    }
+
+    private init(
+        mode: Mode,
+        color: String?,
+        fallbackColor: String,
+        label: String?,
+        symbolName: String?,
+        emoji: String?,
+        imagePath: String?
     ) {
         self.mode = mode
-        self.color = Self.sanitizedColor(color)
+        self.color = Self.sanitizedColor(color, fallback: fallbackColor)
         self.label = Self.sanitizedLabel(label)
         self.symbolName = Self.sanitizedNonEmpty(symbolName)
         self.emoji = Self.sanitizedNonEmpty(emoji)
-        self.imageAssetName = Self.sanitizedNonEmpty(imageAssetName)
+        self.imagePath = Self.sanitizedNonEmpty(imagePath)
     }
 
     init(from decoder: Decoder) throws {
+        self = try Self.decode(from: decoder, fallbackColor: Self.defaultColor)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(mode, forKey: .mode)
+        try c.encode(color, forKey: .color)
+        try c.encodeIfPresent(label, forKey: .label)
+        try c.encodeIfPresent(symbolName, forKey: .symbolName)
+        try c.encodeIfPresent(emoji, forKey: .emoji)
+        try c.encodeIfPresent(imagePath, forKey: .imagePath)
+    }
+
+    static func decode(from decoder: Decoder, fallbackColor: String) throws -> ProjectIcon {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
+        return ProjectIcon(
             mode: try c.decode(Mode.self, forKey: .mode),
-            color: (try? c.decode(String.self, forKey: .color)) ?? Self.defaultColor,
+            color: try? c.decode(String.self, forKey: .color),
+            fallbackColor: fallbackColor,
             label: try? c.decode(String.self, forKey: .label),
             symbolName: try? c.decode(String.self, forKey: .symbolName),
             emoji: try? c.decode(String.self, forKey: .emoji),
-            imageAssetName: try? c.decode(String.self, forKey: .imageAssetName)
+            imagePath: (try? c.decode(String.self, forKey: .imagePath))
+                ?? (try? c.decode(String.self, forKey: .imageAssetName))
         )
     }
 
     static func `default`(color: String = defaultColor) -> ProjectIcon {
         ProjectIcon(mode: .letter, color: color)
+    }
+
+    func withColor(_ color: String) -> ProjectIcon {
+        ProjectIcon(
+            mode: mode,
+            color: color,
+            label: label,
+            symbolName: symbolName,
+            emoji: emoji,
+            imagePath: imagePath
+        )
     }
 
     static func fallbackLabel(projectName: String) -> String {
@@ -68,11 +115,19 @@ struct ProjectIcon: Codable, Equatable {
     }
 
     static func sanitizedColor(_ raw: String) -> String {
+        normalizedHex(raw) ?? defaultColor
+    }
+
+    static func sanitizedColor(_ raw: String?, fallback: String) -> String {
+        raw.flatMap(normalizedHex) ?? normalizedHex(fallback) ?? defaultColor
+    }
+
+    private static func normalizedHex(_ raw: String) -> String? {
         let value = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
         guard value.count == 6,
               value.allSatisfy({ $0.isHexDigit })
         else {
-            return defaultColor
+            return nil
         }
         return "#\(value)"
     }

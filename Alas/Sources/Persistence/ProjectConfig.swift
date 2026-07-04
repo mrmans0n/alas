@@ -77,8 +77,11 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     let id: String           // UUID string
     var name: String         // display name, defaulting to the repo directory name
     var path: String         // absolute repo path
-    var color: String        // hex string, e.g. "#5fb7c4"
     var icon: ProjectIcon
+    var color: String {      // legacy compatibility mirror
+        get { icon.color }
+        set { icon = icon.withColor(newValue) }
+    }
     var addedAt: Date
     var hiddenWorktreePaths: [String] = []
     var worktreeOrder: [String] = []
@@ -117,7 +120,6 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.name = name
         self.path = path
         self.icon = icon ?? ProjectIcon.default(color: color)
-        self.color = self.icon.color
         self.addedAt = addedAt
         self.hiddenWorktreePaths = hiddenWorktreePaths
         self.worktreeOrder = worktreeOrder
@@ -135,10 +137,12 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         name = try c.decode(String.self, forKey: .name)
         path = try c.decode(String.self, forKey: .path)
         let decodedColor = try c.decode(String.self, forKey: .color)
-        let decodedIcon = (try? c.decode(ProjectIcon.self, forKey: .icon))
+        let decodedIcon = (try? ProjectIcon.decode(
+            from: c.superDecoder(forKey: .icon),
+            fallbackColor: decodedColor
+        ))
             ?? ProjectIcon.default(color: decodedColor)
         icon = decodedIcon
-        color = decodedIcon.color
         addedAt = try c.decode(Date.self, forKey: .addedAt)
         hiddenWorktreePaths = (try? c.decode([String].self, forKey: .hiddenWorktreePaths)) ?? []
         worktreeOrder = (try? c.decode([String].self, forKey: .worktreeOrder)) ?? []
