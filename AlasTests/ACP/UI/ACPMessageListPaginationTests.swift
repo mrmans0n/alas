@@ -126,6 +126,25 @@ struct ACPMessageListPaginationTests {
         #expect(!ACPMessageList.shouldRunScheduledTailScroll(followsTranscriptTail: false))
     }
 
+    @Test("viewport width changes restore the tail only while following")
+    func viewportWidthChangesRestoreTailOnlyWhileFollowing() {
+        #expect(ACPMessageList.shouldRestoreTailAfterViewportWidthChange(
+            previousWidth: 720,
+            newWidth: 560,
+            followsTranscriptTail: true
+        ))
+        #expect(!ACPMessageList.shouldRestoreTailAfterViewportWidthChange(
+            previousWidth: 720,
+            newWidth: 560,
+            followsTranscriptTail: false
+        ))
+        #expect(!ACPMessageList.shouldRestoreTailAfterViewportWidthChange(
+            previousWidth: 720,
+            newWidth: 720,
+            followsTranscriptTail: true
+        ))
+    }
+
     @Test("top visible anchor prefers the row crossing the viewport top")
     func topVisibleAnchorPrefersRowCrossingTop() {
         let frames: [String: CGRect] = [

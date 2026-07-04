@@ -227,6 +227,35 @@ struct ACPMarkdownInlineRendererTests {
         #expect(accessibilityLabel(in: host, containing: "`leadingX`") == nil)
     }
 
+    @Test("inline markdown text invalidates height when resized narrower")
+    func inlineMarkdownTextInvalidatesHeightWhenResizedNarrower() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let view = ACPMarkdownInlineTextView(
+            source: """
+            This is a deliberately long paragraph that should wrap into several additional lines when the ACP pane becomes narrow during a divider resize.
+            """,
+            typography: ACPChatTypography(fontFamily: "", fontSize: 12),
+            role: .body,
+            theme: theme
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 1_000)
+        host.layoutSubtreeIfNeeded()
+
+        let wideTextView = try #require(allSubviews(of: host).compactMap { $0 as? NSTextView }.first)
+        let wideHeight = wideTextView.frame.height
+
+        host.frame = NSRect(x: 0, y: 0, width: 180, height: 1_000)
+        host.layoutSubtreeIfNeeded()
+
+        let narrowTextView = try #require(allSubviews(of: host).compactMap { $0 as? NSTextView }.first)
+        let narrowHeight = narrowTextView.frame.height
+
+        #expect(narrowHeight > wideHeight * 1.5)
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }
