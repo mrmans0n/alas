@@ -37,17 +37,20 @@ struct ReviewReadinessModel: Equatable, Sendable {
         let title: String
         let isEnabled: Bool
         let isInFlight: Bool
+        let emphasis: Emphasis
 
         init(
             kind: ReviewReadinessActionKind,
             title: String,
             isEnabled: Bool,
-            isInFlight: Bool = false
+            isInFlight: Bool = false,
+            emphasis: Emphasis? = nil
         ) {
             self.kind = kind
             self.title = title
             self.isEnabled = isEnabled
             self.isInFlight = isInFlight
+            self.emphasis = emphasis ?? Self.defaultEmphasis(for: kind)
         }
 
         var id: ReviewReadinessActionKind { kind }
@@ -66,11 +69,11 @@ struct ReviewReadinessModel: Equatable, Sendable {
             }
         }
 
-        var emphasis: Emphasis {
+        static func defaultEmphasis(for kind: ReviewReadinessActionKind) -> Emphasis {
             switch kind {
-            case .pushBranch, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence:
+            case .pushBranch, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence, .merge:
                 .primary
-            case .refresh, .openReviewRequest, .rerunFailedChecks, .openAgentHandoff, .merge:
+            case .refresh, .openReviewRequest, .rerunFailedChecks, .openAgentHandoff:
                 .normal
             }
         }
@@ -151,7 +154,8 @@ struct ReviewReadinessModel: Equatable, Sendable {
                 kind: action.kind,
                 title: action.title,
                 isEnabled: false,
-                isInFlight: action.kind == inFlightAction
+                isInFlight: action.kind == inFlightAction,
+                emphasis: action.emphasis
             )
         }
     }
@@ -249,19 +253,33 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if request.worstCheckBucket == .pending {
                 actions.append(refreshAction)
             }
+            let canMergeNow = Self.canMergeReviewRequest(snapshot: snapshot, request: request)
+            if canMergeNow {
+                actions.append(Action(kind: .merge, title: request.provider.mergeReviewRequestTitle, isEnabled: true))
+            }
             if snapshot.providerCapabilities.canOpenReviewRequest {
                 actions.append(Action(kind: .openReviewRequest, title: request.provider.openReviewRequestTitle, isEnabled: true))
             }
             if request.hasRerunnableFailedCheck, snapshot.providerCapabilities.canRerunFailedChecks {
                 actions.append(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true))
             }
-            if request.worstCheckBucket == .fail || request.hasActionableFeedback {
+            if canMergeNow {
+                actions.append(Action(kind: .inspectReviewEvidence, title: "Review diff", isEnabled: true, emphasis: .normal))
+            } else if request.worstCheckBucket == .fail || request.hasActionableFeedback {
                 actions.append(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true))
             }
         } else if canCreateReviewRequest(snapshot) {
             actions.append(Action(kind: .createReviewRequest, title: "Create \(requestLabel)", isEnabled: true))
         }
         return actions.isEmpty ? [refreshAction] : actions
+    }
+
+    private static func canMergeReviewRequest(snapshot: ReviewLoopSnapshot, request: ReviewRequest) -> Bool {
+        snapshot.providerCapabilities.canMerge
+            && request.state == .open
+            && !request.isDraft
+            && request.mergeState == .clean
+            && (request.worstCheckBucket == nil || request.worstCheckBucket == .pass)
     }
 
     private static func canCreateReviewRequest(_ snapshot: ReviewLoopSnapshot) -> Bool {

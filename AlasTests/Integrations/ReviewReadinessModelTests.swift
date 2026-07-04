@@ -256,7 +256,7 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    @Test func approvedCleanRequestIsReadyWithoutMergeAction() {
+    @Test func approvedCleanRequestExposesMergeAction() {
         let request = Self.makeReviewRequest(reviewDecision: .approved, mergeState: .clean)
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: request),
@@ -266,8 +266,66 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Ready"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.success])
-        #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
+        #expect(model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.refresh))
+    }
+
+    @Test func greenMergeableRequestExposesMergeAndReviewDiff() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let merge = model.actions.first { $0.kind == .merge }
+        #expect(merge?.title == "Merge PR")
+        #expect(merge?.emphasis == .primary)
+        #expect(merge?.isEnabled == true)
+
+        let review = model.actions.first { $0.kind == .inspectReviewEvidence }
+        #expect(review?.title == "Review diff")
+        #expect(review?.emphasis == .normal)
+    }
+
+    @Test func blockedRequestDoesNotExposeMerge() {
+        let request = Self.makeReviewRequest(
+            mergeState: .blocked,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+    }
+
+    @Test func pendingChecksDoNotExposeMerge() {
+        let request = Self.makeReviewRequest(
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pending)]
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+    }
+
+    @Test func mergeHiddenWhenCapabilityMissing() {
+        let request = Self.makeReviewRequest(mergeState: .clean, checks: [Self.makeCheck(bucket: .pass)])
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request, providerCapabilities: .readOnly),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
     @Test func pendingChecksKeepRefreshAsFallback() {
