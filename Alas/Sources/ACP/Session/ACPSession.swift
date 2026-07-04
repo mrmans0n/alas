@@ -322,7 +322,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
             let touched = updateToolCall(id: u.toolCallId) { tc in
-                applyToolCallUpdateFields(u, to: &tc)
+                Self.applyToolCallUpdateFields(u, to: &tc)
             }
             if touched != nil {
                 applyToolCallMetadata(u.metadata)
@@ -378,12 +378,12 @@ final class ACPSession: ObservableObject, Identifiable {
         switch update {
         case .toolCall(let payload):
             guard updateToolCall(id: payload.toolCallId, { tc in
-                applyToolCallPayloadFields(payload, to: &tc)
+                Self.applyToolCallPayloadFields(payload, to: &tc)
             }) != nil else { return }
             applyToolCallMetadata(payload.metadata)
         case .toolCallUpdate(let update):
             guard updateToolCall(id: update.toolCallId, { tc in
-                applyToolCallUpdateFields(update, to: &tc)
+                Self.applyToolCallUpdateFields(update, to: &tc)
             }) != nil else { return }
             applyToolCallMetadata(update.metadata)
         default:
@@ -391,7 +391,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func applyToolCallPayloadFields(
+    private static func applyToolCallPayloadFields(
         _ payload: ACPToolCallPayload,
         to tc: inout ACPMessage.ToolCall
     ) {
@@ -428,7 +428,7 @@ final class ACPSession: ObservableObject, Identifiable {
         tc.assets = Self.mergeAssets(Self.extractAssets(items), preservedRawOutputAssets)
     }
 
-    private func applyToolCallUpdateFields(
+    private static func applyToolCallUpdateFields(
         _ update: ACPToolCallUpdate,
         to tc: inout ACPMessage.ToolCall
     ) {
