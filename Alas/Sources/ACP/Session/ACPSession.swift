@@ -903,7 +903,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if let exit = Self.metadataObject(root["terminal_exit"]),
            let terminalId = Self.metadataScalarString(exit["terminal_id"]) {
-            if shouldApplyMetadataTerminalSideEffect(terminalId: terminalId, replaying: replaying) {
+            if shouldApplyMetadataTerminalExitSideEffect(terminalId: terminalId, replaying: replaying) {
                 terminalHost.recordMetadataExit(
                     terminalId: terminalId,
                     exitStatus: ACPTerminalExitStatus(
@@ -919,6 +919,16 @@ final class ACPSession: ObservableObject, Identifiable {
         if let terminal = terminalHost.terminal(id: terminalId),
            !terminal.buffer.isEmpty || terminal.exitStatus != nil {
             return false
+        }
+        replayCreatedMetadataTerminalIds.insert(terminalId)
+        return true
+    }
+
+    private func shouldApplyMetadataTerminalExitSideEffect(terminalId: String, replaying: Bool) -> Bool {
+        guard replaying else { return true }
+        if replayCreatedMetadataTerminalIds.contains(terminalId) { return true }
+        if let terminal = terminalHost.terminal(id: terminalId) {
+            return terminal.exitStatus == nil
         }
         replayCreatedMetadataTerminalIds.insert(terminalId)
         return true

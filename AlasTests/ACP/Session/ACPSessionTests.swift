@@ -1447,6 +1447,56 @@ struct ACPSessionTests {
         #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
     }
 
+    @Test("suppressed replay preserves exit for buffered metadata terminal")
+    func suppressedReplayPreservesExitForBufferedMetadataTerminal() async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "cmd-replay-buffered-exit",
+            title: "swift test",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-buffered-exit",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-buffered-exit"),
+                    "data": AnyCodable("building\n")
+                ])
+            ]))))
+
+        session.beginSuppressedReplaySideEffects()
+        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-buffered-exit",
+            status: "in_progress",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-buffered-exit"),
+                    "data": AnyCodable("building\n")
+                ])
+            ]))))
+        session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "cmd-replay-buffered-exit",
+            status: "completed",
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_exit": AnyCodable([
+                    "terminal_id": AnyCodable("term-replay-buffered-exit"),
+                    "exit_code": AnyCodable(0)
+                ])
+            ]))))
+
+        let term = try #require(session.terminalHost.terminal(id: "term-replay-buffered-exit"))
+        #expect(term.snapshot(byteLimit: 1024).text == "building\n")
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
+    }
+
     @Test("metadata terminal id survives later content-only update")
     func metadataTerminalIdSurvivesLaterContentOnlyUpdate() async throws {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
