@@ -857,6 +857,45 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("raw output image asset survives later content update")
+    func rawOutputImageAssetSurvivesLaterContentUpdate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-image-update",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-image-update",
+            status: "in_progress",
+            rawOutput: AnyCodable([
+                "data": AnyCodable([
+                    AnyCodable([
+                        "b64_json": AnyCodable("base64-data")
+                    ])
+                ])
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-image-update",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "final output")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "base64-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("toolCallUpdate merges metadata with existing tool metadata")
     func toolCallUpdateMergesMetadataWithExistingToolMetadata() async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

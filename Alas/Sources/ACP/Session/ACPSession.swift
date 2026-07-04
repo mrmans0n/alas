@@ -355,7 +355,10 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.terminalIds = Self.mergeTerminalIds(
                         Self.extractTerminalIds(c),
                         Self.extractMetadataTerminalIds(tc.metadata))
-                    tc.assets = Self.mergeAssets(Self.extractAssets(c), rawOutputAssets)
+                    let preservedRawOutputAssets = rawOutputAssets.isEmpty
+                        ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
+                        : rawOutputAssets
+                    tc.assets = Self.mergeAssets(Self.extractAssets(c), preservedRawOutputAssets)
                 }
             }
             applyToolCallMetadata(appliedMetadata)
@@ -914,6 +917,10 @@ final class ACPSession: ObservableObject, Identifiable {
         if let string = metadataScalarString(value),
            let mimeType = dataImageMimeType(string) {
             assets.append(.image(data: string, mimeType: mimeType))
+        } else if let string = metadataScalarString(value),
+                  let data = string.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) {
+            collectRawOutputAssets(AnyCodable(json), into: &assets)
         }
     }
 
@@ -923,6 +930,22 @@ final class ACPSession: ObservableObject, Identifiable {
               let semicolon = trimmed.firstIndex(of: ";")
         else { return nil }
         return String(trimmed[..<semicolon].dropFirst("data:".count))
+    }
+
+    private static func extractStoredRawOutputAssets(
+        _ rawOutput: String?,
+        existingAssets: [ACPMessage.ToolCallAsset]
+    ) -> [ACPMessage.ToolCallAsset] {
+        guard let rawOutput else { return [] }
+        let parsedAssets = extractRawOutputAssets(AnyCodable(rawOutput))
+        if !parsedAssets.isEmpty { return parsedAssets }
+
+        let lower = rawOutput.lowercased()
+        guard lower.contains("\"b64_json\"") || lower.contains("data:image/") else { return [] }
+        return existingAssets.filter { asset in
+            asset.kind == .image
+                && (asset.data != nil || asset.uri?.lowercased().hasPrefix("data:image/") == true)
+        }
     }
 
     private static func assetName(from uri: String?) -> String? {
