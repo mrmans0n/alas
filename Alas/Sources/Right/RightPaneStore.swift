@@ -36,19 +36,23 @@ final class RightPaneStore {
     /// Verifies whether `origin/<baseBranch>` resolves in the worktree. If it
     /// does not, returns the original `baseBranch`. Errors are swallowed and
     /// logged so the UI never crashes on a bad git probe.
+    ///
+    /// This probe specifically checks the remote-tracking ref
+    /// `refs/remotes/origin/<baseBranch>` rather than delegating to the generic
+    /// `resolveBaseRef` helper, so slash-named branches such as `release/1.0`
+    /// do not accidentally resolve to the local branch of the same name.
     private func resolveEffectiveBaseBranch(
         worktreePath: URL,
         baseBranch: String
     ) async -> String {
         guard !baseBranch.isEmpty else { return baseBranch }
         do {
-            if let resolved = try await git.resolveBaseRef(
-                worktreePath: worktreePath,
-                baseBranch: baseBranch,
-                preferLocal: false
-            ) {
-                return resolved.baseRef
-            }
+            let result = try await git.resolveRevision(
+                at: worktreePath,
+                ref: "refs/remotes/origin/\(baseBranch)"
+            )
+            guard !result.isEmpty else { return baseBranch }
+            return "origin/\(baseBranch)"
         } catch {
             logger.error("Failed to resolve effective base branch for \(worktreePath.path): \(error.localizedDescription)")
         }
@@ -60,25 +64,50 @@ final class RightPaneStore {
     func state(for worktree: Worktree, baseBranch: String, trackUpstreamForCommits: Bool) -> RightPaneState {
         let id = worktree.id
         let result: RightPaneState
+        let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
         if let existing = states[id] {
-            let effectiveDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
             let trackUpstreamChanged = existing.trackUpstreamForCommits != trackUpstreamForCommits
-            if existing.lastConfigBaseBranch != effectiveDefault {
-                let clearedUserOverride = existing.userOverrodeBaseBranch
-                let baseChanged = existing.baseBranch != effectiveDefault
-                existing.lastConfigBaseBranch = effectiveDefault
+
+            // Settings change: the configured base branch changed. Reset to the
+            // new default unless the user picked a branch themselves.
+            if existing.lastConfigBaseBranch != rawDefault {
+                let wasOverridden = existing.userOverrodeBaseBranch
+                existing.lastConfigBaseBranch = rawDefault
                 existing.userOverrodeBaseBranch = false
+                let baseChanged = existing.baseBranch != rawDefault
                 if baseChanged {
-                    existing.baseBranch = effectiveDefault
-                    existing.reviewLoop.updateBaseBranch(effectiveDefault)
+                    existing.baseBranch = rawDefault
+                    existing.reviewLoop.updateBaseBranch(rawDefault)
                 }
-                if baseChanged || clearedUserOverride {
+                if baseChanged || wasOverridden {
                     // Clear the prior probe so the chip doesn't show a stale
                     // count while comparison semantics are changing.
                     existing.behindBase = nil
                     Task { @MainActor in
                         await existing.refresh()
                         await existing.refreshSyncStatus()
+                    }
+                }
+
+                // If the new default points to a guessed origin ref, verify it
+                // asynchronously and fall back to the configured base branch
+                // if the remote ref does not exist.
+                if rawDefault != baseBranch {
+                    Task { @MainActor [weak existing] in
+                        guard let state = existing else { return }
+                        let confirmed = await self.resolveEffectiveBaseBranch(
+                            worktreePath: worktree.path,
+                            baseBranch: baseBranch
+                        )
+                        guard confirmed != state.baseBranch,
+                              !state.userOverrodeBaseBranch,
+                              state.lastConfigBaseBranch == rawDefault else { return }
+                        state.baseBranch = confirmed
+                        state.lastConfigBaseBranch = confirmed
+                        state.reviewLoop.updateBaseBranch(confirmed)
+                        state.behindBase = nil
+                        await state.refresh()
+                        await state.refreshSyncStatus()
                     }
                 }
             }
@@ -88,9 +117,8 @@ final class RightPaneStore {
             }
             result = existing
         } else {
-            let effectiveDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
-            let new = RightPaneState(worktree: worktree, baseBranch: effectiveDefault)
-            new.lastConfigBaseBranch = effectiveDefault
+            let new = RightPaneState(worktree: worktree, baseBranch: rawDefault)
+            new.lastConfigBaseBranch = rawDefault
             new.trackUpstreamForCommits = trackUpstreamForCommits
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
@@ -107,7 +135,7 @@ final class RightPaneStore {
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
             }
 
-            if effectiveDefault != baseBranch {
+            if rawDefault != baseBranch {
                 Task { @MainActor [weak new] in
                     guard let state = new else { return }
                     let confirmed = await self.resolveEffectiveBaseBranch(
@@ -116,7 +144,7 @@ final class RightPaneStore {
                     )
                     guard confirmed != state.baseBranch,
                           !state.userOverrodeBaseBranch,
-                          state.lastConfigBaseBranch == effectiveDefault else { return }
+                          state.lastConfigBaseBranch == rawDefault else { return }
                     state.baseBranch = confirmed
                     state.lastConfigBaseBranch = confirmed
                     state.reviewLoop.updateBaseBranch(confirmed)

@@ -17,11 +17,11 @@ struct RightPaneStoreBaseBranchTests {
         )
     }
 
-    private func makeRepoOnMain() async throws -> URL {
+    private func makeRepoOnMain(branch: String = "main") async throws -> URL {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-basebranch-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        _ = try await Process.git(["init", "-q", "-b", "main"], cwd: tmp)
+        _ = try await Process.git(["init", "-q", "-b", branch], cwd: tmp)
         _ = try await Process.git(["config", "user.email", "t@e.com"], cwd: tmp)
         _ = try await Process.git(["config", "user.name", "t"], cwd: tmp)
         try "1\n".write(to: tmp.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
@@ -48,6 +48,59 @@ struct RightPaneStoreBaseBranchTests {
     @Test func effectiveBaseBranchRespectsRemoteQualifiedBase() {
         let wt = makeWorktree(at: URL(fileURLWithPath: "/tmp/upstream"), branch: "upstream/main")
         #expect(RightPaneStore.effectiveBaseBranch(worktree: wt, baseBranch: "upstream/main") == "origin/upstream/main")
+    }
+
+    @Test func asyncProbeConfirmsSlashNamedOriginRef() async throws {
+        let repo = try await makeRepoOnMain(branch: "release/1.0")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await Process.git(["update-ref", "refs/remotes/origin/release/1.0", head], cwd: repo)
+
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", trackUpstreamForCommits: false)
+        #expect(state.baseBranch == "origin/release/1.0")
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(state.baseBranch == "origin/release/1.0")
+    }
+
+    @Test func asyncProbeFallsBackForSlashNamedOriginRefWhenLocalBranchExists() async throws {
+        let repo = try await makeRepoOnMain(branch: "release/1.0")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        // No origin ref, but the local branch release/1.0 exists. The generic
+        // resolver would return the local branch; our direct origin probe must
+        // fall back to the configured base branch instead.
+        let store = RightPaneStore(git: GitService())
+        let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", trackUpstreamForCommits: false)
+        #expect(state.baseBranch == "origin/release/1.0")
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(state.baseBranch == "release/1.0")
+    }
+
+    @Test func stateRemembersVerifiedFallbackAcrossRenders() async throws {
+        let repo = try await makeRepoOnMain()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let store = RightPaneStore(git: GitService())
+        let wt = makeWorktree(at: repo, branch: "main")
+        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        #expect(state.baseBranch == "origin/main")
+        #expect(state.lastConfigBaseBranch == "origin/main")
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(state.baseBranch == "main")
+        #expect(state.lastConfigBaseBranch == "main")
+
+        // Simulate a subsequent render with the same configured base branch.
+        // The store must not reset baseBranch back to the non-existent origin/main.
+        _ = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(state.baseBranch == "main")
+        #expect(state.lastConfigBaseBranch == "main")
+        #expect(state.userOverrodeBaseBranch == false)
     }
 
     @Test func asyncProbeConfirmsOriginMainWhenRefExists() async throws {
