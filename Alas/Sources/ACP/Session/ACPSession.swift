@@ -321,48 +321,12 @@ final class ACPSession: ObservableObject, Identifiable {
             return [transcript.messages.count - 1]
         case .toolCallUpdate(let u):
             clearRestoredContextRecoveryStatus()
-            var appliedMetadata: AnyCodable?
-            var metadataTerminalIds: [String] = []
-            var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
             let touched = updateToolCall(id: u.toolCallId) { tc in
-                if let title = u.title { tc.title = title }
-                if let s = u.status { tc.status = s }
-                if let locations = u.locations { tc.locations = locations.map(\.path) }
-                if let rawInput = u.rawInput { tc.rawInput = Self.metadataString(rawInput) }
-                if let rawOutput = u.rawOutput {
-                    tc.rawOutput = Self.metadataString(rawOutput)
-                    rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
-                    tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
-                }
-                if let metadata = u.metadata {
-                    tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
-                    appliedMetadata = metadata
-                    metadataTerminalIds = Self.extractMetadataTerminalIds(metadata)
-                    tc.terminalIds = Self.mergeTerminalIds(tc.terminalIds, metadataTerminalIds)
-                }
-                if let c = u.content {
-                    // ACP content updates are full replacement snapshots,
-                    // so terminalIds tracks the *current* content — assign
-                    // unconditionally, including the empty case, so a
-                    // text/diff-only final update doesn't leave a stale
-                    // terminal tail rendering in the card.
-                    let raw = Self.flatten(c)
-                    let full = Self.stripWrappingFence(raw,
-                                                      isFinal: Self.isFinalStatus(tc.status))
-                    tc.content = full
-                    tc.isContentTruncated = false
-                    tc.preview = Self.previewLine(full)
-                    tc.contentLanguage = Self.wrappingFenceLanguage(raw)
-                    tc.terminalIds = Self.mergeTerminalIds(
-                        Self.extractTerminalIds(c),
-                        Self.extractMetadataTerminalIds(tc.metadata))
-                    let preservedRawOutputAssets = rawOutputAssets.isEmpty
-                        ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
-                        : rawOutputAssets
-                    tc.assets = Self.mergeAssets(Self.extractAssets(c), preservedRawOutputAssets)
-                }
+                applyToolCallUpdateFields(u, to: &tc)
             }
-            applyToolCallMetadata(appliedMetadata)
+            if touched != nil {
+                applyToolCallMetadata(u.metadata)
+            }
             return touched.map { [$0] } ?? []
         case .sessionInfoUpdate(let info):
             applySessionInfoUpdate(info)
@@ -422,16 +386,50 @@ final class ACPSession: ObservableObject, Identifiable {
             }) != nil else { return }
             applyToolCallMetadata(metadata)
         case .toolCallUpdate(let update):
-            guard let metadata = update.metadata else { return }
             guard updateToolCall(id: update.toolCallId, { tc in
-                tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
-                tc.terminalIds = Self.mergeTerminalIds(
-                    tc.terminalIds,
-                    Self.extractMetadataTerminalIds(metadata))
+                applyToolCallUpdateFields(update, to: &tc)
             }) != nil else { return }
-            applyToolCallMetadata(metadata)
+            applyToolCallMetadata(update.metadata)
         default:
             break
+        }
+    }
+
+    private func applyToolCallUpdateFields(
+        _ update: ACPToolCallUpdate,
+        to tc: inout ACPMessage.ToolCall
+    ) {
+        var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
+        if let title = update.title { tc.title = title }
+        if let status = update.status { tc.status = status }
+        if let locations = update.locations { tc.locations = locations.map(\.path) }
+        if let rawInput = update.rawInput { tc.rawInput = Self.metadataString(rawInput) }
+        if let rawOutput = update.rawOutput {
+            tc.rawOutput = Self.metadataString(rawOutput)
+            rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
+            tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
+        }
+        if let metadata = update.metadata {
+            tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
+            tc.terminalIds = Self.mergeTerminalIds(
+                tc.terminalIds,
+                Self.extractMetadataTerminalIds(metadata))
+        }
+        if let content = update.content {
+            let raw = Self.flatten(content)
+            let full = Self.stripWrappingFence(raw,
+                                               isFinal: Self.isFinalStatus(tc.status))
+            tc.content = full
+            tc.isContentTruncated = false
+            tc.preview = Self.previewLine(full)
+            tc.contentLanguage = Self.wrappingFenceLanguage(raw)
+            tc.terminalIds = Self.mergeTerminalIds(
+                Self.extractTerminalIds(content),
+                Self.extractMetadataTerminalIds(tc.metadata))
+            let preservedRawOutputAssets = rawOutputAssets.isEmpty
+                ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
+                : rawOutputAssets
+            tc.assets = Self.mergeAssets(Self.extractAssets(content), preservedRawOutputAssets)
         }
     }
 
@@ -1023,12 +1021,23 @@ final class ACPSession: ObservableObject, Identifiable {
             }
             if let uri = asset.uri, rawOutput.contains(uri) { return true }
             if let uri = asset.uri,
-               dataImageMimeType(uri) != nil,
-               rawOutput.contains(String(uri.prefix(128))) {
+               Self.rawOutputContainsStableURIPrefix(rawOutput, uri: uri) {
                 return true
             }
             return false
         }
+    }
+
+    private static func rawOutputContainsStableURIPrefix(_ rawOutput: String, uri: String) -> Bool {
+        guard uri.count >= 128 else { return false }
+        if dataImageMimeType(uri) != nil {
+            return rawOutput.contains(String(uri.prefix(128)))
+        }
+        guard let components = URLComponents(string: uri),
+              components.scheme != nil,
+              components.host != nil
+        else { return false }
+        return rawOutput.contains(String(uri.prefix(128)))
     }
 
     private static func assetName(from uri: String?) -> String? {

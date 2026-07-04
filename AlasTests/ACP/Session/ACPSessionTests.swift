@@ -1030,6 +1030,47 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("raw output long image URL asset survives later content update")
+    func rawOutputLongImageURLAssetSurvivesLaterContentUpdate() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        let imageURL = "https://example.com/generated.png?signature=" + String(repeating: "A", count: 5_000)
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-long-url-update",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: AnyCodable([
+                "data": AnyCodable([
+                    AnyCodable([
+                        "url": AnyCodable(imageURL)
+                    ])
+                ])
+            ]))))
+        session.apply(.toolCallUpdate(.init(
+            toolCallId: "tc-raw-long-url-update",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            rawOutput: nil)))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "final output")
+            #expect(tc.rawOutput?.contains("[truncated]") == true)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(
+                    data: nil,
+                    uri: imageURL,
+                    mimeType: nil,
+                    name: "generated.png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("content update does not preserve stale content image assets")
     func contentUpdateDoesNotPreserveStaleContentImageAssets() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
