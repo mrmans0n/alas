@@ -1175,8 +1175,8 @@ final class AppState {
         }
     }
 
-    func addProject(path: URL, displayName: String, color: String) async throws {
-        let project = try await projectsManager.addProject(path: path, displayName: displayName, color: color)
+    func addProject(path: URL, displayName: String, icon: ProjectIcon) async throws {
+        let project = try await projectsManager.addProject(path: path, displayName: displayName, icon: icon)
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
         saveProjects()
         saveSpaces()
@@ -1184,6 +1184,10 @@ final class AppState {
             saveProjects()
         }
         startProjectGitWatcher(for: project)
+    }
+
+    func addProject(path: URL, displayName: String, color: String) async throws {
+        try await addProject(path: path, displayName: displayName, icon: ProjectIcon.default(color: color))
     }
 
     @discardableResult
@@ -1340,7 +1344,7 @@ final class AppState {
         projectGitWatchers.removeAll()
     }
 
-    func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {
+    func updateProject(id: String, name: String, icon: ProjectIcon, startupScripts: ProjectStartupScripts) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
@@ -1348,11 +1352,20 @@ final class AppState {
             id: id,
             update: ProjectUpdate(
                 name: trimmedName,
-                color: color,
+                icon: icon,
                 startupScripts: startupScripts
             )
         )
         saveProjects()
+    }
+
+    func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {
+        updateProject(
+            id: id,
+            name: name,
+            icon: ProjectIcon.default(color: color),
+            startupScripts: startupScripts
+        )
     }
 
     func setWorktreeLaunchDefaults(projectId: String, openAfterCreate: Bool, launcherMode: AppConfig.LauncherMode) {
