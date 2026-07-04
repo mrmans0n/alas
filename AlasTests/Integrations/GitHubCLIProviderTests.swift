@@ -1563,6 +1563,27 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func mergeReviewRequestRunsSquashDeleteBranch() async throws {
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
+        let provider = GitHubCLIProvider(runner: runner)
+        let request = Self.makeRequest()
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "merge", "42",
+                    "--squash",
+                    "--delete-branch",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
     private static let checkAnnotationsOutput = """
     [
       [

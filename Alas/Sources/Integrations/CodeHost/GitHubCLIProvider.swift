@@ -823,6 +823,29 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
     }
 
+    func mergeReviewRequest(
+        _ request: ReviewRequest,
+        method: ReviewMergeMethod,
+        deleteBranch: Bool,
+        cwd: URL
+    ) async throws {
+        var args = ["pr", "merge", "\(request.number)"]
+        switch method {
+        case .squash: args.append("--squash")
+        case .merge: args.append("--merge")
+        case .rebase: args.append("--rebase")
+        }
+        if deleteBranch {
+            args.append("--delete-branch")
+        }
+        args.append(contentsOf: ["-R", Self.highLevelRepositorySelector(remote: request.remote)])
+
+        let result = try await runner.run("gh", args: args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr merge", stderr: result.stderr)
+        }
+    }
+
     func replyToThread(
         remote: CodeHostRemote,
         request: ReviewRequest,
