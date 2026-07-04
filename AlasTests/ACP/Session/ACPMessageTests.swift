@@ -204,6 +204,19 @@ struct ACPMessageTests {
         #expect(a != b)
     }
 
+    @Test("AnyCodable preserves numeric NSNumbers")
+    func anyCodablePreservesNumericNSNumbers() throws {
+        let value = AnyCodable([
+            "exit_code": NSNumber(value: 1),
+            "ok": NSNumber(value: true)
+        ])
+
+        let payload = try JSONEncoder().encode(value)
+        let json = try #require(String(data: payload, encoding: .utf8))
+        #expect(json.contains(#""exit_code":1"#))
+        #expect(json.contains(#""ok":true"#))
+    }
+
     @Test("tool call equality differs on rawOutput")
     func toolCallRawOutputAffectsEquality() throws {
         let a = ACPMessage.ToolCall(

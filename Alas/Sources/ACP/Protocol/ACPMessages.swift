@@ -405,6 +405,15 @@ struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
     private static func canonicalize(_ value: Any) -> CanonicalValue {
         if let value = value as? AnyCodable { return value.canonicalValue }
         if value is NSNull { return .null }
+        if let value = value as? NSNumber {
+            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+                return .bool(value.boolValue)
+            }
+            if CFNumberIsFloatType(value) {
+                return .double(value.doubleValue)
+            }
+            return .int(value.intValue)
+        }
         if let value = value as? Bool { return .bool(value) }
         if let value = value as? Int { return .int(value) }
         if let value = value as? Double { return .double(value) }

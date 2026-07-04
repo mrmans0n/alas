@@ -971,6 +971,15 @@ struct ACPSessionRunnerTests {
         } else {
             Issue.record("expected restored toolCall message")
         }
+
+        try await waitUntil {
+            guard let row = try? store.loadMessages(sessionId: "s").first,
+                  let decoded = try? ACPMessageCodec.decode(kind: row.kind, payload: row.payload),
+                  case .toolCall(let persisted) = decoded
+            else { return false }
+            return persisted.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
+                && persisted.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
+        }
     }
 
     @Test("streaming chunks are persisted in a batch when streaming ends")

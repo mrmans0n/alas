@@ -374,20 +374,22 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) {
+    func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {
         switch update {
         case .toolCall(let payload):
-            guard updateToolCall(id: payload.toolCallId, { tc in
+            guard let touched = updateToolCall(id: payload.toolCallId, { tc in
                 Self.applyToolCallPayloadFields(payload, to: &tc)
-            }) != nil else { return }
+            }) else { return [] }
             applyToolCallMetadata(payload.metadata)
+            return [touched]
         case .toolCallUpdate(let update):
-            guard updateToolCall(id: update.toolCallId, { tc in
+            guard let touched = updateToolCall(id: update.toolCallId, { tc in
                 Self.applyToolCallUpdateFields(update, to: &tc)
-            }) != nil else { return }
+            }) else { return [] }
             applyToolCallMetadata(update.metadata)
+            return [touched]
         default:
-            break
+            return []
         }
     }
 
@@ -395,9 +397,12 @@ final class ACPSession: ObservableObject, Identifiable {
         _ payload: ACPToolCallPayload,
         to tc: inout ACPMessage.ToolCall
     ) {
+        let canReplaceSnapshot = !Self.isFinalStatus(tc.status) || Self.isFinalStatus(payload.status)
         tc.title = payload.title
         tc.kind = payload.kind
-        tc.status = payload.status
+        if canReplaceSnapshot {
+            tc.status = payload.status
+        }
         if let locations = payload.locations { tc.locations = locations.map(\.path) }
         if let rawInput = payload.rawInput { tc.rawInput = Self.metadataString(rawInput) }
         var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
@@ -406,12 +411,14 @@ final class ACPSession: ObservableObject, Identifiable {
             rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
             tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
         }
-        tc.metadata = Self.mergeMetadata(tc.metadata, payload.metadata)
-        tc.terminalIds = Self.mergeTerminalIds(
-            tc.terminalIds,
-            Self.extractMetadataTerminalIds(tc.metadata))
+        if let metadata = payload.metadata {
+            tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
+            tc.terminalIds = Self.mergeTerminalIds(
+                tc.terminalIds,
+                Self.extractMetadataTerminalIds(metadata))
+        }
 
-        guard let items = payload.content else { return }
+        guard canReplaceSnapshot, let items = payload.content else { return }
         let raw = Self.flatten(items)
         let full = Self.stripWrappingFence(raw,
                                            isFinal: Self.isFinalStatus(payload.status))

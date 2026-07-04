@@ -1071,6 +1071,48 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("suppressed initial tool replay does not downgrade completed output")
+    func suppressedInitialToolReplayDoesNotDowngradeCompletedOutput() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replay-downgrade",
+            title: "Image generation",
+            kind: "other",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
+            toolCallId: "tc-replay-downgrade",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: [.content(.text("partial output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: AnyCodable([
+                "data": AnyCodable([
+                    AnyCodable([
+                        "b64_json": AnyCodable("raw-output-data")
+                    ])
+                ])
+            ]))))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.status == "completed")
+            #expect(tc.content == "final output")
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("content update does not preserve stale content image assets")
     func contentUpdateDoesNotPreserveStaleContentImageAssets() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
