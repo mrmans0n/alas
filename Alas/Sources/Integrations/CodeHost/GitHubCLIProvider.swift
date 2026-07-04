@@ -1695,7 +1695,6 @@ struct GitHubCLIProvider: CodeHostProvider {
             .joined(separator: "|")
     }
 
-
     private func pullRequestNodeID(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
         let stdin = try Self.graphQLInput(
             query: Self.pullRequestNodeQuery,
