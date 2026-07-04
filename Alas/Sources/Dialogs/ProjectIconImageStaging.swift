@@ -35,6 +35,14 @@ enum ProjectIconImageStaging {
         }
     }
 
+    static func validateFileSize(at url: URL) throws {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .totalFileAllocatedSizeKey])
+        let size = values.fileSize ?? values.totalFileAllocatedSize
+        if let size, size > maxBytes {
+            throw StagingError.tooLarge
+        }
+    }
+
     static func url(for imagePath: String, root: URL = Paths.projectIconsRoot) -> URL {
         root.appendingPathComponent(imagePath)
     }

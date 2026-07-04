@@ -36,6 +36,18 @@ struct ProjectIconImageStagingTests {
         }
     }
 
+    @Test func oversizedFileValidationThrowsBeforeRead() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("project-icon-too-large-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try Data(count: ProjectIconImageStaging.maxBytes + 1).write(to: url)
+
+        #expect(throws: ProjectIconImageStaging.StagingError.tooLarge) {
+            try ProjectIconImageStaging.validateFileSize(at: url)
+        }
+    }
+
     private static let onePixelPNG = Data(base64Encoded:
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
     )!

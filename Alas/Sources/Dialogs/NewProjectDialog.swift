@@ -356,6 +356,7 @@ private struct ProjectDialog: View {
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         if panel.runModal() == .OK, let url = panel.url {
             do {
+                try ProjectIconImageStaging.validateFileSize(at: url)
                 let data = try Data(contentsOf: url)
                 let staged = try ProjectIconImageStaging.stage(
                     data: data,
