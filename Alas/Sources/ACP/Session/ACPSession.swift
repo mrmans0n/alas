@@ -300,6 +300,7 @@ final class ACPSession: ObservableObject, Identifiable {
             let terminalIds = Self.mergeTerminalIds(
                 Self.extractTerminalIds(items),
                 Self.extractMetadataTerminalIds(payload.metadata))
+            let rawOutputAssets = Self.extractRawOutputAssets(payload.rawOutput)
             transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
                 title: payload.title,
@@ -311,7 +312,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 rawInput: Self.metadataString(payload.rawInput),
                 rawOutput: Self.metadataString(payload.rawOutput),
                 metadata: payload.metadata,
-                assets: Self.extractAssets(items),
+                assets: Self.mergeAssets(Self.extractAssets(items), rawOutputAssets),
                 locations: payload.locations?.map(\.path) ?? [],
                 terminalIds: terminalIds)))
             didAppendTranscriptMessage()
@@ -322,12 +323,17 @@ final class ACPSession: ObservableObject, Identifiable {
             clearRestoredContextRecoveryStatus()
             var appliedMetadata: AnyCodable?
             var metadataTerminalIds: [String] = []
+            var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
             let touched = updateToolCall(id: u.toolCallId) { tc in
                 if let title = u.title { tc.title = title }
                 if let s = u.status { tc.status = s }
                 if let locations = u.locations { tc.locations = locations.map(\.path) }
                 if let rawInput = u.rawInput { tc.rawInput = Self.metadataString(rawInput) }
-                if let rawOutput = u.rawOutput { tc.rawOutput = Self.metadataString(rawOutput) }
+                if let rawOutput = u.rawOutput {
+                    tc.rawOutput = Self.metadataString(rawOutput)
+                    rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
+                    tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
+                }
                 if let metadata = u.metadata {
                     tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
                     appliedMetadata = metadata
@@ -349,7 +355,7 @@ final class ACPSession: ObservableObject, Identifiable {
                     tc.terminalIds = Self.mergeTerminalIds(
                         Self.extractTerminalIds(c),
                         Self.extractMetadataTerminalIds(tc.metadata))
-                    tc.assets = Self.extractAssets(c)
+                    tc.assets = Self.mergeAssets(Self.extractAssets(c), rawOutputAssets)
                 }
             }
             applyToolCallMetadata(appliedMetadata)
@@ -829,8 +835,30 @@ final class ACPSession: ObservableObject, Identifiable {
         return nil
     }
 
+    private static func metadataArray(_ value: AnyCodable?) -> [AnyCodable]? {
+        if let array = value?.value as? [AnyCodable] { return array }
+        if let array = value?.value as? [Any] {
+            return array.map { raw in
+                (raw as? AnyCodable) ?? AnyCodable(raw)
+            }
+        }
+        return nil
+    }
+
     private static func extractTerminalIds(_ items: [ACPToolCallContent]) -> [String] {
         items.compactMap { if case .terminal(let id) = $0 { return id } else { return nil } }
+    }
+
+    private static func mergeAssets(
+        _ primary: [ACPMessage.ToolCallAsset],
+        _ secondary: [ACPMessage.ToolCallAsset]
+    ) -> [ACPMessage.ToolCallAsset] {
+        var seen = Set<ACPMessage.ToolCallAsset>()
+        var merged: [ACPMessage.ToolCallAsset] = []
+        for asset in primary + secondary where seen.insert(asset).inserted {
+            merged.append(asset)
+        }
+        return merged
     }
 
     private static func extractAssets(_ items: [ACPToolCallContent]) -> [ACPMessage.ToolCallAsset] {
@@ -847,6 +875,54 @@ final class ACPSession: ObservableObject, Identifiable {
                 return nil
             }
         }
+    }
+
+    private static func extractRawOutputAssets(_ value: AnyCodable?) -> [ACPMessage.ToolCallAsset] {
+        var assets: [ACPMessage.ToolCallAsset] = []
+        collectRawOutputAssets(value, into: &assets)
+        return mergeAssets([], assets)
+    }
+
+    private static func collectRawOutputAssets(_ value: AnyCodable?, into assets: inout [ACPMessage.ToolCallAsset]) {
+        guard let value else { return }
+
+        if let object = metadataObject(value) {
+            if let data = metadataScalarString(object["b64_json"]), !data.isEmpty {
+                assets.append(.image(data: data, mimeType: "image/png"))
+            }
+            let rawData = metadataScalarString(object["data"])
+            let consumedDataImage = rawData.flatMap(dataImageMimeType) != nil
+            if let data = rawData,
+               let mimeType = dataImageMimeType(data) {
+                assets.append(.image(data: data, mimeType: mimeType))
+            }
+
+            for (key, child) in object
+                where key != "b64_json" && !(key == "data" && consumedDataImage) {
+                collectRawOutputAssets(child, into: &assets)
+            }
+            return
+        }
+
+        if let array = metadataArray(value) {
+            for child in array {
+                collectRawOutputAssets(child, into: &assets)
+            }
+            return
+        }
+
+        if let string = metadataScalarString(value),
+           let mimeType = dataImageMimeType(string) {
+            assets.append(.image(data: string, mimeType: mimeType))
+        }
+    }
+
+    private static func dataImageMimeType(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("data:image/"),
+              let semicolon = trimmed.firstIndex(of: ";")
+        else { return nil }
+        return String(trimmed[..<semicolon].dropFirst("data:".count))
     }
 
     private static func assetName(from uri: String?) -> String? {

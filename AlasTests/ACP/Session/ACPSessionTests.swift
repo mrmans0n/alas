@@ -825,6 +825,38 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("raw output image result is preserved as an asset")
+    func rawOutputImageResultPreservesAsset() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-raw-image",
+            title: "Image generation",
+            kind: "other",
+            status: "completed",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: AnyCodable([
+                "created": AnyCodable(1),
+                "data": AnyCodable([
+                    AnyCodable([
+                        "b64_json": AnyCodable("base64-data"),
+                        "revised_prompt": AnyCodable("A useful screenshot")
+                    ])
+                ])
+            ]))))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.rawOutput?.contains(#""b64_json":"base64-data""#) == true)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "base64-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("toolCallUpdate merges metadata with existing tool metadata")
     func toolCallUpdateMergesMetadataWithExistingToolMetadata() async throws {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
