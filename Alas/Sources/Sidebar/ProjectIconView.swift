@@ -114,6 +114,12 @@ struct ProjectIconView: View {
     }
 
     nonisolated static func renderableEmoji(_ raw: String?) -> String? {
-        ProjectIcon.sanitizedEmoji(raw)
+        guard let value = ProjectIcon.sanitizedNonEmpty(raw),
+              value.count == 1,
+              EmojiIcon.sanitized(value) == value
+        else {
+            return nil
+        }
+        return value
     }
 }
