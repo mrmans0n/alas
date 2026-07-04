@@ -300,7 +300,7 @@ final class ACPSession: ObservableObject, Identifiable {
                                                isFinal: Self.isFinalStatus(payload.status))
             let terminalIds = Self.mergeTerminalIds(
                 Self.extractTerminalIds(items),
-                Self.extractMetadataTerminalIds(payload.metadata))
+                Self.extractMetadataTerminalIds(payload.metadata, includeExit: payload.content == nil))
             let rawOutputAssets = Self.extractRawOutputAssets(payload.rawOutput)
             transcript.messages.append(.toolCall(.init(
                 toolCallId: payload.toolCallId,
@@ -431,11 +431,11 @@ final class ACPSession: ObservableObject, Identifiable {
 
         guard let items = payload.content else { return }
         if !canReplaceSnapshot {
+            tc.terminalIds = Self.mergeTerminalIds(
+                tc.terminalIds,
+                Self.extractTerminalIds(items))
             if Self.isFinalStatus(payload.status) {
                 tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(items))
-                tc.terminalIds = Self.mergeTerminalIds(
-                    tc.terminalIds,
-                    Self.extractTerminalIds(items))
             }
             return
         }

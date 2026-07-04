@@ -1267,6 +1267,40 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("suppressed in-progress tool payload replay preserves terminal ids from content")
+    func suppressedInProgressToolPayloadReplayPreservesTerminalIdsFromContent() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-in-progress-payload-replay-terminal",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCall(.init(
+            toolCallId: "tc-in-progress-payload-replay-terminal",
+            title: "Initial command",
+            kind: "execute",
+            status: "in_progress",
+            content: [.terminal(terminalId: "term-in-progress-payload-replay")],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.title == "Final command")
+            #expect(tc.content == "final output")
+            #expect(tc.terminalIds == ["term-in-progress-payload-replay"])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("content update does not preserve stale content image assets")
     func contentUpdateDoesNotPreserveStaleContentImageAssets() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
@@ -1948,6 +1982,34 @@ struct ACPSessionTests {
             #expect(tc.terminalIds == ["term-99"])
             #expect(tc.content == "")
         } else { Issue.record("expected toolCall message") }
+    }
+
+    @Test("initial toolCall content excludes exit-only terminal id")
+    func toolCallInitialContentExcludesExitOnlyTerminalId() async throws {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-initial-exit-content",
+            title: "run",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil,
+            metadata: AnyCodable([
+                "terminal_exit": AnyCodable([
+                    "terminal_id": AnyCodable("term-initial-exit-only"),
+                    "exit_code": AnyCodable(0)
+                ])
+            ]))))
+
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds.isEmpty)
+            #expect(tc.content == "final output")
+        } else { Issue.record("expected toolCall message") }
+
+        let term = try #require(session.terminalHost.terminal(id: "term-initial-exit-only"))
+        #expect(term.exitStatus == ACPTerminalExitStatus(exitCode: 0, signal: nil))
     }
 
     @Test("toolCallUpdate clears stale terminalIds when content has no terminals")

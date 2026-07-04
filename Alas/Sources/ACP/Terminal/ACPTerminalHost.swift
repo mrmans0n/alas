@@ -152,7 +152,7 @@ final class ACPTerminalHost: ObservableObject {
             cwd: cwd ?? sessionCwd,
             outputByteLimit: 65_536)
         term.onExit = { [weak self] in
-            self?.pruneFinishedTerminals()
+            self?.pruneMetadataTerminals()
         }
         terminals[terminalId] = term
         pruneMetadataTerminals()
@@ -161,7 +161,7 @@ final class ACPTerminalHost: ObservableObject {
 
     private func pruneFinishedTerminals() {
         let finished = terminals.values
-            .filter { $0.exitStatus != nil }
+            .filter { $0.isProcessBacked && $0.exitStatus != nil }
             .sorted { $0.createdAt < $1.createdAt }
         let overflow = finished.count - Self.maxRetainedFinishedTerminals
         guard overflow > 0 else { return }
@@ -171,12 +171,12 @@ final class ACPTerminalHost: ObservableObject {
     }
 
     private func pruneMetadataTerminals() {
-        let unfinishedMetadata = terminals.values
-            .filter { !$0.isProcessBacked && $0.exitStatus == nil }
+        let metadata = terminals.values
+            .filter { !$0.isProcessBacked }
             .sorted { $0.createdAt < $1.createdAt }
-        let overflow = unfinishedMetadata.count - Self.maxMetadataTerminals
+        let overflow = metadata.count - Self.maxMetadataTerminals
         guard overflow > 0 else { return }
-        for term in unfinishedMetadata.prefix(overflow) {
+        for term in metadata.prefix(overflow) {
             terminals.removeValue(forKey: term.id)
         }
     }

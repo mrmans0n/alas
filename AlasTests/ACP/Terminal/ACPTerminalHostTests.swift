@@ -187,6 +187,30 @@ struct ACPTerminalHostTests {
         #expect(host.terminal(id: "meta-\(ACPTerminalHost.maxMetadataTerminals)") != nil)
     }
 
+    @Test("finished metadata terminal retention does not prune process terminals")
+    func finishedMetadataTerminalRetentionDoesNotPruneProcessTerminals() async throws {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+        let process = try host.create(.init(
+            sessionId: "s",
+            command: "/bin/echo",
+            args: ["process-output"],
+            env: nil,
+            cwd: nil,
+            outputByteLimit: nil
+        ))
+        _ = await host.terminal(id: process.terminalId)?.waitForExit()
+
+        for i in 0 ... ACPTerminalHost.maxMetadataTerminals {
+            host.recordMetadataExit(
+                terminalId: "meta-finished-\(i)",
+                exitStatus: ACPTerminalExitStatus(exitCode: 0, signal: nil))
+        }
+
+        #expect(host.terminal(id: process.terminalId) != nil)
+        #expect(host.terminal(id: "meta-finished-0") == nil)
+        #expect(host.terminal(id: "meta-finished-\(ACPTerminalHost.maxMetadataTerminals)") != nil)
+    }
+
     #if DEBUG
     @Test("retained byte estimate includes terminal buffers")
     func retainedByteEstimateIncludesTerminalBuffers() async throws {
