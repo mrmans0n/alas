@@ -137,6 +137,28 @@ struct RightPaneView: View {
                 Text("Apply this commit to the current branch.")
             }
         )
+        .confirmationDialog(
+            "Merge review request?",
+            isPresented: Binding(
+                get: { rps.pendingMerge != nil },
+                set: { if !$0 { rps.cancelMerge() } }
+            ),
+            titleVisibility: .visible,
+            presenting: rps.pendingMerge
+        ) { snapshot in
+            Button("Merge", role: .destructive) {
+                rps.performMerge(appState: state)
+            }
+            Button("Cancel", role: .cancel) {
+                rps.cancelMerge()
+            }
+        } message: { snapshot in
+            if let request = snapshot.reviewRequest {
+                Text("Squash-merge \(request.displayIdentity) into \(request.baseRefName) and delete the branch.")
+            } else {
+                Text("Squash-merge this review request and delete the branch.")
+            }
+        }
         .sheet(
             isPresented: Binding(
                 get: { rps.pendingParkChanges },

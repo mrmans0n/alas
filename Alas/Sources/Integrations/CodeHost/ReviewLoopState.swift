@@ -362,6 +362,28 @@ final class ReviewLoopState {
         }
     }
 
+    func merge(snapshot: ReviewLoopSnapshot) async -> Bool {
+        guard
+            let remote = snapshot.remote,
+            let request = snapshot.reviewRequest,
+            let provider = providerRegistry.provider(for: remote.kind)
+        else { return false }
+
+        lastError = nil
+        do {
+            try await provider.mergeReviewRequest(
+                request,
+                method: .squash,
+                deleteBranch: true,
+                cwd: worktreePath
+            )
+            return true
+        } catch {
+            lastError = Self.describe(error)
+            return false
+        }
+    }
+
     private func isCurrentRefresh(_ generation: Int) -> Bool {
         generation == refreshGeneration
     }

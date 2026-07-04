@@ -527,6 +527,51 @@ struct ReviewLoopStateTests {
         ])
     }
 
+    @Test func mergeInvokesProviderWithSquashAndDeleteBranch() async throws {
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            request: Self.makeReviewRequest(remote: remote, checks: [])
+        )
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+
+        let ok = await state.merge(snapshot: snapshot)
+
+        #expect(ok)
+        #expect(provider.mergeRequestCalls == [
+            FakeCodeHostProvider.MergeRequestCall(number: 42, method: .squash, deleteBranch: true),
+        ])
+    }
+
+    @Test func mergeReturnsFalseAndRecordsErrorOnFailure() async throws {
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            request: Self.makeReviewRequest(remote: remote, checks: [])
+        )
+        provider.mergeError = CodeHostProviderError.commandFailed(command: "gh pr merge", stderr: "boom")
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+
+        let ok = await state.merge(snapshot: snapshot)
+
+        #expect(!ok)
+        #expect(state.lastError != nil)
+    }
+
     @Test func overlappingRefreshIgnoresOlderResult() async throws {
         let remote = Self.makeRemote()
         let slowRequest = Self.makeReviewRequest(
@@ -972,6 +1017,12 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         let requestNumber: Int?
     }
 
+    struct MergeRequestCall: Equatable {
+        let number: Int
+        let method: ReviewMergeMethod
+        let deleteBranch: Bool
+    }
+
     let kind: CodeHostKind
     var available: Bool
     var authenticated: Bool
@@ -983,8 +1034,10 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
     var checksError: Error?
     var createError: Error?
     var rerunError: Error?
+    var mergeError: Error?
     var createdReviewRequests: [CreatedReviewRequest] = []
     var rerunFailedChecksRequests: [RerunFailedChecksRequest] = []
+    var mergeRequestCalls: [MergeRequestCall] = []
 
     init(
         kind: CodeHostKind,
@@ -1073,6 +1126,20 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
             branch: branch,
             headSHA: headSHA,
             requestNumber: request?.number
+        ))
+    }
+
+    func mergeReviewRequest(
+        _ request: ReviewRequest,
+        method: ReviewMergeMethod,
+        deleteBranch: Bool,
+        cwd: URL
+    ) async throws {
+        if let mergeError { throw mergeError }
+        mergeRequestCalls.append(MergeRequestCall(
+            number: request.number,
+            method: method,
+            deleteBranch: deleteBranch
         ))
     }
 }

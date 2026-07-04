@@ -130,6 +130,7 @@ final class RightPaneState {
 
     var pendingDiscard: PendingDiscard? = nil
     var pendingCherryPickSHA: String? = nil
+    var pendingMerge: ReviewLoopSnapshot? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -329,7 +330,10 @@ final class RightPaneState {
                 }
             }
         case .merge:
-            break
+            guard let snapshot = reviewLoop.snapshot,
+                  snapshot.reviewRequest != nil
+            else { return }
+            pendingMerge = snapshot
         }
     }
 
@@ -858,6 +862,25 @@ final class RightPaneState {
 
     func cancelDiscard() {
         pendingDiscard = nil
+    }
+
+    func cancelMerge() {
+        pendingMerge = nil
+    }
+
+    func performMerge(appState: AppState) {
+        _ = appState
+        guard let snapshot = pendingMerge else { return }
+        pendingMerge = nil
+        guard reviewLoop.beginAction(.merge) else { return }
+        Task { @MainActor in
+            defer { reviewLoop.endAction(.merge) }
+            if await reviewLoop.merge(snapshot: snapshot) {
+                await refresh()
+            } else {
+                sidebarError = reviewLoop.lastError ?? "Merge failed."
+            }
+        }
     }
 
     func requestCherryPick(sha: String) {
