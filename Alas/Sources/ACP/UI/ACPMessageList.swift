@@ -223,6 +223,16 @@ struct ACPMessageList: View {
                     restoreTailIfNeeded(proxy: proxy, animated: false)
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
+                .onChange(of: viewport.size.width) { oldWidth, newWidth in
+                    if Self.shouldRestoreTailAfterViewportWidthChange(
+                        previousWidth: oldWidth,
+                        newWidth: newWidth,
+                        followsTranscriptTail: session.followsTranscriptTail
+                    ) {
+                        restoreTailIfNeeded(proxy: proxy, animated: false)
+                    }
+                    restoreRememberedAnchorIfNeeded(proxy: proxy)
+                }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
                         scheduleTailScroll(
@@ -518,6 +528,15 @@ struct ACPMessageList: View {
 
     nonisolated static func shouldRunScheduledTailScroll(followsTranscriptTail: Bool) -> Bool {
         followsTranscriptTail
+    }
+
+    nonisolated static func shouldRestoreTailAfterViewportWidthChange(
+        previousWidth: CGFloat,
+        newWidth: CGFloat,
+        followsTranscriptTail: Bool
+    ) -> Bool {
+        guard followsTranscriptTail else { return false }
+        return abs(newWidth - previousWidth) > 0.5
     }
 
     nonisolated static func topVisibleAnchorID(in frames: [String: CGRect]) -> String? {
