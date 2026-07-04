@@ -7,20 +7,31 @@ import Testing
 @MainActor
 struct RepoGroupViewLayoutTests {
     @Test func repoHeaderAnchorDoesNotShiftWhenExpanded() throws {
-        let collapsedX = try repoDotMinX(collapsed: true)
-        let expandedX = try repoDotMinX(collapsed: false)
+        let collapsedX = try repoIconMinX(collapsed: true)
+        let expandedX = try repoIconMinX(collapsed: false)
 
         #expect(collapsedX == expandedX)
     }
 
-    private func repoDotMinX(collapsed: Bool) throws -> Int {
-        let color = "#ff0000"
+    @Test func projectIconSymbolHeaderAnchorDoesNotShiftWhenExpanded() throws {
+        let icon = ProjectIcon(mode: .symbol, color: "#ff0000", symbolName: "terminal")
+        let collapsedX = try repoIconMinX(collapsed: true, icon: icon)
+        let expandedX = try repoIconMinX(collapsed: false, icon: icon)
+
+        #expect(collapsedX == expandedX)
+    }
+
+    private func repoIconMinX(
+        collapsed: Bool,
+        icon: ProjectIcon = ProjectIcon.default(color: "#ff0000")
+    ) throws -> Int {
         let project = ProjectConfig(
             id: "project-1",
             name: "Sample",
             path: "/tmp/sample",
-            color: color,
-            addedAt: Date(timeIntervalSince1970: 0)
+            color: icon.color,
+            addedAt: Date(timeIntervalSince1970: 0),
+            icon: icon
         )
         let worktrees = [
             Worktree(

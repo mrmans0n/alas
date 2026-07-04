@@ -49,6 +49,19 @@ struct ProjectPickerTests {
         #expect(result.isEmpty)
     }
 
+    @Test func projectIconAccessibilityLabelNamesProject() {
+        let project = ProjectConfig(
+            id: "p1",
+            name: "Alpha",
+            path: "/tmp/alpha",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0),
+            icon: ProjectIcon(mode: .emoji, color: "#5fb7c4", emoji: "🚀")
+        )
+
+        #expect(ProjectIconView.accessibilityLabel(project: project) == "Alpha project icon")
+    }
+
     private static func project(name: String) -> ProjectConfig {
         ProjectConfig(
             id: UUID().uuidString,

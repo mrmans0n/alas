@@ -79,7 +79,7 @@ struct RepoSelectorRowView: View {
     private func worktreeContent(worktree: Worktree, indices: [Int], isCurrent: Bool) -> some View {
         HStack(spacing: 10) {
             if let project = projectsById[worktree.projectId] {
-                RepoDot(color: project.color, letter: String(project.name.prefix(1)).uppercased())
+                ProjectIconView(icon: project.icon, fallbackName: project.name, size: .sidebar)
             }
             if isCurrent {
                 Circle()
