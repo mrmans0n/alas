@@ -899,9 +899,19 @@ final class ACPSession: ObservableObject, Identifiable {
                let mimeType = dataImageMimeType(data) {
                 assets.append(.image(data: data, mimeType: mimeType))
             }
+            if let uri = metadataScalarString(object["url"]),
+               rawOutputURLLooksLikeImage(uri, in: object) {
+                assets.append(.image(
+                    data: nil,
+                    uri: uri,
+                    mimeType: rawOutputMimeType(object),
+                    name: assetName(from: uri)))
+            }
 
             for (key, child) in object
-                where key != "b64_json" && !(key == "data" && consumedDataImage) {
+                where key != "b64_json"
+                    && key != "url"
+                    && !(key == "data" && consumedDataImage) {
                 collectRawOutputAssets(child, into: &assets)
             }
             return
@@ -932,6 +942,26 @@ final class ACPSession: ObservableObject, Identifiable {
         return String(trimmed[..<semicolon].dropFirst("data:".count))
     }
 
+    private static func rawOutputURLLooksLikeImage(_ uri: String, in object: [String: AnyCodable]) -> Bool {
+        if rawOutputMimeType(object)?.lowercased().hasPrefix("image/") == true { return true }
+        if metadataScalarString(object["type"])?.lowercased() == "image" { return true }
+        if object["revised_prompt"] != nil { return true }
+        let pathExtension = URL(string: uri)?.pathExtension.lowercased()
+            ?? URL(fileURLWithPath: uri).pathExtension.lowercased()
+        switch pathExtension {
+        case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "webp":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func rawOutputMimeType(_ object: [String: AnyCodable]) -> String? {
+        metadataScalarString(object["mimeType"])
+            ?? metadataScalarString(object["mime_type"])
+            ?? metadataScalarString(object["mimetype"])
+    }
+
     private static func extractStoredRawOutputAssets(
         _ rawOutput: String?,
         existingAssets: [ACPMessage.ToolCallAsset]
@@ -941,10 +971,12 @@ final class ACPSession: ObservableObject, Identifiable {
         if !parsedAssets.isEmpty { return parsedAssets }
 
         let lower = rawOutput.lowercased()
-        guard lower.contains("\"b64_json\"") || lower.contains("data:image/") else { return [] }
+        guard lower.contains("\"b64_json\"")
+            || lower.contains("data:image/")
+            || lower.contains("\"url\"")
+        else { return [] }
         return existingAssets.filter { asset in
-            asset.kind == .image
-                && (asset.data != nil || asset.uri?.lowercased().hasPrefix("data:image/") == true)
+            asset.kind == .image && (asset.data != nil || asset.uri != nil)
         }
     }
 
