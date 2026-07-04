@@ -1002,6 +1002,9 @@ final class ACPSession: ObservableObject, Identifiable {
 
     private static func assetName(from uri: String?) -> String? {
         guard let uri, !uri.isEmpty else { return nil }
+        if uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("data:") {
+            return nil
+        }
         return URL(string: uri)?.lastPathComponent
             ?? URL(fileURLWithPath: uri).lastPathComponent
     }
