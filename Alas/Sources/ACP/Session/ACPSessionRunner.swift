@@ -1491,7 +1491,7 @@ extension ACPSessionRunner {
         let now = Int64(Date().timeIntervalSince1970)
         for i in indices.sorted() {
             guard i >= 0, i < messages.count else { continue }
-            let m = messages[i]
+            let m = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
             if i < persistedMessageCount {
@@ -1510,6 +1510,20 @@ extension ACPSessionRunner {
         }
         onPersist?()
         return true
+    }
+
+    private func messageForPersistence(_ message: ACPMessage) -> ACPMessage {
+        guard case .toolCall(var toolCall) = message,
+              toolCall.isContentTruncated,
+              let storedContent = try? store.loadToolCallContent(
+                sessionId: sessionId,
+                toolCallId: toolCall.toolCallId
+              )
+        else {
+            return message
+        }
+        toolCall.content = storedContent
+        return .toolCall(toolCall)
     }
 
     /// Persist messages from the apply() boundary. Three cases:
