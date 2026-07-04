@@ -1,7 +1,7 @@
 import Foundation
 
 struct ProjectIcon: Codable, Equatable {
-    enum Mode: String, Codable, Equatable, CaseIterable {
+    enum Mode: String, Codable, Equatable, Hashable, CaseIterable {
         case letter
         case symbol
         case emoji
