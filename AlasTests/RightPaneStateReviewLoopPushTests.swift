@@ -99,6 +99,30 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(state.pendingMerge == nil)
     }
 
+    @Test func performMergeRevalidatesAgainstCurrentSnapshot() {
+        let worktreeId = "wt-merge-revalidate"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let worktree = Worktree(
+            id: worktreeId,
+            projectId: "p1",
+            name: "feature/review-loop",
+            branch: "feature/review-loop",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        // A merge was queued via the dialog, but the current snapshot no longer
+        // qualifies (default snapshot is unpushed / has no mergeable request).
+        state.pendingMerge = Self.makeSnapshot()
+        state.reviewLoop.setSnapshotForTests(Self.makeSnapshot())
+
+        state.performMerge()
+
+        #expect(state.pendingMerge == nil)
+        #expect(state.sidebarError != nil)
+    }
+
     @Test func normalPushArgumentsDoNotForce() {
         let snapshot = Self.makeSnapshot()
 

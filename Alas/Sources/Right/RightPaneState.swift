@@ -869,8 +869,18 @@ final class RightPaneState {
     }
 
     func performMerge() {
-        guard let snapshot = pendingMerge else { return }
+        guard pendingMerge != nil else { return }
         pendingMerge = nil
+        // Re-validate against the CURRENT snapshot, not the one captured when
+        // the dialog opened. The review-loop watcher may have refreshed while
+        // the confirmation was up (a new unpushed commit, checks or review
+        // becoming blocking), which would make the captured snapshot stale.
+        // Merge the fresh snapshot only if it still qualifies.
+        guard let snapshot = reviewLoop.snapshot,
+              ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot) else {
+            sidebarError = "Merge is no longer available — the branch or review state changed."
+            return
+        }
         guard reviewLoop.beginAction(.merge) else { return }
         Task { @MainActor in
             defer { reviewLoop.endAction(.merge) }
