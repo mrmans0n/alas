@@ -863,10 +863,11 @@ struct RemoteSessionGatewayTests {
                 mimeType: "image/png",
                 name: "inline-uri.png"
             ),
-            .resource(
+            .init(
+                kind: .resource,
                 uri: nil,
-                name: "inline-resource.json",
-                mimeType: "application/json"
+                mimeType: "application/json",
+                name: "inline-resource.json"
             )
         ])
     }
