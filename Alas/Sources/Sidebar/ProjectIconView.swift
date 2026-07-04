@@ -100,7 +100,7 @@ struct ProjectIconView: View {
 
     private func loadImage() -> NSImage? {
         guard let imagePath = icon.imagePath else { return nil }
-        return NSImage(contentsOfFile: imagePath)
+        return NSImage(contentsOf: ProjectIconImageStaging.url(for: imagePath))
     }
 
     nonisolated static func accessibilityLabel(project: ProjectConfig) -> String {
