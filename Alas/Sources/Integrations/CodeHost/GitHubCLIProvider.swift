@@ -865,8 +865,10 @@ struct GitHubCLIProvider: CodeHostProvider {
             _ = try? await runner.run(
                 "gh",
                 args: [
-                    "api", "--method", "DELETE",
-                    "repos/\(Self.highLevelRepositorySelector(remote: request.remote))/git/refs/heads/\(request.headRefName)",
+                    "api",
+                    "--hostname", request.remote.host,
+                    "--method", "DELETE",
+                    "repos/\(request.remote.repositorySlug)/git/refs/heads/\(request.headRefName)",
                 ],
                 cwd: cwd
             )

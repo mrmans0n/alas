@@ -1587,7 +1587,9 @@ struct GitHubCLIProviderTests {
             FakeRunner.Command(
                 executable: "gh",
                 args: [
-                    "api", "--method", "DELETE",
+                    "api",
+                    "--hostname", "github.com",
+                    "--method", "DELETE",
                     "repos/mrmans0n/alas/git/refs/heads/feature/github-provider",
                 ],
                 cwd: Self.cwd
