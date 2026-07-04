@@ -290,7 +290,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             return nil
         }
         let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return Self.withThreads(threads, on: request)
+        return request.withThreads(threads)
     }
 
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
@@ -697,7 +697,7 @@ struct GitHubCLIProvider: CodeHostProvider {
         }
         let request = try Self.parsePRView(result.stdout, remote: remote)
         let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return Self.withThreads(threads, on: request)
+        return request.withThreads(threads)
     }
 
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
@@ -1695,23 +1695,6 @@ struct GitHubCLIProvider: CodeHostProvider {
             .joined(separator: "|")
     }
 
-    private static func withThreads(_ threads: [ReviewThread], on request: ReviewRequest) -> ReviewRequest {
-        ReviewRequest(
-            remote: request.remote,
-            number: request.number,
-            title: request.title,
-            url: request.url,
-            state: request.state,
-            isDraft: request.isDraft,
-            headRefName: request.headRefName,
-            baseRefName: request.baseRefName,
-            headSHA: request.headSHA,
-            reviewDecision: request.reviewDecision,
-            mergeState: request.mergeState,
-            checks: request.checks,
-            threads: threads
-        )
-    }
 
     private func pullRequestNodeID(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
         let stdin = try Self.graphQLInput(

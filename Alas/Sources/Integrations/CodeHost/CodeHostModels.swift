@@ -461,6 +461,28 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         )
     }
 
+    /// Returns a copy with `threads` replaced, preserving every other field.
+    /// Same rationale as `withChecks`: a hand-rolled copy in the provider used
+    /// to silently drop `headRepositoryOwner`.
+    func withThreads(_ threads: [ReviewThread]) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: title,
+            url: url,
+            state: state,
+            isDraft: isDraft,
+            headRefName: headRefName,
+            baseRefName: baseRefName,
+            headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
+            reviewDecision: reviewDecision,
+            mergeState: mergeState,
+            checks: checks,
+            threads: threads
+        )
+    }
+
     static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
