@@ -28,7 +28,7 @@ struct ChangesPreparationCard: View {
             if let reviewAction = model.reviewAction {
                 primaryReviewButton(reviewAction)
             }
-            if model.draftAction != nil || model.reviewRequestAction != nil {
+            if model.draftAction != nil || !model.reviewRequestActions.isEmpty {
                 ViewThatFits(in: .horizontal) {
                     secondaryActionsHorizontal
                     secondaryActionsVertical
@@ -104,8 +104,8 @@ struct ChangesPreparationCard: View {
             if let draftAction = model.draftAction {
                 secondaryDraftButton(draftAction)
             }
-            if let reviewRequestAction = model.reviewRequestAction {
-                secondaryReviewRequestButton(reviewRequestAction)
+            ForEach(model.reviewRequestActions, id: \.kind) { action in
+                secondaryReviewRequestButton(action)
             }
         }
     }
@@ -115,8 +115,8 @@ struct ChangesPreparationCard: View {
             if let draftAction = model.draftAction {
                 secondaryDraftButton(draftAction)
             }
-            if let reviewRequestAction = model.reviewRequestAction {
-                secondaryReviewRequestButton(reviewRequestAction)
+            ForEach(model.reviewRequestActions, id: \.kind) { action in
+                secondaryReviewRequestButton(action)
             }
         }
     }
