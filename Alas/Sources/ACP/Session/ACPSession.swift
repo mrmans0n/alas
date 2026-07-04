@@ -478,6 +478,9 @@ final class ACPSession: ObservableObject, Identifiable {
             if !canReplaceSnapshot {
                 if let status = update.status, Self.isFinalStatus(status) {
                     tc.assets = Self.mergeAssets(tc.assets, Self.extractAssets(content))
+                    tc.terminalIds = Self.mergeTerminalIds(
+                        tc.terminalIds,
+                        Self.extractTerminalIds(content))
                 }
                 return
             }

@@ -1170,6 +1170,35 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("suppressed final tool replay preserves terminal ids from content")
+    func suppressedFinalToolReplayPreservesTerminalIdsFromContent() async {
+        let session = ACPSession(id: "s", agentId: "bridge", worktreeId: "w", title: "t")
+
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-final-replay-terminal",
+            title: "Final command",
+            kind: "execute",
+            status: "completed",
+            content: [.content(.text("final output"))],
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+
+        let touched = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
+            toolCallId: "tc-final-replay-terminal",
+            status: "completed",
+            content: [.terminal(terminalId: "term-final-replay")],
+            rawOutput: nil)))
+
+        #expect(touched == [0])
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "final output")
+            #expect(tc.terminalIds == ["term-final-replay"])
+        } else {
+            Issue.record("expected toolCall message")
+        }
+    }
+
     @Test("content update does not preserve stale content image assets")
     func contentUpdateDoesNotPreserveStaleContentImageAssets() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

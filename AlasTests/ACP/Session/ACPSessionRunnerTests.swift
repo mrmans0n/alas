@@ -1138,6 +1138,87 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "hello world")
     }
 
+    @Test("takeover snapshot preserves stored full tool content")
+    func takeoverSnapshotPreservesStoredFullToolContent() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-takeover-tool-snapshot-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+
+        let fullContent = String(repeating: "full-content-line\n", count: 400)
+        let original = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Run",
+            kind: "execute",
+            status: "completed",
+            content: fullContent
+        ))
+        session.replaceTranscriptMessages([original])
+        runner.persistIndices([0])
+        session.transcript.setVisibleHead(1)
+        guard case .toolCall(let truncated) = session.transcript.messages[0] else {
+            Issue.record("expected tool call")
+            return
+        }
+        #expect(truncated.isContentTruncated)
+        #expect(truncated.content.count < fullContent.count)
+
+        runner.start()
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        mock.emitToolCallUpdate(.init(
+            toolCallId: "tool-1",
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-1"),
+                    "data": AnyCodable("tail\n")
+                ])
+            ])
+        ))
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == fullContent)
+        #expect(persisted.terminalIds == ["term-1"])
+    }
+
     @Test("stop() resolves a parked permission continuation as cancelled")
     func stopResolvesParkedPermission() async throws {
         let (runner, _) = try makeRunner()
@@ -2030,6 +2111,10 @@ private final class StreamingBatchACPClient: ACPClient {
 
     func emitAgentChunk(_ text: String) {
         updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text(text))))
+    }
+
+    func emitToolCallUpdate(_ update: ACPToolCallUpdate) {
+        updatesCont.yield(.init(sessionId: "s", update: .toolCallUpdate(update)))
     }
 
     func notify(_ request: ACPRequest) async throws {}

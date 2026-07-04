@@ -1440,7 +1440,7 @@ extension ACPSessionRunner {
         let messages = session.transcript.messages
         for i in indices {
             guard i >= 0, i < messages.count else { continue }
-            let message = messages[i]
+            let message = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
             let id = "msg-\(sessionId)-\(i)"
             let basePayload = i < persistedMessageCount ? try? store.loadMessagePayload(id: id) : nil
