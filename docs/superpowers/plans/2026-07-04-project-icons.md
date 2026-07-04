@@ -82,7 +82,7 @@ struct ProjectIconTests {
         #expect(icon.label == nil)
         #expect(icon.symbolName == nil)
         #expect(icon.emoji == nil)
-        #expect(icon.imageAssetName == nil)
+        #expect(icon.imagePath == nil)
     }
 
     @Test func fallbackLabelUsesLastPathComponentInitial() {
@@ -195,7 +195,7 @@ struct ProjectIcon: Codable, Equatable {
     var label: String?
     var symbolName: String?
     var emoji: String?
-    var imageAssetName: String?
+    var imagePath: String?
 
     init(
         mode: Mode,
@@ -203,14 +203,14 @@ struct ProjectIcon: Codable, Equatable {
         label: String? = nil,
         symbolName: String? = nil,
         emoji: String? = nil,
-        imageAssetName: String? = nil
+        imagePath: String? = nil
     ) {
         self.mode = mode
         self.color = Self.sanitizedColor(color)
         self.label = Self.sanitizedLabel(label)
         self.symbolName = Self.sanitizedNonEmpty(symbolName)
         self.emoji = Self.sanitizedNonEmpty(emoji)
-        self.imageAssetName = Self.sanitizedNonEmpty(imageAssetName)
+        self.imagePath = Self.sanitizedNonEmpty(imagePath)
     }
 
     static func `default`(color: String = defaultColor) -> ProjectIcon {
@@ -780,8 +780,8 @@ struct ProjectIconView: View {
     }
 
     private func loadImage() -> NSImage? {
-        guard let imageAssetName = icon.imageAssetName else { return nil }
-        return NSImage(contentsOfFile: imageAssetName)
+        guard let imagePath = icon.imagePath else { return nil }
+        return NSImage(contentsOfFile: imagePath)
     }
 
     static func accessibilityLabel(project: ProjectConfig) -> String {
@@ -876,7 +876,7 @@ struct ProjectIconImageStagingTests {
             root: root
         )
 
-        #expect(staged.assetName.hasSuffix(".png"))
+        #expect(staged.imagePath.hasSuffix(".png"))
         #expect(staged.url.path.contains("/project-1/"))
         #expect(FileManager.default.fileExists(atPath: staged.url.path))
         #expect(try Data(contentsOf: staged.url) == data)
@@ -938,7 +938,7 @@ import CryptoKit
 
 enum ProjectIconImageStaging {
     struct Staged: Equatable {
-        let assetName: String
+        let imagePath: String
         let url: URL
     }
 
@@ -964,14 +964,14 @@ enum ProjectIconImageStaging {
             if !FileManager.default.fileExists(atPath: url.path) {
                 try data.write(to: url, options: .atomic)
             }
-            return Staged(assetName: "\(projectId)/\(filename)", url: url)
+            return Staged(imagePath: "\(projectId)/\(filename)", url: url)
         } catch {
             throw StagingError.writeFailed
         }
     }
 
-    static func url(for assetName: String, root: URL = Paths.projectIconsRoot) -> URL {
-        root.appendingPathComponent(assetName)
+    static func url(for imagePath: String, root: URL = Paths.projectIconsRoot) -> URL {
+        root.appendingPathComponent(imagePath)
     }
 
     static func fileExtension(for data: Data) -> String? {
@@ -1002,8 +1002,8 @@ Modify `ProjectIconView.loadImage()`:
 
 ```swift
 private func loadImage() -> NSImage? {
-    guard let imageAssetName = icon.imageAssetName else { return nil }
-    let url = ProjectIconImageStaging.url(for: imageAssetName)
+    guard let imagePath = icon.imagePath else { return nil }
+    let url = ProjectIconImageStaging.url(for: imagePath)
     return NSImage(contentsOf: url)
 }
 ```
@@ -1189,7 +1189,7 @@ with:
 @State private var iconLabel: String = ""
 @State private var iconSymbolName: String = "folder"
 @State private var iconEmoji: String = "🚀"
-@State private var iconImageAssetName: String?
+@State private var iconImagePath: String?
 @State private var pendingIconStorageId = "pending-\(UUID().uuidString)"
 @State private var avatarPreset: ProjectAvatarPreset?
 @State private var avatarPresetData: Data?
@@ -1207,7 +1207,7 @@ private var draftIcon: ProjectIcon {
         label: iconLabel,
         symbolName: iconSymbolName,
         emoji: iconEmoji,
-        imageAssetName: iconImageAssetName
+        imagePath: iconImagePath
     )
 }
 ```
@@ -1374,7 +1374,7 @@ private func chooseProjectIconImage() {
             let data = try Data(contentsOf: url)
             let projectId = existingProjectIdForIconStorage()
             let staged = try ProjectIconImageStaging.stage(data: data, projectId: projectId)
-            iconImageAssetName = staged.assetName
+            iconImagePath = staged.imagePath
             iconMode = .image
             errorMessage = nil
         } catch let stagingError as ProjectIconImageStaging.StagingError {
@@ -1405,7 +1405,7 @@ iconColor = project.icon.color
 iconLabel = project.icon.label ?? ""
 iconSymbolName = project.icon.symbolName ?? "folder"
 iconEmoji = project.icon.emoji ?? "🚀"
-iconImageAssetName = project.icon.imageAssetName
+iconImagePath = project.icon.imagePath
 ```
 
 In add confirm:
@@ -1476,7 +1476,7 @@ private func useAvatarPreset() {
     guard let data = avatarPresetData else { return }
     do {
         let staged = try ProjectIconImageStaging.stage(data: data, projectId: existingProjectIdForIconStorage())
-        iconImageAssetName = staged.assetName
+        iconImagePath = staged.imagePath
         iconMode = .image
         errorMessage = nil
     } catch let stagingError as ProjectIconImageStaging.StagingError {
