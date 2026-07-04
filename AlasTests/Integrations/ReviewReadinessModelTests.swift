@@ -305,6 +305,27 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func actionableFeedbackSuppressesMergeOnGreenPR() {
+        // Green + mergeable, but a reviewer has requested changes. Even in a
+        // repo that doesn't enforce reviews as a merge block (mergeState stays
+        // clean), in-app merge must not bypass the open feedback.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .changesRequested,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+        // Falls through to the feedback-inspection affordance instead.
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+    }
+
     @Test func unpushedLocalCommitsSuppressMergeEvenWhenPRIsGreen() {
         let request = Self.makeReviewRequest(
             reviewDecision: .approved,

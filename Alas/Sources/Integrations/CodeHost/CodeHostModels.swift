@@ -438,6 +438,29 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         reviewDecision == .changesRequested || threads.contains { $0.isActionable }
     }
 
+    /// Returns a copy with `checks` replaced, preserving every other field.
+    /// Used by the refresh path to attach freshly-fetched checks without
+    /// dropping metadata like `headSHA`/`headRepositoryOwner` that the merge
+    /// path relies on.
+    func withChecks(_ checks: [ReviewCheck]) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: title,
+            url: url,
+            state: state,
+            isDraft: isDraft,
+            headRefName: headRefName,
+            baseRefName: baseRefName,
+            headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
+            reviewDecision: reviewDecision,
+            mergeState: mergeState,
+            checks: checks,
+            threads: threads
+        )
+    }
+
     static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {
         ReviewRequest(
             remote: remote,

@@ -213,6 +213,37 @@ struct ReviewLoopStateTests {
         #expect(state.snapshot?.reviewRequest?.checks == [check])
     }
 
+    @Test func refreshPreservesHeadSHAAndRepositoryOwnerForMerge() async throws {
+        let remote = Self.makeRemote()
+        let request = Self.makeReviewRequest(
+            remote: remote,
+            headSHA: "reviewed-head-sha",
+            headRepositoryOwner: "mrmans0n",
+            checks: []
+        )
+        let check = ReviewCheck(
+            id: "ci-build",
+            name: "Build",
+            workflow: "CI",
+            bucket: .pass,
+            detailURL: nil,
+            completedAt: nil
+        )
+        let provider = FakeCodeHostProvider(kind: .github, request: request, checks: [check])
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
+
+        // The refresh reattaches checks; it must not drop the head metadata the
+        // merge path relies on for `--match-head-commit` and branch cleanup.
+        #expect(state.snapshot?.reviewRequest?.headSHA == "reviewed-head-sha")
+        #expect(state.snapshot?.reviewRequest?.headRepositoryOwner == "mrmans0n")
+    }
+
     @Test func providerErrorPreservesPreviousRequestFactsForSameBranchAndRemote() async throws {
         let remote = Self.makeRemote()
         let request = Self.makeReviewRequest(remote: remote, checks: [])
@@ -949,6 +980,8 @@ struct ReviewLoopStateTests {
         remote: CodeHostRemote,
         number: Int = 42,
         headRefName: String = "feature/review-loop",
+        headSHA: String? = nil,
+        headRepositoryOwner: String? = nil,
         checks: [ReviewCheck]
     ) -> ReviewRequest {
         ReviewRequest(
@@ -960,6 +993,8 @@ struct ReviewLoopStateTests {
             isDraft: false,
             headRefName: headRefName,
             baseRefName: "main",
+            headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
             reviewDecision: .reviewRequired,
             mergeState: .clean,
             checks: checks,

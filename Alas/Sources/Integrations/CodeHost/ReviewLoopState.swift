@@ -247,20 +247,7 @@ final class ReviewLoopState {
             if let request {
                 let checks = try await provider.checks(remote: remote, request: request, cwd: worktreePath)
                 guard isCurrentRefresh(generation) else { return }
-                loadedRequest = ReviewRequest(
-                    remote: request.remote,
-                    number: request.number,
-                    title: request.title,
-                    url: request.url,
-                    state: request.state,
-                    isDraft: request.isDraft,
-                    headRefName: request.headRefName,
-                    baseRefName: request.baseRefName,
-                    reviewDecision: request.reviewDecision,
-                    mergeState: request.mergeState,
-                    checks: checks,
-                    threads: request.threads
-                )
+                loadedRequest = request.withChecks(checks)
             } else {
                 loadedRequest = nil
             }
