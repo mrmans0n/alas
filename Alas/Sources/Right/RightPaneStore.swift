@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 @Observable
 @MainActor
@@ -16,22 +17,60 @@ final class RightPaneStore {
     /// retain the app.
     weak var appState: AppState?
 
+    private let git: GitService
+
+    init(git: GitService = GitService()) {
+        self.git = git
+    }
+
+    /// Returns the branch name the Commits section should compare HEAD against
+    /// when no user override has been set. If the worktree is checked out on the
+    /// configured base branch itself, prefer `origin/<baseBranch>` so the
+    /// comparison is meaningful instead of `branch..branch`.
+    static func effectiveBaseBranch(worktree: Worktree, baseBranch: String) -> String {
+        guard !baseBranch.isEmpty else { return baseBranch }
+        guard worktree.branch == baseBranch else { return baseBranch }
+        return "origin/\(baseBranch)"
+    }
+
+    /// Verifies whether `origin/<baseBranch>` resolves in the worktree. If it
+    /// does not, returns the original `baseBranch`. Errors are swallowed and
+    /// logged so the UI never crashes on a bad git probe.
+    private func resolveEffectiveBaseBranch(
+        worktreePath: URL,
+        baseBranch: String
+    ) async -> String {
+        guard !baseBranch.isEmpty else { return baseBranch }
+        do {
+            if let resolved = try await git.resolveBaseRef(
+                worktreePath: worktreePath,
+                baseBranch: baseBranch,
+                preferLocal: false
+            ) {
+                return resolved.baseRef
+            }
+        } catch {
+            logger.error("Failed to resolve effective base branch for \(worktreePath.path): \(error.localizedDescription)")
+        }
+        return baseBranch
+    }
+
+    private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
+
     func state(for worktree: Worktree, baseBranch: String, trackUpstreamForCommits: Bool) -> RightPaneState {
         let id = worktree.id
         let result: RightPaneState
         if let existing = states[id] {
+            let effectiveDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
             let trackUpstreamChanged = existing.trackUpstreamForCommits != trackUpstreamForCommits
-            // If the global config base branch changed (Settings → Worktrees),
-            // honor the new value and clear the user override. If it didn't
-            // change, leave the state's baseBranch alone so a user-picked
-            // override survives across renders.
-            if existing.lastConfigBaseBranch != baseBranch {
+            if existing.lastConfigBaseBranch != effectiveDefault {
                 let clearedUserOverride = existing.userOverrodeBaseBranch
-                let baseChanged = existing.baseBranch != baseBranch
-                existing.lastConfigBaseBranch = baseBranch
+                let baseChanged = existing.baseBranch != effectiveDefault
+                existing.lastConfigBaseBranch = effectiveDefault
                 existing.userOverrodeBaseBranch = false
                 if baseChanged {
-                    existing.baseBranch = baseBranch
+                    existing.baseBranch = effectiveDefault
+                    existing.reviewLoop.updateBaseBranch(effectiveDefault)
                 }
                 if baseChanged || clearedUserOverride {
                     // Clear the prior probe so the chip doesn't show a stale
@@ -49,8 +88,9 @@ final class RightPaneStore {
             }
             result = existing
         } else {
-            let new = RightPaneState(worktree: worktree, baseBranch: baseBranch)
-            new.lastConfigBaseBranch = baseBranch
+            let effectiveDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
+            let new = RightPaneState(worktree: worktree, baseBranch: effectiveDefault)
+            new.lastConfigBaseBranch = effectiveDefault
             new.trackUpstreamForCommits = trackUpstreamForCommits
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }
@@ -66,6 +106,26 @@ final class RightPaneStore {
                 )
                 app.tabs.activate(worktreeId: id, tabId: tab.id)
             }
+
+            if effectiveDefault != baseBranch {
+                Task { @MainActor [weak new] in
+                    guard let state = new else { return }
+                    let confirmed = await self.resolveEffectiveBaseBranch(
+                        worktreePath: worktree.path,
+                        baseBranch: baseBranch
+                    )
+                    guard confirmed != state.baseBranch,
+                          !state.userOverrodeBaseBranch,
+                          state.lastConfigBaseBranch == effectiveDefault else { return }
+                    state.baseBranch = confirmed
+                    state.lastConfigBaseBranch = confirmed
+                    state.reviewLoop.updateBaseBranch(confirmed)
+                    state.behindBase = nil
+                    await state.refresh()
+                    await state.refreshSyncStatus()
+                }
+            }
+
             states[id] = new
             result = new
         }
