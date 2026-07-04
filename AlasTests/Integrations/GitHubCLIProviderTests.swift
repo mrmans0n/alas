@@ -1566,6 +1566,7 @@ struct GitHubCLIProviderTests {
     @Test func mergeReviewRequestSquashesPinsHeadAndDeletesRemoteBranch() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"state":"MERGED"}"#, stderr: ""),
             ProcessResult(exitCode: 0, stdout: "", stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -1587,10 +1588,54 @@ struct GitHubCLIProviderTests {
             FakeRunner.Command(
                 executable: "gh",
                 args: [
+                    "pr", "view", "42",
+                    "--json", "state",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
                     "api",
                     "--hostname", "github.com",
                     "--method", "DELETE",
                     "repos/mrmans0n/alas/git/refs/heads/feature/github-provider",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func mergeReviewRequestSkipsBranchDeleteWhenPRIsQueuedNotMerged() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"state":"OPEN"}"#, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let request = Self.makeRequest()
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
+
+        // `gh pr merge` enqueued the PR (still OPEN), so the head branch must be
+        // left in place for the queue — no DELETE command is issued.
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "merge", "42",
+                    "--squash",
+                    "--match-head-commit", "head-sha-42",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "view", "42",
+                    "--json", "state",
+                    "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
             ),

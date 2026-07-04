@@ -859,9 +859,15 @@ struct GitHubCLIProvider: CodeHostProvider {
         // the DELETE ref endpoint is scoped by `{owner}/{repo}`, so targeting
         // the base repo there would either miss the fork branch or delete an
         // unrelated same-named base-repo branch. Leave fork branches alone.
+        //
+        // A zero exit does not guarantee the PR merged: with a required merge
+        // queue, `gh pr merge` enqueues the PR (still open) and the queue needs
+        // the head branch to complete. Confirm the PR is actually merged before
+        // deleting; for a queued PR, leave cleanup to the queue / auto-delete.
         if deleteBranch,
            let headOwner = request.headRepositoryOwner,
-           headOwner == request.remote.owner {
+           headOwner == request.remote.owner,
+           await isReviewRequestMerged(request, cwd: cwd) {
             _ = try? await runner.run(
                 "gh",
                 args: [
@@ -873,6 +879,25 @@ struct GitHubCLIProvider: CodeHostProvider {
                 cwd: cwd
             )
         }
+    }
+
+    private func isReviewRequestMerged(_ request: ReviewRequest, cwd: URL) async -> Bool {
+        guard let result = try? await runner.run(
+            "gh",
+            args: [
+                "pr", "view", "\(request.number)",
+                "--json", "state",
+                "-R", Self.highLevelRepositorySelector(remote: request.remote),
+            ],
+            cwd: cwd
+        ), result.exitCode == 0 else {
+            return false
+        }
+        struct PRStateOnly: Decodable { let state: String }
+        guard let decoded = try? JSONDecoder().decode(PRStateOnly.self, from: Data(result.stdout.utf8)) else {
+            return false
+        }
+        return Self.mapState(decoded.state) == .merged
     }
 
     func replyToThread(
