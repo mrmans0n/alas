@@ -881,7 +881,88 @@ struct ACPSessionRunnerTests {
 
         #expect(session.transcript.messages.count == 1)
         if case .toolCall(let tc) = session.transcript.messages[0] {
-            #expect(tc.content == "[image]")
+            #expect(tc.content == "")
+            #expect(tc.rawOutput?.contains(#""b64_json":"raw-output-data""#) == true)
+            #expect(tc.assets == [
+                ACPMessage.ToolCallAsset.image(data: "content-image-data", mimeType: "image/png"),
+                ACPMessage.ToolCallAsset.image(data: "raw-output-data", mimeType: "image/png")
+            ])
+        } else {
+            Issue.record("expected restored toolCall message")
+        }
+    }
+
+    @Test("initial tool image enrichments apply during load replay suppression")
+    func initialToolImageEnrichmentsApplyDuringLoadReplaySuppression() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-tool-initial-image-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "codex",
+            title: "t",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-initial-image-replay",
+            title: "Image generation",
+            kind: "other",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .toolCall(.init(
+                toolCallId: "tc-initial-image-replay",
+                title: "Image generation",
+                kind: "other",
+                status: "completed",
+                content: [
+                    .content(.image(data: "content-image-data", uri: nil, mimeType: "image/png"))
+                ],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: AnyCodable([
+                    "data": AnyCodable([
+                        AnyCodable([
+                            "b64_json": AnyCodable("raw-output-data")
+                        ])
+                    ])
+                ])))))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
+
+        try await waitUntil {
+            guard case .toolCall(let tc) = session.transcript.messages.first else { return false }
+            return tc.status == "completed"
+                && tc.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
+                && tc.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
+        }
+
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.content == "")
             #expect(tc.rawOutput?.contains(#""b64_json":"raw-output-data""#) == true)
             #expect(tc.assets == [
                 ACPMessage.ToolCallAsset.image(data: "content-image-data", mimeType: "image/png"),

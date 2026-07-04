@@ -377,14 +377,10 @@ final class ACPSession: ObservableObject, Identifiable {
     func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) {
         switch update {
         case .toolCall(let payload):
-            guard let metadata = payload.metadata else { return }
             guard updateToolCall(id: payload.toolCallId, { tc in
-                tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
-                tc.terminalIds = Self.mergeTerminalIds(
-                    tc.terminalIds,
-                    Self.extractMetadataTerminalIds(metadata))
+                applyToolCallPayloadFields(payload, to: &tc)
             }) != nil else { return }
-            applyToolCallMetadata(metadata)
+            applyToolCallMetadata(payload.metadata)
         case .toolCallUpdate(let update):
             guard updateToolCall(id: update.toolCallId, { tc in
                 applyToolCallUpdateFields(update, to: &tc)
@@ -393,6 +389,43 @@ final class ACPSession: ObservableObject, Identifiable {
         default:
             break
         }
+    }
+
+    private func applyToolCallPayloadFields(
+        _ payload: ACPToolCallPayload,
+        to tc: inout ACPMessage.ToolCall
+    ) {
+        tc.title = payload.title
+        tc.kind = payload.kind
+        tc.status = payload.status
+        if let locations = payload.locations { tc.locations = locations.map(\.path) }
+        if let rawInput = payload.rawInput { tc.rawInput = Self.metadataString(rawInput) }
+        var rawOutputAssets: [ACPMessage.ToolCallAsset] = []
+        if let rawOutput = payload.rawOutput {
+            tc.rawOutput = Self.metadataString(rawOutput)
+            rawOutputAssets = Self.extractRawOutputAssets(rawOutput)
+            tc.assets = Self.mergeAssets(tc.assets, rawOutputAssets)
+        }
+        tc.metadata = Self.mergeMetadata(tc.metadata, payload.metadata)
+        tc.terminalIds = Self.mergeTerminalIds(
+            tc.terminalIds,
+            Self.extractMetadataTerminalIds(tc.metadata))
+
+        guard let items = payload.content else { return }
+        let raw = Self.flatten(items)
+        let full = Self.stripWrappingFence(raw,
+                                           isFinal: Self.isFinalStatus(payload.status))
+        tc.content = full
+        tc.isContentTruncated = false
+        tc.preview = Self.previewLine(full)
+        tc.contentLanguage = Self.wrappingFenceLanguage(raw)
+        tc.terminalIds = Self.mergeTerminalIds(
+            Self.extractTerminalIds(items),
+            Self.extractMetadataTerminalIds(tc.metadata))
+        let preservedRawOutputAssets = rawOutputAssets.isEmpty
+            ? Self.extractStoredRawOutputAssets(tc.rawOutput, existingAssets: tc.assets)
+            : rawOutputAssets
+        tc.assets = Self.mergeAssets(Self.extractAssets(items), preservedRawOutputAssets)
     }
 
     private func applyToolCallUpdateFields(
