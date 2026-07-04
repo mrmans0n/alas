@@ -297,6 +297,9 @@ extension ACPMessage.ToolCallAsset {
             return name
         }
         if let uri = nonEmpty(uri) {
+            if Self.isDataURI(uri) {
+                return kind == .image ? "Image" : "Resource"
+            }
             if let url = Self.displayURL(from: uri), !url.lastPathComponent.isEmpty {
                 return url.lastPathComponent
             }
@@ -307,6 +310,7 @@ extension ACPMessage.ToolCallAsset {
 
     var displayDetail: String? {
         guard let uri = nonEmpty(uri), uri != displayTitle else { return nil }
+        guard !Self.isDataURI(uri) else { return nil }
         return uri
     }
 
@@ -326,6 +330,12 @@ extension ACPMessage.ToolCallAsset {
             base64 = trimmed
         }
         return Data(base64Encoded: base64, options: .ignoreUnknownCharacters)
+    }
+
+    private static func isDataURI(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .hasPrefix("data:")
     }
 
     private static func trustedLocalURL(from value: String, trustedRoot: URL?) -> URL? {

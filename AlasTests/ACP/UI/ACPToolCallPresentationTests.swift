@@ -65,6 +65,19 @@ struct ACPToolCallPresentationTests {
         #expect(presentation.style == .image)
     }
 
+    @Test("image data URI assets do not expose URI as display text")
+    func imageDataURIAssetDisplayText() {
+        let asset = ACPMessage.ToolCallAsset.image(
+            data: nil,
+            uri: " \ndata:image/png;base64,\(String(repeating: "A", count: 128))",
+            mimeType: "image/png",
+            name: nil)
+
+        #expect(asset.displayTitle == "Image")
+        #expect(asset.displayDetail == nil)
+        #expect(asset.displayText == "Image")
+    }
+
     @Test("read tool with image path maps to viewed image presentation")
     func viewedImagePresentation() {
         let presentation = ACPToolCallPresentation.resolve(toolCall(

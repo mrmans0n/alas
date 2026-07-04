@@ -503,7 +503,8 @@ final class RemoteSessionGateway {
 
     private static func remoteAssetURI(_ uri: String?) -> String? {
         guard let uri else { return nil }
-        return uri.lowercased().hasPrefix("data:image/") ? nil : uri
+        let normalized = uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasPrefix("data:image/") ? nil : uri
     }
 
     private static func encodeJSON<T: Encodable>(_ value: T) -> String? {

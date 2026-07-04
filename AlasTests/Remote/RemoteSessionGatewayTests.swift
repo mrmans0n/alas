@@ -827,7 +827,7 @@ struct RemoteSessionGatewayTests {
                 ),
                 .image(
                     data: nil,
-                    uri: "data:image/png;base64,inline-uri-data",
+                    uri: " \ndata:image/png;base64,inline-uri-data",
                     mimeType: "image/png",
                     name: "inline-uri.png"
                 )
