@@ -407,10 +407,11 @@ struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
         if let value = value as? AnyCodable { return value.canonicalValue }
         if value is NSNull { return .null }
         if let value = value as? NSNumber {
-            if CFGetTypeID(value) == CFBooleanGetTypeID() {
+            let cfValue = value as CFNumber
+            if CFGetTypeID(cfValue) == CFBooleanGetTypeID() {
                 return .bool(value.boolValue)
             }
-            if CFNumberIsFloatType(value) {
+            if CFNumberIsFloatType(cfValue) {
                 return .double(value.doubleValue)
             }
             return .int(value.intValue)
