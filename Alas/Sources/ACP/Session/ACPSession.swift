@@ -350,6 +350,7 @@ final class ACPSession: ObservableObject, Identifiable {
                     let full = Self.stripWrappingFence(raw,
                                                       isFinal: Self.isFinalStatus(tc.status))
                     tc.content = full
+                    tc.isContentTruncated = false
                     tc.preview = Self.previewLine(full)
                     tc.contentLanguage = Self.wrappingFenceLanguage(raw)
                     tc.terminalIds = Self.mergeTerminalIds(

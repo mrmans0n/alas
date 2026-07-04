@@ -1352,6 +1352,56 @@ struct ACPSessionRunnerTests {
         #expect(persisted.terminalIds == ["term-1"])
     }
 
+    @Test("persistIndices stores replacement tool content after truncation")
+    func persistIndicesStoresReplacementToolContentAfterTruncation() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-persist-replacement-tool-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        let originalContent = String(repeating: "old-content-line\n", count: 400)
+        let replacementContent = String(repeating: "new-content-line\n", count: 350)
+        let original = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Run",
+            kind: "execute",
+            status: "completed",
+            content: originalContent
+        ))
+        session.replaceTranscriptMessages([original])
+        runner.persistIndices([0])
+
+        session.transcript.setVisibleHead(1)
+        let dirty = session.apply(.toolCallUpdate(.init(
+            toolCallId: "tool-1",
+            status: "completed",
+            content: [.content(.text(replacementContent))]
+        )))
+        runner.persistIndices(dirty)
+
+        let rows = try store.loadMessages(sessionId: "s")
+        let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
+        let decoded = try ACPMessageCodec.decode(kind: row.kind, payload: row.payload)
+        guard case .toolCall(let persisted) = decoded else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == replacementContent)
+        #expect(persisted.isContentTruncated == false)
+    }
+
     @Test("persistIndices updates deterministic row kind that appeared after runner initialization")
     func persistIndicesUpdatesLateDeterministicRowCollisionKind() throws {
         let url = FileManager.default.temporaryDirectory
