@@ -305,6 +305,28 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func erroredSnapshotSuppressesMergeEvenWithGreenStaleRequest() {
+        // A failed refresh preserves the last (green) request but marks the
+        // snapshot with an errorMessage; its checks/mergeability are stale, so
+        // the gate (shared by the Inspect button and performMerge) must refuse.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(
+            reviewRequest: request,
+            errorMessage: "gh pr view failed"
+        )
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
     @Test func reviewRequiredSuppressesMergeOnGreenPR() {
         // Host requires a review that hasn't happened (e.g. GitLab approvalsLeft
         // > 0 maps to .reviewRequired while mergeState stays clean). Offering

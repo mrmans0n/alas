@@ -282,6 +282,11 @@ struct ReviewReadinessModel: Equatable, Sendable {
     /// would drop that work and delete the branch.
     static func canMergeReviewRequest(snapshot: ReviewLoopSnapshot) -> Bool {
         guard let request = snapshot.reviewRequest else { return false }
+        // A failed refresh preserves the previous (possibly green) request but
+        // sets `errorMessage`; the checks/mergeability are then stale, so never
+        // merge off an errored snapshot — mirror the drawer, which suppresses
+        // all actions in this state.
+        guard snapshot.errorMessage == nil else { return false }
         guard snapshot.remote != nil,
               snapshot.providerAvailable,
               snapshot.providerAuthenticated
