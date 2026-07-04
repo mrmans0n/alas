@@ -475,7 +475,7 @@ final class ACPSession: ObservableObject, Identifiable {
             tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
             tc.terminalIds = Self.mergeTerminalIds(
                 tc.terminalIds,
-                Self.extractMetadataTerminalIds(metadata))
+                Self.extractMetadataTerminalIds(metadata, includeExit: update.content == nil))
         }
         if let content = update.content {
             if !canReplaceSnapshot {
@@ -1123,6 +1123,7 @@ final class ACPSession: ObservableObject, Identifiable {
         let lower = rawOutput.lowercased()
         guard lower.contains("\"b64_json\"")
             || lower.contains("data:image/")
+            || lower.contains("\"data\"")
             || lower.contains("\"url\"")
             || lower.contains("\"mimetype\"")
             || lower.contains("\"mime_type\"")
