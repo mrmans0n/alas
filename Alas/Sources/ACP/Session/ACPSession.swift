@@ -409,6 +409,31 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) {
+        switch update {
+        case .toolCall(let payload):
+            guard let metadata = payload.metadata else { return }
+            guard updateToolCall(id: payload.toolCallId, { tc in
+                tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
+                tc.terminalIds = Self.mergeTerminalIds(
+                    tc.terminalIds,
+                    Self.extractMetadataTerminalIds(metadata))
+            }) != nil else { return }
+            applyToolCallMetadata(metadata)
+        case .toolCallUpdate(let update):
+            guard let metadata = update.metadata else { return }
+            guard updateToolCall(id: update.toolCallId, { tc in
+                tc.metadata = Self.mergeMetadata(tc.metadata, metadata)
+                tc.terminalIds = Self.mergeTerminalIds(
+                    tc.terminalIds,
+                    Self.extractMetadataTerminalIds(metadata))
+            }) != nil else { return }
+            applyToolCallMetadata(metadata)
+        default:
+            break
+        }
+    }
+
     func markContextRecoveryRestored(expiryNanoseconds: UInt64 = 30_000_000_000) {
         contextRecoveryExpiryTask?.cancel()
         contextRecoveryStatus = .restored
@@ -996,6 +1021,11 @@ final class ACPSession: ObservableObject, Identifiable {
                 return true
             }
             if let uri = asset.uri, rawOutput.contains(uri) { return true }
+            if let uri = asset.uri,
+               dataImageMimeType(uri) != nil,
+               rawOutput.contains(String(uri.prefix(128))) {
+                return true
+            }
             return false
         }
     }

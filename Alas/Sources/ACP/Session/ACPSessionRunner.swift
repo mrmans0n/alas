@@ -146,6 +146,9 @@ final class ACPSessionRunner {
                         preAppliedSessionInfoDirty = nil
                     }
                     if self.suppressingLoadReplay {
+                        if preAppliedSessionInfoDirty == nil {
+                            self.session.applySuppressedReplaySideEffects(u.update)
+                        }
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false

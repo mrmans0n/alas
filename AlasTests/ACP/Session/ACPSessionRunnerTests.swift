@@ -751,6 +751,70 @@ struct ACPSessionRunnerTests {
         #expect(session.transcript.messages.isEmpty)
     }
 
+    @Test("tool metadata side effects apply during load replay suppression")
+    func toolMetadataSideEffectsApplyDuringLoadReplaySuppression() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-tool-replay-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "s",
+            agentId: "claude",
+            title: "t",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let mock = ACPMockClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.apply(.toolCall(.init(
+            toolCallId: "tc-replay",
+            title: "Run command",
+            kind: "execute",
+            status: "in_progress",
+            content: nil,
+            locations: nil,
+            rawInput: nil,
+            rawOutput: nil)))
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            suppressingLoadReplay: true
+        )
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emit(.init(
+            sessionId: "s",
+            update: .toolCallUpdate(.init(
+                toolCallId: "tc-replay",
+                metadata: AnyCodable([
+                    "terminal_output_delta": AnyCodable([
+                        "terminal_id": AnyCodable("term-replay"),
+                        "data": AnyCodable("replayed output\n")
+                    ])
+                ])))))
+        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
+
+        try await waitUntil {
+            session.terminalHost.terminal(id: "term-replay")?.snapshot(byteLimit: 1024).text == "replayed output\n"
+        }
+
+        #expect(session.transcript.messages.count == 1)
+        if case .toolCall(let tc) = session.transcript.messages[0] {
+            #expect(tc.terminalIds == ["term-replay"])
+        } else {
+            Issue.record("expected restored toolCall message")
+        }
+    }
+
     @Test("streaming chunks are persisted in a batch when streaming ends")
     func streamingChunksPersistAsBatchOnIdle() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
