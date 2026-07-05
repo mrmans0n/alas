@@ -36,6 +36,7 @@ struct DiffSelectableTextBuilder {
             let lineStart = location
             let attributedLine = attributedLine(
                 line.text,
+                kind: line.kind,
                 fileExtension: fileExtension,
                 font: font,
                 theme: theme
@@ -55,6 +56,7 @@ struct DiffSelectableTextBuilder {
 
     private static func attributedLine(
         _ line: String,
+        kind: ParsedDiff.Hunk.Line.Kind,
         fileExtension: String,
         font: NSFont,
         theme: Theme
@@ -82,7 +84,7 @@ struct DiffSelectableTextBuilder {
             }
             result.append(NSAttributedString(
                 string: ns.substring(with: span.range),
-                attributes: attributes(for: span.capture, font: font, theme: theme)
+                attributes: attributes(for: span.capture, kind: kind, font: font, theme: theme)
             ))
             cursor = NSMaxRange(span.range)
         }
@@ -122,15 +124,16 @@ struct DiffSelectableTextBuilder {
 
     private static func attributes(
         for capture: HighlightCapture,
+        kind: ParsedDiff.Hunk.Line.Kind,
         font: NSFont,
         theme: Theme
     ) -> [NSAttributedString.Key: Any] {
         var attributes = baseAttributes(font: font, theme: theme)
-        attributes[.foregroundColor] = NSColor(color(for: capture, theme: theme))
+        attributes[.foregroundColor] = NSColor(color(for: capture, kind: kind, theme: theme))
         return attributes
     }
 
-    private static func color(for capture: HighlightCapture, theme: Theme) -> Color {
+    private static func color(for capture: HighlightCapture, kind: ParsedDiff.Hunk.Line.Kind, theme: Theme) -> Color {
         switch capture {
         case .keyword:
             return theme.color("syntax-keyword")
@@ -143,6 +146,9 @@ struct DiffSelectableTextBuilder {
         case .number:
             return theme.color("mod")
         case .comment:
+            if kind == .add || kind == .delete {
+                return theme.color("fg")
+            }
             return theme.color("fg-faint")
         default:
             return theme.color("fg")
