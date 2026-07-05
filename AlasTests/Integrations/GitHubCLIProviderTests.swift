@@ -904,6 +904,31 @@ struct GitHubCLIProviderTests {
         #expect(threads.first?.line == nil)
     }
 
+    @Test func hasHooksMergeStateMapsToClean() throws {
+        // GitHub Enterprise reports HAS_HOOKS for a mergeable PR with pre-receive
+        // hooks; it must not fall through to `.unknown` (which would hide Merge).
+        let request = try #require(try GitHubCLIProvider.parsePRList(
+            """
+            [
+              {
+                "number": 42,
+                "title": "GHE PR",
+                "url": "https://github.com/mrmans0n/alas/pull/42",
+                "state": "OPEN",
+                "isDraft": false,
+                "headRefName": "feature/x",
+                "headRepositoryOwner": { "login": "mrmans0n" },
+                "baseRefName": "main",
+                "reviewDecision": "APPROVED",
+                "mergeStateStatus": "HAS_HOOKS"
+              }
+            ]
+            """,
+            remote: Self.remote
+        ))
+        #expect(request.mergeState == .clean)
+    }
+
     @Test func prListFiltersByHeadOwnerWhenProvided() throws {
         let request = try #require(try GitHubCLIProvider.parsePRList(
             """

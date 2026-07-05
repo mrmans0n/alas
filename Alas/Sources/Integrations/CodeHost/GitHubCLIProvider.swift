@@ -1642,6 +1642,11 @@ struct GitHubCLIProvider: CodeHostProvider {
     private static func mapMergeState(_ value: String?) -> ReviewMergeState {
         switch value?.uppercased() {
         case "CLEAN": .clean
+        // GitHub Enterprise reports HAS_HOOKS for a PR that is mergeable with
+        // passing status and pre-receive hooks. It's mergeable like CLEAN, so
+        // treat it as such rather than falling through to `.unknown` (which
+        // would hide the Merge action).
+        case "HAS_HOOKS": .clean
         case "BLOCKED": .blocked
         case "DIRTY": .dirty
         case "UNSTABLE": .unstable
