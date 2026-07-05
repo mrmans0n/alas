@@ -192,6 +192,42 @@ struct RootView: View {
                 Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
             }
         )
+        .confirmationDialog(
+            "Merge review request?",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateWithPendingMerge() != nil },
+                set: { if !$0 { state.rightPaneStore.stateWithPendingMerge()?.cancelMerge() } }
+            ),
+            titleVisibility: .visible,
+            presenting: state.rightPaneStore.stateWithPendingMerge()?.pendingMerge
+        ) { snapshot in
+            Button("Merge", role: .destructive) {
+                state.rightPaneStore.stateWithPendingMerge()?.performMerge()
+            }
+            Button("Cancel", role: .cancel) {
+                state.rightPaneStore.stateWithPendingMerge()?.cancelMerge()
+            }
+        } message: { snapshot in
+            if let request = snapshot.reviewRequest {
+                Text("Squash-merge \(request.displayIdentity) into \(request.baseRefName) and delete the branch.")
+            } else {
+                Text("Squash-merge this review request and delete the branch.")
+            }
+        }
+        .alert(
+            "Merge failed",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateReportingMergeError() != nil },
+                set: { if !$0 { state.rightPaneStore.stateReportingMergeError()?.clearMergeError() } }
+            ),
+            presenting: state.rightPaneStore.stateReportingMergeError()?.mergeError
+        ) { _ in
+            Button("OK", role: .cancel) {
+                state.rightPaneStore.stateReportingMergeError()?.clearMergeError()
+            }
+        } message: { message in
+            Text(message)
+        }
         .onAppear {
             state.updates.checkOnLaunch()
         }

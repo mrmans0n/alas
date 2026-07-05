@@ -127,6 +127,11 @@ struct ReviewTabView: View {
         matchedSnapshot?.providerCapabilities ?? .readOnly
     }
 
+    private var canMergeReviewRequest: Bool {
+        guard let snapshot = matchedSnapshot else { return false }
+        return ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
+    }
+
     private var outdatedAndFileLevelThreads: [ReviewThread] {
         localThreads.filter { $0.isFileLevel || $0.isOutdated }
     }
@@ -244,6 +249,17 @@ struct ReviewTabView: View {
                     isActive: false
                 ) {
                     NSWorkspace.shared.open(url)
+                }
+            }
+            if canMergeReviewRequest {
+                toolbarButton(
+                    systemName: "arrow.triangle.merge",
+                    tooltip: "Merge \(tabState.provider.reviewRequestLabel)",
+                    isActive: false
+                ) {
+                    appState.rightPaneStore
+                        .activeState(worktreeId: tabState.worktreeId)?
+                        .handleReviewReadinessAction(.merge, appState: appState)
                 }
             }
         }

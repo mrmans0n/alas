@@ -39,6 +39,10 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
     var openReviewRequestTitle: String {
         "Open \(reviewRequestLabel)"
     }
+
+    var mergeReviewRequestTitle: String {
+        "Merge \(reviewRequestLabel)"
+    }
 }
 
 struct CodeHostRemote: Equatable, Sendable {
@@ -72,6 +76,7 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
     let canFetchAnnotations: Bool
     let canEditComment: Bool
     let canDeleteComment: Bool
+    let canMerge: Bool
 
     static let readOnly = CodeHostProviderCapabilities(
         canCreateReviewRequest: false,
@@ -83,7 +88,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canSubmitReview: false,
         canFetchAnnotations: false,
         canEditComment: false,
-        canDeleteComment: false
+        canDeleteComment: false,
+        canMerge: false
     )
 
     static let githubCLI = CodeHostProviderCapabilities(
@@ -96,7 +102,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canSubmitReview: true,
         canFetchAnnotations: true,
         canEditComment: true,
-        canDeleteComment: true
+        canDeleteComment: true,
+        canMerge: true
     )
 
     static let gitlabCLI = CodeHostProviderCapabilities(
@@ -109,7 +116,8 @@ struct CodeHostProviderCapabilities: Equatable, Sendable {
         canSubmitReview: true,
         canFetchAnnotations: false,
         canEditComment: true,
-        canDeleteComment: true
+        canDeleteComment: true,
+        canMerge: true
     )
 }
 
@@ -138,6 +146,12 @@ enum ReviewMergeState: String, Codable, Equatable, Sendable {
     case dirty
     case unstable
     case unknown
+}
+
+enum ReviewMergeMethod: String, Codable, Equatable, Sendable {
+    case squash
+    case merge
+    case rebase
 }
 
 enum ReviewCheckBucket: String, Codable, Equatable, Sendable {
@@ -371,10 +385,20 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let headRefName: String
     let baseRefName: String
     let headSHA: String?
+    /// Owner (login) and name of the repository the head branch lives in.
+    /// Differ from `remote` for forked pull requests — including same-owner
+    /// forks, where only the name differs. Both are compared before remote-
+    /// branch cleanup so a same-named branch in the base repo is never deleted.
+    let headRepositoryOwner: String?
+    let headRepositoryName: String?
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
     let threads: [ReviewThread]
+    /// False when loading review threads/discussions failed, so `threads` may
+    /// be missing actionable feedback. The merge gate fails closed on this: we
+    /// must not offer merge while we can't confirm there are no open threads.
+    let areThreadsComplete: Bool
 
     var provider: CodeHostKind { remote.kind }
 
@@ -390,10 +414,13 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         headRefName: String,
         baseRefName: String,
         headSHA: String? = nil,
+        headRepositoryOwner: String? = nil,
+        headRepositoryName: String? = nil,
         reviewDecision: ReviewDecision,
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
-        threads: [ReviewThread]
+        threads: [ReviewThread],
+        areThreadsComplete: Bool = true
     ) {
         self.remote = remote
         self.number = number
@@ -404,10 +431,13 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         self.headRefName = headRefName
         self.baseRefName = baseRefName
         self.headSHA = headSHA
+        self.headRepositoryOwner = headRepositoryOwner
+        self.headRepositoryName = headRepositoryName
         self.reviewDecision = reviewDecision
         self.mergeState = mergeState
         self.checks = checks
         self.threads = threads
+        self.areThreadsComplete = areThreadsComplete
     }
 
     var worstCheckBucket: ReviewCheckBucket? {
@@ -416,6 +446,56 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
 
     var hasActionableFeedback: Bool {
         reviewDecision == .changesRequested || threads.contains { $0.isActionable }
+    }
+
+    /// Returns a copy with `checks` replaced, preserving every other field.
+    /// Used by the refresh path to attach freshly-fetched checks without
+    /// dropping metadata like `headSHA`/`headRepositoryOwner` that the merge
+    /// path relies on.
+    func withChecks(_ checks: [ReviewCheck]) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: title,
+            url: url,
+            state: state,
+            isDraft: isDraft,
+            headRefName: headRefName,
+            baseRefName: baseRefName,
+            headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
+            reviewDecision: reviewDecision,
+            mergeState: mergeState,
+            checks: checks,
+            threads: threads,
+            areThreadsComplete: areThreadsComplete
+        )
+    }
+
+    /// Returns a copy with `threads` replaced, preserving every other field.
+    /// Same rationale as `withChecks`: a hand-rolled copy in the provider used
+    /// to silently drop `headRepositoryOwner`. `complete` records whether the
+    /// thread fetch succeeded so the merge gate can fail closed on a failure.
+    func withThreads(_ threads: [ReviewThread], complete: Bool = true) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: title,
+            url: url,
+            state: state,
+            isDraft: isDraft,
+            headRefName: headRefName,
+            baseRefName: baseRefName,
+            headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
+            reviewDecision: reviewDecision,
+            mergeState: mergeState,
+            checks: checks,
+            threads: threads,
+            areThreadsComplete: complete
+        )
     }
 
     static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {

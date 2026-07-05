@@ -1763,6 +1763,31 @@ struct GitLabCLIProviderTests {
         #expect(args.contains("--draft"))
     }
 
+    @Test func mergeReviewRequestRunsSquashRemoveSourceBranch() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+        ])
+        let provider = GitLabCLIProvider(runner: runner)
+        let request = Self.makeRequest()
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "glab",
+                args: [
+                    "mr", "merge", "42",
+                    "--squash",
+                    "--remove-source-branch",
+                    "--sha", "head123",
+                    "--yes",
+                    "-R", "platform/mobile/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
     private static let discussionsWithPositionOutput = """
     [
       { "id": "disc-1", "resolved": false, "notes": [

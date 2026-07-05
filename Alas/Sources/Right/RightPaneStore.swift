@@ -265,4 +265,21 @@ final class RightPaneStore {
     func activeState(worktreeId: String) -> RightPaneState? {
         states[worktreeId]
     }
+
+    /// The first cached state currently reporting a merge failure, if any.
+    /// Merge errors are surfaced app-wide (see RootView) independent of the
+    /// selected worktree: the async merge can fail after the user has switched
+    /// away from the worktree that initiated it, so the alert must observe the
+    /// originating state rather than the current selection.
+    func stateReportingMergeError() -> RightPaneState? {
+        states.values.first { $0.mergeError != nil }
+    }
+
+    /// The first cached state with a pending merge confirmation, if any. The
+    /// confirmation dialog (see RootView) resolves its owning state through
+    /// this rather than the current selection, so switching worktrees while the
+    /// dialog is open can't cancel the wrong state and strand `pendingMerge`.
+    func stateWithPendingMerge() -> RightPaneState? {
+        states.values.first { $0.pendingMerge != nil }
+    }
 }

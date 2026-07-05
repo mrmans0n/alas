@@ -148,6 +148,18 @@ struct CodeHostProviderTests {
         #expect(thread.location?.providerPosition == "github-position-1")
     }
 
+    @Test func githubCapabilitiesAllowMerge() {
+        #expect(CodeHostProviderCapabilities.githubCLI.canMerge)
+    }
+
+    @Test func gitlabCapabilitiesAllowMerge() {
+        #expect(CodeHostProviderCapabilities.gitlabCLI.canMerge)
+    }
+
+    @Test func readOnlyCapabilitiesDisallowMerge() {
+        #expect(!CodeHostProviderCapabilities.readOnly.canMerge)
+    }
+
     @Test func defaultFeedbackEvidenceSynthesizesChangesRequestedWhenThreadsAreMissing() async throws {
         let remote = CodeHostRemote(
             kind: .github,

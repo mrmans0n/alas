@@ -277,7 +277,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--base", base,
                 "--state", "open",
                 "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -289,8 +289,23 @@ struct GitHubCLIProvider: CodeHostProvider {
         guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
             return nil
         }
-        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return Self.withThreads(threads, on: request)
+        let loadedThreads = await threadsWithCompleteness(remote: remote, request: request, cwd: cwd)
+        return request.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
+    }
+
+    /// Loads review threads, reporting whether the fetch succeeded. A failure
+    /// yields no threads but flags the result incomplete so the merge gate can
+    /// fail closed instead of treating missing threads as "no feedback".
+    private func threadsWithCompleteness(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async -> (threads: [ReviewThread], complete: Bool) {
+        do {
+            return (try await reviewThreads(remote: remote, request: request, cwd: cwd), true)
+        } catch {
+            return ([], false)
+        }
     }
 
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
@@ -687,7 +702,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "pr", "view", "\(request.number)",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -696,8 +711,8 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
         }
         let request = try Self.parsePRView(result.stdout, remote: remote)
-        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return Self.withThreads(threads, on: request)
+        let loadedThreads = await threadsWithCompleteness(remote: remote, request: request, cwd: cwd)
+        return request.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
     }
 
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
@@ -821,6 +836,87 @@ struct GitHubCLIProvider: CodeHostProvider {
                 throw CodeHostProviderError.commandFailed(command: "gh run rerun", stderr: rerunResult.stderr)
             }
         }
+    }
+
+    func mergeReviewRequest(
+        _ request: ReviewRequest,
+        method: ReviewMergeMethod,
+        deleteBranch: Bool,
+        cwd: URL
+    ) async throws {
+        var args = ["pr", "merge", "\(request.number)"]
+        switch method {
+        case .squash: args.append("--squash")
+        case .merge: args.append("--merge")
+        case .rebase: args.append("--rebase")
+        }
+        // Pin the merge to the reviewed head so a push that lands between the
+        // snapshot load and the confirmation can't merge an unreviewed commit.
+        if let headSHA = request.headSHA {
+            args.append(contentsOf: ["--match-head-commit", headSHA])
+        }
+        args.append(contentsOf: ["-R", Self.highLevelRepositorySelector(remote: request.remote)])
+
+        let result = try await runner.run("gh", args: args, cwd: cwd)
+        guard result.exitCode == 0 else {
+            throw CodeHostProviderError.commandFailed(command: "gh pr merge", stderr: result.stderr)
+        }
+
+        // Delete the remote branch only. `gh pr merge --delete-branch` also
+        // deletes the *local* branch, which fails in Alas' linked-worktree
+        // workflow when that branch is checked out — surfacing a false merge
+        // failure even though the PR already merged. Best-effort: the merge
+        // has succeeded, so ignore cleanup errors (e.g. a repo configured to
+        // auto-delete head branches will already have removed the ref).
+        //
+        // Only delete when the head lives in the base repo. For forked PRs the
+        // head branch is in a different repo (`headRepositoryOwner != remote.owner`);
+        // the DELETE ref endpoint is scoped by `{owner}/{repo}`, so targeting
+        // the base repo there would either miss the fork branch or delete an
+        // unrelated same-named base-repo branch. Both owner AND name must match
+        // — a same-owner fork (e.g. `owner/repo-fork`) shares the owner but not
+        // the repository. Leave fork branches alone.
+        //
+        // A zero exit does not guarantee the PR merged: with a required merge
+        // queue, `gh pr merge` enqueues the PR (still open) and the queue needs
+        // the head branch to complete. Confirm the PR is actually merged before
+        // deleting; for a queued PR, leave cleanup to the queue / auto-delete.
+        if deleteBranch,
+           let headOwner = request.headRepositoryOwner,
+           let headName = request.headRepositoryName,
+           headOwner == request.remote.owner,
+           headName == request.remote.repository,
+           await isReviewRequestMerged(request, cwd: cwd) {
+            _ = try? await runner.run(
+                "gh",
+                args: [
+                    "api",
+                    "--hostname", request.remote.host,
+                    "--method", "DELETE",
+                    "repos/\(request.remote.repositorySlug)/git/refs/heads/\(request.headRefName)",
+                ],
+                cwd: cwd
+            )
+        }
+    }
+
+    private func isReviewRequestMerged(_ request: ReviewRequest, cwd: URL) async -> Bool {
+        guard let result = try? await runner.run(
+            "gh",
+            args: [
+                "pr", "view", "\(request.number)",
+                "--json", "state",
+                "-R", Self.highLevelRepositorySelector(remote: request.remote),
+            ],
+            cwd: cwd
+        ), result.exitCode == 0 else {
+            return false
+        }
+        struct PRStateOnly: Decodable { let state: String }
+        guard let decoded = try? JSONDecoder().decode(PRStateOnly.self, from: Data(result.stdout.utf8)) else {
+            return false
+        }
+        return Self.mapState(decoded.state) == .merged
     }
 
     func replyToThread(
@@ -1147,6 +1243,8 @@ struct GitHubCLIProvider: CodeHostProvider {
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
             headSHA: normalizedOptionalString(item.headRefOid),
+            headRepositoryOwner: item.headRepositoryOwner?.login,
+            headRepositoryName: item.headRepository?.name,
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -1184,6 +1282,8 @@ struct GitHubCLIProvider: CodeHostProvider {
             headRefName: item.headRefName,
             baseRefName: item.baseRefName,
             headSHA: normalizedOptionalString(item.headRefOid),
+            headRepositoryOwner: item.headRepositoryOwner?.login,
+            headRepositoryName: item.headRepository?.name,
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -1548,6 +1648,11 @@ struct GitHubCLIProvider: CodeHostProvider {
     private static func mapMergeState(_ value: String?) -> ReviewMergeState {
         switch value?.uppercased() {
         case "CLEAN": .clean
+        // GitHub Enterprise reports HAS_HOOKS for a PR that is mergeable with
+        // passing status and pre-receive hooks. It's mergeable like CLEAN, so
+        // treat it as such rather than falling through to `.unknown` (which
+        // would hide the Merge action).
+        case "HAS_HOOKS": .clean
         case "BLOCKED": .blocked
         case "DIRTY": .dirty
         case "UNSTABLE": .unstable
@@ -1614,24 +1719,6 @@ struct GitHubCLIProvider: CodeHostProvider {
         return fields
             .map { "\($0.utf8.count):\($0)" }
             .joined(separator: "|")
-    }
-
-    private static func withThreads(_ threads: [ReviewThread], on request: ReviewRequest) -> ReviewRequest {
-        ReviewRequest(
-            remote: request.remote,
-            number: request.number,
-            title: request.title,
-            url: request.url,
-            state: request.state,
-            isDraft: request.isDraft,
-            headRefName: request.headRefName,
-            baseRefName: request.baseRefName,
-            headSHA: request.headSHA,
-            reviewDecision: request.reviewDecision,
-            mergeState: request.mergeState,
-            checks: request.checks,
-            threads: threads
-        )
     }
 
     private func pullRequestNodeID(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String {
@@ -1708,9 +1795,14 @@ private struct PRListItem: Decodable {
     let headRefName: String
     let headRefOid: String?
     let headRepositoryOwner: HeadRepositoryOwner?
+    let headRepository: HeadRepository?
     let baseRefName: String
     let reviewDecision: String?
     let mergeStateStatus: String?
+}
+
+private struct HeadRepository: Decodable {
+    let name: String
 }
 
 private struct HeadRepositoryOwner: Decodable {

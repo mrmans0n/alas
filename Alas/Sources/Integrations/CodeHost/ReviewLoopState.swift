@@ -250,20 +250,7 @@ final class ReviewLoopState {
             if let request {
                 let checks = try await provider.checks(remote: remote, request: request, cwd: worktreePath)
                 guard isCurrentRefresh(generation) else { return }
-                loadedRequest = ReviewRequest(
-                    remote: request.remote,
-                    number: request.number,
-                    title: request.title,
-                    url: request.url,
-                    state: request.state,
-                    isDraft: request.isDraft,
-                    headRefName: request.headRefName,
-                    baseRefName: request.baseRefName,
-                    reviewDecision: request.reviewDecision,
-                    mergeState: request.mergeState,
-                    checks: checks,
-                    threads: request.threads
-                )
+                loadedRequest = request.withChecks(checks)
             } else {
                 loadedRequest = nil
             }
@@ -356,6 +343,59 @@ final class ReviewLoopState {
                 branch: snapshot.local.branchName,
                 headSHA: snapshot.local.headSHA,
                 request: snapshot.reviewRequest,
+                cwd: worktreePath
+            )
+            return true
+        } catch {
+            lastError = Self.describe(error)
+            return false
+        }
+    }
+
+    func merge(snapshot: ReviewLoopSnapshot) async -> Bool {
+        guard
+            let remote = snapshot.remote,
+            let provider = providerRegistry.provider(for: remote.kind)
+        else { return false }
+
+        lastError = nil
+        do {
+            // Re-query the provider immediately before merging so a refresh
+            // race (the generation guard can let the merge-triggered refresh
+            // return without publishing) can't merge on stale checks,
+            // mergeability, review state, or a closed PR. Build a fresh
+            // snapshot from live provider data + the caller-verified local
+            // state and re-run the full merge gate.
+            guard let fresh = try await provider.currentReviewRequest(
+                remote: remote,
+                branch: snapshot.local.branchName,
+                headOwner: snapshot.local.headRemoteOwner,
+                baseBranch: snapshot.local.baseBranch,
+                cwd: worktreePath
+            ) else {
+                lastError = "The review request could not be found."
+                return false
+            }
+            let checks = try await provider.checks(remote: remote, request: fresh, cwd: worktreePath)
+            let freshSnapshot = ReviewLoopSnapshot(
+                local: snapshot.local,
+                remote: remote,
+                reviewRequest: fresh.withChecks(checks),
+                providerAvailable: true,
+                providerAuthenticated: true,
+                providerCapabilities: provider.capabilities,
+                errorMessage: nil
+            )
+            guard ReviewReadinessModel.canMergeReviewRequest(snapshot: freshSnapshot),
+                  let request = freshSnapshot.reviewRequest
+            else {
+                lastError = "Merge is no longer available — the review state changed."
+                return false
+            }
+            try await provider.mergeReviewRequest(
+                request,
+                method: .squash,
+                deleteBranch: true,
                 cwd: worktreePath
             )
             return true

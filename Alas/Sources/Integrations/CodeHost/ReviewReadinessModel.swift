@@ -37,17 +37,20 @@ struct ReviewReadinessModel: Equatable, Sendable {
         let title: String
         let isEnabled: Bool
         let isInFlight: Bool
+        let emphasis: Emphasis
 
         init(
             kind: ReviewReadinessActionKind,
             title: String,
             isEnabled: Bool,
-            isInFlight: Bool = false
+            isInFlight: Bool = false,
+            emphasis: Emphasis? = nil
         ) {
             self.kind = kind
             self.title = title
             self.isEnabled = isEnabled
             self.isInFlight = isInFlight
+            self.emphasis = emphasis ?? Self.defaultEmphasis(for: kind)
         }
 
         var id: ReviewReadinessActionKind { kind }
@@ -66,11 +69,11 @@ struct ReviewReadinessModel: Equatable, Sendable {
             }
         }
 
-        var emphasis: Emphasis {
+        static func defaultEmphasis(for kind: ReviewReadinessActionKind) -> Emphasis {
             switch kind {
-            case .pushBranch, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence:
+            case .pushBranch, .forcePushBranch, .createReviewRequest, .inspectReviewEvidence, .merge:
                 .primary
-            case .refresh, .openReviewRequest, .rerunFailedChecks, .openAgentHandoff, .merge:
+            case .refresh, .openReviewRequest, .rerunFailedChecks, .openAgentHandoff:
                 .normal
             }
         }
@@ -151,7 +154,8 @@ struct ReviewReadinessModel: Equatable, Sendable {
                 kind: action.kind,
                 title: action.title,
                 isEnabled: false,
-                isInFlight: action.kind == inFlightAction
+                isInFlight: action.kind == inFlightAction,
+                emphasis: action.emphasis
             )
         }
     }
@@ -249,19 +253,69 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if request.worstCheckBucket == .pending {
                 actions.append(refreshAction)
             }
+            let canMergeNow = Self.canMergeReviewRequest(snapshot: snapshot)
+            if canMergeNow {
+                actions.append(Action(kind: .merge, title: request.provider.mergeReviewRequestTitle, isEnabled: true))
+            }
             if snapshot.providerCapabilities.canOpenReviewRequest {
                 actions.append(Action(kind: .openReviewRequest, title: request.provider.openReviewRequestTitle, isEnabled: true))
             }
             if request.hasRerunnableFailedCheck, snapshot.providerCapabilities.canRerunFailedChecks {
                 actions.append(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true))
             }
-            if request.worstCheckBucket == .fail || request.hasActionableFeedback {
+            if canMergeNow {
+                actions.append(Action(kind: .inspectReviewEvidence, title: "Review diff", isEnabled: true, emphasis: .normal))
+            } else if request.worstCheckBucket == .fail || request.hasActionableFeedback {
                 actions.append(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true))
             }
         } else if canCreateReviewRequest(snapshot) {
             actions.append(Action(kind: .createReviewRequest, title: "Create \(requestLabel)", isEnabled: true))
         }
         return actions.isEmpty ? [refreshAction] : actions
+    }
+
+    /// Single source of truth for "can this review request be merged now?".
+    /// Includes the local-sync preconditions (`makeActions` enforces these
+    /// structurally via its else-if chain, but the Inspect-tab button and the
+    /// merge handler reuse this helper directly, so the guards must live here
+    /// too): merging a green PR whose head predates unpushed local commits
+    /// would drop that work and delete the branch.
+    static func canMergeReviewRequest(snapshot: ReviewLoopSnapshot) -> Bool {
+        guard let request = snapshot.reviewRequest else { return false }
+        // A failed refresh preserves the previous (possibly green) request but
+        // sets `errorMessage`; the checks/mergeability are then stale, so never
+        // merge off an errored snapshot — mirror the drawer, which suppresses
+        // all actions in this state.
+        guard snapshot.errorMessage == nil else { return false }
+        guard snapshot.remote != nil,
+              snapshot.providerAvailable,
+              snapshot.providerAuthenticated
+        else { return false }
+        guard snapshot.local.pushState != .diverged,
+              snapshot.local.pushState != .stale,
+              !snapshot.local.needsPush
+        else { return false }
+        // A dirty worktree means in-progress work on this branch that isn't in
+        // any commit (so `needsPush`/`headSHA` still look clean). Merging and
+        // deleting the branch now would strand it — block until it's committed
+        // or cleared.
+        guard !snapshot.local.hasWorkingTreeChanges,
+              !snapshot.local.hasStagedChanges
+        else { return false }
+        // The local worktree HEAD must be exactly the reviewed PR head. If
+        // another contributor pushed and this worktree hasn't fetched, the
+        // provider reports the new remote head while local refs (and thus
+        // needsPush/upstreamAhead) look clean off the stale local commit —
+        // merging would ship/delete commits never present in the review diff.
+        guard request.headSHA == snapshot.local.headSHA else { return false }
+        return snapshot.providerCapabilities.canMerge
+            && request.state == .open
+            && !request.isDraft
+            && request.mergeState == .clean
+            && request.reviewDecision != .reviewRequired
+            && request.areThreadsComplete
+            && !request.hasActionableFeedback
+            && (request.worstCheckBucket == nil || request.worstCheckBucket == .pass)
     }
 
     private static func canCreateReviewRequest(_ snapshot: ReviewLoopSnapshot) -> Bool {

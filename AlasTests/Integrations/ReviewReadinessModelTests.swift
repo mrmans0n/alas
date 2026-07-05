@@ -137,7 +137,8 @@ struct ReviewReadinessModelTests {
             canSubmitReview: true,
             canFetchAnnotations: false,
             canEditComment: true,
-            canDeleteComment: true
+            canDeleteComment: true,
+            canMerge: true
         )
 
         let model = ReviewReadinessModel(
@@ -255,7 +256,7 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    @Test func approvedCleanRequestIsReadyWithoutMergeAction() {
+    @Test func approvedCleanRequestExposesMergeAction() {
         let request = Self.makeReviewRequest(reviewDecision: .approved, mergeState: .clean)
         let model = ReviewReadinessModel(
             snapshot: Self.makeSnapshot(reviewRequest: request),
@@ -265,8 +266,222 @@ struct ReviewReadinessModelTests {
 
         #expect(model.chips.map(\ReviewReadinessModel.Chip.title) == ["Ready"])
         #expect(model.chips.map(\ReviewReadinessModel.Chip.tone) == [.success])
-        #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
+        #expect(model.actions.map(\ReviewReadinessModel.Action.kind).contains(.merge))
         #expect(!model.actions.map(\ReviewReadinessModel.Action.kind).contains(.refresh))
+    }
+
+    @Test func greenMergeableRequestExposesMergeAndReviewDiff() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let merge = model.actions.first { $0.kind == .merge }
+        #expect(merge?.title == "Merge PR")
+        #expect(merge?.emphasis == .primary)
+        #expect(merge?.isEnabled == true)
+
+        let review = model.actions.first { $0.kind == .inspectReviewEvidence }
+        #expect(review?.title == "Review diff")
+        #expect(review?.emphasis == .normal)
+    }
+
+    @Test func blockedRequestDoesNotExposeMerge() {
+        let request = Self.makeReviewRequest(
+            mergeState: .blocked,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+    }
+
+    @Test func dirtyWorktreeSuppressesMergeOnGreenPR() {
+        // Staged/working-tree changes with no commit: needsPush stays false and
+        // the head SHAs still match, but there's in-progress work on the branch.
+        // Merging + deleting the branch would strand it, so the gate must block.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        for local in [
+            Self.makeLocal(hasWorkingTreeChanges: true),
+            Self.makeLocal(hasStagedChanges: true),
+        ] {
+            let snapshot = Self.makeSnapshot(local: local, reviewRequest: request)
+            let model = ReviewReadinessModel(
+                snapshot: snapshot,
+                lastError: nil,
+                canOpenAgentHandoff: false
+            )
+            #expect(!model.actions.map(\.kind).contains(.merge))
+            #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+        }
+    }
+
+    @Test func incompleteFeedbackSuppressesMergeOnGreenPR() {
+        // Loading review threads failed, so `threads` may be missing actionable
+        // feedback. The gate must fail closed rather than treat the empty list
+        // as "no feedback" and expose Merge.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)],
+            areThreadsComplete: false
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func mismatchedLocalAndReviewedHeadSuppressesMerge() {
+        // The host reports a newer PR head (e.g. a teammate pushed) than the
+        // local worktree HEAD; local refs still look in-sync because they're
+        // stale. Merging would ship/delete a head that isn't in the review
+        // diff, so the gate must refuse until local matches the reviewed head.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)],
+            headSHA: "remote-head-xyz"
+        )
+        let snapshot = Self.makeSnapshot(
+            local: Self.makeLocal(),
+            reviewRequest: request
+        )
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(snapshot.local.headSHA == "abc123")
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func erroredSnapshotSuppressesMergeEvenWithGreenStaleRequest() {
+        // A failed refresh preserves the last (green) request but marks the
+        // snapshot with an errorMessage; its checks/mergeability are stale, so
+        // the gate (shared by the Inspect button and performMerge) must refuse.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(
+            reviewRequest: request,
+            errorMessage: "gh pr view failed"
+        )
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func reviewRequiredSuppressesMergeOnGreenPR() {
+        // Host requires a review that hasn't happened (e.g. GitLab approvalsLeft
+        // > 0 maps to .reviewRequired while mergeState stays clean). Offering
+        // Merge here is a false affordance the host would reject and bypasses a
+        // pending review policy. A no-policy solo PR is .unknown, not
+        // .reviewRequired, so it is unaffected.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .reviewRequired,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func actionableFeedbackSuppressesMergeOnGreenPR() {
+        // Green + mergeable, but a reviewer has requested changes. Even in a
+        // repo that doesn't enforce reviews as a merge block (mergeState stays
+        // clean), in-app merge must not bypass the open feedback.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .changesRequested,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+        // Falls through to the feedback-inspection affordance instead.
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true)))
+    }
+
+    @Test func unpushedLocalCommitsSuppressMergeEvenWhenPRIsGreen() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(
+            local: Self.makeLocal(needsPush: true),
+            reviewRequest: request
+        )
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        // Local head is ahead of what the green PR reviewed — merging now
+        // would ship the old head and delete the branch, dropping the
+        // unpushed commits. The gate (shared with the Inspect-tab button and
+        // the merge handler) must suppress merge here.
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func pendingChecksDoNotExposeMerge() {
+        let request = Self.makeReviewRequest(
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pending)]
+        )
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+    }
+
+    @Test func mergeHiddenWhenCapabilityMissing() {
+        let request = Self.makeReviewRequest(mergeState: .clean, checks: [Self.makeCheck(bucket: .pass)])
+        let model = ReviewReadinessModel(
+            snapshot: Self.makeSnapshot(reviewRequest: request, providerCapabilities: .readOnly),
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
     @Test func pendingChecksKeepRefreshAsFallback() {
@@ -357,14 +572,16 @@ struct ReviewReadinessModelTests {
         baseBranch: String = "main",
         needsPush: Bool = false,
         upstreamAheadCommitCount: Int = 0,
-        aheadCommitCount: Int = 1
+        aheadCommitCount: Int = 1,
+        hasWorkingTreeChanges: Bool = false,
+        hasStagedChanges: Bool = false
     ) -> ReviewLoopLocalState {
         ReviewLoopLocalState(
             branchName: branchName,
             headSHA: "abc123",
             baseBranch: baseBranch,
-            hasWorkingTreeChanges: false,
-            hasStagedChanges: false,
+            hasWorkingTreeChanges: hasWorkingTreeChanges,
+            hasStagedChanges: hasStagedChanges,
             aheadCommitCount: aheadCommitCount,
             hasUpstream: true,
             upstreamAheadCommitCount: upstreamAheadCommitCount,
@@ -388,7 +605,9 @@ struct ReviewReadinessModelTests {
         reviewDecision: ReviewDecision = .reviewRequired,
         mergeState: ReviewMergeState = .blocked,
         checks: [ReviewCheck] = [],
-        threads: [ReviewThread] = []
+        threads: [ReviewThread] = [],
+        headSHA: String? = "abc123",
+        areThreadsComplete: Bool = true
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
@@ -399,10 +618,12 @@ struct ReviewReadinessModelTests {
             isDraft: false,
             headRefName: "feature/review-loop",
             baseRefName: "main",
+            headSHA: headSHA,
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,
-            threads: threads
+            threads: threads,
+            areThreadsComplete: areThreadsComplete
         )
     }
 
