@@ -75,7 +75,7 @@ struct RemoteServerPane: View {
                             ) {
                                 Picker("", selection: selectedAddressBinding()) {
                                     ForEach(state.remoteAdvertisedAddresses) { address in
-                                        Text(addressLabel(address)).tag(address.id)
+                                        Text(pickerAddressLabel(address)).tag(address.id)
                                     }
                                 }
                                 .pickerStyle(.segmented)
@@ -189,6 +189,18 @@ struct RemoteServerPane: View {
             return "\(address.url) on \(interface)"
         }
         return address.url
+    }
+
+    private func pickerAddressLabel(_ address: RemoteAdvertisedAddress) -> String {
+        let label = addressLabel(address)
+        let matching = state.remoteAdvertisedAddresses.filter { addressLabel($0) == label }
+        guard matching.count > 1 else { return label }
+
+        if let interfaceName = address.interfaceName,
+           matching.filter({ $0.interfaceName == interfaceName }).count == 1 {
+            return "\(label) \(interfaceName)"
+        }
+        return "\(label) \(address.host)"
     }
 
     private func selectedAddressBinding() -> Binding<String> {
