@@ -6,6 +6,11 @@ struct OutdatedThreadsDrawer: View {
 
     @Environment(\.theme) private var theme
 
+    init(threads: [ReviewThread], initiallyExpanded: Bool = false) {
+        self.threads = threads
+        _isExpanded = State(initialValue: initiallyExpanded)
+    }
+
     var body: some View {
         if threads.isEmpty {
             EmptyView()
@@ -116,11 +121,11 @@ private struct OutdatedThreadRow: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(theme.color("accent"))
                 }
-                Text(body)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg"))
+                DiffReviewInlineFeedbackMarkdown.view(body)
                     .lineLimit(4)
                     .truncationMode(.tail)
+                    .frame(maxHeight: 72, alignment: .top)
+                    .clipped()
                     .textSelection(.enabled)
             }
         }

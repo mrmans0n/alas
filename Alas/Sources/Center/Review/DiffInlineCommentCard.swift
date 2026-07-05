@@ -65,7 +65,7 @@ struct DiffInlineCommentCard: View {
                     Text("\(first.author):")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundColor(.primary)
-                    Text(first.body)
+                    Text(DiffReviewInlineFeedbackMarkdown.plainText(first.body))
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)

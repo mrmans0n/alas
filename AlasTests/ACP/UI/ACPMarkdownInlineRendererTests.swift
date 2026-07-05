@@ -100,6 +100,19 @@ struct ACPMarkdownInlineRendererTests {
         #expect(plan.markdownSource.contains("</sub>") == false)
     }
 
+    @Test("nested subscript tags are stripped")
+    func nestedSubscriptTagsAreStripped() throws {
+        let source = "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub> Preserve text**"
+        let plain = ACPMarkdownInlineRenderer.plainText(source)
+        #expect(plain == "P2 Badge Preserve text")
+
+        let plan = ACPMarkdownInlineRenderer.makePlan(source)
+        let image = try #require(plan.images.first)
+        #expect(image.isSubscript)
+        #expect(plan.markdownSource.contains("<sub") == false)
+        #expect(plan.markdownSource.contains("</sub>") == false)
+    }
+
     @Test("malformed subscript remains visible")
     func malformedSubscriptRemainsVisible() {
         let plain = ACPMarkdownInlineRenderer.plainText("Before <sub>small after")
@@ -225,6 +238,59 @@ struct ACPMarkdownInlineRendererTests {
         #expect(!renderedBody.contains("`leadingX`"))
         #expect(accessibilityLabel(in: host, containing: "**<sub>") == nil)
         #expect(accessibilityLabel(in: host, containing: "`leadingX`") == nil)
+    }
+
+    @Test("outdated drawer thread body renders markdown")
+    func outdatedDrawerThreadBodyRendersMarkdown() throws {
+        let comment = ReviewComment(
+            id: "comment-1",
+            author: "chatgpt-codex-connector",
+            body: """
+            **<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub> Preserve streamed text**
+
+            Use `leadingX` instead of **resetting** each event.
+            """,
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: false,
+            viewerCanDelete: false,
+            isPending: false
+        )
+        let thread = ReviewThread(
+            id: "thread-1",
+            path: "Sources/App.swift",
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: false,
+            isOutdated: true,
+            isFileLevel: false,
+            comments: [comment],
+            viewerCanResolve: false,
+            viewerCanReply: false,
+            url: nil
+        )
+
+        let host = NSHostingView(
+            rootView: OutdatedThreadsDrawer(threads: [thread], initiallyExpanded: true)
+                .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+                .frame(width: 620, height: 360)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 360)
+        host.layoutSubtreeIfNeeded()
+
+        let renderedBody = allSubviews(of: host)
+            .compactMap { $0 as? NSTextView }
+            .map(\.string)
+            .joined(separator: "\n")
+
+        #expect(renderedBody.contains("Preserve streamed text"))
+        #expect(renderedBody.contains("Use leadingX instead of resetting each event."))
+        #expect(!renderedBody.contains("**"))
+        #expect(!renderedBody.contains("<sub>"))
+        #expect(!renderedBody.contains("</sub>"))
+        #expect(!renderedBody.contains("`leadingX`"))
     }
 
     @Test("inline markdown text invalidates height when resized narrower")
