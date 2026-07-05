@@ -305,6 +305,30 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func dirtyWorktreeSuppressesMergeOnGreenPR() {
+        // Staged/working-tree changes with no commit: needsPush stays false and
+        // the head SHAs still match, but there's in-progress work on the branch.
+        // Merging + deleting the branch would strand it, so the gate must block.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        for local in [
+            Self.makeLocal(hasWorkingTreeChanges: true),
+            Self.makeLocal(hasStagedChanges: true),
+        ] {
+            let snapshot = Self.makeSnapshot(local: local, reviewRequest: request)
+            let model = ReviewReadinessModel(
+                snapshot: snapshot,
+                lastError: nil,
+                canOpenAgentHandoff: false
+            )
+            #expect(!model.actions.map(\.kind).contains(.merge))
+            #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+        }
+    }
+
     @Test func incompleteFeedbackSuppressesMergeOnGreenPR() {
         // Loading review threads failed, so `threads` may be missing actionable
         // feedback. The gate must fail closed rather than treat the empty list
@@ -548,14 +572,16 @@ struct ReviewReadinessModelTests {
         baseBranch: String = "main",
         needsPush: Bool = false,
         upstreamAheadCommitCount: Int = 0,
-        aheadCommitCount: Int = 1
+        aheadCommitCount: Int = 1,
+        hasWorkingTreeChanges: Bool = false,
+        hasStagedChanges: Bool = false
     ) -> ReviewLoopLocalState {
         ReviewLoopLocalState(
             branchName: branchName,
             headSHA: "abc123",
             baseBranch: baseBranch,
-            hasWorkingTreeChanges: false,
-            hasStagedChanges: false,
+            hasWorkingTreeChanges: hasWorkingTreeChanges,
+            hasStagedChanges: hasStagedChanges,
             aheadCommitCount: aheadCommitCount,
             hasUpstream: true,
             upstreamAheadCommitCount: upstreamAheadCommitCount,

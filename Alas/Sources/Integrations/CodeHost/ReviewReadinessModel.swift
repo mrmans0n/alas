@@ -295,6 +295,13 @@ struct ReviewReadinessModel: Equatable, Sendable {
               snapshot.local.pushState != .stale,
               !snapshot.local.needsPush
         else { return false }
+        // A dirty worktree means in-progress work on this branch that isn't in
+        // any commit (so `needsPush`/`headSHA` still look clean). Merging and
+        // deleting the branch now would strand it — block until it's committed
+        // or cleared.
+        guard !snapshot.local.hasWorkingTreeChanges,
+              !snapshot.local.hasStagedChanges
+        else { return false }
         // The local worktree HEAD must be exactly the reviewed PR head. If
         // another contributor pushed and this worktree hasn't fetched, the
         // provider reports the new remote head while local refs (and thus

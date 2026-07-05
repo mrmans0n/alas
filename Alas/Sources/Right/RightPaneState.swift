@@ -874,7 +874,7 @@ final class RightPaneState {
     }
 
     func performMerge() {
-        guard pendingMerge != nil else { return }
+        guard let pending = pendingMerge else { return }
         pendingMerge = nil
         // Fast reject against the currently-cached snapshot (also re-validates
         // if the dialog captured a now-stale snapshot).
@@ -883,6 +883,11 @@ final class RightPaneState {
             mergeError = Self.mergeUnavailableMessage
             return
         }
+        // The PR + head the user actually confirmed. After the forced refresh we
+        // require the fresh snapshot to still be this exact request/head, so a
+        // branch switch mid-dialog can't redirect the merge to a different PR.
+        let confirmedRequestID = pending.reviewRequest?.id
+        let confirmedHeadSHA = pending.reviewRequest?.headSHA
         guard reviewLoop.beginAction(.merge) else { return }
         Task { @MainActor in
             defer { reviewLoop.endAction(.merge) }
@@ -893,7 +898,10 @@ final class RightPaneState {
             // mergeability), then re-validate and merge the fresh snapshot.
             await refresh()
             guard let snapshot = reviewLoop.snapshot,
-                  ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot) else {
+                  ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot),
+                  snapshot.reviewRequest?.id == confirmedRequestID,
+                  snapshot.reviewRequest?.headSHA == confirmedHeadSHA
+            else {
                 mergeError = Self.mergeUnavailableMessage
                 return
             }
