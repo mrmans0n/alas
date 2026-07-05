@@ -305,6 +305,31 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func mismatchedLocalAndReviewedHeadSuppressesMerge() {
+        // The host reports a newer PR head (e.g. a teammate pushed) than the
+        // local worktree HEAD; local refs still look in-sync because they're
+        // stale. Merging would ship/delete a head that isn't in the review
+        // diff, so the gate must refuse until local matches the reviewed head.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)],
+            headSHA: "remote-head-xyz"
+        )
+        let snapshot = Self.makeSnapshot(
+            local: Self.makeLocal(),
+            reviewRequest: request
+        )
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(snapshot.local.headSHA == "abc123")
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
     @Test func erroredSnapshotSuppressesMergeEvenWithGreenStaleRequest() {
         // A failed refresh preserves the last (green) request but marks the
         // snapshot with an errorMessage; its checks/mergeability are stale, so
@@ -534,7 +559,8 @@ struct ReviewReadinessModelTests {
         reviewDecision: ReviewDecision = .reviewRequired,
         mergeState: ReviewMergeState = .blocked,
         checks: [ReviewCheck] = [],
-        threads: [ReviewThread] = []
+        threads: [ReviewThread] = [],
+        headSHA: String? = "abc123"
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
@@ -545,6 +571,7 @@ struct ReviewReadinessModelTests {
             isDraft: false,
             headRefName: "feature/review-loop",
             baseRefName: "main",
+            headSHA: headSHA,
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,

@@ -295,6 +295,12 @@ struct ReviewReadinessModel: Equatable, Sendable {
               snapshot.local.pushState != .stale,
               !snapshot.local.needsPush
         else { return false }
+        // The local worktree HEAD must be exactly the reviewed PR head. If
+        // another contributor pushed and this worktree hasn't fetched, the
+        // provider reports the new remote head while local refs (and thus
+        // needsPush/upstreamAhead) look clean off the stale local commit —
+        // merging would ship/delete commits never present in the review diff.
+        guard request.headSHA == snapshot.local.headSHA else { return false }
         return snapshot.providerCapabilities.canMerge
             && request.state == .open
             && !request.isDraft
