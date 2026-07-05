@@ -385,10 +385,12 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let headRefName: String
     let baseRefName: String
     let headSHA: String?
-    /// Owner (login) of the repository the head branch lives in. Differs from
-    /// `remote.owner` for forked pull requests. Used to scope remote-branch
-    /// cleanup so a same-named branch in the base repo is never deleted.
+    /// Owner (login) and name of the repository the head branch lives in.
+    /// Differ from `remote` for forked pull requests — including same-owner
+    /// forks, where only the name differs. Both are compared before remote-
+    /// branch cleanup so a same-named branch in the base repo is never deleted.
     let headRepositoryOwner: String?
+    let headRepositoryName: String?
     let reviewDecision: ReviewDecision
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
@@ -413,6 +415,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         baseRefName: String,
         headSHA: String? = nil,
         headRepositoryOwner: String? = nil,
+        headRepositoryName: String? = nil,
         reviewDecision: ReviewDecision,
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
@@ -429,6 +432,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         self.baseRefName = baseRefName
         self.headSHA = headSHA
         self.headRepositoryOwner = headRepositoryOwner
+        self.headRepositoryName = headRepositoryName
         self.reviewDecision = reviewDecision
         self.mergeState = mergeState
         self.checks = checks
@@ -460,6 +464,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             baseRefName: baseRefName,
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,
@@ -484,6 +489,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             baseRefName: baseRefName,
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,

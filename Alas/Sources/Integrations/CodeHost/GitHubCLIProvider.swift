@@ -277,7 +277,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 "--base", base,
                 "--state", "open",
                 "--limit", "20",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -702,7 +702,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             "gh",
             args: [
                 "pr", "view", "\(request.number)",
-                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
                 "-R", Self.highLevelRepositorySelector(remote: remote),
             ],
             cwd: cwd
@@ -873,7 +873,9 @@ struct GitHubCLIProvider: CodeHostProvider {
         // head branch is in a different repo (`headRepositoryOwner != remote.owner`);
         // the DELETE ref endpoint is scoped by `{owner}/{repo}`, so targeting
         // the base repo there would either miss the fork branch or delete an
-        // unrelated same-named base-repo branch. Leave fork branches alone.
+        // unrelated same-named base-repo branch. Both owner AND name must match
+        // — a same-owner fork (e.g. `owner/repo-fork`) shares the owner but not
+        // the repository. Leave fork branches alone.
         //
         // A zero exit does not guarantee the PR merged: with a required merge
         // queue, `gh pr merge` enqueues the PR (still open) and the queue needs
@@ -881,7 +883,9 @@ struct GitHubCLIProvider: CodeHostProvider {
         // deleting; for a queued PR, leave cleanup to the queue / auto-delete.
         if deleteBranch,
            let headOwner = request.headRepositoryOwner,
+           let headName = request.headRepositoryName,
            headOwner == request.remote.owner,
+           headName == request.remote.repository,
            await isReviewRequestMerged(request, cwd: cwd) {
             _ = try? await runner.run(
                 "gh",
@@ -1240,6 +1244,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             baseRefName: item.baseRefName,
             headSHA: normalizedOptionalString(item.headRefOid),
             headRepositoryOwner: item.headRepositoryOwner?.login,
+            headRepositoryName: item.headRepository?.name,
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -1278,6 +1283,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             baseRefName: item.baseRefName,
             headSHA: normalizedOptionalString(item.headRefOid),
             headRepositoryOwner: item.headRepositoryOwner?.login,
+            headRepositoryName: item.headRepository?.name,
             reviewDecision: mapReviewDecision(item.reviewDecision),
             mergeState: mapMergeState(item.mergeStateStatus),
             checks: [],
@@ -1789,9 +1795,14 @@ private struct PRListItem: Decodable {
     let headRefName: String
     let headRefOid: String?
     let headRepositoryOwner: HeadRepositoryOwner?
+    let headRepository: HeadRepository?
     let baseRefName: String
     let reviewDecision: String?
     let mergeStateStatus: String?
+}
+
+private struct HeadRepository: Decodable {
+    let name: String
 }
 
 private struct HeadRepositoryOwner: Decodable {

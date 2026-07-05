@@ -210,7 +210,7 @@ struct GitHubCLIProviderTests {
                     "--base", "main",
                     "--state", "open",
                     "--limit", "20",
-                    "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+                    "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
                     "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
@@ -379,7 +379,7 @@ struct GitHubCLIProviderTests {
         #expect(publishThreads.first?["startSide"] as? String == "RIGHT")
         #expect(commands[2].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(result.published == [
@@ -716,13 +716,13 @@ struct GitHubCLIProviderTests {
         #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[1].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[3].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[4].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
@@ -770,7 +770,7 @@ struct GitHubCLIProviderTests {
         #expect(commands.count == 2)
         #expect(commands[0].args == [
             "pr", "view", "42",
-            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,reviewDecision,mergeStateStatus",
+            "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "github.enterprise.example.com/platform/alas",
         ])
         #expect(commands[1].args.prefix(3) == ["api", "graphql", "--hostname"])
@@ -1667,6 +1667,30 @@ struct GitHubCLIProviderTests {
         ])
     }
 
+    @Test func mergeReviewRequestForSameOwnerForkSkipsRemoteDelete() async throws {
+        let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
+        let provider = GitHubCLIProvider(runner: runner)
+        // Head lives in a fork under the SAME owner but a different repo name
+        // (`mrmans0n/alas-fork`). Owner matches the base repo, but the branch is
+        // not in it — deleting `mrmans0n/alas`'s same-named branch would be wrong.
+        let request = Self.makeRequest(headRepositoryName: "alas-fork")
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "merge", "42",
+                    "--squash",
+                    "--match-head-commit", "head-sha-42",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
     @Test func mergeReviewRequestForForkedHeadSkipsRemoteDelete() async throws {
         let runner = FakeRunner(results: [ProcessResult(exitCode: 0, stdout: "", stderr: "")])
         let provider = GitHubCLIProvider(runner: runner)
@@ -1749,7 +1773,8 @@ struct GitHubCLIProviderTests {
         threads: [ReviewThread] = [],
         reviewDecision: ReviewDecision = .approved,
         headSHA: String? = "head-sha-42",
-        headRepositoryOwner: String? = "mrmans0n"
+        headRepositoryOwner: String? = "mrmans0n",
+        headRepositoryName: String? = "alas"
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,
@@ -1762,6 +1787,7 @@ struct GitHubCLIProviderTests {
             baseRefName: "main",
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
             reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,
