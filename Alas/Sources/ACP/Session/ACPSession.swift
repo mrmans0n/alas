@@ -1518,14 +1518,23 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// When a diverged replay `candidate` begins with the full text of the
-    /// trailing in-progress bubble of `kind`, the stream is that
-    /// already-present message replayed under a regenerated id and then
-    /// continued past the boundary window. Append only the divergent suffix
-    /// to that bubble (so the hydrated prefix is not duplicated) and rebind
-    /// it to the regenerated `messageId` so subsequent chunks target it via
-    /// `messageIndex`. Returns the adopted message's index, or nil when the
-    /// trailing bubble is not a prefix of the candidate (genuine new output).
+    /// When a diverged replay `candidate` reproduces the tail of the
+    /// trailing in-progress bubble of `kind` and then continues past it, the
+    /// stream is that already-present message replayed under a regenerated
+    /// id and continued past the boundary window. Append only the text
+    /// beyond the reproduced portion (so nothing already present is
+    /// duplicated) and rebind the bubble to the regenerated `messageId` so
+    /// subsequent chunks target it via `messageIndex`. Returns the adopted
+    /// message's index, or nil when no suffix of the bubble is a prefix of
+    /// the candidate (genuine new output).
+    ///
+    /// Matching the longest *suffix* of the bubble (not just the whole
+    /// bubble) handles a mid-message replay slip: the suppression counter
+    /// can fall between chunks, so the first surviving chunk may be a middle
+    /// fragment (`"world"` of `"hello world"`) that then continues (`"!"`),
+    /// which must extend the bubble to `"hello world!"` rather than spawn a
+    /// duplicate. A full replay is just the special case where the matched
+    /// suffix is the whole bubble.
     ///
     /// The adoption target is exactly `lastAgent()`/`lastThought()` — the
     /// same trailing bubble a legacy (id-less) chunk would extend — so the
@@ -1547,8 +1556,19 @@ final class ACPSession: ObservableObject, Identifiable {
         default:
             return nil
         }
-        guard !existing.isEmpty, candidate.hasPrefix(existing) else { return nil }
-        let suffix = String(candidate.dropFirst(existing.count))
+        guard !existing.isEmpty else { return nil }
+        // Longest suffix of `existing` that is a prefix of `candidate` — the
+        // reproduced portion. The remaining candidate is the genuine new
+        // continuation to append.
+        var suffix: String?
+        let maxOverlap = min(existing.count, candidate.count)
+        for overlap in stride(from: maxOverlap, through: 1, by: -1) {
+            if candidate.hasPrefix(String(existing.suffix(overlap))) {
+                suffix = String(candidate.dropFirst(overlap))
+                break
+            }
+        }
+        guard let suffix, !suffix.isEmpty else { return nil }
         switch transcript.messages[i] {
         case .agent(let id, _, let buf):
             buf.append(suffix)

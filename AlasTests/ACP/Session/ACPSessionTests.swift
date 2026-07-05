@@ -440,6 +440,28 @@ struct ACPSessionTests {
         #expect(agentTexts == ["tests completed.Running"])
     }
 
+    @Test("mid-message replay slip followed by real continuation extends the hydrated bubble")
+    func midMessageReplaySlipThenContinuationExtendsBubble() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The "hello " prefix was consumed during suppression; the surviving
+        // replay chunk is the middle fragment "world", which then continues
+        // with "!". This must extend the hydrated bubble to "hello world!"
+        // rather than materialize "world!" as a duplicate row.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world!"])
+    }
+
     @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
     func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
