@@ -256,6 +256,30 @@ struct ACPMarkdownInlineRendererTests {
         #expect(narrowHeight > wideHeight * 1.5)
     }
 
+    @Test("inline markdown text container follows repeated resize bounds")
+    func inlineMarkdownTextContainerFollowsRepeatedResizeBounds() throws {
+        let theme = try Theme.loadBundled(id: "cool-slate")
+        let view = ACPMarkdownInlineTextView(
+            source: """
+            This paragraph is long enough to wrap differently at each task width, so a stale NSTextContainer width would leave the row height and drawing width out of sync.
+            """,
+            typography: ACPChatTypography(fontFamily: "", fontSize: 12),
+            role: .body,
+            theme: theme
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        let host = NSHostingView(rootView: view)
+        for width in [640.0, 180.0, 520.0, 220.0] {
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 1_000)
+            host.layoutSubtreeIfNeeded()
+
+            let textView = try #require(allSubviews(of: host).compactMap { $0 as? NSTextView }.first)
+            let containerWidth = try #require(textView.textContainer?.containerSize.width)
+            #expect(abs(containerWidth - textView.bounds.width) < 0.5)
+        }
+    }
+
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
     }

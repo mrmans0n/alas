@@ -205,156 +205,17 @@ private struct ACPSessionView: View {
 
     private var transcriptAndComposer: some View {
         GeometryReader { proxy in
-            let chatColumnWidth = ACPChatLayout.chatColumnWidth(
-                forPaneWidth: proxy.size.width,
-                planSidebarVisible: showPlanSidebar
-            )
-            let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
-                forPaneWidth: chatColumnWidth
-            )
             HStack(spacing: 0) {
-                ZStack(alignment: .bottom) {
-                    if let phase = firstRunConnectingPhase {
-                        introStateAndComposer(contentMaxWidth: chatContentMaxWidth) {
-                            ACPFirstRunConnectingView(
-                                agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
-                                phase: phase,
-                                bottomInset: 0
-                            )
-                        }
-                    } else if isNewEmptySession {
-                        introStateAndComposer(contentMaxWidth: chatContentMaxWidth) {
-                            ACPNewChatEmptyStateView(
-                                agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
-                                bottomInset: 0,
-                                onStarterPrompt: insertStarterPrompt
-                            )
-                            .transition(
-                                .opacity.combined(with: .move(edge: .top))
-                            )
-                        }
-                    } else {
-                        if isConnecting {
-                            ACPConnectingPlaceholder(
-                                agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
-                            )
-                        } else {
-                            ACPMessageList(
-                                session: session,
-                                transcript: session.transcript,
-                                contentMaxWidth: chatContentMaxWidth,
-                                typography: chatTypography,
-                                onOpenDiff: { relativePath in
-                                    state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
-                                },
-                                onOpenTranscriptLink: { url in
-                                    state.routeTranscriptOpenURL(url, worktreeId: worktree.id)
-                                },
-                                // Use the runner's policy (where the agent's continuation
-                                // lives) — otherwise the user's click can't resolve the
-                                // pending permission request.
-                                policy: manager.runners[sessionId]?.policy,
-                                trustedImageRoot: worktree.path,
-                                scopeKey: scopeKey(for: session.transcript.pendingPermission),
-                                onQuestionResponse: { response in
-                                    manager.runners[sessionId]?.answerQuestion(response)
-                                },
-                                onQueueEdit: isMirror ? { _ in } : { item in
-                                    // Pull the queued prompt back into the composer
-                                    // for editing — appended after any text the user
-                                    // has already typed so nothing is clobbered.
-                                    // `takeForEditing` removes the item and returns
-                                    // its draft ONLY if it's still `.pending`; a
-                                    // `.sending` item (promoted by the flusher
-                                    // between render and click) returns nil and is
-                                    // left in flight, so it can't be duplicated.
-                                    guard let restored = session.takeForEditing(id: item.id) else { return }
-                                    manager.persistComposerDraft(
-                                        session.composerDraft.appending(restored), for: session)
-                                    manager.persistQueue(for: session)
-                                    // Discarding the head can unblock a successor
-                                    // that was waiting behind a `lastError` head.
-                                    manager.runners[sessionId]?.flushQueueIfIdle()
-                                },
-                                onQueueForceSend: isMirror ? { _ in } : { id in
-                                    manager.runners[sessionId]?.forceSendQueuedItem(id: id)
-                                },
-                                onQueueRemove: isMirror ? { _ in } : { id in
-                                    session.removeFromQueue(id: id)
-                                    manager.persistQueue(for: session)
-                                    manager.runners[sessionId]?.flushQueueIfIdle()
-                                },
-                                onQueueRetry: isMirror ? { _ in } : { id in
-                                    guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
-                                    session.queue[idx].lastError = nil
-                                    manager.persistQueue(for: session)
-                                    manager.runners[sessionId]?.flushQueueIfIdle()
-                                },
-                                onQueueReorder: isMirror ? { _, _ in } : { src, dst in
-                                    session.moveInQueue(from: src, to: dst)
-                                    manager.persistQueue(for: session)
-                                    // Reordering can move a clean prompt to the head
-                                    // where it can finally drain.
-                                    manager.runners[sessionId]?.flushQueueIfIdle()
-                                },
-                                onQueueClearAll: isMirror ? {} : {
-                                    session.clearPendingQueue()
-                                    manager.persistQueue(for: session)
-                                    // No-op if the queue is now empty, but if a
-                                    // `.sending` head survives the clear and the
-                                    // user re-enqueues, the next idle drain still
-                                    // needs to fire from this path.
-                                    manager.runners[sessionId]?.flushQueueIfIdle()
-                                },
-                                onRetryContextRecovery: {
-                                    _ = manager.sendTranscriptAsContext(
-                                        sessionId: sessionId,
-                                        agentName: state.agent(id: session.agentId)?.displayName
-                                    )
-                                },
-                                rememberedScrollAnchor: {
-                                    manager.rememberedTranscriptScrollAnchor(for: sessionId)
-                                },
-                                onRememberScrollAnchor: { anchor, index, followsTail in
-                                    manager.rememberTranscriptScrollAnchor(
-                                        sessionId: sessionId,
-                                        anchorMessageId: anchor,
-                                        anchorMessageIndex: index,
-                                        followsTail: followsTail
-                                    )
-                                },
-                                onLoadFullToolCallContent: { toolCallId in
-                                    manager.reloadFullToolCallContent(
-                                        sessionId: sessionId, toolCallId: toolCallId)
-                                }
-                            )
-                            .transition(.opacity)
-                        }
-
-                        composerView(
-                            placement: composerPlacement,
-                            contentMaxWidth: chatContentMaxWidth,
-                            typography: chatTypography
-                        )
-
-                        if let undo = session.steerUndo, !undo.snapshot.isEmpty {
-                            VStack {
-                                Spacer()
-                                ACPSteerUndoToast(
-                                    discardedCount: undo.snapshot.count,
-                                    onUndo: { manager.runners[sessionId]?.steerUndo() },
-                                    onDismiss: { session.steerUndo = nil }
-                                )
-                                .id(undo.id)
-                                .padding(.bottom, 200)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .transition(.opacity)
-                        }
-                    }
+                GeometryReader { chatProxy in
+                    let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
+                        forChatColumnWidth: chatProxy.size.width
+                    )
+                    chatSurface(contentMaxWidth: chatContentMaxWidth)
+                        .frame(width: chatProxy.size.width, height: chatProxy.size.height)
+                        .animation(emptyStateAnimation, value: isNewEmptySession)
+                        .animation(emptyStateAnimation, value: isFirstRunConnecting)
                 }
-                .animation(emptyStateAnimation, value: isNewEmptySession)
-                .animation(emptyStateAnimation, value: isFirstRunConnecting)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if showPlanSidebar {
                     ACPPlanSidebar(
@@ -381,6 +242,143 @@ private struct ACPSessionView: View {
                 updatePlanSidebar(paneWidth: proxy.size.width)
             }
         }
+    }
+
+    private func chatSurface(contentMaxWidth: CGFloat) -> some View {
+        ZStack(alignment: .bottom) {
+            if let phase = firstRunConnectingPhase {
+                introStateAndComposer(contentMaxWidth: contentMaxWidth) {
+                    ACPFirstRunConnectingView(
+                        agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                        phase: phase,
+                        bottomInset: 0
+                    )
+                }
+            } else if isNewEmptySession {
+                introStateAndComposer(contentMaxWidth: contentMaxWidth) {
+                    ACPNewChatEmptyStateView(
+                        agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
+                        bottomInset: 0,
+                        onStarterPrompt: insertStarterPrompt
+                    )
+                    .transition(
+                        .opacity.combined(with: .move(edge: .top))
+                    )
+                }
+            } else {
+                if isConnecting {
+                    ACPConnectingPlaceholder(
+                        agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId
+                    )
+                } else {
+                    messageList(contentMaxWidth: contentMaxWidth)
+                        .transition(.opacity)
+                }
+
+                composerView(
+                    placement: composerPlacement,
+                    contentMaxWidth: contentMaxWidth,
+                    typography: chatTypography
+                )
+
+                if let undo = session.steerUndo, !undo.snapshot.isEmpty {
+                    VStack {
+                        Spacer()
+                        ACPSteerUndoToast(
+                            discardedCount: undo.snapshot.count,
+                            onUndo: { manager.runners[sessionId]?.steerUndo() },
+                            onDismiss: { session.steerUndo = nil }
+                        )
+                        .id(undo.id)
+                        .padding(.bottom, 200)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+                }
+            }
+        }
+    }
+
+    private func messageList(contentMaxWidth: CGFloat) -> ACPMessageList {
+        ACPMessageList(
+            session: session,
+            transcript: session.transcript,
+            contentMaxWidth: contentMaxWidth,
+            typography: chatTypography,
+            onOpenDiff: { relativePath in
+                state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
+            },
+            onOpenTranscriptLink: { url in
+                state.routeTranscriptOpenURL(url, worktreeId: worktree.id)
+            },
+            // Use the runner's policy (where the agent's continuation
+            // lives) so the user's click can resolve the pending permission
+            // request.
+            policy: manager.runners[sessionId]?.policy,
+            trustedImageRoot: worktree.path,
+            scopeKey: scopeKey(for: session.transcript.pendingPermission),
+            onQuestionResponse: { response in
+                manager.runners[sessionId]?.answerQuestion(response)
+            },
+            onQueueEdit: isMirror ? { _ in } : { item in
+                // Pull the queued prompt back into the composer for editing,
+                // appended after any text the user has already typed so
+                // nothing is clobbered. `takeForEditing` removes the item and
+                // returns its draft ONLY if it's still `.pending`; a `.sending`
+                // item returns nil and is left in flight, so it can't be
+                // duplicated.
+                guard let restored = session.takeForEditing(id: item.id) else { return }
+                manager.persistComposerDraft(
+                    session.composerDraft.appending(restored), for: session)
+                manager.persistQueue(for: session)
+                manager.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onQueueForceSend: isMirror ? { _ in } : { id in
+                manager.runners[sessionId]?.forceSendQueuedItem(id: id)
+            },
+            onQueueRemove: isMirror ? { _ in } : { id in
+                session.removeFromQueue(id: id)
+                manager.persistQueue(for: session)
+                manager.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onQueueRetry: isMirror ? { _ in } : { id in
+                guard let idx = session.queue.firstIndex(where: { $0.id == id }) else { return }
+                session.queue[idx].lastError = nil
+                manager.persistQueue(for: session)
+                manager.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onQueueReorder: isMirror ? { _, _ in } : { src, dst in
+                session.moveInQueue(from: src, to: dst)
+                manager.persistQueue(for: session)
+                manager.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onQueueClearAll: isMirror ? {} : {
+                session.clearPendingQueue()
+                manager.persistQueue(for: session)
+                manager.runners[sessionId]?.flushQueueIfIdle()
+            },
+            onRetryContextRecovery: {
+                _ = manager.sendTranscriptAsContext(
+                    sessionId: sessionId,
+                    agentName: state.agent(id: session.agentId)?.displayName
+                )
+            },
+            rememberedScrollAnchor: {
+                manager.rememberedTranscriptScrollAnchor(for: sessionId)
+            },
+            onRememberScrollAnchor: { anchor, index, followsTail in
+                manager.rememberTranscriptScrollAnchor(
+                    sessionId: sessionId,
+                    anchorMessageId: anchor,
+                    anchorMessageIndex: index,
+                    followsTail: followsTail
+                )
+            },
+            onLoadFullToolCallContent: { toolCallId in
+                manager.reloadFullToolCallContent(
+                    sessionId: sessionId, toolCallId: toolCallId)
+            }
+        )
     }
 
     private func introStateAndComposer<Intro: View>(
