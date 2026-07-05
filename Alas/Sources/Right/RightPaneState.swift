@@ -131,6 +131,7 @@ final class RightPaneState {
     var pendingDiscard: PendingDiscard? = nil
     var pendingCherryPickSHA: String? = nil
     var pendingMerge: ReviewLoopSnapshot? = nil
+    var mergeError: String? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -868,6 +869,10 @@ final class RightPaneState {
         pendingMerge = nil
     }
 
+    func clearMergeError() {
+        mergeError = nil
+    }
+
     func performMerge() {
         guard pendingMerge != nil else { return }
         pendingMerge = nil
@@ -875,7 +880,7 @@ final class RightPaneState {
         // if the dialog captured a now-stale snapshot).
         guard let cached = reviewLoop.snapshot,
               ReviewReadinessModel.canMergeReviewRequest(snapshot: cached) else {
-            sidebarError = Self.mergeUnavailableMessage
+            mergeError = Self.mergeUnavailableMessage
             return
         }
         guard reviewLoop.beginAction(.merge) else { return }
@@ -889,17 +894,21 @@ final class RightPaneState {
             await refresh()
             guard let snapshot = reviewLoop.snapshot,
                   ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot) else {
-                sidebarError = Self.mergeUnavailableMessage
+                mergeError = Self.mergeUnavailableMessage
                 return
             }
             if await reviewLoop.merge(snapshot: snapshot) {
                 await refresh()
             } else {
-                sidebarError = reviewLoop.lastError ?? "Merge failed."
+                mergeError = reviewLoop.lastError ?? "Merge failed."
             }
         }
     }
 
+    // Merge failures are surfaced via an app-level alert (hosted in RootView
+    // next to the confirmation dialog) rather than `sidebarError`, because a
+    // merge can be launched from the Review tab in the center pane while the
+    // right pane — the only place `sidebarError` renders — is collapsed.
     private static let mergeUnavailableMessage =
         "Merge is no longer available — the branch or review state changed."
 

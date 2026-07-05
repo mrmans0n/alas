@@ -120,7 +120,7 @@ struct RightPaneStateReviewLoopPushTests {
         state.performMerge()
 
         #expect(state.pendingMerge == nil)
-        #expect(state.sidebarError != nil)
+        #expect(state.mergeError != nil)
     }
 
     @Test func normalPushArgumentsDoNotForce() {

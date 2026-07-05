@@ -214,6 +214,20 @@ struct RootView: View {
                 Text("Squash-merge this review request and delete the branch.")
             }
         }
+        .alert(
+            "Merge failed",
+            isPresented: Binding(
+                get: { activeMergeState()?.mergeError != nil },
+                set: { if !$0 { activeMergeState()?.clearMergeError() } }
+            ),
+            presenting: activeMergeState()?.mergeError
+        ) { _ in
+            Button("OK", role: .cancel) {
+                activeMergeState()?.clearMergeError()
+            }
+        } message: { message in
+            Text(message)
+        }
         .onAppear {
             state.updates.checkOnLaunch()
         }
