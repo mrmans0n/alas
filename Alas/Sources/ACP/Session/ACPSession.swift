@@ -1474,14 +1474,21 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// Index just past the last user message — the start of the current
-    /// trailing turn. A late load-replay only reconstructs this trailing
-    /// in-progress output; messages before the last user prompt belong to
-    /// completed prior turns and must never be matched or adopted by the
-    /// replay guard (doing so would mutate an old bubble and then drop the
-    /// real continuation via the `hasUserAfterMessage` guard).
-    private var trailingTurnStartIndex: Int {
-        if let last = transcript.messages.lastIndex(where: { if case .user = $0 { return true } else { return false } }) {
+    /// Start of the trailing contiguous run of agent/thought bubbles — the
+    /// index just past the last message that is neither `.agent` nor
+    /// `.thought` (a user prompt, tool call, file edit, plan, or system
+    /// notice). A late load-replay only continues this in-progress trailing
+    /// output; adoption must not reach back across such a boundary into an
+    /// already-closed bubble (mirroring how `lastAgent()`/`lastThought()`
+    /// stop at user/tool/file rows), which would mutate an old bubble and
+    /// then drop the real continuation via the `hasUserAfterMessage` guard.
+    private var trailingOutputStartIndex: Int {
+        if let last = transcript.messages.lastIndex(where: { message in
+            switch message {
+            case .agent, .thought: return false
+            default: return true
+            }
+        }) {
             return transcript.messages.index(after: last)
         }
         return transcript.messages.startIndex
@@ -1512,19 +1519,19 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// When a diverged replay `candidate` begins with the full text of an
-    /// existing trailing-turn message of `kind`, the stream is that
+    /// existing trailing-output message of `kind`, the stream is that
     /// already-present message replayed under a regenerated id and then
     /// continued past the boundary window. Append only the divergent suffix
     /// to that message (so the hydrated prefix is not duplicated) and rebind
     /// it to the regenerated `messageId` so subsequent chunks target it via
     /// `messageIndex`. Returns the adopted message's index, or nil when no
-    /// trailing-turn message is a prefix of the candidate (genuine new
-    /// output — including output that merely shares a prefix with an older,
-    /// pre-user-prompt bubble).
+    /// trailing-output message is a prefix of the candidate (genuine new
+    /// output — including output that merely shares a prefix with an older
+    /// bubble already closed by a user prompt, tool call, or file edit).
     private func adoptReplayContinuation(kind: TextMessageKind, candidate: String, messageId: String) -> Int? {
         var bestIndex: Int?
         var bestPrefixCount = 0
-        for index in trailingTurnStartIndex..<transcript.messages.endIndex {
+        for index in trailingOutputStartIndex..<transcript.messages.endIndex {
             let existing: String
             switch (kind, transcript.messages[index]) {
             case (.agent, .agent(_, _, let buf)),

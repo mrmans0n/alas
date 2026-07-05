@@ -368,6 +368,34 @@ struct ACPSessionTests {
         #expect(agentTexts == ["hello", "hello there"])
     }
 
+    @Test("post-tool live output sharing a prefix with a pre-tool bubble is not adopted across the tool call")
+    func postToolLiveOutputNotAdoptedAcrossToolCall() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK")),
+            .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Run",
+                kind: "execute",
+                status: "completed",
+                content: "done"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Fresh post-tool output that happens to start with the pre-tool
+        // bubble's full text. It must become its own message after the tool
+        // call, not append to the already-closed pre-tool bubble.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" done"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK", "OK done"])
+    }
+
     @Test("late replay user chunk with unknown messageId does not append prompt")
     func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
