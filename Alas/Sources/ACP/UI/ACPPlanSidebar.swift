@@ -12,7 +12,7 @@ import SwiftUI
 ///
 /// Spec: `docs/superpowers/specs/2026-05-29-acp-plan-sidebar-design.md` (§3)
 struct ACPPlanSidebar: View {
-    static let width: CGFloat = 320
+    static let width = ACPChatLayout.planSidebarWidth
 
     @ObservedObject var transcript: ACPTranscript
     let onMinimize: () -> Void

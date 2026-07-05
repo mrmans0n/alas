@@ -20,6 +20,11 @@ struct ACPChatLayoutTests {
         #expect(ACPChatLayout.contentMaxWidth(forPaneWidth: 3_000) == 960)
     }
 
+    @Test func contentWidthUsesMeasuredChatColumnWidth() {
+        #expect(ACPChatLayout.contentMaxWidth(forChatColumnWidth: 1_200) == 840)
+        #expect(ACPChatLayout.contentMaxWidth(forChatColumnWidth: 880) == 720)
+    }
+
     @Test func planSidebarReducesEffectiveChatColumnWidth() {
         #expect(ACPChatLayout.chatColumnWidth(
             forPaneWidth: 1_200,
