@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.14] - 2026-07-05
+
+### ✨ Features
+
+- Default main worktree comparisons to `origin/baseBranch` (#631).
+- Merge PRs in-app to close the review loop (#633).
+- Support GitHub merge queues in review flows (#635).
+
+### 🐛 Fixes
+
+- Keep ACP transcript layout stable after pane resize (#632).
+
 ## [0.8.13] - 2026-07-04
 
 ### ✨ Features

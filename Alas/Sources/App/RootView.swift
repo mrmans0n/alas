@@ -15,122 +15,270 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        ZStack {
-            Group {
-                if state.projects.isEmpty {
-                    EmptyState(
-                        canCreateWorktree: false,
-                        onAddProject: { showNewProject = true },
-                        onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
-                    )
-                } else {
-                    ThreePaneLayout(
-                        sidebarWidth: Binding(
-                            get: { state.config.sidebarWidth },
-                            set: { state.config.sidebarWidth = $0 }
-                        ),
-                        rightWidth: Binding(
-                            get: { state.config.rightPaneWidth },
-                            set: { state.config.rightPaneWidth = $0 }
-                        ),
-                        sidebarVisible: state.config.sidebarVisible,
-                        rightVisible: state.config.rightPaneVisible,
-                        onWidthsChanged: { state.saveConfig() },
-                        sidebar: {
-                            SidebarView(
-                                state: state,
-                                collapsedProjects: Binding(
-                                    get: { Set(state.config.collapsedProjectIds) },
-                                    set: { collapsedProjects in
-                                        state.config.collapsedProjectIds = collapsedProjects.sorted()
-                                        state.saveConfig()
-                                    }
-                                ),
-                                onSettings: { openSettingsWindow() },
-                                onAddProject: { showNewProject = true },
-                                onEditProject: { projectId in
-                                    editingProject = state.projects.first { $0.id == projectId }
-                                },
-                                onRemoveProject: { projectId in
-                                    removingProject = state.projects.first { $0.id == projectId }
-                                },
-                                onNewWorktree: { projectId in
-                                    newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
-                                },
-                                onHideSidebar: {
-                                    state.config.sidebarVisible = false
-                                    state.saveConfig()
-                                }
-                            )
-                        },
-                        center: {
-                            centerContent()
-                        },
-                        right: {
-                            let resolver = RightPaneSelectionStateResolver(
-                                selectedWorktreeId: state.selectedWorktreeId,
-                                projects: state.activeSpaceProjects,
-                                projectsManager: state.projectsManager
-                            )
-                            switch resolver.resolve() {
-                            case .empty:
-                                EmptyView()
-                            case .active(let wt):
-                                RightPaneView(
-                                    state: state,
-                                    worktree: wt,
-                                    onSelectChangedFile: { file in
-                                        openOrFocusDiff(
-                                            worktree: wt,
-                                            path: file.path,
-                                            staged: file.stage == .staged,
-                                            originalPath: file.renameFrom
-                                        )
-                                    },
-                                    onSelectTreeFile: { node in
-                                        openOrFocusEditor(worktree: wt, path: node.path)
-                                    },
-                                    onSelectCommit: { commit in
-                                        openOrFocusCommit(worktree: wt, commit: commit)
-                                    },
-                                    onEditCommit: { commit, baseRef in
-                                        openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
-                                    }
-                                )
-                            case .creating(let wt):
-                                RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
-                            case .deleting(let wt):
-                                RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
-                            case .createFailed(let wt):
-                                RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
-                            }
-                        }
-                    )
-                }
+        rootContent
+            .environment(\.theme, state.themeStore.current)
+            .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
+                // `initial: true` is load-bearing: AppState.init() calls
+                // WindowAppearance.apply too, but that runs before the SwiftUI
+                // Window's NSWindow exists, so the per-window appearance never
+                // gets set. Without firing on first appearance, light-mode
+                // launches render half-dark until the user toggles the theme.
+                WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
             }
+            .background(WindowConfigurator(disablesSystemDrag: true))
+            .frame(minWidth: 700, minHeight: 600)
+            .ignoresSafeArea()
+            .modifier(RootCommandHandlers(
+                state: state,
+                newWorktreePresentation: $newWorktreePresentation,
+                showNewProject: $showNewProject,
+                selectedWorktree: selectedWorktree,
+                openSettings: openSettingsWindow
+            ))
+            .modifier(RootPresentationHandlers(
+                state: state,
+                showNewProject: $showNewProject,
+                editingProject: $editingProject,
+                removingProject: $removingProject,
+                newWorktreePresentation: $newWorktreePresentation
+            ))
+            .task {
+                state.startHarness()
+                if await state.projectsManager.refreshAll() {
+                    state.saveProjects()
+                }
+                // Worktrees now exist — load any persisted tab files for them. Init
+                // can't do this because refreshAll runs async after init.
+                state.reloadTabs()
+                if state.selectedWorktreeId == nil {
+                    state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
+                }
+                state.startAllProjectGitWatchers()
+                state.rescanAgents()
+            }
+    }
+
+    private var rootContent: some View {
+        ZStack {
+            mainContent
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
             AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
         }
-        .environment(\.theme, state.themeStore.current)
-        .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
-            // `initial: true` is load-bearing: AppState.init() calls
-            // WindowAppearance.apply too, but that runs before the SwiftUI
-            // Window's NSWindow exists, so the per-window appearance never
-            // gets set. Without firing on first appearance, light-mode
-            // launches render half-dark until the user toggles the theme.
-            WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        if state.projects.isEmpty {
+            EmptyState(
+                canCreateWorktree: false,
+                onAddProject: { showNewProject = true },
+                onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
+            )
+        } else {
+            ThreePaneLayout(
+                sidebarWidth: Binding(
+                    get: { state.config.sidebarWidth },
+                    set: { state.config.sidebarWidth = $0 }
+                ),
+                rightWidth: Binding(
+                    get: { state.config.rightPaneWidth },
+                    set: { state.config.rightPaneWidth = $0 }
+                ),
+                sidebarVisible: state.config.sidebarVisible,
+                rightVisible: state.config.rightPaneVisible,
+                onWidthsChanged: { state.saveConfig() },
+                sidebar: { sidebarContent },
+                center: { centerContent() },
+                right: { rightContent }
+            )
         }
-        .background(WindowConfigurator(disablesSystemDrag: true))
-        .frame(minWidth: 700, minHeight: 600)
-        .ignoresSafeArea()
-        .modifier(RootCommandHandlers(
+    }
+
+    private var sidebarContent: some View {
+        SidebarView(
             state: state,
-            newWorktreePresentation: $newWorktreePresentation,
-            showNewProject: $showNewProject,
-            selectedWorktree: selectedWorktree,
-            openSettings: openSettingsWindow
-        ))
+            collapsedProjects: Binding(
+                get: { Set(state.config.collapsedProjectIds) },
+                set: { collapsedProjects in
+                    state.config.collapsedProjectIds = collapsedProjects.sorted()
+                    state.saveConfig()
+                }
+            ),
+            onSettings: { openSettingsWindow() },
+            onAddProject: { showNewProject = true },
+            onEditProject: { projectId in
+                editingProject = state.projects.first { $0.id == projectId }
+            },
+            onRemoveProject: { projectId in
+                removingProject = state.projects.first { $0.id == projectId }
+            },
+            onNewWorktree: { projectId in
+                newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
+            },
+            onHideSidebar: {
+                state.config.sidebarVisible = false
+                state.saveConfig()
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var rightContent: some View {
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
+        )
+        switch resolver.resolve() {
+        case .empty:
+            EmptyView()
+        case .active(let wt):
+            RightPaneView(
+                state: state,
+                worktree: wt,
+                onSelectChangedFile: { file in
+                    openOrFocusDiff(
+                        worktree: wt,
+                        path: file.path,
+                        staged: file.stage == .staged,
+                        originalPath: file.renameFrom
+                    )
+                },
+                onSelectTreeFile: { node in
+                    openOrFocusEditor(worktree: wt, path: node.path)
+                },
+                onSelectCommit: { commit in
+                    openOrFocusCommit(worktree: wt, commit: commit)
+                },
+                onEditCommit: { commit, baseRef in
+                    openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
+                }
+            )
+        case .creating(let wt):
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
+        case .deleting(let wt):
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
+        case .createFailed(let wt):
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
+        }
+    }
+
+    private func openSettingsWindow() {
+        openWindow(id: "settings")
+    }
+
+    @ViewBuilder
+    private func centerContent() -> some View {
+        let resolver = CenterSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
+        )
+        switch resolver.resolve() {
+        case .worktree(let wt):
+            CenterPaneView(
+                state: state,
+                worktree: wt,
+                allowsPaneFocus: !state.isKeyboardOverlayOpen
+            )
+        case .deleting(let wt):
+            DeletingWorktreeView(worktree: wt)
+        case .deleteFailed(let wt, let message):
+            DeleteFailedWorktreeView(
+                worktree: wt,
+                message: message,
+                onRetry: { state.deleteWorktree(wt) },
+                onArchive: { state.archiveWorktree(wt) },
+                onCopyError: {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(message, forType: .string)
+                }
+            )
+        case .creating(let wt):
+            CreatingWorktreeView(worktree: wt)
+        case .empty:
+            EmptyTabView(
+                onNewTerminal: {},
+                onNewAgentTerminal: {},
+                onNewAgentChat: {},
+                newTerminalShortcut: nil,
+                newAgentTerminalShortcut: nil,
+                newAgentChatShortcut: nil
+            )
+        }
+    }
+
+    private func selectedWorktree() -> Worktree? {
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
+        )
+        if case .active(let wt) = resolver.resolve() { return wt }
+        return nil
+    }
+
+    private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool, originalPath: String?) {
+        if ImageFileType.isSupported(relativePath: path) {
+            state.openFile(relativePath: path, worktreeId: worktree.id)
+            return
+        }
+
+        state.openDiffTab(
+            forFileInWorktree: worktree,
+            relativePath: path,
+            staged: staged,
+            originalPath: originalPath,
+            compareWithHEAD: false
+        )
+    }
+
+    private func openOrFocusEditor(worktree: Worktree, path: String) {
+        state.openFile(relativePath: path, worktreeId: worktree.id)
+    }
+
+    private func openOrFocusCommit(worktree: Worktree, commit: CommitInfo) {
+        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
+            if case .commit(let s) = tab { return s.sha == commit.sha } else { return false }
+        }
+        if let existing {
+            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+        } else {
+            let title = "\(commit.shortSha) \(commit.subject)"
+            let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
+            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+        }
+    }
+
+    private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
+        if let existing = state.tabs.commitEditorTab(worktreeId: worktree.id, currentSha: commit.sha) {
+            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
+            return
+        }
+
+        let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
+        let tab = state.tabs.openCommitEditor(
+            worktreeId: worktree.id,
+            baseRef: baseRef,
+            originalSha: commit.sha,
+            currentSha: commit.sha,
+            title: title
+        )
+        state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+    }
+}
+
+private struct RootPresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+    @Binding var showNewProject: Bool
+    @Binding var editingProject: ProjectConfig?
+    @Binding var removingProject: ProjectConfig?
+    @Binding var newWorktreePresentation: NewWorktreePresentation?
+
+    func body(content: Content) -> some View {
+        content
         .sheet(isPresented: $showNewProject) {
             NewProjectDialog(state: state, presented: $showNewProject)
         }
@@ -269,125 +417,6 @@ struct RootView: View {
             }
             .environment(\.theme, state.themeStore.current)
         }
-        .task {
-            state.startHarness()
-            if await state.projectsManager.refreshAll() {
-                state.saveProjects()
-            }
-            // Worktrees now exist — load any persisted tab files for them. Init
-            // can't do this because refreshAll runs async after init.
-            state.reloadTabs()
-            if state.selectedWorktreeId == nil {
-                state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
-            }
-            state.startAllProjectGitWatchers()
-            state.rescanAgents()
-        }
-    }
-
-    private func openSettingsWindow() {
-        openWindow(id: "settings")
-    }
-
-    @ViewBuilder
-    private func centerContent() -> some View {
-        let resolver = CenterSelectionStateResolver(
-            selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
-        )
-        switch resolver.resolve() {
-        case .worktree(let wt):
-            CenterPaneView(
-                state: state,
-                worktree: wt,
-                allowsPaneFocus: !state.isKeyboardOverlayOpen
-            )
-        case .deleting(let wt):
-            DeletingWorktreeView(worktree: wt)
-        case .deleteFailed(let wt, let message):
-            DeleteFailedWorktreeView(
-                worktree: wt,
-                message: message,
-                onRetry: { state.deleteWorktree(wt) },
-                onArchive: { state.archiveWorktree(wt) },
-                onCopyError: {
-                    let pb = NSPasteboard.general
-                    pb.clearContents()
-                    pb.setString(message, forType: .string)
-                }
-            )
-        case .creating(let wt):
-            CreatingWorktreeView(worktree: wt)
-        case .empty:
-            EmptyTabView(
-                onNewTerminal: {},
-                onNewAgentTerminal: {},
-                onNewAgentChat: {},
-                newTerminalShortcut: nil,
-                newAgentTerminalShortcut: nil,
-                newAgentChatShortcut: nil
-            )
-        }
-    }
-
-    private func selectedWorktree() -> Worktree? {
-        let resolver = RightPaneSelectionStateResolver(
-            selectedWorktreeId: state.selectedWorktreeId,
-            projects: state.activeSpaceProjects,
-            projectsManager: state.projectsManager
-        )
-        if case .active(let wt) = resolver.resolve() { return wt }
-        return nil
-    }
-
-    private func openOrFocusDiff(worktree: Worktree, path: String, staged: Bool, originalPath: String?) {
-        if ImageFileType.isSupported(relativePath: path) {
-            state.openFile(relativePath: path, worktreeId: worktree.id)
-            return
-        }
-
-        state.openDiffTab(
-            forFileInWorktree: worktree,
-            relativePath: path,
-            staged: staged,
-            originalPath: originalPath,
-            compareWithHEAD: false
-        )
-    }
-
-    private func openOrFocusEditor(worktree: Worktree, path: String) {
-        state.openFile(relativePath: path, worktreeId: worktree.id)
-    }
-
-    private func openOrFocusCommit(worktree: Worktree, commit: CommitInfo) {
-        let existing = state.tabs.tabs(forWorktree: worktree.id).first { tab in
-            if case .commit(let s) = tab { return s.sha == commit.sha } else { return false }
-        }
-        if let existing {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
-        } else {
-            let title = "\(commit.shortSha) \(commit.subject)"
-            let tab = state.tabs.appendCommit(worktreeId: worktree.id, sha: commit.sha, title: title)
-            state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
-        }
-    }
-
-    private func openOrFocusCommitEditor(worktree: Worktree, commit: CommitInfo, baseRef: String) {
-        if let existing = state.tabs.commitEditorTab(worktreeId: worktree.id, currentSha: commit.sha) {
-            state.tabs.activate(worktreeId: worktree.id, tabId: existing.id)
-            return
-        }
-
-        let title = "\(commit.shortSha) \(commit.conventionalTag.map { "\($0): \(commit.subject)" } ?? commit.subject)"
-        let tab = state.tabs.openCommitEditor(
-            worktreeId: worktree.id,
-            baseRef: baseRef,
-            originalSha: commit.sha,
-            currentSha: commit.sha,
-            title: title
-        )
-        state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
     }
 }
 
