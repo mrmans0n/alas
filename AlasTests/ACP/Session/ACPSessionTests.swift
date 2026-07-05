@@ -462,6 +462,28 @@ struct ACPSessionTests {
         #expect(agentTexts == ["hello world!"])
     }
 
+    @Test("a coincidental mid-token suffix overlap is not adopted as a replay continuation")
+    func weakMidTokenSuffixOverlapNotAdopted() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A genuinely new message "Keep going" whose first held fragment "K"
+        // coincides with the tail of "OK". The overlap is mid-token (not at a
+        // word boundary), so it must not be adopted into the old bubble as
+        // "OKeep going"; it starts its own row.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("K"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("eep going"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK", "Keep going"])
+    }
+
     @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
     func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

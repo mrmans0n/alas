@@ -1559,11 +1559,21 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !existing.isEmpty else { return nil }
         // Longest suffix of `existing` that is a prefix of `candidate` — the
         // reproduced portion. The remaining candidate is the genuine new
-        // continuation to append.
+        // continuation to append. The reproduced suffix must begin at a word
+        // boundary (the start of the bubble, or just after whitespace):
+        // unrecognised message ids otherwise start their own rows, so a
+        // coincidental mid-token overlap (a new message `"Keep going"` whose
+        // `"K"` matches the tail of a hydrated `"OK"`) must not be mistaken
+        // for a replay continuation and merged into the old bubble.
         var suffix: String?
-        let maxOverlap = min(existing.count, candidate.count)
+        let existingChars = Array(existing)
+        let maxOverlap = min(existingChars.count, candidate.count)
         for overlap in stride(from: maxOverlap, through: 1, by: -1) {
-            if candidate.hasPrefix(String(existing.suffix(overlap))) {
+            let startOffset = existingChars.count - overlap
+            if startOffset > 0, !existingChars[startOffset - 1].isWhitespace {
+                continue
+            }
+            if candidate.hasPrefix(String(existingChars[startOffset...])) {
                 suffix = String(candidate.dropFirst(overlap))
                 break
             }
