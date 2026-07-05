@@ -61,6 +61,7 @@ struct DiffCodeText: View {
             to: output,
             text: text,
             fileExtension: fileExtension,
+            inlineTone: inlineTone,
             theme: theme,
             visibleLength: visibleLength
         )
@@ -91,6 +92,7 @@ struct DiffCodeText: View {
         to output: NSMutableAttributedString,
         text: String,
         fileExtension: String,
+        inlineTone: DiffInlineTone,
         theme: Theme,
         visibleLength: Int
     ) {
@@ -103,7 +105,7 @@ struct DiffCodeText: View {
             guard span.range.location >= cursor else { continue }
             output.addAttribute(
                 .foregroundColor,
-                value: NSColor(syntaxColor(for: span.capture, theme: theme)),
+                value: NSColor(syntaxColor(for: span.capture, inlineTone: inlineTone, theme: theme)),
                 range: span.range
             )
             cursor = NSMaxRange(span.range)
@@ -143,7 +145,7 @@ struct DiffCodeText: View {
         }
     }
 
-    private static func syntaxColor(for capture: HighlightCapture, theme: Theme) -> Color {
+    private static func syntaxColor(for capture: HighlightCapture, inlineTone: DiffInlineTone, theme: Theme) -> Color {
         switch capture {
         case .keyword:
             return theme.color("syntax-keyword")
@@ -156,6 +158,9 @@ struct DiffCodeText: View {
         case .number:
             return theme.color("mod")
         case .comment:
+            if inlineTone == .add || inlineTone == .del {
+                return theme.color("fg")
+            }
             return theme.color("fg-faint")
         case .attribute, .constant:
             return theme.color("syntax-keyword")
