@@ -276,6 +276,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
+                adoptContinuation: { candidate in
+                    chunk.messageId.flatMap { adoptReplayContinuation(kind: .agent, candidate: candidate, messageId: $0) }
+                },
                 makeNew: { text in .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
                 return []
             }
@@ -298,6 +301,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
+                adoptContinuation: { candidate in
+                    chunk.messageId.flatMap { adoptReplayContinuation(kind: .thought, candidate: candidate, messageId: $0) }
+                },
                 makeNew: { text in .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
                 return []
             }
@@ -1489,6 +1495,46 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    /// When a diverged replay `candidate` begins with the full text of an
+    /// existing message of `kind`, the stream is that already-present
+    /// message replayed under a regenerated id and then continued past the
+    /// boundary window. Append only the divergent suffix to that message
+    /// (so the hydrated prefix is not duplicated) and rebind it to the
+    /// regenerated `messageId` so subsequent chunks target it via
+    /// `messageIndex`. Returns the adopted message's index, or nil when no
+    /// existing message is a prefix of the candidate (genuine new output).
+    private func adoptReplayContinuation(kind: TextMessageKind, candidate: String, messageId: String) -> Int? {
+        var bestIndex: Int?
+        var bestPrefixCount = 0
+        for (index, message) in transcript.messages.enumerated() {
+            let existing: String
+            switch (kind, message) {
+            case (.agent, .agent(_, _, let buf)),
+                 (.thought, .thought(_, _, let buf)):
+                existing = buf.value
+            default:
+                continue
+            }
+            guard !existing.isEmpty, existing.count > bestPrefixCount, candidate.hasPrefix(existing) else { continue }
+            bestIndex = index
+            bestPrefixCount = existing.count
+        }
+        guard let i = bestIndex else { return nil }
+        let suffix = String(candidate.dropFirst(bestPrefixCount))
+        switch transcript.messages[i] {
+        case .agent(let id, _, let buf):
+            buf.append(suffix)
+            transcript.messages[i] = .agent(id: id, messageId: messageId, buf)
+        case .thought(let id, _, let buf):
+            buf.append(suffix)
+            transcript.messages[i] = .thought(id: id, messageId: messageId, buf)
+        default:
+            return nil
+        }
+        transcript.streamingTick &+= 1
+        return i
+    }
+
     private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         guard !text.isEmpty || !attachments.isEmpty else { return false }
         return transcript.messages.contains { message in
@@ -1506,6 +1552,7 @@ final class ACPSession: ObservableObject, Identifiable {
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,
                                  replayCandidateMatches: (String) -> Bool,
+                                 adoptContinuation: (String) -> Int?,
                                  makeNew: (String) -> ACPMessage) -> Int? {
         // Outside the boundary-crossing window there is no late replay to
         // guard against — drop any accumulated candidates so they never
@@ -1556,6 +1603,10 @@ final class ACPSession: ObservableObject, Identifiable {
         // first fragment like "I" coinciding with an earlier message would
         // otherwise be dropped, corrupting the text). Single-chunk full
         // replays and chunked/mid-stream replays never create a message.
+        // On divergence, if the candidate begins with an existing message
+        // it is that message replayed under a regenerated id and continued
+        // — adopt it (append only the divergent suffix) instead of
+        // materialising a new row that duplicates the hydrated prefix.
         var newMessageText = addition
         if let messageId, !allowsStreamingBoundaryCrossing {
             let previous = pendingReplayCandidates[messageId]
@@ -1565,6 +1616,9 @@ final class ACPSession: ObservableObject, Identifiable {
                 return nil
             }
             pendingReplayCandidates.removeValue(forKey: messageId)
+            if let adopted = adoptContinuation(candidate) {
+                return adopted
+            }
             newMessageText = candidate
         }
         transcript.messages.append(makeNew(newMessageText))

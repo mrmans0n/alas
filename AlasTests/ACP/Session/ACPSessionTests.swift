@@ -316,6 +316,36 @@ struct ACPSessionTests {
         #expect(agentTexts == ["hello world"])
     }
 
+    @Test("replay-then-continuation under a regenerated messageId merges into the hydrated message")
+    func replayThenContinuationMergesIntoHydratedMessage() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The in-progress "hello" is replayed under a regenerated id and
+        // then continues with " world". The prefix must not be duplicated:
+        // the continuation merges into the hydrated message.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" world"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+
+        // A further continuation chunk targets the adopted message via its
+        // rebound id rather than spawning yet another row.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
+        let after = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(after == ["hello world!"])
+    }
+
     @Test("late replay user chunk with unknown messageId does not append prompt")
     func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
