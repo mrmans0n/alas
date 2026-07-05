@@ -217,13 +217,13 @@ struct RootView: View {
         .alert(
             "Merge failed",
             isPresented: Binding(
-                get: { activeMergeState()?.mergeError != nil },
-                set: { if !$0 { activeMergeState()?.clearMergeError() } }
+                get: { state.rightPaneStore.stateReportingMergeError() != nil },
+                set: { if !$0 { state.rightPaneStore.stateReportingMergeError()?.clearMergeError() } }
             ),
-            presenting: activeMergeState()?.mergeError
+            presenting: state.rightPaneStore.stateReportingMergeError()?.mergeError
         ) { _ in
             Button("OK", role: .cancel) {
-                activeMergeState()?.clearMergeError()
+                state.rightPaneStore.stateReportingMergeError()?.clearMergeError()
             }
         } message: { message in
             Text(message)
