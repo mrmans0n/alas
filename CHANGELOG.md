@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.15] - 2026-07-05
+
+### 🐛 Fixes
+
+- Clarify remote QR address selection (#637).
+- Stop duplicate stacked diff draft composers (#636).
+
 ## [0.8.14] - 2026-07-05
 
 ### ✨ Features
