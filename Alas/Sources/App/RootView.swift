@@ -195,17 +195,17 @@ struct RootView: View {
         .confirmationDialog(
             "Merge review request?",
             isPresented: Binding(
-                get: { activeMergeState()?.pendingMerge != nil },
-                set: { if !$0 { activeMergeState()?.cancelMerge() } }
+                get: { state.rightPaneStore.stateWithPendingMerge() != nil },
+                set: { if !$0 { state.rightPaneStore.stateWithPendingMerge()?.cancelMerge() } }
             ),
             titleVisibility: .visible,
-            presenting: activeMergeState()?.pendingMerge
+            presenting: state.rightPaneStore.stateWithPendingMerge()?.pendingMerge
         ) { snapshot in
             Button("Merge", role: .destructive) {
-                activeMergeState()?.performMerge()
+                state.rightPaneStore.stateWithPendingMerge()?.performMerge()
             }
             Button("Cancel", role: .cancel) {
-                activeMergeState()?.cancelMerge()
+                state.rightPaneStore.stateWithPendingMerge()?.cancelMerge()
             }
         } message: { snapshot in
             if let request = snapshot.reviewRequest {
@@ -319,11 +319,6 @@ struct RootView: View {
                 newAgentChatShortcut: nil
             )
         }
-    }
-
-    private func activeMergeState() -> RightPaneState? {
-        guard let id = state.selectedWorktreeId else { return nil }
-        return state.rightPaneStore.activeState(worktreeId: id)
     }
 
     private func selectedWorktree() -> Worktree? {

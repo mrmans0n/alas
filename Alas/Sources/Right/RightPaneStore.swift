@@ -130,4 +130,12 @@ final class RightPaneStore {
     func stateReportingMergeError() -> RightPaneState? {
         states.values.first { $0.mergeError != nil }
     }
+
+    /// The first cached state with a pending merge confirmation, if any. The
+    /// confirmation dialog (see RootView) resolves its owning state through
+    /// this rather than the current selection, so switching worktrees while the
+    /// dialog is open can't cancel the wrong state and strand `pendingMerge`.
+    func stateWithPendingMerge() -> RightPaneState? {
+        states.values.first { $0.pendingMerge != nil }
+    }
 }
