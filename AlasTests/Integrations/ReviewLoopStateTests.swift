@@ -589,7 +589,31 @@ struct ReviewLoopStateTests {
 
         let ok = await state.merge(snapshot: snapshot)
 
-        #expect(ok)
+        #expect(ok == .merged)
+        #expect(provider.mergeRequestCalls == [
+            FakeCodeHostProvider.MergeRequestCall(number: 42, method: .squash, deleteBranch: true),
+        ])
+    }
+
+    @Test func mergeReportsQueuedOutcomeForQueueRequest() async throws {
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            capabilities: .githubCLI,
+            request: Self.makeMergeableReviewRequest(remote: remote).withMergeQueue(isEnabled: true, isInQueue: false)
+        )
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+
+        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+
+        let outcome = await state.merge(snapshot: snapshot)
+
+        #expect(outcome == .queued)
         #expect(provider.mergeRequestCalls == [
             FakeCodeHostProvider.MergeRequestCall(number: 42, method: .squash, deleteBranch: true),
         ])
@@ -614,7 +638,7 @@ struct ReviewLoopStateTests {
 
         let ok = await state.merge(snapshot: snapshot)
 
-        #expect(!ok)
+        #expect(ok == nil)
         #expect(state.lastError != nil)
     }
 
@@ -648,7 +672,7 @@ struct ReviewLoopStateTests {
 
         let ok = await state.merge(snapshot: snapshot)
 
-        #expect(!ok)
+        #expect(ok == nil)
         #expect(provider.mergeRequestCalls.isEmpty)
         #expect(state.lastError != nil)
     }

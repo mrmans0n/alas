@@ -6,6 +6,11 @@ struct ReviewLoopRefreshAttempt: Equatable, Sendable {
     fileprivate let generation: Int
 }
 
+enum ReviewMergeOutcome: Equatable, Sendable {
+    case merged
+    case queued
+}
+
 @Observable
 @MainActor
 final class ReviewLoopState {
@@ -352,11 +357,11 @@ final class ReviewLoopState {
         }
     }
 
-    func merge(snapshot: ReviewLoopSnapshot) async -> Bool {
+    func merge(snapshot: ReviewLoopSnapshot) async -> ReviewMergeOutcome? {
         guard
             let remote = snapshot.remote,
             let provider = providerRegistry.provider(for: remote.kind)
-        else { return false }
+        else { return nil }
 
         lastError = nil
         do {
@@ -374,7 +379,7 @@ final class ReviewLoopState {
                 cwd: worktreePath
             ) else {
                 lastError = "The review request could not be found."
-                return false
+                return nil
             }
             let checks = try await provider.checks(remote: remote, request: fresh, cwd: worktreePath)
             let freshSnapshot = ReviewLoopSnapshot(
@@ -390,7 +395,7 @@ final class ReviewLoopState {
                   let request = freshSnapshot.reviewRequest
             else {
                 lastError = "Merge is no longer available — the review state changed."
-                return false
+                return nil
             }
             try await provider.mergeReviewRequest(
                 request,
@@ -398,10 +403,10 @@ final class ReviewLoopState {
                 deleteBranch: true,
                 cwd: worktreePath
             )
-            return true
+            return request.isMergeQueueEnabled ? .queued : .merged
         } catch {
             lastError = Self.describe(error)
-            return false
+            return nil
         }
     }
 

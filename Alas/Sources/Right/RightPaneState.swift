@@ -151,6 +151,7 @@ final class RightPaneState {
     var pendingCherryPickSHA: String? = nil
     var pendingMerge: ReviewLoopSnapshot? = nil
     var mergeError: String? = nil
+    var mergeQueuedMessage: String? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -892,6 +893,20 @@ final class RightPaneState {
         mergeError = nil
     }
 
+    func clearMergeQueuedMessage() {
+        mergeQueuedMessage = nil
+    }
+
+    static func mergeConfirmationMessage(for request: ReviewRequest?) -> String {
+        guard let request else {
+            return "Squash-merge this review request and delete the branch."
+        }
+        if request.isMergeQueueEnabled {
+            return "Add \(request.displayIdentity) to the merge queue for \(request.baseRefName)."
+        }
+        return "Squash-merge \(request.displayIdentity) into \(request.baseRefName) and delete the branch."
+    }
+
     func performMerge() {
         guard let pending = pendingMerge else { return }
         pendingMerge = nil
@@ -934,9 +949,13 @@ final class RightPaneState {
                 mergeError = Self.mergeUnavailableMessage
                 return
             }
-            if await reviewLoop.merge(snapshot: snapshot) {
+            switch await reviewLoop.merge(snapshot: snapshot) {
+            case .merged:
                 await refresh()
-            } else {
+            case .queued:
+                mergeQueuedMessage = "Added to merge queue."
+                await refresh()
+            case nil:
                 mergeError = reviewLoop.lastError ?? "Merge failed."
             }
         }

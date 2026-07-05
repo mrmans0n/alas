@@ -208,11 +208,7 @@ struct RootView: View {
                 state.rightPaneStore.stateWithPendingMerge()?.cancelMerge()
             }
         } message: { snapshot in
-            if let request = snapshot.reviewRequest {
-                Text("Squash-merge \(request.displayIdentity) into \(request.baseRefName) and delete the branch.")
-            } else {
-                Text("Squash-merge this review request and delete the branch.")
-            }
+            Text(RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest))
         }
         .alert(
             "Merge failed",
@@ -224,6 +220,20 @@ struct RootView: View {
         ) { _ in
             Button("OK", role: .cancel) {
                 state.rightPaneStore.stateReportingMergeError()?.clearMergeError()
+            }
+        } message: { message in
+            Text(message)
+        }
+        .alert(
+            "Added to merge queue",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateReportingMergeQueuedMessage() != nil },
+                set: { if !$0 { state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage() } }
+            ),
+            presenting: state.rightPaneStore.stateReportingMergeQueuedMessage()?.mergeQueuedMessage
+        ) { _ in
+            Button("OK", role: .cancel) {
+                state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage()
             }
         } message: { message in
             Text(message)

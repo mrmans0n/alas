@@ -123,6 +123,42 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(state.mergeError != nil)
     }
 
+    @Test func mergeConfirmationMessageReflectsQueueOperation() {
+        let snapshot = Self.makeSnapshot(reviewRequest: Self.makeReviewRequest(isMergeQueueEnabled: true))
+
+        #expect(
+            RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest)
+                == "Add GitHub #428 to the merge queue for main."
+        )
+    }
+
+    @Test func mergeConfirmationMessageReflectsSquashOperation() {
+        let snapshot = Self.makeSnapshot(reviewRequest: Self.makeReviewRequest())
+
+        #expect(
+            RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest)
+                == "Squash-merge GitHub #428 into main and delete the branch."
+        )
+    }
+
+    @Test func clearMergeQueuedMessageClearsQueuedSuccess() {
+        let worktree = Worktree(
+            id: "wt-merge-queued-message",
+            projectId: "p1",
+            name: "feature/review-loop",
+            branch: "feature/review-loop",
+            path: URL(fileURLWithPath: "/tmp/repo"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let state = RightPaneState(worktree: worktree, baseBranch: "main")
+        state.mergeQueuedMessage = "Added to merge queue."
+
+        state.clearMergeQueuedMessage()
+
+        #expect(state.mergeQueuedMessage == nil)
+    }
+
     @Test func normalPushArgumentsDoNotForce() {
         let snapshot = Self.makeSnapshot()
 
@@ -216,7 +252,8 @@ struct RightPaneStateReviewLoopPushTests {
         hasUpstream: Bool = true,
         upstreamRemoteName: String? = nil,
         upstreamBranchName: String? = nil,
-        headRemoteName: String? = nil
+        headRemoteName: String? = nil,
+        reviewRequest: ReviewRequest? = nil
     ) -> ReviewLoopSnapshot {
         let remote = CodeHostRemote(
             kind: .github,
@@ -242,11 +279,39 @@ struct RightPaneStateReviewLoopPushTests {
                 needsPush: true
             ),
             remote: remote,
-            reviewRequest: nil,
+            reviewRequest: reviewRequest,
             providerAvailable: true,
             providerAuthenticated: true,
             providerCapabilities: .githubCLI,
             errorMessage: nil
+        )
+    }
+
+    private static func makeReviewRequest(isMergeQueueEnabled: Bool = false) -> ReviewRequest {
+        let remote = CodeHostRemote(
+            kind: .github,
+            host: "github.com",
+            owner: "mrmans0n",
+            repository: "alas",
+            remoteName: "origin",
+            webURL: URL(string: "https://github.com/mrmans0n/alas")!
+        )
+        return ReviewRequest(
+            remote: remote,
+            number: 428,
+            title: "Review loop",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/428")!,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/review-loop",
+            baseRefName: "main",
+            headSHA: "abc123",
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [],
+            threads: [],
+            isMergeQueueEnabled: isMergeQueueEnabled,
+            isInMergeQueue: false
         )
     }
 
