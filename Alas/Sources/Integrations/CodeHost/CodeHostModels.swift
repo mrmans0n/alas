@@ -43,6 +43,11 @@ enum CodeHostKind: String, Codable, Equatable, Sendable {
     var mergeReviewRequestTitle: String {
         "Merge \(reviewRequestLabel)"
     }
+
+    func mergeReviewRequestTitle(for request: ReviewRequest) -> String {
+        if request.isMergeQueueEnabled { return "Add to queue" }
+        return mergeReviewRequestTitle
+    }
 }
 
 struct CodeHostRemote: Equatable, Sendable {
@@ -399,6 +404,8 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     /// be missing actionable feedback. The merge gate fails closed on this: we
     /// must not offer merge while we can't confirm there are no open threads.
     let areThreadsComplete: Bool
+    let isMergeQueueEnabled: Bool
+    let isInMergeQueue: Bool
 
     var provider: CodeHostKind { remote.kind }
 
@@ -420,7 +427,9 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
         threads: [ReviewThread],
-        areThreadsComplete: Bool = true
+        areThreadsComplete: Bool = true,
+        isMergeQueueEnabled: Bool = false,
+        isInMergeQueue: Bool = false
     ) {
         self.remote = remote
         self.number = number
@@ -438,6 +447,8 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         self.checks = checks
         self.threads = threads
         self.areThreadsComplete = areThreadsComplete
+        self.isMergeQueueEnabled = isMergeQueueEnabled
+        self.isInMergeQueue = isInMergeQueue
     }
 
     var worstCheckBucket: ReviewCheckBucket? {
@@ -469,7 +480,9 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             mergeState: mergeState,
             checks: checks,
             threads: threads,
-            areThreadsComplete: areThreadsComplete
+            areThreadsComplete: areThreadsComplete,
+            isMergeQueueEnabled: isMergeQueueEnabled,
+            isInMergeQueue: isInMergeQueue
         )
     }
 
@@ -494,7 +507,9 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             mergeState: mergeState,
             checks: checks,
             threads: threads,
-            areThreadsComplete: complete
+            areThreadsComplete: complete,
+            isMergeQueueEnabled: isMergeQueueEnabled,
+            isInMergeQueue: isInMergeQueue
         )
     }
 

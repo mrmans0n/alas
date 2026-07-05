@@ -254,8 +254,11 @@ struct ReviewReadinessModel: Equatable, Sendable {
                 actions.append(refreshAction)
             }
             let canMergeNow = Self.canMergeReviewRequest(snapshot: snapshot)
+            let isQueued = request.isMergeQueueEnabled && request.isInMergeQueue
             if canMergeNow {
-                actions.append(Action(kind: .merge, title: request.provider.mergeReviewRequestTitle, isEnabled: true))
+                actions.append(Action(kind: .merge, title: request.provider.mergeReviewRequestTitle(for: request), isEnabled: true))
+            } else if isQueued {
+                actions.append(Action(kind: .merge, title: "In queue", isEnabled: false, emphasis: .normal))
             }
             if snapshot.providerCapabilities.canOpenReviewRequest {
                 actions.append(Action(kind: .openReviewRequest, title: request.provider.openReviewRequestTitle, isEnabled: true))
@@ -263,7 +266,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             if request.hasRerunnableFailedCheck, snapshot.providerCapabilities.canRerunFailedChecks {
                 actions.append(Action(kind: .rerunFailedChecks, title: "Rerun", isEnabled: true))
             }
-            if canMergeNow {
+            if canMergeNow || isQueued {
                 actions.append(Action(kind: .inspectReviewEvidence, title: "Review diff", isEnabled: true, emphasis: .normal))
             } else if request.worstCheckBucket == .fail || request.hasActionableFeedback {
                 actions.append(Action(kind: .inspectReviewEvidence, title: "Inspect", isEnabled: true))
@@ -308,10 +311,13 @@ struct ReviewReadinessModel: Equatable, Sendable {
         // needsPush/upstreamAhead) look clean off the stale local commit —
         // merging would ship/delete commits never present in the review diff.
         guard request.headSHA == snapshot.local.headSHA else { return false }
+        let mergeStateAllowsOperation = request.mergeState == .clean
+            || (request.isMergeQueueEnabled && request.mergeState == .blocked)
         return snapshot.providerCapabilities.canMerge
             && request.state == .open
             && !request.isDraft
-            && request.mergeState == .clean
+            && mergeStateAllowsOperation
+            && !request.isInMergeQueue
             && request.reviewDecision != .reviewRequired
             && request.areThreadsComplete
             && !request.hasActionableFeedback

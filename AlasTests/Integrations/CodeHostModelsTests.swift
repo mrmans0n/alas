@@ -25,18 +25,24 @@ struct CodeHostModelsTests {
             reviewDecision: .approved,
             mergeState: .clean,
             checks: [],
-            threads: []
+            threads: [],
+            isMergeQueueEnabled: true,
+            isInMergeQueue: true
         )
         let check = ReviewCheck(id: "c", name: "CI", workflow: "CI", bucket: .pass, detailURL: nil, completedAt: nil)
 
         let requestWithChecks = request.withChecks([check])
         #expect(requestWithChecks.headSHA == "reviewed-head")
         #expect(requestWithChecks.headRepositoryOwner == "mrmans0n")
+        #expect(requestWithChecks.isMergeQueueEnabled)
+        #expect(requestWithChecks.isInMergeQueue)
         #expect(requestWithChecks.checks == [check])
 
         let requestWithThreads = request.withThreads([])
         #expect(requestWithThreads.headSHA == "reviewed-head")
         #expect(requestWithThreads.headRepositoryOwner == "mrmans0n")
+        #expect(requestWithThreads.isMergeQueueEnabled)
+        #expect(requestWithThreads.isInMergeQueue)
         #expect(requestWithThreads.areThreadsComplete)
 
         // A failed thread load flags the copy incomplete; withChecks preserves it.
