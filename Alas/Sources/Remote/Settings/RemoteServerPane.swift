@@ -73,7 +73,7 @@ struct RemoteServerPane: View {
                                 name: "Pairing QR address",
                                 desc: "QR will use \(addressLabel(selected)): \(selected.url)"
                             ) {
-                                Picker("", selection: selectedAddressBinding()) {
+                                Picker("Pairing QR address", selection: selectedAddressBinding()) {
                                     ForEach(state.remoteAdvertisedAddresses) { address in
                                         Text(pickerAddressLabel(address)).tag(address.id)
                                     }
