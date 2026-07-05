@@ -511,14 +511,18 @@ struct DiffTabView: View {
     private func savePendingDraft() {
         guard let anchor = pendingDraftAnchor,
               let model = displayModel else { return }
+        let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(anchor, in: model.groups)
         let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         let validKeys = Set(model.groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
-        guard validKeys.contains(ReviewDraftCommentPlacement.RowKey(side: anchor.side, line: anchor.line)) else {
+        guard validKeys.contains(ReviewDraftCommentPlacement.RowKey(
+            side: canonicalAnchor.side,
+            line: canonicalAnchor.endLine ?? canonicalAnchor.line
+        )) else {
             clearPendingDraft()
             return
         }
-        try? draftCommentController?.add(anchor: anchor, fileID: fileID, bodyMarkdown: body)
+        try? draftCommentController?.add(anchor: canonicalAnchor, fileID: fileID, bodyMarkdown: body)
         clearPendingDraft()
     }
 
