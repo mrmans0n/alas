@@ -513,6 +513,29 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         )
     }
 
+    func withMergeQueue(isEnabled: Bool, isInQueue: Bool) -> ReviewRequest {
+        ReviewRequest(
+            remote: remote,
+            number: number,
+            title: title,
+            url: url,
+            state: state,
+            isDraft: isDraft,
+            headRefName: headRefName,
+            baseRefName: baseRefName,
+            headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner,
+            headRepositoryName: headRepositoryName,
+            reviewDecision: reviewDecision,
+            mergeState: mergeState,
+            checks: checks,
+            threads: threads,
+            areThreadsComplete: areThreadsComplete,
+            isMergeQueueEnabled: isEnabled,
+            isInMergeQueue: isInQueue
+        )
+    }
+
     static func placeholder(remote: CodeHostRemote, number: Int) -> ReviewRequest {
         ReviewRequest(
             remote: remote,

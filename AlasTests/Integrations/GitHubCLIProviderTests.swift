@@ -188,6 +188,7 @@ struct GitHubCLIProviderTests {
     @Test func currentReviewRequestUsesExpectedCommandArgs() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
 
@@ -220,6 +221,18 @@ struct GitHubCLIProviderTests {
                 args: [
                     "api", "graphql",
                     "--hostname", "github.com",
+                    "-f", "owner=mrmans0n",
+                    "-f", "name=alas",
+                    "-F", "number=42",
+                    "-f", "query=\(Self.mergeQueueMetadataQuery)",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "api", "graphql",
+                    "--hostname", "github.com",
                     "-f", "query=\(GitHubCLIProvider.reviewThreadsQuery)",
                     "-F", "owner=mrmans0n",
                     "-F", "repo=alas",
@@ -227,6 +240,53 @@ struct GitHubCLIProviderTests {
                 ],
                 cwd: Self.cwd
             ),
+        ])
+    }
+
+    @Test func currentReviewRequestEnrichesMergeQueueMetadata() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueEnabledOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
+        ])
+
+        let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
+            remote: Self.remote,
+            branch: "feature/github-provider",
+            headOwner: nil,
+            baseBranch: "main",
+            cwd: Self.cwd
+        )
+
+        #expect(request?.isMergeQueueEnabled == true)
+        #expect(request?.isInMergeQueue == true)
+        #expect(request?.threads.count == 2)
+        #expect(await runner.commands.map(\.args) == [
+            [
+                "pr", "list",
+                "--head", "feature/github-provider",
+                "--base", "main",
+                "--state", "open",
+                "--limit", "20",
+                "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
+                "-R", "mrmans0n/alas",
+            ],
+            [
+                "api", "graphql",
+                "--hostname", "github.com",
+                "-f", "owner=mrmans0n",
+                "-f", "name=alas",
+                "-F", "number=42",
+                "-f", "query=\(Self.mergeQueueMetadataQuery)",
+            ],
+            [
+                "api", "graphql",
+                "--hostname", "github.com",
+                "-f", "query=\(GitHubCLIProvider.reviewThreadsQuery)",
+                "-F", "owner=mrmans0n",
+                "-F", "repo=alas",
+                "-F", "number=42",
+            ],
         ])
     }
 
@@ -270,6 +330,7 @@ struct GitHubCLIProviderTests {
     @Test func currentReviewRequestKeepsRequestWhenReviewThreadFetchFails() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 1, stdout: "", stderr: "GraphQL field unavailable"),
         ])
 
@@ -283,12 +344,13 @@ struct GitHubCLIProviderTests {
 
         #expect(request?.number == 42)
         #expect(request?.threads == [])
-        #expect(await runner.commands.count == 2)
+        #expect(await runner.commands.count == 3)
     }
 
     @Test func currentReviewRequestPagesReviewThreads() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsFirstPageOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsSecondPageOutput, stderr: ""),
         ])
@@ -303,10 +365,10 @@ struct GitHubCLIProviderTests {
 
         #expect(request?.threads.map(\.id) == ["thread-page-1", "thread-page-2"])
         let commands = await runner.commands
-        #expect(commands.count == 3)
-        #expect(!commands[1].args.contains("-F cursor=cursor-1"))
-        #expect(commands[2].args.contains("-F"))
-        #expect(commands[2].args.contains("cursor=cursor-1"))
+        #expect(commands.count == 4)
+        #expect(!commands[2].args.contains("-F cursor=cursor-1"))
+        #expect(commands[3].args.contains("-F"))
+        #expect(commands[3].args.contains("cursor=cursor-1"))
     }
 
     @Test func reviewThreadsJSONParsesActionableSummaries() throws {
@@ -329,6 +391,7 @@ struct GitHubCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -360,7 +423,7 @@ struct GitHubCLIProviderTests {
         ))
 
         let commands = await runner.commands
-        #expect(commands.count == 4)
+        #expect(commands.count == 5)
         #expect(commands[0].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[1].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
         #expect(commands[0].stdin?.contains("pullRequest(number: $number)") == true)
@@ -381,6 +444,14 @@ struct GitHubCLIProviderTests {
             "pr", "view", "42",
             "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
+        ])
+        #expect(commands[3].args == [
+            "api", "graphql",
+            "--hostname", "github.com",
+            "-f", "owner=mrmans0n",
+            "-f", "name=alas",
+            "-F", "number=42",
+            "-f", "query=\(Self.mergeQueueMetadataQuery)",
         ])
         #expect(result.published == [
             ProviderReviewPublishedComment(
@@ -407,6 +478,7 @@ struct GitHubCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput, stderr: ""),
             ProcessResult(exitCode: 1, stdout: "", stderr: "line is not commentable"),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -438,7 +510,7 @@ struct GitHubCLIProviderTests {
         ))
 
         let commands = await runner.commands
-        #expect(commands.count == 6)
+        #expect(commands.count == 7)
         let batchVariables = try Self.graphQLVariables(from: commands[1].stdin)
         let batchInput = try #require(batchVariables["input"] as? [String: Any])
         let batchThreads = try #require(batchInput["threads"] as? [[String: Any]])
@@ -474,6 +546,7 @@ struct GitHubCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationOutput(commentCount: 100), stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -501,6 +574,7 @@ struct GitHubCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: #"{"data":{}}"#, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -532,7 +606,7 @@ struct GitHubCLIProviderTests {
         ))
 
         let commands = await runner.commands
-        #expect(commands.count == 4)
+        #expect(commands.count == 5)
         let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
         let publishInput = try #require(publishVariables["input"] as? [String: Any])
         let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
@@ -589,6 +663,7 @@ struct GitHubCLIProviderTests {
             ProcessResult(exitCode: 0, stdout: Self.pullRequestNodeOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.publishReviewMutationWithoutCommentsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -603,7 +678,7 @@ struct GitHubCLIProviderTests {
         ))
 
         let commands = await runner.commands
-        #expect(commands.count == 4)
+        #expect(commands.count == 5)
         let publishVariables = try Self.graphQLVariables(from: commands[1].stdin)
         let publishInput = try #require(publishVariables["input"] as? [String: Any])
         let publishThreads = try #require(publishInput["threads"] as? [[String: Any]])
@@ -688,9 +763,11 @@ struct GitHubCLIProviderTests {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.replyMutationOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.resolveThreadMutationOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -719,16 +796,16 @@ struct GitHubCLIProviderTests {
             "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
-        #expect(commands[3].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
-        #expect(commands[4].args == [
+        #expect(commands[4].args == ["api", "graphql", "--hostname", "github.com", "--input", "-"])
+        #expect(commands[5].args == [
             "pr", "view", "42",
             "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "mrmans0n/alas",
         ])
         #expect(commands[0].stdin?.contains("addPullRequestReviewThreadReply") == true)
         #expect(commands[0].stdin?.contains("\"pullRequestReviewThreadId\":\"PRRT_thread_1\"") == true)
-        #expect(commands[3].stdin?.contains("resolveReviewThread") == true)
-        #expect(commands[3].stdin?.contains("\"threadId\":\"PRRT_thread_1\"") == true)
+        #expect(commands[4].stdin?.contains("resolveReviewThread") == true)
+        #expect(commands[4].stdin?.contains("\"threadId\":\"PRRT_thread_1\"") == true)
         #expect(replyResult.providerURL == URL(string: "https://github.com/mrmans0n/alas/pull/42#discussion_r2"))
         #expect(replyResult.refreshedRequest.number == 42)
         #expect(resolveResult.refreshedRequest.number == 42)
@@ -760,6 +837,7 @@ struct GitHubCLIProviderTests {
         )
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prViewOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.reviewThreadsOutput, stderr: ""),
         ])
         let provider = GitHubCLIProvider(runner: runner)
@@ -767,16 +845,24 @@ struct GitHubCLIProviderTests {
         _ = try await provider.reviewRequest(remote: enterpriseRemote, number: 42, cwd: Self.cwd)
 
         let commands = await runner.commands
-        #expect(commands.count == 2)
+        #expect(commands.count == 3)
         #expect(commands[0].args == [
             "pr", "view", "42",
             "--json", "number,title,url,state,isDraft,headRefName,headRefOid,headRepositoryOwner,headRepository,baseRefName,reviewDecision,mergeStateStatus",
             "-R", "github.enterprise.example.com/platform/alas",
         ])
-        #expect(commands[1].args.prefix(3) == ["api", "graphql", "--hostname"])
-        #expect(commands[1].args.contains("github.enterprise.example.com"))
-        #expect(commands[1].args.contains("owner=platform"))
-        #expect(commands[1].args.contains("repo=alas"))
+        #expect(commands[1].args == [
+            "api", "graphql",
+            "--hostname", "github.enterprise.example.com",
+            "-f", "owner=platform",
+            "-f", "name=alas",
+            "-F", "number=42",
+            "-f", "query=\(Self.mergeQueueMetadataQuery)",
+        ])
+        #expect(commands[2].args.prefix(3) == ["api", "graphql", "--hostname"])
+        #expect(commands[2].args.contains("github.enterprise.example.com"))
+        #expect(commands[2].args.contains("owner=platform"))
+        #expect(commands[2].args.contains("repo=alas"))
     }
 
     @Test func githubThreadMutationPreservesSuccessfulReplyWhenRefreshFails() async throws {
@@ -1493,6 +1579,7 @@ struct GitHubCLIProviderTests {
     @Test func parsesRichReviewThreadFields() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.richReviewThreadsOutput, stderr: ""),
         ])
         let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
@@ -1512,6 +1599,7 @@ struct GitHubCLIProviderTests {
     @Test func parsesFileLevelReviewThread() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.fileLevelReviewThreadOutput, stderr: ""),
         ])
         let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
@@ -1525,6 +1613,7 @@ struct GitHubCLIProviderTests {
     @Test func reviewThreadsFilterEmptyBodiedCommentsAndDropEmptyThreads() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.prListOutput, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: Self.mergeQueueDisabledOutput, stderr: ""),
             ProcessResult(exitCode: 0, stdout: Self.emptyCommentReviewThreadsOutput, stderr: ""),
         ])
         let request = try await GitHubCLIProvider(runner: runner).currentReviewRequest(
@@ -1626,6 +1715,38 @@ struct GitHubCLIProviderTests {
                     "--hostname", "github.com",
                     "--method", "DELETE",
                     "repos/mrmans0n/alas/git/refs/heads/feature/github-provider",
+                ],
+                cwd: Self.cwd
+            ),
+        ])
+    }
+
+    @Test func mergeReviewRequestWithMergeQueueOmitsStrategyAndSkipsBranchDeleteWhenStillOpen() async throws {
+        let runner = FakeRunner(results: [
+            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
+            ProcessResult(exitCode: 0, stdout: #"{"state":"OPEN"}"#, stderr: ""),
+        ])
+        let provider = GitHubCLIProvider(runner: runner)
+        let request = Self.makeRequest(isMergeQueueEnabled: true)
+
+        try await provider.mergeReviewRequest(request, method: .squash, deleteBranch: true, cwd: Self.cwd)
+
+        #expect(await runner.commands == [
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "merge", "42",
+                    "--match-head-commit", "head-sha-42",
+                    "-R", "mrmans0n/alas",
+                ],
+                cwd: Self.cwd
+            ),
+            FakeRunner.Command(
+                executable: "gh",
+                args: [
+                    "pr", "view", "42",
+                    "--json", "state",
+                    "-R", "mrmans0n/alas",
                 ],
                 cwd: Self.cwd
             ),
@@ -1774,7 +1895,9 @@ struct GitHubCLIProviderTests {
         reviewDecision: ReviewDecision = .approved,
         headSHA: String? = "head-sha-42",
         headRepositoryOwner: String? = "mrmans0n",
-        headRepositoryName: String? = "alas"
+        headRepositoryName: String? = "alas",
+        isMergeQueueEnabled: Bool = false,
+        isInMergeQueue: Bool = false
     ) -> ReviewRequest {
         ReviewRequest(
             remote: Self.remote,
@@ -1791,7 +1914,9 @@ struct GitHubCLIProviderTests {
             reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,
-            threads: threads
+            threads: threads,
+            isMergeQueueEnabled: isMergeQueueEnabled,
+            isInMergeQueue: isInMergeQueue
         )
     }
 
@@ -1865,6 +1990,25 @@ struct GitHubCLIProviderTests {
       "reviewDecision": "APPROVED",
       "mergeStateStatus": "CLEAN"
     }
+    """
+
+    private static let mergeQueueMetadataQuery = """
+    query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          isMergeQueueEnabled
+          isInMergeQueue
+        }
+      }
+    }
+    """
+
+    private static let mergeQueueEnabledOutput = """
+    {"data":{"repository":{"pullRequest":{"isMergeQueueEnabled":true,"isInMergeQueue":true}}}}
+    """
+
+    private static let mergeQueueDisabledOutput = """
+    {"data":{"repository":{"pullRequest":{"isMergeQueueEnabled":false,"isInMergeQueue":false}}}}
     """
 
     private static let checksOutput = """
