@@ -106,6 +106,17 @@ struct GitHubCLIProvider: CodeHostProvider {
     }
     """
 
+    static let mergeQueueMetadataQuery = """
+    query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          isMergeQueueEnabled
+          isInMergeQueue
+        }
+      }
+    }
+    """
+
     static let addPullRequestReviewThreadReplyMutation = """
     mutation($threadId: ID!, $body: String!) {
       addPullRequestReviewThreadReply(input: {pullRequestReviewThreadId: $threadId, body: $body}) {
@@ -289,8 +300,13 @@ struct GitHubCLIProvider: CodeHostProvider {
         guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
             return nil
         }
-        let loadedThreads = await threadsWithCompleteness(remote: remote, request: request, cwd: cwd)
-        return request.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
+        let queueMetadata = await mergeQueueMetadata(remote: remote, number: request.number, cwd: cwd)
+        let enrichedRequest = request.withMergeQueue(
+            isEnabled: queueMetadata.isMergeQueueEnabled,
+            isInQueue: queueMetadata.isInMergeQueue
+        )
+        let loadedThreads = await threadsWithCompleteness(remote: remote, request: enrichedRequest, cwd: cwd)
+        return enrichedRequest.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
     }
 
     /// Loads review threads, reporting whether the fetch succeeded. A failure
@@ -305,6 +321,34 @@ struct GitHubCLIProvider: CodeHostProvider {
             return (try await reviewThreads(remote: remote, request: request, cwd: cwd), true)
         } catch {
             return ([], false)
+        }
+    }
+
+    private func mergeQueueMetadata(remote: CodeHostRemote, number: Int, cwd: URL) async -> PullRequestQueueMetadata {
+        do {
+            let result = try await runner.run(
+                "gh",
+                args: [
+                    "api", "graphql",
+                    "--hostname", remote.host,
+                    "-f", "owner=\(remote.owner)",
+                    "-f", "name=\(remote.repository)",
+                    "-F", "number=\(number)",
+                    "-f", "query=\(Self.mergeQueueMetadataQuery)",
+                ],
+                cwd: cwd
+            )
+            guard result.exitCode == 0 else { return .unavailable }
+            let response = try JSONDecoder().decode(
+                GitHubQueueMetadataResponse.self,
+                from: Data(result.stdout.utf8)
+            )
+            return PullRequestQueueMetadata(
+                isMergeQueueEnabled: response.data.repository.pullRequest.isMergeQueueEnabled,
+                isInMergeQueue: response.data.repository.pullRequest.isInMergeQueue
+            )
+        } catch {
+            return .unavailable
         }
     }
 
@@ -711,8 +755,13 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
         }
         let request = try Self.parsePRView(result.stdout, remote: remote)
-        let loadedThreads = await threadsWithCompleteness(remote: remote, request: request, cwd: cwd)
-        return request.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
+        let queueMetadata = await mergeQueueMetadata(remote: remote, number: request.number, cwd: cwd)
+        let enrichedRequest = request.withMergeQueue(
+            isEnabled: queueMetadata.isMergeQueueEnabled,
+            isInQueue: queueMetadata.isInMergeQueue
+        )
+        let loadedThreads = await threadsWithCompleteness(remote: remote, request: enrichedRequest, cwd: cwd)
+        return enrichedRequest.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
     }
 
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
@@ -845,10 +894,12 @@ struct GitHubCLIProvider: CodeHostProvider {
         cwd: URL
     ) async throws {
         var args = ["pr", "merge", "\(request.number)"]
-        switch method {
-        case .squash: args.append("--squash")
-        case .merge: args.append("--merge")
-        case .rebase: args.append("--rebase")
+        if !request.isMergeQueueEnabled {
+            switch method {
+            case .squash: args.append("--squash")
+            case .merge: args.append("--merge")
+            case .rebase: args.append("--rebase")
+            }
         }
         // Pin the merge to the reviewed head so a push that lands between the
         // snapshot load and the confirmation can't merge an unreviewed commit.
@@ -1822,6 +1873,33 @@ private struct HeadRepositoryOwner: Decodable {
     private enum CodingKeys: String, CodingKey {
         case login
     }
+}
+
+private struct PullRequestQueueMetadata: Equatable, Sendable {
+    let isMergeQueueEnabled: Bool
+    let isInMergeQueue: Bool
+
+    static let unavailable = PullRequestQueueMetadata(
+        isMergeQueueEnabled: false,
+        isInMergeQueue: false
+    )
+}
+
+private struct GitHubQueueMetadataResponse: Decodable {
+    struct DataPayload: Decodable {
+        struct Repository: Decodable {
+            struct PullRequest: Decodable {
+                let isMergeQueueEnabled: Bool
+                let isInMergeQueue: Bool
+            }
+
+            let pullRequest: PullRequest
+        }
+
+        let repository: Repository
+    }
+
+    let data: DataPayload
 }
 
 private struct CheckItem: Decodable {

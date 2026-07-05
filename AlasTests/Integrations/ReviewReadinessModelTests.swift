@@ -292,6 +292,81 @@ struct ReviewReadinessModelTests {
         #expect(review?.emphasis == .normal)
     }
 
+    @Test func queueRequiredGreenPREmitsAddToQueueAction() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .blocked,
+            checks: [Self.makeCheck(bucket: .pass)],
+            isMergeQueueEnabled: true,
+            isInMergeQueue: false
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let merge = model.actions.first { $0.kind == .merge }
+        #expect(merge?.title == "Add to queue")
+        #expect(merge?.isEnabled == true)
+        #expect(ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func alreadyQueuedPRShowsInQueueAndDoesNotAllowMerge() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .blocked,
+            checks: [Self.makeCheck(bucket: .pass)],
+            isMergeQueueEnabled: true,
+            isInMergeQueue: true
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+
+        let merge = model.actions.first { $0.kind == .merge }
+        #expect(merge?.title == "In queue")
+        #expect(merge?.isEnabled == false)
+        #expect(model.actions.contains(Action(kind: .inspectReviewEvidence, title: "Review diff", isEnabled: true, emphasis: .normal)))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func normalBlockedPRStillSuppressesMerge() {
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .blocked,
+            checks: [Self.makeCheck(bucket: .pass)]
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
+    @Test func queueRequiredUnsafeMergeStatesStillSuppressMerge() {
+        for mergeState in [ReviewMergeState.dirty, .unstable, .unknown] {
+            let request = Self.makeReviewRequest(
+                reviewDecision: .approved,
+                mergeState: mergeState,
+                checks: [Self.makeCheck(bucket: .pass)],
+                isMergeQueueEnabled: true,
+                isInMergeQueue: false
+            )
+            let snapshot = Self.makeSnapshot(reviewRequest: request)
+            let model = ReviewReadinessModel(
+                snapshot: snapshot,
+                lastError: nil,
+                canOpenAgentHandoff: false
+            )
+
+            #expect(!model.actions.map(\.kind).contains(.merge))
+            #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+        }
+    }
+
     @Test func blockedRequestDoesNotExposeMerge() {
         let request = Self.makeReviewRequest(
             mergeState: .blocked,
@@ -607,7 +682,9 @@ struct ReviewReadinessModelTests {
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = [],
         headSHA: String? = "abc123",
-        areThreadsComplete: Bool = true
+        areThreadsComplete: Bool = true,
+        isMergeQueueEnabled: Bool = false,
+        isInMergeQueue: Bool = false
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
@@ -623,7 +700,9 @@ struct ReviewReadinessModelTests {
             mergeState: mergeState,
             checks: checks,
             threads: threads,
-            areThreadsComplete: areThreadsComplete
+            areThreadsComplete: areThreadsComplete,
+            isMergeQueueEnabled: isMergeQueueEnabled,
+            isInMergeQueue: isInMergeQueue
         )
     }
 

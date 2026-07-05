@@ -275,6 +275,14 @@ final class RightPaneStore {
         states.values.first { $0.mergeError != nil }
     }
 
+    /// The first cached state currently reporting that a PR was added to the
+    /// merge queue. Like merge errors, this is surfaced app-wide independent
+    /// of current selection because the async operation can finish after the
+    /// user switches worktrees.
+    func stateReportingMergeQueuedMessage() -> RightPaneState? {
+        states.values.first { $0.mergeQueuedMessage != nil }
+    }
+
     /// The first cached state with a pending merge confirmation, if any. The
     /// confirmation dialog (see RootView) resolves its owning state through
     /// this rather than the current selection, so switching worktrees while the
