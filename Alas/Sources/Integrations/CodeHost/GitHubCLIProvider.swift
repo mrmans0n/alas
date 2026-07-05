@@ -289,8 +289,23 @@ struct GitHubCLIProvider: CodeHostProvider {
         guard let request = try Self.parsePRList(result.stdout, remote: remote, headOwner: headOwner) else {
             return nil
         }
-        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return request.withThreads(threads)
+        let loadedThreads = await threadsWithCompleteness(remote: remote, request: request, cwd: cwd)
+        return request.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
+    }
+
+    /// Loads review threads, reporting whether the fetch succeeded. A failure
+    /// yields no threads but flags the result incomplete so the merge gate can
+    /// fail closed instead of treating missing threads as "no feedback".
+    private func threadsWithCompleteness(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async -> (threads: [ReviewThread], complete: Bool) {
+        do {
+            return (try await reviewThreads(remote: remote, request: request, cwd: cwd), true)
+        } catch {
+            return ([], false)
+        }
     }
 
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
@@ -696,8 +711,8 @@ struct GitHubCLIProvider: CodeHostProvider {
             throw CodeHostProviderError.commandFailed(command: "gh pr view", stderr: result.stderr)
         }
         let request = try Self.parsePRView(result.stdout, remote: remote)
-        let threads = (try? await reviewThreads(remote: remote, request: request, cwd: cwd)) ?? []
-        return request.withThreads(threads)
+        let loadedThreads = await threadsWithCompleteness(remote: remote, request: request, cwd: cwd)
+        return request.withThreads(loadedThreads.threads, complete: loadedThreads.complete)
     }
 
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {

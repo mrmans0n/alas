@@ -306,6 +306,7 @@ struct ReviewReadinessModel: Equatable, Sendable {
             && !request.isDraft
             && request.mergeState == .clean
             && request.reviewDecision != .reviewRequired
+            && request.areThreadsComplete
             && !request.hasActionableFeedback
             && (request.worstCheckBucket == nil || request.worstCheckBucket == .pass)
     }

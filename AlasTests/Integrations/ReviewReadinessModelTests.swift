@@ -305,6 +305,26 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.merge))
     }
 
+    @Test func incompleteFeedbackSuppressesMergeOnGreenPR() {
+        // Loading review threads failed, so `threads` may be missing actionable
+        // feedback. The gate must fail closed rather than treat the empty list
+        // as "no feedback" and expose Merge.
+        let request = Self.makeReviewRequest(
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [Self.makeCheck(bucket: .pass)],
+            areThreadsComplete: false
+        )
+        let snapshot = Self.makeSnapshot(reviewRequest: request)
+        let model = ReviewReadinessModel(
+            snapshot: snapshot,
+            lastError: nil,
+            canOpenAgentHandoff: false
+        )
+        #expect(!model.actions.map(\.kind).contains(.merge))
+        #expect(!ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot))
+    }
+
     @Test func mismatchedLocalAndReviewedHeadSuppressesMerge() {
         // The host reports a newer PR head (e.g. a teammate pushed) than the
         // local worktree HEAD; local refs still look in-sync because they're
@@ -560,7 +580,8 @@ struct ReviewReadinessModelTests {
         mergeState: ReviewMergeState = .blocked,
         checks: [ReviewCheck] = [],
         threads: [ReviewThread] = [],
-        headSHA: String? = "abc123"
+        headSHA: String? = "abc123",
+        areThreadsComplete: Bool = true
     ) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
@@ -575,7 +596,8 @@ struct ReviewReadinessModelTests {
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,
-            threads: threads
+            threads: threads,
+            areThreadsComplete: areThreadsComplete
         )
     }
 

@@ -393,6 +393,10 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
     let mergeState: ReviewMergeState
     let checks: [ReviewCheck]
     let threads: [ReviewThread]
+    /// False when loading review threads/discussions failed, so `threads` may
+    /// be missing actionable feedback. The merge gate fails closed on this: we
+    /// must not offer merge while we can't confirm there are no open threads.
+    let areThreadsComplete: Bool
 
     var provider: CodeHostKind { remote.kind }
 
@@ -412,7 +416,8 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         reviewDecision: ReviewDecision,
         mergeState: ReviewMergeState,
         checks: [ReviewCheck],
-        threads: [ReviewThread]
+        threads: [ReviewThread],
+        areThreadsComplete: Bool = true
     ) {
         self.remote = remote
         self.number = number
@@ -428,6 +433,7 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
         self.mergeState = mergeState
         self.checks = checks
         self.threads = threads
+        self.areThreadsComplete = areThreadsComplete
     }
 
     var worstCheckBucket: ReviewCheckBucket? {
@@ -457,14 +463,16 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,
-            threads: threads
+            threads: threads,
+            areThreadsComplete: areThreadsComplete
         )
     }
 
     /// Returns a copy with `threads` replaced, preserving every other field.
     /// Same rationale as `withChecks`: a hand-rolled copy in the provider used
-    /// to silently drop `headRepositoryOwner`.
-    func withThreads(_ threads: [ReviewThread]) -> ReviewRequest {
+    /// to silently drop `headRepositoryOwner`. `complete` records whether the
+    /// thread fetch succeeded so the merge gate can fail closed on a failure.
+    func withThreads(_ threads: [ReviewThread], complete: Bool = true) -> ReviewRequest {
         ReviewRequest(
             remote: remote,
             number: number,
@@ -479,7 +487,8 @@ struct ReviewRequest: Identifiable, Equatable, Sendable {
             reviewDecision: reviewDecision,
             mergeState: mergeState,
             checks: checks,
-            threads: threads
+            threads: threads,
+            areThreadsComplete: complete
         )
     }
 

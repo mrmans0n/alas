@@ -37,6 +37,12 @@ struct CodeHostModelsTests {
         let requestWithThreads = request.withThreads([])
         #expect(requestWithThreads.headSHA == "reviewed-head")
         #expect(requestWithThreads.headRepositoryOwner == "mrmans0n")
+        #expect(requestWithThreads.areThreadsComplete)
+
+        // A failed thread load flags the copy incomplete; withChecks preserves it.
+        let incomplete = request.withThreads([], complete: false)
+        #expect(!incomplete.areThreadsComplete)
+        #expect(!incomplete.withChecks([check]).areThreadsComplete)
     }
 
     @Test func checkBucketSeverityOrdersFailuresBeforePendingBeforePass() {

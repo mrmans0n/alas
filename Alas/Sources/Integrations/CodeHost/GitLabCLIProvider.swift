@@ -78,9 +78,9 @@ struct GitLabCLIProvider: CodeHostProvider {
         }
 
         let detailedRequest = (try? await reviewRequestDetails(remote: remote, request: request, cwd: cwd)) ?? request
-        let threads = (try? await unresolvedDiscussions(remote: remote, request: detailedRequest, cwd: cwd)) ?? []
+        let loadedThreads = await discussionsWithCompleteness(remote: remote, request: detailedRequest, cwd: cwd)
         let checks = (try? await checks(remote: remote, request: detailedRequest, cwd: cwd)) ?? []
-        return Self.withEnrichment(threads: threads, checks: checks, on: detailedRequest)
+        return Self.withEnrichment(threads: loadedThreads.threads, checks: checks, threadsComplete: loadedThreads.complete, on: detailedRequest)
     }
 
     func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
@@ -836,9 +836,9 @@ struct GitLabCLIProvider: CodeHostProvider {
         cwd: URL
     ) async throws -> ReviewRequest {
         let refreshed = try await reviewRequestDetails(remote: remote, request: request, cwd: cwd)
-        let threads = (try? await unresolvedDiscussions(remote: remote, request: refreshed, cwd: cwd)) ?? []
+        let loadedThreads = await discussionsWithCompleteness(remote: remote, request: refreshed, cwd: cwd)
         let checks = (try? await checks(remote: remote, request: refreshed, cwd: cwd)) ?? []
-        return Self.withEnrichment(threads: threads, checks: checks, on: refreshed)
+        return Self.withEnrichment(threads: loadedThreads.threads, checks: checks, threadsComplete: loadedThreads.complete, on: refreshed)
     }
 
     private func mergeRequestDiffRefs(
@@ -1655,6 +1655,7 @@ struct GitLabCLIProvider: CodeHostProvider {
     private static func withEnrichment(
         threads: [ReviewThread],
         checks: [ReviewCheck],
+        threadsComplete: Bool,
         on request: ReviewRequest
     ) -> ReviewRequest {
         ReviewRequest(
@@ -1670,8 +1671,24 @@ struct GitLabCLIProvider: CodeHostProvider {
             reviewDecision: request.reviewDecision,
             mergeState: request.mergeState,
             checks: checks,
-            threads: threads
+            threads: threads,
+            areThreadsComplete: threadsComplete
         )
+    }
+
+    /// Loads unresolved discussions, reporting whether the fetch succeeded so
+    /// the merge gate can fail closed instead of treating a failed load as
+    /// "no feedback".
+    private func discussionsWithCompleteness(
+        remote: CodeHostRemote,
+        request: ReviewRequest,
+        cwd: URL
+    ) async -> (threads: [ReviewThread], complete: Bool) {
+        do {
+            return (try await unresolvedDiscussions(remote: remote, request: request, cwd: cwd), true)
+        } catch {
+            return ([], false)
+        }
     }
 }
 
