@@ -1329,6 +1329,11 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .thought = transcript.messages[i] { return i }
             if case .agent = transcript.messages[i] { return nil }
             if case .toolCall = transcript.messages[i] { return nil }
+            // A file edit closes the current output run, matching lastAgent()
+            // and markCompletedOutputBoundary(); a thought after an edit is a
+            // new bubble, so a legacy chunk (or a replay continuation adopted
+            // via this index) must not extend the pre-edit thought.
+            if case .fileEdit = transcript.messages[i] { return nil }
         }
         return nil
     }

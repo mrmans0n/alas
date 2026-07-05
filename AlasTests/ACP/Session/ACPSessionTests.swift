@@ -462,6 +462,32 @@ struct ACPSessionTests {
         #expect(agentTexts == ["hello world!"])
     }
 
+    @Test("regenerated thought replay is not adopted across a file edit")
+    func thoughtReplayNotAdoptedAcrossFileEdit() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("plan")),
+            .fileEdit(id: UUID(), .init(
+                path: "x.swift", added: 1, removed: 0,
+                oldText: "a\n", newText: "a\nb\n"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A file edit closes the pre-edit thought (like lastAgent() and the
+        // completed-output boundary). A regenerated thought stream starting
+        // with the pre-edit thought's text must not extend it across the
+        // edit; it becomes a new thought after the edit.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text("plan"))))
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text(" more"))))
+
+        let thoughtTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .thought(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(thoughtTexts == ["plan", "plan more"])
+    }
+
     @Test("a coincidental mid-token suffix overlap is not adopted as a replay continuation")
     func weakMidTokenSuffixOverlapNotAdopted() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
