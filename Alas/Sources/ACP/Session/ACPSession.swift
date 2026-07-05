@@ -111,11 +111,22 @@ final class ACPSession: ObservableObject, Identifiable {
     /// — i.e. it is genuine new output whose leading fragment merely
     /// coincided with an earlier message — the full text can be materialised
     /// without losing the leading characters. Cleared once the window ends.
-    private var pendingReplayCandidates: [ReplayCandidateKey: String] = [:]
+    private var pendingReplayCandidates: [ReplayCandidateKey: ReplayCandidate] = [:]
 
     private struct ReplayCandidateKey: Hashable {
         let kind: TextMessageKind
         let messageId: String
+    }
+
+    /// Two views of the accumulated replay text. `display` carries the
+    /// sentence-boundary separators a live stream injects (used when the
+    /// text turns out to be genuine new output and is materialised);
+    /// `raw` is the plain concatenation used for matching, so a replay that
+    /// splits at a boundary the original stream did not is still recognised
+    /// (the injected `\n` would otherwise cause a false mismatch).
+    private struct ReplayCandidate {
+        var display: String
+        var raw: String
     }
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
@@ -1483,27 +1494,6 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// Start of the trailing in-progress output run — the index just past
-    /// the last message that closes a turn's output (a user prompt, tool
-    /// call, file edit, or system notice). `.agent`, `.thought`, and
-    /// `.plan` rows stay inside the span, matching `markCompletedOutputBoundary()`
-    /// (and `lastAgent()`, which skips plans). A late load-replay only
-    /// continues this trailing output; adoption must not reach back across
-    /// such a boundary into an already-closed bubble — that would mutate an
-    /// old bubble and then drop the real continuation via the
-    /// `hasUserAfterMessage` guard.
-    private var trailingOutputStartIndex: Int {
-        if let last = transcript.messages.lastIndex(where: { message in
-            switch message {
-            case .agent, .thought, .plan: return false
-            default: return true
-            }
-        }) {
-            return transcript.messages.index(after: last)
-        }
-        return transcript.messages.startIndex
-    }
-
     /// Whether some existing message of `kind` contains `text` — i.e.
     /// `text` could be the running span of a late load-replay stream that
     /// reproduces part of an already-present message. Uses containment
@@ -1528,34 +1518,37 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// When a diverged replay `candidate` begins with the full text of an
-    /// existing trailing-output message of `kind`, the stream is that
+    /// When a diverged replay `candidate` begins with the full text of the
+    /// trailing in-progress bubble of `kind`, the stream is that
     /// already-present message replayed under a regenerated id and then
     /// continued past the boundary window. Append only the divergent suffix
-    /// to that message (so the hydrated prefix is not duplicated) and rebind
+    /// to that bubble (so the hydrated prefix is not duplicated) and rebind
     /// it to the regenerated `messageId` so subsequent chunks target it via
-    /// `messageIndex`. Returns the adopted message's index, or nil when no
-    /// trailing-output message is a prefix of the candidate (genuine new
-    /// output — including output that merely shares a prefix with an older
-    /// bubble already closed by a user prompt, tool call, or file edit).
+    /// `messageIndex`. Returns the adopted message's index, or nil when the
+    /// trailing bubble is not a prefix of the candidate (genuine new output).
+    ///
+    /// The adoption target is exactly `lastAgent()`/`lastThought()` — the
+    /// same trailing bubble a legacy (id-less) chunk would extend — so the
+    /// boundary rules (a user prompt, tool call, or file edit closes the
+    /// run; an agent row closes a thought; plans are skipped) stay
+    /// consistent with the rest of streaming instead of being re-derived.
     private func adoptReplayContinuation(kind: TextMessageKind, candidate: String, messageId: String) -> Int? {
-        var bestIndex: Int?
-        var bestPrefixCount = 0
-        for index in trailingOutputStartIndex..<transcript.messages.endIndex {
-            let existing: String
-            switch (kind, transcript.messages[index]) {
-            case (.agent, .agent(_, _, let buf)),
-                 (.thought, .thought(_, _, let buf)):
-                existing = buf.value
-            default:
-                continue
-            }
-            guard !existing.isEmpty, existing.count > bestPrefixCount, candidate.hasPrefix(existing) else { continue }
-            bestIndex = index
-            bestPrefixCount = existing.count
+        let trailingIndex: Int?
+        switch kind {
+        case .agent: trailingIndex = lastAgent()
+        case .thought: trailingIndex = lastThought()
+        case .user: trailingIndex = nil
         }
-        guard let i = bestIndex else { return nil }
-        let suffix = String(candidate.dropFirst(bestPrefixCount))
+        guard let i = trailingIndex else { return nil }
+        let existing: String
+        switch transcript.messages[i] {
+        case .agent(_, _, let buf), .thought(_, _, let buf):
+            existing = buf.value
+        default:
+            return nil
+        }
+        guard !existing.isEmpty, candidate.hasPrefix(existing) else { return nil }
+        let suffix = String(candidate.dropFirst(existing.count))
         switch transcript.messages[i] {
         case .agent(let id, _, let buf):
             buf.append(suffix)
@@ -1647,16 +1640,23 @@ final class ACPSession: ObservableObject, Identifiable {
         if let messageId, !allowsStreamingBoundaryCrossing {
             let candidateKey = ReplayCandidateKey(kind: replayKind, messageId: messageId)
             let previous = pendingReplayCandidates[candidateKey]
-            let candidate = (previous ?? "") + Self.streamingSeparator(between: previous ?? "", and: addition) + addition
-            if replayCandidateMatches(candidate) {
-                pendingReplayCandidates[candidateKey] = candidate
+            let previousDisplay = previous?.display ?? ""
+            let previousRaw = previous?.raw ?? ""
+            let display = previousDisplay + Self.streamingSeparator(between: previousDisplay, and: addition) + addition
+            let raw = previousRaw + addition
+            // Match on both forms: the display form (as a live stream would
+            // build it) and the raw concatenation, so a replay that splits
+            // at a sentence boundary the original stream did not is still
+            // recognised rather than duplicated by the injected separator.
+            if replayCandidateMatches(display) || replayCandidateMatches(raw) {
+                pendingReplayCandidates[candidateKey] = ReplayCandidate(display: display, raw: raw)
                 return nil
             }
             pendingReplayCandidates.removeValue(forKey: candidateKey)
-            if let adopted = adoptContinuation(candidate) {
+            if let adopted = adoptContinuation(display) ?? adoptContinuation(raw) {
                 return adopted
             }
-            newMessageText = candidate
+            newMessageText = display
         }
         transcript.messages.append(makeNew(newMessageText))
         didAppendTranscriptMessage()

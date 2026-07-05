@@ -390,6 +390,56 @@ struct ACPSessionTests {
         #expect(agentTexts == ["response", "reply"])
     }
 
+    @Test("regenerated thought replay is not adopted into a thought that an agent row already closed")
+    func thoughtReplayNotAdoptedAcrossAgentRow() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("earlier")),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("answer"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A regenerated thought stream that starts with the earlier thought's
+        // text but continues. The agent row closed that thought (lastThought()
+        // stops at it), so it must not be adopted; a new thought row appears.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text("earlier"))))
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text(" more"))))
+
+        let thoughtTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .thought(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(thoughtTexts == ["earlier", "earlier more"])
+        // The agent bubble between them is untouched.
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["answer"])
+    }
+
+    @Test("replay split at a sentence boundary the original did not is still suppressed despite the separator")
+    func replaySplitAtSentenceBoundaryStillSuppressed() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // Hydrated as one chunk, so it carries no injected separator.
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("tests completed.Running"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The replay splits at the sentence boundary, so streamingSeparator
+        // would inject a newline. Matching on the raw concatenation as well
+        // keeps this recognised as a replay instead of a duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("tests completed."))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("Running"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["tests completed.Running"])
+    }
+
     @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
     func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
