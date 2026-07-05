@@ -4,11 +4,19 @@ import SwiftUI
 private let diffContextExpansionChunkSize = 10
 
 struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
+    struct SelectedLine: Equatable, Hashable, Sendable {
+        let side: DiffReviewInlineFeedbackSide
+        let line: Int
+        let isChange: Bool
+    }
+
     let path: String
     let side: DiffReviewInlineFeedbackSide
     let line: Int
     let endLine: Int?
     let rowIndex: Int
+    let endRowIndex: Int
+    let selectedLines: [SelectedLine]
     let selectedText: String
 
     init(
@@ -17,6 +25,8 @@ struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
         line: Int,
         endLine: Int? = nil,
         rowIndex: Int,
+        endRowIndex: Int? = nil,
+        selectedLines: [SelectedLine]? = nil,
         selectedText: String
     ) {
         self.path = path
@@ -24,6 +34,10 @@ struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
         self.line = line
         self.endLine = endLine
         self.rowIndex = rowIndex
+        self.endRowIndex = endRowIndex ?? rowIndex
+        self.selectedLines = selectedLines ?? [
+            SelectedLine(side: side, line: line, isChange: side != .unknown),
+        ]
         self.selectedText = selectedText
     }
 }
@@ -1208,6 +1222,8 @@ final class DiffPaneCodeTextView: NSTextView {
             line: startLine,
             endLine: endLine,
             rowIndex: first.rowIndex,
+            endRowIndex: resolvedAnchors.last?.rowIndex ?? first.rowIndex,
+            selectedLines: resolvedAnchors.flatMap(\.selectedLines),
             selectedText: resolvedAnchors.map(\.selectedText).joined(separator: "\n")
         )
     }
@@ -1968,6 +1984,13 @@ private extension DiffPaneTextDocumentBuilder.LineMetadata {
             line: lineNumber,
             endLine: nil,
             rowIndex: rowIndex,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(
+                    side: side,
+                    line: lineNumber,
+                    isChange: sourceLine.kind != .context
+                ),
+            ],
             selectedText: sourceLine.text
         )
     }

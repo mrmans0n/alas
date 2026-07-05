@@ -690,6 +690,199 @@ struct DiffReviewSurfaceTests {
         #expect(segments.items[0].rows.map(\.id) == [group.rows[0].id, group.rows[1].id])
     }
 
+    @Test func pendingMixedSideDraftComposerUsesSingleNewSideInsertionRow() throws {
+        let contextRow = DiffDisplayRow(
+            id: "context-row",
+            kind: .context,
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "let a = 1"),
+            new: diffLine(id: "new-1", side: .new, newLine: 1, text: "let a = 1"),
+            collapsedLineCount: 0
+        )
+        let deletedRow = DiffDisplayRow(
+            id: "deleted-row",
+            kind: .delete,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "let b = 2"),
+            new: nil,
+            collapsedLineCount: 0
+        )
+        let addedRow = DiffDisplayRow(
+            id: "added-row",
+            kind: .add,
+            old: nil,
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "let b = 3"),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,2 +1,2 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [contextRow, deletedRow, addedRow]
+        )
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 2,
+            endLine: 2,
+            rowIndex: 1,
+            endRowIndex: 2,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 2, isChange: true),
+                DiffReviewLineAnchor.SelectedLine(side: .new, line: 2, isChange: true),
+            ],
+            selectedText: "let b = 2\nlet b = 3"
+        )
+
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: ReviewDraftCommentPlacement.position([], in: [group]),
+            pendingAnchor: pendingAnchor
+        )
+
+        #expect(segments.items.count == 1)
+        #expect(segments.items[0].showsComposer)
+        #expect(segments.items[0].rows.map { $0.id } == ["context-row", "deleted-row", "added-row"])
+    }
+
+    @Test func pendingReplacementDraftComposerDoesNotUseFollowingDisplayRow() throws {
+        let replacementRow = DiffDisplayRow(
+            id: "replacement-row",
+            kind: .replacement,
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "let value = 1", kind: .delete),
+            new: diffLine(id: "new-1", side: .new, newLine: 1, text: "let value = 2", kind: .add),
+            collapsedLineCount: 0
+        )
+        let followingRow = DiffDisplayRow(
+            id: "following-row",
+            kind: .context,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "return value"),
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "return value"),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,2 +1,2 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [replacementRow, followingRow]
+        )
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 1,
+            endLine: 1,
+            rowIndex: 0,
+            endRowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 1, isChange: true),
+                DiffReviewLineAnchor.SelectedLine(side: .new, line: 1, isChange: true),
+            ],
+            selectedText: "let value = 1\nlet value = 2"
+        )
+
+        let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(pendingAnchor, in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: ReviewDraftCommentPlacement.position([], in: [group]),
+            pendingAnchor: pendingAnchor
+        )
+
+        #expect(canonicalAnchor.side == .new)
+        #expect(canonicalAnchor.line == 1)
+        #expect(canonicalAnchor.endLine == nil)
+        #expect(segments.items.count == 2)
+        #expect(segments.items[0].showsComposer)
+        #expect(segments.items[0].rows.map { $0.id } == ["replacement-row"])
+    }
+
+    @Test func pendingContextAndDeletionDraftComposerUsesDeletedLine() throws {
+        let contextRow = DiffDisplayRow(
+            id: "context-row",
+            kind: .context,
+            old: diffLine(id: "old-10", side: .old, oldLine: 10, text: "let value = 1"),
+            new: diffLine(id: "new-10", side: .new, newLine: 10, text: "let value = 1"),
+            collapsedLineCount: 0
+        )
+        let deletedRow = DiffDisplayRow(
+            id: "deleted-row",
+            kind: .delete,
+            old: diffLine(id: "old-11", side: .old, oldLine: 11, text: "print(value)", kind: .delete),
+            new: nil,
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -10,2 +10,1 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [contextRow, deletedRow]
+        )
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 10,
+            endLine: 11,
+            rowIndex: 0,
+            endRowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .unknown, line: 10, isChange: false),
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 11, isChange: true),
+            ],
+            selectedText: "let value = 1\nprint(value)"
+        )
+
+        let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(pendingAnchor, in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: ReviewDraftCommentPlacement.position([], in: [group]),
+            pendingAnchor: pendingAnchor
+        )
+
+        #expect(canonicalAnchor.side == .old)
+        #expect(canonicalAnchor.line == 11)
+        #expect(canonicalAnchor.endLine == nil)
+        #expect(segments.items.count == 1)
+        #expect(segments.items[0].showsComposer)
+        #expect(segments.items[0].rows.map { $0.id } == ["context-row", "deleted-row"])
+    }
+
+    @Test func pendingContextOnlyDraftComposerUsesUnknownInsertionRow() throws {
+        let contextRow = DiffDisplayRow(
+            id: "context-row",
+            kind: .context,
+            old: diffLine(id: "old-10", side: .old, oldLine: 10, text: "let value = 1"),
+            new: diffLine(id: "new-10", side: .new, newLine: 10, text: "let value = 1"),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -10,1 +10,1 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [contextRow]
+        )
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 10,
+            endLine: nil,
+            rowIndex: 0,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .unknown, line: 10, isChange: false),
+            ],
+            selectedText: "let value = 1"
+        )
+
+        let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(pendingAnchor, in: [group])
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: ReviewDraftCommentPlacement.position([], in: [group]),
+            pendingAnchor: pendingAnchor
+        )
+
+        #expect(canonicalAnchor.side == .unknown)
+        #expect(canonicalAnchor.line == 10)
+        #expect(segments.items.count == 1)
+        #expect(segments.items[0].showsComposer)
+        #expect(segments.items[0].rows.map { $0.id } == ["context-row"])
+    }
+
     @Test func localDraftCommentsOnCollapsedRowsAttachToCollapsedParent() throws {
         let hiddenLine = diffLine(
             id: "hidden-new",
@@ -2486,7 +2679,8 @@ struct DiffReviewSurfaceTests {
         side: DiffLineSide,
         oldLine: Int? = nil,
         newLine: Int? = nil,
-        text: String
+        text: String,
+        kind: ParsedDiff.Hunk.Line.Kind = .context
     ) -> DiffDisplayLine {
         DiffDisplayLine(
             id: id,
@@ -2500,7 +2694,7 @@ struct DiffReviewSurfaceTests {
             ),
             text: text,
             lineNumber: oldLine ?? newLine,
-            kind: .context,
+            kind: kind,
             inlineSpans: [],
             noTrailingNewline: false
         )
