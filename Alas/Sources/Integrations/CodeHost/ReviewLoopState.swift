@@ -352,12 +352,43 @@ final class ReviewLoopState {
     func merge(snapshot: ReviewLoopSnapshot) async -> Bool {
         guard
             let remote = snapshot.remote,
-            let request = snapshot.reviewRequest,
             let provider = providerRegistry.provider(for: remote.kind)
         else { return false }
 
         lastError = nil
         do {
+            // Re-query the provider immediately before merging so a refresh
+            // race (the generation guard can let the merge-triggered refresh
+            // return without publishing) can't merge on stale checks,
+            // mergeability, review state, or a closed PR. Build a fresh
+            // snapshot from live provider data + the caller-verified local
+            // state and re-run the full merge gate.
+            guard let fresh = try await provider.currentReviewRequest(
+                remote: remote,
+                branch: snapshot.local.branchName,
+                headOwner: snapshot.local.headRemoteOwner,
+                baseBranch: snapshot.local.baseBranch,
+                cwd: worktreePath
+            ) else {
+                lastError = "The review request could not be found."
+                return false
+            }
+            let checks = try await provider.checks(remote: remote, request: fresh, cwd: worktreePath)
+            let freshSnapshot = ReviewLoopSnapshot(
+                local: snapshot.local,
+                remote: remote,
+                reviewRequest: fresh.withChecks(checks),
+                providerAvailable: true,
+                providerAuthenticated: true,
+                providerCapabilities: provider.capabilities,
+                errorMessage: nil
+            )
+            guard ReviewReadinessModel.canMergeReviewRequest(snapshot: freshSnapshot),
+                  let request = freshSnapshot.reviewRequest
+            else {
+                lastError = "Merge is no longer available — the review state changed."
+                return false
+            }
             try await provider.mergeReviewRequest(
                 request,
                 method: .squash,

@@ -500,7 +500,8 @@ struct ReviewLoopStateTests {
         let remote = Self.makeRemote()
         let provider = FakeCodeHostProvider(
             kind: .github,
-            request: Self.makeReviewRequest(remote: remote, checks: [])
+            capabilities: .githubCLI,
+            request: Self.makeMergeableReviewRequest(remote: remote)
         )
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
@@ -558,11 +559,24 @@ struct ReviewLoopStateTests {
         ])
     }
 
+    // A fully-mergeable request whose head matches `makeLocal`'s default SHA.
+    private static func makeMergeableReviewRequest(remote: CodeHostRemote) -> ReviewRequest {
+        makeReviewRequest(
+            remote: remote,
+            headSHA: "abc123",
+            headRepositoryOwner: "mrmans0n",
+            reviewDecision: .approved,
+            includeActionableThread: false,
+            checks: []
+        )
+    }
+
     @Test func mergeInvokesProviderWithSquashAndDeleteBranch() async throws {
         let remote = Self.makeRemote()
         let provider = FakeCodeHostProvider(
             kind: .github,
-            request: Self.makeReviewRequest(remote: remote, checks: [])
+            capabilities: .githubCLI,
+            request: Self.makeMergeableReviewRequest(remote: remote)
         )
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
@@ -585,7 +599,8 @@ struct ReviewLoopStateTests {
         let remote = Self.makeRemote()
         let provider = FakeCodeHostProvider(
             kind: .github,
-            request: Self.makeReviewRequest(remote: remote, checks: [])
+            capabilities: .githubCLI,
+            request: Self.makeMergeableReviewRequest(remote: remote)
         )
         provider.mergeError = CodeHostProviderError.commandFailed(command: "gh pr merge", stderr: "boom")
         let state = ReviewLoopState(
@@ -600,6 +615,41 @@ struct ReviewLoopStateTests {
         let ok = await state.merge(snapshot: snapshot)
 
         #expect(!ok)
+        #expect(state.lastError != nil)
+    }
+
+    @Test func mergeReValidatesFreshProviderStateAndAbortsWhenNoLongerMergeable() async throws {
+        // Refresh sees a mergeable request; then the fresh re-query at merge
+        // time returns a non-mergeable one (review now required + actionable
+        // feedback). The merge must abort without invoking the provider merge.
+        let remote = Self.makeRemote()
+        let provider = FakeCodeHostProvider(
+            kind: .github,
+            capabilities: .githubCLI,
+            request: Self.makeMergeableReviewRequest(remote: remote)
+        )
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: provider])
+        )
+        await state.refresh(local: Self.makeLocal(needsPush: false), remotes: [Self.makeGitHubRemote()])
+        let snapshot = try #require(state.snapshot)
+
+        // Remote state changed since the (still green) snapshot.
+        provider.request = Self.makeReviewRequest(
+            remote: remote,
+            headSHA: "abc123",
+            headRepositoryOwner: "mrmans0n",
+            reviewDecision: .reviewRequired,
+            includeActionableThread: true,
+            checks: []
+        )
+
+        let ok = await state.merge(snapshot: snapshot)
+
+        #expect(!ok)
+        #expect(provider.mergeRequestCalls.isEmpty)
         #expect(state.lastError != nil)
     }
 
@@ -982,6 +1032,8 @@ struct ReviewLoopStateTests {
         headRefName: String = "feature/review-loop",
         headSHA: String? = nil,
         headRepositoryOwner: String? = nil,
+        reviewDecision: ReviewDecision = .reviewRequired,
+        includeActionableThread: Bool = true,
         checks: [ReviewCheck]
     ) -> ReviewRequest {
         ReviewRequest(
@@ -995,10 +1047,10 @@ struct ReviewLoopStateTests {
             baseRefName: "main",
             headSHA: headSHA,
             headRepositoryOwner: headRepositoryOwner,
-            reviewDecision: .reviewRequired,
+            reviewDecision: reviewDecision,
             mergeState: .clean,
             checks: checks,
-            threads: [
+            threads: includeActionableThread ? [
                 ReviewThread(
                     id: "thread-1",
                     path: nil,
@@ -1025,7 +1077,7 @@ struct ReviewLoopStateTests {
                     viewerCanReply: false,
                     url: nil
                 ),
-            ]
+            ] : []
         )
     }
 }
@@ -1059,6 +1111,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
     }
 
     let kind: CodeHostKind
+    let capabilities: CodeHostProviderCapabilities
     var available: Bool
     var authenticated: Bool
     var request: ReviewRequest?
@@ -1076,6 +1129,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
 
     init(
         kind: CodeHostKind,
+        capabilities: CodeHostProviderCapabilities = .readOnly,
         available: Bool = true,
         authenticated: Bool = true,
         request: ReviewRequest? = nil,
@@ -1088,6 +1142,7 @@ private final class FakeCodeHostProvider: CodeHostProvider, @unchecked Sendable 
         rerunError: Error? = nil
     ) {
         self.kind = kind
+        self.capabilities = capabilities
         self.available = available
         self.authenticated = authenticated
         self.request = request
