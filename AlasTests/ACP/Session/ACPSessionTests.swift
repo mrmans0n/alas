@@ -276,14 +276,14 @@ struct ACPSessionTests {
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("The plan is complete.")),
-            .user(id: UUID(), messageId: "user-1", text: "next prompt", attachments: [])
+            .user(id: UUID(), messageId: "user-1", text: "prev prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("The plan is complete."))
         ]
         session.allowsStreamingBoundaryCrossing = false
 
-        // A late replay of the hydrated message arrives under a regenerated
-        // id, split into chunks whose first fragment is short. It must stay
-        // suppressed for its whole length and never create a duplicate.
+        // A late replay of the trailing hydrated message arrives under a
+        // regenerated id, split into chunks whose first fragment is short.
+        // It must stay suppressed for its whole length and never duplicate.
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("The "))))
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("plan is complete."))))
 
@@ -298,15 +298,15 @@ struct ACPSessionTests {
     func midStreamLateReplayFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world")),
-            .user(id: UUID(), messageId: "user-1", text: "next prompt", attachments: [])
+            .user(id: UUID(), messageId: "user-1", text: "prev prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
         ]
         session.allowsStreamingBoundaryCrossing = false
 
         // The "hello " prefix was consumed while replay suppression was
         // still active; the slip that reaches appendStreaming is a middle
-        // fragment of the hydrated message. It must not be appended as a
-        // duplicate even though it is not a prefix of that message.
+        // fragment of the trailing hydrated message. It must not be appended
+        // as a duplicate even though it is not a prefix of that message.
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
 
         let agentTexts = session.transcript.messages.compactMap { message -> String? in
@@ -344,6 +344,28 @@ struct ACPSessionTests {
             return nil
         }
         #expect(after == ["hello world!"])
+    }
+
+    @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
+    func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello")),
+            .user(id: UUID(), messageId: "user-1", text: "next", attachments: [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Genuinely new output for the "next" turn that happens to start
+        // with the same word as the prior turn's "hello" bubble. It must
+        // become its own message, not mutate the earlier (pre-user) bubble.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" there"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello", "hello there"])
     }
 
     @Test("late replay user chunk with unknown messageId does not append prompt")

@@ -1474,6 +1474,19 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
+    /// Index just past the last user message — the start of the current
+    /// trailing turn. A late load-replay only reconstructs this trailing
+    /// in-progress output; messages before the last user prompt belong to
+    /// completed prior turns and must never be matched or adopted by the
+    /// replay guard (doing so would mutate an old bubble and then drop the
+    /// real continuation via the `hasUserAfterMessage` guard).
+    private var trailingTurnStartIndex: Int {
+        if let last = transcript.messages.lastIndex(where: { if case .user = $0 { return true } else { return false } }) {
+            return transcript.messages.index(after: last)
+        }
+        return transcript.messages.startIndex
+    }
+
     /// Whether some existing message of `kind` contains `text` — i.e.
     /// `text` could be the running span of a late load-replay stream that
     /// reproduces part of an already-present message. Uses containment
@@ -1481,7 +1494,10 @@ final class ACPSession: ObservableObject, Identifiable {
     /// mid-message: the suppression counter can fall between chunks of a
     /// replayed message, so the first chunk reaching `appendStreaming`
     /// may be a middle fragment (`"world"` of `"hello world"`). Drives the
-    /// replay guard in `appendStreaming`.
+    /// replay guard in `appendStreaming`. Scans the whole transcript — a
+    /// full replay can re-deliver a message that sits before a later user
+    /// prompt, and that must still be suppressed; only *adoption* of a
+    /// continuation is restricted to the trailing turn.
     private func existingMessageContains(kind: TextMessageKind, _ text: String) -> Bool {
         guard !text.isEmpty else { return false }
         return transcript.messages.contains { message in
@@ -1496,19 +1512,21 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     /// When a diverged replay `candidate` begins with the full text of an
-    /// existing message of `kind`, the stream is that already-present
-    /// message replayed under a regenerated id and then continued past the
-    /// boundary window. Append only the divergent suffix to that message
-    /// (so the hydrated prefix is not duplicated) and rebind it to the
-    /// regenerated `messageId` so subsequent chunks target it via
+    /// existing trailing-turn message of `kind`, the stream is that
+    /// already-present message replayed under a regenerated id and then
+    /// continued past the boundary window. Append only the divergent suffix
+    /// to that message (so the hydrated prefix is not duplicated) and rebind
+    /// it to the regenerated `messageId` so subsequent chunks target it via
     /// `messageIndex`. Returns the adopted message's index, or nil when no
-    /// existing message is a prefix of the candidate (genuine new output).
+    /// trailing-turn message is a prefix of the candidate (genuine new
+    /// output — including output that merely shares a prefix with an older,
+    /// pre-user-prompt bubble).
     private func adoptReplayContinuation(kind: TextMessageKind, candidate: String, messageId: String) -> Int? {
         var bestIndex: Int?
         var bestPrefixCount = 0
-        for (index, message) in transcript.messages.enumerated() {
+        for index in trailingTurnStartIndex..<transcript.messages.endIndex {
             let existing: String
-            switch (kind, message) {
+            switch (kind, transcript.messages[index]) {
             case (.agent, .agent(_, _, let buf)),
                  (.thought, .thought(_, _, let buf)):
                 existing = buf.value
