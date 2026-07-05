@@ -243,6 +243,35 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("post-load live chunk whose short leading fragment coincides with earlier output is not dropped")
+    func postLoadLiveShortLeadingFragmentNotDroppedAsReplay() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm rerunning the tests now.")),
+            .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Run tests",
+                kind: "execute",
+                status: "completed",
+                content: "done"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A genuinely new agent message streams its first fragment "I" — a
+        // coincidental substring of the earlier message. It must not be
+        // classified as a late replay and dropped; otherwise the message is
+        // rebuilt from the second fragment, losing its leading character.
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("'ve made that warning cleanup."))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts.contains("I've made that warning cleanup."))
+    }
+
     @Test("late replay user chunk with unknown messageId does not append prompt")
     func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

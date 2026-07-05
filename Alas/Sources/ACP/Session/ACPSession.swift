@@ -265,7 +265,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
-                isLikelyReplay: { text in messageExists(kind: .agent, containing: text) },
+                isLikelyReplay: { text in chunkIsLikelyReplay(kind: .agent, of: text) },
                 makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
                 return []
             }
@@ -287,7 +287,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
-                isLikelyReplay: { text in messageExists(kind: .thought, containing: text) },
+                isLikelyReplay: { text in chunkIsLikelyReplay(kind: .thought, of: text) },
                 makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
                 return []
             }
@@ -1458,18 +1458,44 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func messageExists(kind: TextMessageKind, containing text: String) -> Bool {
-        guard !text.isEmpty else { return false }
+    /// A late load-replay frame with an unrecognised messageId
+    /// re-delivers a *complete*, previously seen message. Genuine live
+    /// output streams in small increments whose leading fragments (`I`,
+    /// `The`, `'ve`, a lone space) are almost always coincidental
+    /// substrings of an earlier message. Classifying such a fragment as a
+    /// replay drops it and rebuilds the message from a later chunk,
+    /// corrupting the visible text (`I've` rendered as `'ve`). Only treat
+    /// the chunk as a replay when it reproduces a whole existing message,
+    /// or is a substantial (non-fragment) span contained in one.
+    private func chunkIsLikelyReplay(kind: TextMessageKind, of addition: String) -> Bool {
+        let trimmed = addition.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
         return transcript.messages.contains { message in
+            let existing: String
             switch (kind, message) {
-            case (.agent, .agent(_, _, let existing)),
-                 (.thought, .thought(_, _, let existing)):
-                return existing.value.contains(text)
+            case (.agent, .agent(_, _, let buf)),
+                 (.thought, .thought(_, _, let buf)):
+                existing = buf.value
             default:
                 return false
             }
+            // Whole-message replay: the chunk reproduces an existing
+            // message verbatim (the canonical single-chunk replay frame).
+            if existing.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+                return true
+            }
+            // Multi-chunk replay straggler: a substantial span already
+            // present in an existing message. The length floor keeps short
+            // leading fragments of genuine new output from being dropped.
+            return trimmed.count >= Self.replayFragmentMinimumLength && existing.contains(addition)
         }
     }
+
+    /// Minimum length for a streaming chunk to be eligible for
+    /// substring-based replay suppression. Below this, a chunk is treated
+    /// as genuine new output even if it happens to appear inside an
+    /// earlier message — see `chunkIsLikelyReplay(kind:of:)`.
+    private static let replayFragmentMinimumLength = 16
 
     private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         guard !text.isEmpty || !attachments.isEmpty else { return false }
