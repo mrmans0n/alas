@@ -346,6 +346,50 @@ struct ACPSessionTests {
         #expect(after == ["hello world!"])
     }
 
+    @Test("replay continuation is still adopted across a trailing plan row")
+    func replayContinuationAdoptedAcrossTrailingPlan() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello")),
+            .plan(id: UUID(), [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A trailing plan does not close the agent output (like lastAgent()
+        // and markCompletedOutputBoundary(), which skip plans), so the
+        // replayed continuation must still merge into "hello", not duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" world"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
+    @Test("pending replay candidates are namespaced by kind so a shared id does not mix thought into agent text")
+    func pendingReplayCandidatesNamespacedByKind() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("pondering")),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("response"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A thought and an agent chunk reuse the same id during the restore
+        // window. The suppressed thought fragment must not leak into the
+        // agent chunk's candidate and materialize as "ponderingreply".
+        session.apply(.agentThoughtChunk(.init(messageId: "dup", content: .text("pondering"))))
+        session.apply(.agentMessageChunk(.init(messageId: "dup", content: .text("reply"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["response", "reply"])
+    }
+
     @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
     func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

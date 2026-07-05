@@ -104,12 +104,19 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Running text of streaming chunks that arrived with an unrecognised
     /// `messageId` while `allowsStreamingBoundaryCrossing` was false and
     /// still look like a late load-replay (their accumulated text is
-    /// contained in an already-present message). Keyed by messageId. Held
-    /// rather than dropped so that if the stream diverges — i.e. it is
-    /// genuine new output whose leading fragment merely coincided with an
-    /// earlier message — the full text can be materialised without losing
-    /// the leading characters. Cleared once the boundary window ends.
-    private var pendingReplayCandidates: [String: String] = [:]
+    /// contained in an already-present message). Keyed by kind + messageId
+    /// (ids are kind-scoped elsewhere — see `messageIndex` and `stableId` —
+    /// so a thought and an agent chunk that reuse the same id must not share
+    /// a candidate). Held rather than dropped so that if the stream diverges
+    /// — i.e. it is genuine new output whose leading fragment merely
+    /// coincided with an earlier message — the full text can be materialised
+    /// without losing the leading characters. Cleared once the window ends.
+    private var pendingReplayCandidates: [ReplayCandidateKey: String] = [:]
+
+    private struct ReplayCandidateKey: Hashable {
+        let kind: TextMessageKind
+        let messageId: String
+    }
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
@@ -273,6 +280,7 @@ final class ACPSession: ObservableObject, Identifiable {
             guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
+                replayKind: .agent,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
@@ -298,6 +306,7 @@ final class ACPSession: ObservableObject, Identifiable {
             guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
+                replayKind: .thought,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
                 replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
@@ -1313,7 +1322,7 @@ final class ACPSession: ObservableObject, Identifiable {
         return nil
     }
 
-    private enum TextMessageKind {
+    private enum TextMessageKind: Hashable {
         case user
         case agent
         case thought
@@ -1474,18 +1483,19 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// Start of the trailing contiguous run of agent/thought bubbles — the
-    /// index just past the last message that is neither `.agent` nor
-    /// `.thought` (a user prompt, tool call, file edit, plan, or system
-    /// notice). A late load-replay only continues this in-progress trailing
-    /// output; adoption must not reach back across such a boundary into an
-    /// already-closed bubble (mirroring how `lastAgent()`/`lastThought()`
-    /// stop at user/tool/file rows), which would mutate an old bubble and
-    /// then drop the real continuation via the `hasUserAfterMessage` guard.
+    /// Start of the trailing in-progress output run — the index just past
+    /// the last message that closes a turn's output (a user prompt, tool
+    /// call, file edit, or system notice). `.agent`, `.thought`, and
+    /// `.plan` rows stay inside the span, matching `markCompletedOutputBoundary()`
+    /// (and `lastAgent()`, which skips plans). A late load-replay only
+    /// continues this trailing output; adoption must not reach back across
+    /// such a boundary into an already-closed bubble — that would mutate an
+    /// old bubble and then drop the real continuation via the
+    /// `hasUserAfterMessage` guard.
     private var trailingOutputStartIndex: Int {
         if let last = transcript.messages.lastIndex(where: { message in
             switch message {
-            case .agent, .thought: return false
+            case .agent, .thought, .plan: return false
             default: return true
             }
         }) {
@@ -1574,6 +1584,7 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
                                  messageId: String?,
+                                 replayKind: TextMessageKind,
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,
                                  replayCandidateMatches: (String) -> Bool,
@@ -1634,13 +1645,14 @@ final class ACPSession: ObservableObject, Identifiable {
         // materialising a new row that duplicates the hydrated prefix.
         var newMessageText = addition
         if let messageId, !allowsStreamingBoundaryCrossing {
-            let previous = pendingReplayCandidates[messageId]
+            let candidateKey = ReplayCandidateKey(kind: replayKind, messageId: messageId)
+            let previous = pendingReplayCandidates[candidateKey]
             let candidate = (previous ?? "") + Self.streamingSeparator(between: previous ?? "", and: addition) + addition
             if replayCandidateMatches(candidate) {
-                pendingReplayCandidates[messageId] = candidate
+                pendingReplayCandidates[candidateKey] = candidate
                 return nil
             }
-            pendingReplayCandidates.removeValue(forKey: messageId)
+            pendingReplayCandidates.removeValue(forKey: candidateKey)
             if let adopted = adoptContinuation(candidate) {
                 return adopted
             }
