@@ -905,12 +905,37 @@ final class RightPaneState {
                 mergeError = Self.mergeUnavailableMessage
                 return
             }
+            // The generation-guarded refresh above can be superseded by a
+            // concurrent watcher refresh and return without publishing, leaving
+            // the snapshot stale. Do a final authoritative read straight from
+            // git so a just-created commit or dirty tree can't slip through.
+            guard let reviewedHead = snapshot.reviewRequest?.headSHA,
+                  await localHeadIsCleanlyAt(reviewedHead)
+            else {
+                mergeError = Self.mergeUnavailableMessage
+                return
+            }
             if await reviewLoop.merge(snapshot: snapshot) {
                 await refresh()
             } else {
                 mergeError = reviewLoop.lastError ?? "Merge failed."
             }
         }
+    }
+
+    /// Authoritative, point-in-time check that the worktree HEAD is exactly the
+    /// reviewed head and the tree is clean — read straight from git, not via the
+    /// review-loop refresh (whose generation guard lets a concurrent watcher
+    /// refresh supersede the merge-triggered one without publishing).
+    private func localHeadIsCleanlyAt(_ reviewedHeadSHA: String) async -> Bool {
+        guard let head = try? await Process.git(["rev-parse", "HEAD"], cwd: worktree.path),
+              head.exitCode == 0,
+              head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == reviewedHeadSHA
+        else { return false }
+        guard let status = try? await Process.git(["status", "--porcelain"], cwd: worktree.path),
+              status.exitCode == 0
+        else { return false }
+        return status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // Merge failures are surfaced via an app-level alert (hosted in RootView
