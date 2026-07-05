@@ -101,6 +101,16 @@ final class ACPSession: ObservableObject, Identifiable {
     /// check is never reached).
     var allowsStreamingBoundaryCrossing: Bool = true
 
+    /// Running text of streaming chunks that arrived with an unrecognised
+    /// `messageId` while `allowsStreamingBoundaryCrossing` was false and
+    /// still look like a late load-replay (their accumulated text is a
+    /// prefix of an already-present message). Keyed by messageId. Held
+    /// rather than dropped so that if the stream diverges — i.e. it is
+    /// genuine new output whose leading fragment merely coincided with an
+    /// earlier message — the full text can be materialised without losing
+    /// the leading characters. Cleared once the boundary window ends.
+    private var pendingReplayPrefixes: [String: String] = [:]
+
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
     private var liveUserChunkMessageIds: Set<String> = []
@@ -265,8 +275,8 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
-                isLikelyReplay: { text in chunkIsLikelyReplay(kind: .agent, of: text) },
-                makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
+                replayPrefixMatches: { text in existingMessageHasPrefix(kind: .agent, text) },
+                makeNew: { text in .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
                 return []
             }
             return [i]
@@ -287,8 +297,8 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: chunk.messageId,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
-                isLikelyReplay: { text in chunkIsLikelyReplay(kind: .thought, of: text) },
-                makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
+                replayPrefixMatches: { text in existingMessageHasPrefix(kind: .thought, text) },
+                makeNew: { text in .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
                 return []
             }
             return [i]
@@ -1458,44 +1468,22 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// A late load-replay frame with an unrecognised messageId
-    /// re-delivers a *complete*, previously seen message. Genuine live
-    /// output streams in small increments whose leading fragments (`I`,
-    /// `The`, `'ve`, a lone space) are almost always coincidental
-    /// substrings of an earlier message. Classifying such a fragment as a
-    /// replay drops it and rebuilds the message from a later chunk,
-    /// corrupting the visible text (`I've` rendered as `'ve`). Only treat
-    /// the chunk as a replay when it reproduces a whole existing message,
-    /// or is a substantial (non-fragment) span contained in one.
-    private func chunkIsLikelyReplay(kind: TextMessageKind, of addition: String) -> Bool {
-        let trimmed = addition.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
+    /// Whether some existing message of `kind` begins with `text` — i.e.
+    /// `text` could be the running prefix of a late load-replay stream
+    /// reconstructing that already-present message. Drives the replay
+    /// guard in `appendStreaming`.
+    private func existingMessageHasPrefix(kind: TextMessageKind, _ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
         return transcript.messages.contains { message in
-            let existing: String
             switch (kind, message) {
             case (.agent, .agent(_, _, let buf)),
                  (.thought, .thought(_, _, let buf)):
-                existing = buf.value
+                return buf.value.hasPrefix(text)
             default:
                 return false
             }
-            // Whole-message replay: the chunk reproduces an existing
-            // message verbatim (the canonical single-chunk replay frame).
-            if existing.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
-                return true
-            }
-            // Multi-chunk replay straggler: a substantial span already
-            // present in an existing message. The length floor keeps short
-            // leading fragments of genuine new output from being dropped.
-            return trimmed.count >= Self.replayFragmentMinimumLength && existing.contains(addition)
         }
     }
-
-    /// Minimum length for a streaming chunk to be eligible for
-    /// substring-based replay suppression. Below this, a chunk is treated
-    /// as genuine new output even if it happens to appear inside an
-    /// earlier message — see `chunkIsLikelyReplay(kind:of:)`.
-    private static let replayFragmentMinimumLength = 16
 
     private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
         guard !text.isEmpty || !attachments.isEmpty else { return false }
@@ -1513,8 +1501,14 @@ final class ACPSession: ObservableObject, Identifiable {
                                  messageId: String?,
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,
-                                 isLikelyReplay: (String) -> Bool,
-                                 makeNew: () -> ACPMessage) -> Int? {
+                                 replayPrefixMatches: (String) -> Bool,
+                                 makeNew: (String) -> ACPMessage) -> Int? {
+        // Outside the boundary-crossing window there is no late replay to
+        // guard against — drop any accumulated candidates so they never
+        // leak into a later window.
+        if allowsStreamingBoundaryCrossing, !pendingReplayPrefixes.isEmpty {
+            pendingReplayPrefixes.removeAll(keepingCapacity: false)
+        }
         let located = if let messageId {
             locateByMessageId(messageId)
         } else {
@@ -1546,10 +1540,28 @@ final class ACPSession: ObservableObject, Identifiable {
                 }
             }
         }
-        if messageId != nil, !allowsStreamingBoundaryCrossing, isLikelyReplay(addition) {
-            return nil
+        // Late load-replay guard for an unrecognised messageId. A replay
+        // re-streams an already-present message from its start, so we
+        // accumulate this messageId's chunks and keep suppressing while
+        // the running text stays a prefix of some existing message. Once
+        // it diverges it is genuine new output — materialise it in full so
+        // no leading fragment is lost (a short first fragment like "I" or
+        // "The " coinciding with an earlier message would otherwise be
+        // dropped, corrupting the text, or — if suppressed per-chunk —
+        // duplicate a chunked replay). Single-chunk full replays still
+        // never create a message.
+        var newMessageText = addition
+        if let messageId, !allowsStreamingBoundaryCrossing {
+            let previous = pendingReplayPrefixes[messageId]
+            let candidate = (previous ?? "") + Self.streamingSeparator(between: previous ?? "", and: addition) + addition
+            if replayPrefixMatches(candidate) {
+                pendingReplayPrefixes[messageId] = candidate
+                return nil
+            }
+            pendingReplayPrefixes.removeValue(forKey: messageId)
+            newMessageText = candidate
         }
-        transcript.messages.append(makeNew())
+        transcript.messages.append(makeNew(newMessageText))
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }
