@@ -294,6 +294,28 @@ struct ACPSessionTests {
         #expect(agentTexts == ["The plan is complete."])
     }
 
+    @Test("mid-stream late replay fragment with a regenerated messageId is not duplicated")
+    func midStreamLateReplayFragmentNotDuplicated() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world")),
+            .user(id: UUID(), messageId: "user-1", text: "next prompt", attachments: [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The "hello " prefix was consumed while replay suppression was
+        // still active; the slip that reaches appendStreaming is a middle
+        // fragment of the hydrated message. It must not be appended as a
+        // duplicate even though it is not a prefix of that message.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
     @Test("late replay user chunk with unknown messageId does not append prompt")
     func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
