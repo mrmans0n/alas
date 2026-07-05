@@ -25,7 +25,7 @@ No new production file is needed because the change is tightly scoped to one set
 **Files:**
 - Modify: `Alas/Sources/Remote/Settings/RemoteServerPane.swift`
 
-- [ ] **Step 1: Inspect the current pane and address helpers**
+- [x] **Step 1: Inspect the current pane and address helpers**
 
 Run:
 
@@ -35,7 +35,7 @@ rtk sed -n '1,260p' Alas/Sources/Remote/Settings/RemoteServerPane.swift
 
 Expected: the file contains `ForEach(state.remoteAdvertisedAddresses)`, `chooseAddress(_:)`, `pairingURL(port:)`, and `selectedAddress()`.
 
-- [ ] **Step 2: Add the selector row after the advertised address rows**
+- [x] **Step 2: Add the selector row after the advertised address rows**
 
 In `RemoteServerPane.body`, inside `if state.config.remote.enabled, let port = state.remotePort`, after the `ForEach(state.remoteAdvertisedAddresses)` block and before `SettingsRow(name: "PWA install", ...)`, add:
 
@@ -58,7 +58,7 @@ if let selected = selectedAddress(), !state.remoteAdvertisedAddresses.isEmpty {
 
 This row must be shown only when advertised addresses exist. The fallback localhost-only state must not show a selector.
 
-- [ ] **Step 3: Replace per-row selection controls with Copy only**
+- [x] **Step 3: Replace per-row selection controls with Copy only**
 
 In the `ForEach(state.remoteAdvertisedAddresses)` row control, replace the existing `HStack` containing the checkmark, `Copy`, and `Use for QR` button with this single `Copy` button:
 
@@ -78,7 +78,7 @@ Also update the localhost fallback row's copy action to use the same helper:
 copyAddress(fallbackURL)
 ```
 
-- [ ] **Step 4: Add the binding and copy helpers**
+- [x] **Step 4: Add the binding and copy helpers**
 
 Near the existing private helper methods in `RemoteServerPane`, add:
 
@@ -102,7 +102,7 @@ private func copyAddress(_ url: String) {
 
 Keep `chooseAddress(_:)`, `pairingURL(port:)`, and `selectedAddress()` as the source of persisted selection and QR URL behavior.
 
-- [ ] **Step 5: Build the app**
+- [x] **Step 5: Build the app**
 
 Run:
 
@@ -112,7 +112,7 @@ rtk xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS
 
 Expected: build exits 0.
 
-- [ ] **Step 6: Self-review the UI logic**
+- [x] **Step 6: Self-review the UI logic**
 
 Check:
 
@@ -128,7 +128,7 @@ Expected:
 - `pairingURL(port:)` still derives from `selectedAddress()`.
 - No fallback localhost selector is shown when `remoteAdvertisedAddresses` is empty.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 Run:
 
@@ -145,7 +145,7 @@ Expected: commit succeeds with only the Remote settings pane change.
 - Inspect: `docs/superpowers/specs/2026-07-05-remote-qr-address-picker-design.md`
 - Inspect: `Alas/Sources/Remote/Settings/RemoteServerPane.swift`
 
-- [ ] **Step 1: Compare implementation to the design spec**
+- [x] **Step 1: Compare implementation to the design spec**
 
 Run:
 
@@ -162,7 +162,7 @@ Expected:
 - QR URL continues through `pairingURL(port:)`.
 - No extra remote behavior is introduced.
 
-- [ ] **Step 2: Run a focused build verification**
+- [x] **Step 2: Run a focused build verification**
 
 Run:
 
@@ -172,7 +172,7 @@ rtk xcodebuild -project Alas.xcodeproj -scheme Alas -destination 'platform=macOS
 
 Expected: build exits 0.
 
-- [ ] **Step 3: Check the final diff**
+- [x] **Step 3: Check the final diff**
 
 Run:
 
