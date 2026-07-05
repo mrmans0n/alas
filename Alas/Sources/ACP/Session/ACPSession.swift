@@ -1564,19 +1564,22 @@ final class ACPSession: ObservableObject, Identifiable {
         guard !existing.isEmpty else { return nil }
         // Longest suffix of `existing` that is a prefix of `candidate` — the
         // reproduced portion. The remaining candidate is the genuine new
-        // continuation to append. The reproduced suffix must begin at a word
-        // boundary (the start of the bubble, or just after whitespace):
-        // unrecognised message ids otherwise start their own rows, so a
-        // coincidental mid-token overlap (a new message `"Keep going"` whose
-        // `"K"` matches the tail of a hydrated `"OK"`) must not be mistaken
-        // for a replay continuation and merged into the old bubble.
+        // continuation to append. The reproduced suffix must begin at a token
+        // boundary (the start of the bubble, or after a non-alphanumeric
+        // character — whitespace or punctuation): unrecognised message ids
+        // otherwise start their own rows, so a coincidental mid-word overlap
+        // (a new message `"Keep going"` whose `"K"` matches the tail of a
+        // hydrated `"OK"`) must not be mistaken for a replay continuation and
+        // merged into the old bubble, while a punctuation-bounded suffix
+        // (`"Running"` after `"tests completed."`) is still adopted.
         var suffix: String?
         let existingChars = Array(existing)
         let maxOverlap = min(existingChars.count, candidate.count)
         for overlap in stride(from: maxOverlap, through: 1, by: -1) {
             let startOffset = existingChars.count - overlap
-            if startOffset > 0, !existingChars[startOffset - 1].isWhitespace {
-                continue
+            if startOffset > 0 {
+                let preceding = existingChars[startOffset - 1]
+                if preceding.isLetter || preceding.isNumber { continue }
             }
             if candidate.hasPrefix(String(existingChars[startOffset...])) {
                 suffix = String(candidate.dropFirst(overlap))

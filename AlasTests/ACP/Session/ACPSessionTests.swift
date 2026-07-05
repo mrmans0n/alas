@@ -488,6 +488,29 @@ struct ACPSessionTests {
         #expect(thoughtTexts == ["plan", "plan more"])
     }
 
+    @Test("replay resuming after a punctuation-bounded split is adopted as a continuation")
+    func punctuationBoundedReplaySuffixAdopted() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // No whitespace at the sentence split, as the raw/display replay case
+        // hydrates it.
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("tests completed.Running"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The replay resumes at "Running" (a suffix that begins after the
+        // period, not whitespace) and then continues. It must extend the
+        // hydrated bubble, not spawn a second "Running" row.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("Running"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["tests completed.Running!"])
+    }
+
     @Test("a coincidental mid-token suffix overlap is not adopted as a replay continuation")
     func weakMidTokenSuffixOverlapNotAdopted() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
