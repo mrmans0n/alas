@@ -101,6 +101,40 @@ final class ACPSession: ObservableObject, Identifiable {
     /// check is never reached).
     var allowsStreamingBoundaryCrossing: Bool = true
 
+    /// Running text of streaming chunks that arrived with an unrecognised
+    /// `messageId` while `allowsStreamingBoundaryCrossing` was false and
+    /// still look like a late load-replay (their accumulated text is
+    /// contained in an already-present message). Keyed by kind + messageId
+    /// (ids are kind-scoped elsewhere — see `messageIndex` and `stableId` —
+    /// so a thought and an agent chunk that reuse the same id must not share
+    /// a candidate). Held rather than dropped so that if the stream diverges
+    /// — i.e. it is genuine new output whose leading fragment merely
+    /// coincided with an earlier message — the full text can be materialised
+    /// without losing the leading characters. Cleared once the window ends.
+    private var pendingReplayCandidates: [ReplayCandidateKey: ReplayCandidate] = [:]
+    /// Monotonic counter stamping each candidate with its arrival order, so a
+    /// flush materialises them in the order their first chunk arrived rather
+    /// than by the opaque `messageId` (which need not sort chronologically).
+    private var replayCandidateArrivalCounter: Int = 0
+
+    private struct ReplayCandidateKey: Hashable {
+        let kind: TextMessageKind
+        let messageId: String
+    }
+
+    /// Two views of the accumulated replay text plus its arrival order.
+    /// `display` carries the sentence-boundary separators a live stream
+    /// injects (used when the text turns out to be genuine new output and is
+    /// materialised); `raw` is the plain concatenation used for matching, so
+    /// a replay that splits at a boundary the original stream did not is still
+    /// recognised (the injected `\n` would otherwise cause a false mismatch).
+    /// `arrivalOrder` preserves first-seen order across the buffer.
+    private struct ReplayCandidate {
+        var display: String
+        var raw: String
+        var arrivalOrder: Int
+    }
+
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
     private var reconciledLegacyLocalUserPromptIds: Set<UUID> = []
     private var liveUserChunkMessageIds: Set<String> = []
@@ -231,6 +265,11 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
+        // Materialise any held replay candidate before the new prompt so
+        // stranded live text from the just-ended turn keeps its place ahead
+        // of the user message instead of being dropped. The runner persists
+        // from the pre-call message count, so the flushed rows are saved too.
+        _ = flushPendingReplayCandidates()
         transcript.messages.append(.user(id: UUID(), messageId: nil, text: text, attachments: attachments))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -256,42 +295,84 @@ final class ACPSession: ObservableObject, Identifiable {
     /// transcript, not just the trailing row.
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
+        // Materialise held replay candidates in order before an update that
+        // closes their message, so a suppressed short fragment (e.g. "I",
+        // buffered because it is a substring of prior output) is emitted in
+        // place rather than stranded in `pendingReplayCandidates` and dropped.
+        // Once the boundary window has ended, flush everything (residual
+        // candidates are genuine output). Within the window:
+        //   • a tool call or plan closes the whole in-progress run;
+        //   • an agent answer closes an in-progress thought (`lastThought()`
+        //     stops at `.agent`), so flush pending thoughts ahead of it — the
+        //     agent candidate itself is handled by `appendStreaming`.
+        // State-only updates append no row and must NOT flush a buffered
+        // chunk into a duplicate; `userMessageChunk` (via `appendUserChunk`)
+        // and the thought-before-agent-answer flush (via `appendStreaming`)
+        // are both deferred until the incoming chunk is known to be live
+        // rather than itself a suppressed replay.
+        let kindsToFlush: Set<TextMessageKind>
+        if allowsStreamingBoundaryCrossing {
+            kindsToFlush = [.agent, .thought]
+        } else {
+            switch update {
+            case .toolCall, .plan:
+                kindsToFlush = [.agent, .thought]
+            default:
+                kindsToFlush = []
+            }
+        }
+        let flushed = kindsToFlush.isEmpty ? [] : flushPendingReplayCandidates(kinds: kindsToFlush)
+        let result: Set<Int> = { () -> Set<Int> in
         switch update {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            var flushedForAgent: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
+                replayKind: .agent,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .agent) },
                 locateLegacy: { lastAgent() },
-                isLikelyReplay: { text in messageExists(kind: .agent, containing: text) },
-                makeNew: { .agent(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
-                return []
+                replayCandidateMatches: { text in existingMessageContains(kind: .agent, text) },
+                adoptContinuation: { candidate in
+                    chunk.messageId.flatMap { adoptReplayContinuation(kind: .agent, candidate: candidate, messageId: $0) }
+                },
+                flushedReplayIndices: &flushedForAgent,
+                makeNew: { text in .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
+                return flushedForAgent
             }
-            return [i]
+            return flushedForAgent.union([i])
         case .userMessageChunk(let chunk):
             let txt = text(of: chunk.content)
+            var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
                 text: txt,
                 attachments: ACPSessionRunner.attachments(of: [chunk.content]),
-                messageId: chunk.messageId) else {
+                messageId: chunk.messageId,
+                flushedReplayIndices: &flushedForUser) else {
                 return []
             }
-            return [i]
+            return flushedForUser.union([i])
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            var flushedForThought: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
+                replayKind: .thought,
                 locateByMessageId: { id in messageIndex(messageId: id, kind: .thought) },
                 locateLegacy: { lastThought() },
-                isLikelyReplay: { text in messageExists(kind: .thought, containing: text) },
-                makeNew: { .thought(id: UUID(), messageId: chunk.messageId, StreamingText(txt)) }) else {
-                return []
+                replayCandidateMatches: { text in existingMessageContains(kind: .thought, text) },
+                adoptContinuation: { candidate in
+                    chunk.messageId.flatMap { adoptReplayContinuation(kind: .thought, candidate: candidate, messageId: $0) }
+                },
+                flushedReplayIndices: &flushedForThought,
+                makeNew: { text in .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
+                return flushedForThought
             }
-            return [i]
+            return flushedForThought.union([i])
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
             let items = payload.content ?? []
@@ -372,6 +453,74 @@ final class ACPSession: ObservableObject, Identifiable {
             return []
         case .unknown:
             return []
+        }
+        }()
+        return flushed.union(result)
+    }
+
+    /// Materialise held replay candidates of the given `kinds` as new rows
+    /// (in a stable order), removing them from the buffer. Returns the
+    /// indices appended so the caller can persist them. Called when the
+    /// current text message closes (a row-appending update), the boundary
+    /// window ends, or the turn completes, so a suppressed short fragment is
+    /// never stranded and dropped.
+    ///
+    /// A candidate whose accumulated text exactly reproduces a complete
+    /// existing message of its kind is a pure full replay that never
+    /// diverged — it is dropped rather than materialised, preserving replay
+    /// suppression. A candidate that merely coincided with a *substring* of a
+    /// longer message (a genuine one-chunk reply like "OK" against an
+    /// existing "OK done.") is materialised.
+    @discardableResult
+    private func flushPendingReplayCandidates(kinds: Set<TextMessageKind> = [.agent, .thought]) -> Set<Int> {
+        guard !pendingReplayCandidates.isEmpty else { return [] }
+        var indices: Set<Int> = []
+        // Compare full-replay equality only against messages that existed
+        // before this flush, so two distinct held chunks with identical text
+        // (two one-chunk "OK" replies) don't collapse — the first materialised
+        // row must not make the second look like a replay of it.
+        let preFlushCount = transcript.messages.count
+        let orderedKeys = pendingReplayCandidates.keys.sorted {
+            (pendingReplayCandidates[$0]?.arrivalOrder ?? 0) < (pendingReplayCandidates[$1]?.arrivalOrder ?? 0)
+        }
+        for key in orderedKeys {
+            guard kinds.contains(key.kind), let candidate = pendingReplayCandidates[key] else { continue }
+            pendingReplayCandidates.removeValue(forKey: key)
+            if existingMessageEquals(kind: key.kind, candidate.display, before: preFlushCount)
+                || existingMessageEquals(kind: key.kind, candidate.raw, before: preFlushCount) {
+                continue // pure full replay — keep suppressed
+            }
+            let message: ACPMessage
+            switch key.kind {
+            case .agent:
+                message = .agent(id: UUID(), messageId: key.messageId, StreamingText(candidate.display))
+            case .thought:
+                message = .thought(id: UUID(), messageId: key.messageId, StreamingText(candidate.display))
+            case .user:
+                continue
+            }
+            transcript.messages.append(message)
+            didAppendTranscriptMessage()
+            indices.insert(transcript.messages.count - 1)
+        }
+        return indices
+    }
+
+    /// Whether some message of `kind` in `transcript.messages[..<upperBound]`
+    /// has value exactly equal to `text` — i.e. `text` reproduces that
+    /// complete message (a full replay). `upperBound` excludes rows appended
+    /// during the current flush so repeated identical outputs are preserved.
+    private func existingMessageEquals(kind: TextMessageKind, _ text: String, before upperBound: Int) -> Bool {
+        let end = min(upperBound, transcript.messages.count)
+        guard end > 0 else { return false }
+        return transcript.messages[..<end].contains { message in
+            switch (kind, message) {
+            case (.agent, .agent(_, _, let buf)),
+                 (.thought, .thought(_, _, let buf)):
+                return buf.value == text
+            default:
+                return false
+            }
         }
     }
 
@@ -516,12 +665,20 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func appendSystemNotice(_ text: String) {
+        // A system notice closes the current output run; materialise any held
+        // replay candidate first so it keeps its place ahead of the notice.
+        flushPendingReplayCandidates()
         transcript.messages.append(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
         clearRestoredContextRecoveryStatus()
+        // A file edit closes the current output run (see lastAgent()/
+        // lastThought(), which stop at .fileEdit); materialise any held replay
+        // candidate first so text that arrived before the edit stays ahead of
+        // it. This path does not flow through `apply`, so it must flush here.
+        flushPendingReplayCandidates()
         transcript.messages.append(.fileEdit(id: UUID(), edit))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -553,6 +710,14 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func markCompletedOutputBoundary() {
+        // The turn's output is complete; materialise any held replay
+        // candidate now (before marking boundaries so the flushed final
+        // message is itself recorded as a completed boundary). Otherwise a
+        // buffered final chunk whose text happens to be a substring of prior
+        // output — a one-chunk reply like "OK" — would stay outside
+        // `transcript.messages`, never persist, and be lost on detach/reopen,
+        // since turn completion reaches here without an `ACPSessionUpdate`.
+        _ = flushPendingReplayCandidates()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         for message in transcript.messages.reversed() {
             switch message {
@@ -1293,11 +1458,16 @@ final class ACPSession: ObservableObject, Identifiable {
             if case .thought = transcript.messages[i] { return i }
             if case .agent = transcript.messages[i] { return nil }
             if case .toolCall = transcript.messages[i] { return nil }
+            // A file edit closes the current output run, matching lastAgent()
+            // and markCompletedOutputBoundary(); a thought after an edit is a
+            // new bubble, so a legacy chunk (or a replay continuation adopted
+            // via this index) must not extend the pre-edit thought.
+            if case .fileEdit = transcript.messages[i] { return nil }
         }
         return nil
     }
 
-    private enum TextMessageKind {
+    private enum TextMessageKind: Hashable {
         case user
         case agent
         case thought
@@ -1316,7 +1486,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?) -> Int? {
+    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
@@ -1399,6 +1569,11 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if addition.isEmpty {
             guard !newAttachments.isEmpty else { return nil }
+            // A genuine new prompt closes the current text message; flush any
+            // held replay candidate first so it keeps its place ahead of the
+            // prompt. Deferred to here (past the replay guard above) so a
+            // replayed user chunk never materialises a still-buffered chunk.
+            flushedReplayIndices = flushPendingReplayCandidates()
             let id = UUID()
             transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
             if let messageId {
@@ -1411,6 +1586,9 @@ final class ACPSession: ObservableObject, Identifiable {
             return transcript.messages.count - 1
         }
 
+        // Genuine new prompt (past the replay guard): flush held replay
+        // candidates first so they keep their place ahead of the prompt.
+        flushedReplayIndices = flushPendingReplayCandidates()
         let id = UUID()
         transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
         if let messageId {
@@ -1458,17 +1636,86 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func messageExists(kind: TextMessageKind, containing text: String) -> Bool {
+    /// Whether some existing message of `kind` contains `text` — i.e.
+    /// `text` could be the running span of a late load-replay stream that
+    /// reproduces part of an already-present message. Uses containment
+    /// rather than prefix matching because a replay slip can begin
+    /// mid-message: the suppression counter can fall between chunks of a
+    /// replayed message, so the first chunk reaching `appendStreaming`
+    /// may be a middle fragment (`"world"` of `"hello world"`). Drives the
+    /// replay guard in `appendStreaming`. Scans the whole transcript — a
+    /// full replay can re-deliver a message that sits before a later user
+    /// prompt, and that must still be suppressed; only *adoption* of a
+    /// continuation is restricted to the trailing turn.
+    private func existingMessageContains(kind: TextMessageKind, _ text: String) -> Bool {
         guard !text.isEmpty else { return false }
         return transcript.messages.contains { message in
             switch (kind, message) {
-            case (.agent, .agent(_, _, let existing)),
-                 (.thought, .thought(_, _, let existing)):
-                return existing.value.contains(text)
+            case (.agent, .agent(_, _, let buf)),
+                 (.thought, .thought(_, _, let buf)):
+                return buf.value.contains(text)
             default:
                 return false
             }
         }
+    }
+
+    /// When a diverged replay `candidate` reproduces the *entire* trailing
+    /// in-progress bubble of `kind` as a prefix and then continues past it,
+    /// the stream is that already-present message replayed under a
+    /// regenerated id and continued past the boundary window. Append only
+    /// the text beyond the bubble (so the hydrated prefix is not duplicated)
+    /// and rebind the bubble to the regenerated `messageId` so subsequent
+    /// chunks target it via `messageIndex`. Returns the adopted message's
+    /// index, or nil when the candidate does not begin with the whole bubble
+    /// (genuine new output).
+    ///
+    /// Only a *whole-bubble* prefix is adopted, never a partial suffix. A
+    /// regenerated id that reproduces just the tail of the bubble is
+    /// indistinguishable from a genuinely separate message that happens to
+    /// start with the bubble's last word (`"hello world"` followed by a new
+    /// `"world again"` reads identically to a mid-message replay `"world"` +
+    /// `"!"`), and ACP message ids normally delimit separate rows — so a
+    /// partial match starts its own row rather than risk a corrupting merge.
+    /// A mid-message replay slip that is then continued therefore surfaces as
+    /// a (rare) duplicate bubble instead; that is the accepted trade-off for
+    /// never mutating a genuinely separate message into an existing bubble.
+    ///
+    /// The adoption target is exactly `lastAgent()`/`lastThought()` — the
+    /// same trailing bubble a legacy (id-less) chunk would extend — so the
+    /// boundary rules (a user prompt, tool call, or file edit closes the
+    /// run; an agent row closes a thought; plans are skipped) stay
+    /// consistent with the rest of streaming instead of being re-derived.
+    private func adoptReplayContinuation(kind: TextMessageKind, candidate: String, messageId: String) -> Int? {
+        let trailingIndex: Int?
+        switch kind {
+        case .agent: trailingIndex = lastAgent()
+        case .thought: trailingIndex = lastThought()
+        case .user: trailingIndex = nil
+        }
+        guard let i = trailingIndex else { return nil }
+        let existing: String
+        switch transcript.messages[i] {
+        case .agent(_, _, let buf), .thought(_, _, let buf):
+            existing = buf.value
+        default:
+            return nil
+        }
+        guard !existing.isEmpty, candidate.hasPrefix(existing) else { return nil }
+        let suffix = String(candidate.dropFirst(existing.count))
+        guard !suffix.isEmpty else { return nil }
+        switch transcript.messages[i] {
+        case .agent(let id, _, let buf):
+            buf.append(suffix)
+            transcript.messages[i] = .agent(id: id, messageId: messageId, buf)
+        case .thought(let id, _, let buf):
+            buf.append(suffix)
+            transcript.messages[i] = .thought(id: id, messageId: messageId, buf)
+        default:
+            return nil
+        }
+        transcript.streamingTick &+= 1
+        return i
     }
 
     private func userMessageExists(containing text: String, attachments: [ACPMessage.Attachment]) -> Bool {
@@ -1485,10 +1732,17 @@ final class ACPSession: ObservableObject, Identifiable {
     /// Returns the index of the message that was appended or mutated.
     private func appendStreaming(text addition: String,
                                  messageId: String?,
+                                 replayKind: TextMessageKind,
                                  locateByMessageId: (String) -> Int?,
                                  locateLegacy: () -> Int?,
-                                 isLikelyReplay: (String) -> Bool,
-                                 makeNew: () -> ACPMessage) -> Int? {
+                                 replayCandidateMatches: (String) -> Bool,
+                                 adoptContinuation: (String) -> Int?,
+                                 flushedReplayIndices: inout Set<Int>,
+                                 makeNew: (String) -> ACPMessage) -> Int? {
+        // Any held candidates from a prior window are flushed (materialised)
+        // by `apply` before this runs — once `allowsStreamingBoundaryCrossing`
+        // is true, or on the closing non-text update — so they are never
+        // stranded or leaked into a later window.
         let located = if let messageId {
             locateByMessageId(messageId)
         } else {
@@ -1520,10 +1774,61 @@ final class ACPSession: ObservableObject, Identifiable {
                 }
             }
         }
-        if messageId != nil, !allowsStreamingBoundaryCrossing, isLikelyReplay(addition) {
-            return nil
+        // Late load-replay guard for an unrecognised messageId. A replay
+        // re-streams text that is already present, so we accumulate this
+        // messageId's chunks and keep suppressing while the running text
+        // stays contained in some existing message. Containment (not just
+        // a prefix) is required because a replay slip can start mid-message
+        // — the suppression counter may fall between chunks, so the first
+        // chunk seen here can be a middle fragment ("world" of "hello
+        // world"). Once the running text diverges it is genuine new output
+        // — materialise it in full so no leading fragment is lost (a short
+        // first fragment like "I" coinciding with an earlier message would
+        // otherwise be dropped, corrupting the text). Single-chunk full
+        // replays and chunked/mid-stream replays never create a message.
+        // On divergence, if the candidate begins with an existing message
+        // it is that message replayed under a regenerated id and continued
+        // — adopt it (append only the divergent suffix) instead of
+        // materialising a new row that duplicates the hydrated prefix.
+        var newMessageText = addition
+        if let messageId, !allowsStreamingBoundaryCrossing {
+            let candidateKey = ReplayCandidateKey(kind: replayKind, messageId: messageId)
+            let previous = pendingReplayCandidates[candidateKey]
+            let previousDisplay = previous?.display ?? ""
+            let previousRaw = previous?.raw ?? ""
+            let display = previousDisplay + Self.streamingSeparator(between: previousDisplay, and: addition) + addition
+            let raw = previousRaw + addition
+            // Match on both forms: the display form (as a live stream would
+            // build it) and the raw concatenation, so a replay that splits
+            // at a sentence boundary the original stream did not is still
+            // recognised rather than duplicated by the injected separator.
+            if replayCandidateMatches(display) || replayCandidateMatches(raw) {
+                // Preserve the first-seen arrival order across accumulation.
+                let arrivalOrder: Int
+                if let previous {
+                    arrivalOrder = previous.arrivalOrder
+                } else {
+                    arrivalOrder = replayCandidateArrivalCounter
+                    replayCandidateArrivalCounter += 1
+                }
+                pendingReplayCandidates[candidateKey] = ReplayCandidate(display: display, raw: raw, arrivalOrder: arrivalOrder)
+                return nil
+            }
+            pendingReplayCandidates.removeValue(forKey: candidateKey)
+            if let adopted = adoptContinuation(display) ?? adoptContinuation(raw) {
+                return adopted
+            }
+            newMessageText = display
         }
-        transcript.messages.append(makeNew())
+        // A new agent row is live output that closes an in-progress thought
+        // (`lastThought()` stops at `.agent`); flush pending thoughts ahead of
+        // it now that the chunk is known not to be suppressed as replay. (The
+        // located/adopt paths above continue a bubble that predates any held
+        // thought, so their order is already correct.)
+        if replayKind == .agent {
+            flushedReplayIndices.formUnion(flushPendingReplayCandidates(kinds: [.thought]))
+        }
+        transcript.messages.append(makeNew(newMessageText))
         didAppendTranscriptMessage()
         return transcript.messages.count - 1
     }

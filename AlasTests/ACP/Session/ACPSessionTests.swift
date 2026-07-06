@@ -243,6 +243,634 @@ struct ACPSessionTests {
         }
     }
 
+    @Test("post-load live chunk whose short leading fragment coincides with earlier output is not dropped")
+    func postLoadLiveShortLeadingFragmentNotDroppedAsReplay() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm rerunning the tests now.")),
+            .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Run tests",
+                kind: "execute",
+                status: "completed",
+                content: "done"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A genuinely new agent message streams its first fragment "I" — a
+        // coincidental substring of the earlier message. It must not be
+        // classified as a late replay and dropped; otherwise the message is
+        // rebuilt from the second fragment, losing its leading character.
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("'ve made that warning cleanup."))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts.contains("I've made that warning cleanup."))
+    }
+
+    @Test("a held short fragment is materialized when a tool call closes the message")
+    func heldFragmentMaterializedOnToolCall() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm working on it."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A new live message whose only chunk "I" is a substring of prior
+        // output is held as a replay candidate. A tool call then closes the
+        // message with no further text chunk — the held "I" must be
+        // materialized (ahead of the tool call), not stranded and dropped.
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["I'm working on it.", "I"])
+        if case .toolCall = session.transcript.messages.last {} else {
+            Issue.record("expected the tool call to follow the materialized fragment")
+        }
+    }
+
+    @Test("a held short fragment is materialized before the next user prompt")
+    func heldFragmentMaterializedBeforeNextPrompt() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm working on it."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The held fragment "I" is stranded when the turn ends with no further
+        // text chunk; the next prompt must materialize it (keeping its place
+        // before the user message) rather than drop it.
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
+        session.recordUserPrompt(text: "next", attachments: [])
+
+        let texts: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            case .user(_, _, let t, _): return "user:\(t)"
+            default: return nil
+            }
+        }
+        #expect(texts == ["agent:I'm working on it.", "agent:I", "user:next"])
+    }
+
+    @Test("a state-only update does not flush a held replay candidate into a duplicate row")
+    func stateOnlyUpdateDoesNotFlushHeldCandidate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A late replay chunk "hello" is buffered (substring of prior output).
+        // A state-only update (model change) appends no row and does not close
+        // the text, so it must not materialize the held chunk as a duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.currentModelUpdate(modelId: "gpt-5.5"))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
+    @Test("a replayed user chunk does not flush a held agent replay candidate")
+    func replayedUserChunkDoesNotFlushHeldCandidate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .user(id: UUID(), messageId: "user-1", text: "earlier prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Held agent replay chunk "hello", then a replayed user prompt that
+        // appendUserChunk drops (its text already exists). The held chunk must
+        // not be flushed into a duplicate agent row by that dropped prompt.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("hello"))))
+        session.apply(.userMessageChunk(.init(messageId: "regen-user", content: .text("earlier prompt"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
+    @Test("a real user chunk flushes a held agent replay candidate ahead of the prompt")
+    func realUserChunkFlushesHeldCandidate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hi there"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Held agent chunk "hi", then a genuinely new user prompt. The held
+        // chunk must materialize in order, ahead of the prompt.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("hi"))))
+        session.apply(.userMessageChunk(.init(messageId: "user-new", content: .text("do the thing"))))
+
+        let texts: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            case .user(_, _, let t, _): return "user:\(t)"
+            default: return nil
+            }
+        }
+        #expect(texts == ["agent:hi there", "agent:hi", "user:do the thing"])
+    }
+
+    @Test("a held final fragment is materialized when the output boundary completes")
+    func heldFragmentMaterializedOnCompletedOutputBoundary() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK done."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A one-chunk reply "OK" whose text is a substring of prior output is
+        // held. Turn completion reaches markCompletedOutputBoundary() without
+        // an update, so it must materialize the held chunk rather than leave
+        // it stranded (and lost on detach/reopen).
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+        session.markCompletedOutputBoundary()
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK done.", "OK"])
+    }
+
+    @Test("a full-replay candidate is kept suppressed on flush, not materialized as a duplicate")
+    func fullReplayCandidateKeptSuppressedOnFlush() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A late replay delivers the complete "OK" under a regenerated id, so
+        // it is held (it matches the existing message exactly). A tool call
+        // then triggers a flush — but a candidate that fully reproduces an
+        // existing message never diverged and must stay suppressed.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK"])
+    }
+
+    @Test("a held thought is flushed before an agent answer, preserving transcript order")
+    func heldThoughtFlushedBeforeAgentAnswer() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("thinking hard"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A held thought fragment "thinking" (substring of the prior thought),
+        // then an agent answer. An agent answer closes an in-progress thought,
+        // so the thought must materialize ahead of the answer, not after it.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-thought", content: .text("thinking"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("here is the answer"))))
+
+        let ordered: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .thought(_, _, let t): return "thought:\(t.value)"
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            default: return nil
+            }
+        }
+        #expect(ordered == ["thought:thinking hard", "thought:thinking", "agent:here is the answer"])
+    }
+
+    @Test("a held thought is not flushed when the following agent chunk is itself suppressed as replay")
+    func heldThoughtNotFlushedWhenAgentChunkSuppressed() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("thinking hard")),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("the answer"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Held thought fragment "thinking", then a replayed agent chunk "the"
+        // (a substring of the existing agent message) that appendStreaming
+        // holds as a replay candidate. Since the agent chunk produces no live
+        // output, the thought must stay buffered — not materialize as a
+        // duplicate thought row.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-thought", content: .text("thinking"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("the"))))
+
+        let ordered: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .thought(_, _, let t): return "thought:\(t.value)"
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            default: return nil
+            }
+        }
+        #expect(ordered == ["thought:thinking hard", "agent:the answer"])
+    }
+
+    @Test("multiple held candidates flush in arrival order, not by messageId")
+    func heldCandidatesFlushInArrivalOrder() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("alpha beta"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Two short live agent rows are both held (substrings of prior
+        // output). Their ids sort opposite to arrival ("a-1" < "z-1"), so a
+        // flush must still emit them in arrival order ("alpha" then "beta").
+        session.apply(.agentMessageChunk(.init(messageId: "z-1", content: .text("alpha"))))
+        session.apply(.agentMessageChunk(.init(messageId: "a-1", content: .text("beta"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["alpha beta", "alpha", "beta"])
+    }
+
+    @Test("two repeated held candidates with identical text are both materialized")
+    func repeatedHeldCandidatesBothMaterialized() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK done."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Two distinct new one-chunk "OK" replies, both held as substrings of
+        // "OK done.". Flushing must materialize both — the first must not make
+        // the second look like a full replay of it.
+        session.apply(.agentMessageChunk(.init(messageId: "z-1", content: .text("OK"))))
+        session.apply(.agentMessageChunk(.init(messageId: "a-1", content: .text("OK"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK done.", "OK", "OK"])
+    }
+
+    @Test("a held fragment is flushed before an appended file edit, preserving order")
+    func heldFragmentFlushedBeforeFileEdit() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("editing files"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A held fragment "editing" (substring), then a file edit. The file
+        // edit path does not flow through apply(), so it must flush the held
+        // text ahead of the edit rather than leave it after.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("editing"))))
+        session.appendFileEdit(.init(
+            path: "x.swift", added: 1, removed: 0, oldText: "a\n", newText: "a\nb\n"))
+
+        let ordered: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            case .fileEdit: return "fileEdit"
+            default: return nil
+            }
+        }
+        #expect(ordered == ["agent:editing files", "agent:editing", "fileEdit"])
+    }
+
+    @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
+    func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .user(id: UUID(), messageId: "user-1", text: "prev prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("The plan is complete."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A late replay of the trailing hydrated message arrives under a
+        // regenerated id, split into chunks whose first fragment is short.
+        // It must stay suppressed for its whole length and never duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("The "))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("plan is complete."))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["The plan is complete."])
+    }
+
+    @Test("mid-stream late replay fragment with a regenerated messageId is not duplicated")
+    func midStreamLateReplayFragmentNotDuplicated() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .user(id: UUID(), messageId: "user-1", text: "prev prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The "hello " prefix was consumed while replay suppression was
+        // still active; the slip that reaches appendStreaming is a middle
+        // fragment of the trailing hydrated message. It must not be appended
+        // as a duplicate even though it is not a prefix of that message.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
+    @Test("replay-then-continuation under a regenerated messageId merges into the hydrated message")
+    func replayThenContinuationMergesIntoHydratedMessage() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The in-progress "hello" is replayed under a regenerated id and
+        // then continues with " world". The prefix must not be duplicated:
+        // the continuation merges into the hydrated message.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" world"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+
+        // A further continuation chunk targets the adopted message via its
+        // rebound id rather than spawning yet another row.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
+        let after = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(after == ["hello world!"])
+    }
+
+    @Test("replay continuation is still adopted across a trailing plan row")
+    func replayContinuationAdoptedAcrossTrailingPlan() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello")),
+            .plan(id: UUID(), [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A trailing plan does not close the agent output (like lastAgent()
+        // and markCompletedOutputBoundary(), which skip plans), so the
+        // replayed continuation must still merge into "hello", not duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" world"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
+    @Test("pending replay candidates are namespaced by kind so a shared id does not mix thought into agent text")
+    func pendingReplayCandidatesNamespacedByKind() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("pondering")),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("response"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A thought and an agent chunk reuse the same id during the restore
+        // window. The suppressed thought fragment must not leak into the
+        // agent chunk's candidate and materialize as "ponderingreply".
+        session.apply(.agentThoughtChunk(.init(messageId: "dup", content: .text("pondering"))))
+        session.apply(.agentMessageChunk(.init(messageId: "dup", content: .text("reply"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["response", "reply"])
+    }
+
+    @Test("regenerated thought replay is not adopted into a thought that an agent row already closed")
+    func thoughtReplayNotAdoptedAcrossAgentRow() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("earlier")),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("answer"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A regenerated thought stream that starts with the earlier thought's
+        // text but continues. The agent row closed that thought (lastThought()
+        // stops at it), so it must not be adopted; a new thought row appears.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text("earlier"))))
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text(" more"))))
+
+        let thoughtTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .thought(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(thoughtTexts == ["earlier", "earlier more"])
+        // The agent bubble between them is untouched.
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["answer"])
+    }
+
+    @Test("replay split at a sentence boundary the original did not is still suppressed despite the separator")
+    func replaySplitAtSentenceBoundaryStillSuppressed() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        // Hydrated as one chunk, so it carries no injected separator.
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("tests completed.Running"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The replay splits at the sentence boundary, so streamingSeparator
+        // would inject a newline. Matching on the raw concatenation as well
+        // keeps this recognised as a replay instead of a duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("tests completed."))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("Running"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["tests completed.Running"])
+    }
+
+    @Test("mid-message replay slip followed by real continuation starts its own row, not a merge")
+    func midMessageReplaySlipThenContinuationStartsNewRow() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The surviving replay chunk is the middle fragment "world", which
+        // then continues with "!". Only a whole-bubble prefix is adopted, so
+        // a partial (suffix) match is NOT merged — it starts its own row.
+        // This is the accepted trade-off (a rare duplicate) for never merging
+        // a genuinely separate message into an existing bubble; a suffix like
+        // "world" is indistinguishable from new output starting with that
+        // word (see postPromptLiveOutputSharingTrailingWordNotAdopted).
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world", "world!"])
+    }
+
+    @Test("post-prompt output sharing only the trailing word of the previous bubble is not merged")
+    func postPromptLiveOutputSharingTrailingWordNotAdopted() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A genuinely separate message that starts with the previous bubble's
+        // last word ("world") then diverges. It must be its own row, never
+        // merged into "hello world" as "hello world again".
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" again"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world", "world again"])
+    }
+
+    @Test("regenerated thought replay is not adopted across a file edit")
+    func thoughtReplayNotAdoptedAcrossFileEdit() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("plan")),
+            .fileEdit(id: UUID(), .init(
+                path: "x.swift", added: 1, removed: 0,
+                oldText: "a\n", newText: "a\nb\n"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A file edit closes the pre-edit thought (like lastAgent() and the
+        // completed-output boundary). A regenerated thought stream starting
+        // with the pre-edit thought's text must not extend it across the
+        // edit; it becomes a new thought after the edit.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text("plan"))))
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-1", content: .text(" more"))))
+
+        let thoughtTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .thought(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(thoughtTexts == ["plan", "plan more"])
+    }
+
+    @Test("a partial (non-whole-bubble) suffix match starts its own row rather than merging")
+    func partialSuffixMatchStartsNewRow() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A genuinely new message "Keep going" whose first held fragment "K"
+        // coincides with the tail of "OK". Only a whole-bubble prefix is
+        // adopted, so this partial match is not merged into "OK" as
+        // "OKeep going" — it starts its own row.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("K"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("eep going"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK", "Keep going"])
+    }
+
+    @Test("post-prompt live output sharing a prefix with a prior turn is not adopted into the old bubble")
+    func postPromptLiveOutputNotAdoptedIntoPriorTurn() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello")),
+            .user(id: UUID(), messageId: "user-1", text: "next", attachments: [])
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Genuinely new output for the "next" turn that happens to start
+        // with the same word as the prior turn's "hello" bubble. It must
+        // become its own message, not mutate the earlier (pre-user) bubble.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" there"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello", "hello there"])
+    }
+
+    @Test("post-tool live output sharing a prefix with a pre-tool bubble is not adopted across the tool call")
+    func postToolLiveOutputNotAdoptedAcrossToolCall() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK")),
+            .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Run",
+                kind: "execute",
+                status: "completed",
+                content: "done"
+            ))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Fresh post-tool output that happens to start with the pre-tool
+        // bubble's full text. It must become its own message after the tool
+        // call, not append to the already-closed pre-tool bubble.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" done"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK", "OK done"])
+    }
+
     @Test("late replay user chunk with unknown messageId does not append prompt")
     func lateReplayUnknownUserMessageIdChunkDoesNotAppendPrompt() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

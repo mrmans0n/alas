@@ -1342,7 +1342,14 @@ extension ACPSessionRunner {
         else { return false }
         pendingCompletedOutputBoundaryUpdateCount = nil
         flushStreamingPersist()
+        // markCompletedOutputBoundary() materialises any held replay candidate
+        // (a stranded final chunk); persist the appended rows so they survive
+        // detach/reopen — no `ACPSessionUpdate` carries them here.
+        let before = session.transcript.messages.count
         session.markCompletedOutputBoundary()
+        if session.transcript.messages.count > before {
+            persistFromIndex(before)
+        }
         guard activePromptID == nil else { return false }
         session.transcript.streamingState = .idle
         return true
