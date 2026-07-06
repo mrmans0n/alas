@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.16] - 2026-07-06
+
+### 🐛 Fixes
+
+- Cap outdated review thread drawer height (#642).
+- Stop dropping leading fragments of new ACP messages after transcript restore (#639).
+- Render subscript tags in review comments (#641).
+- Improve diff comment contrast.
+- Measure ACP chat width during task resize (#638).
+
 ## [0.8.15] - 2026-07-05
 
 ### 🐛 Fixes
