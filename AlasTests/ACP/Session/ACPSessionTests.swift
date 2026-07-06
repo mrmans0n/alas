@@ -323,6 +323,27 @@ struct ACPSessionTests {
         #expect(texts == ["agent:I'm working on it.", "agent:I", "user:next"])
     }
 
+    @Test("a state-only update does not flush a held replay candidate into a duplicate row")
+    func stateOnlyUpdateDoesNotFlushHeldCandidate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A late replay chunk "hello" is buffered (substring of prior output).
+        // A state-only update (model change) appends no row and does not close
+        // the text, so it must not materialize the held chunk as a duplicate.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("hello"))))
+        session.apply(.currentModelUpdate(modelId: "gpt-5.5"))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

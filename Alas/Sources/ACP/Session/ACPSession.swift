@@ -289,19 +289,22 @@ final class ACPSession: ObservableObject, Identifiable {
     /// transcript, not just the trailing row.
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
-        // A non-text update closes the current in-progress text message, and
-        // once the boundary window has ended every update is genuine new
-        // output. In both cases materialise any held replay candidate first,
-        // so a suppressed short fragment (e.g. "I", buffered because it is a
+        // Materialise any held replay candidate first when a row-appending
+        // update closes the current in-progress text message (a tool call,
+        // plan, or user prompt), or once the boundary window has ended — so a
+        // suppressed short fragment (e.g. "I", buffered because it is a
         // substring of prior output) is emitted in order rather than being
         // stranded in `pendingReplayCandidates` and dropped when the message
-        // ends without a further diverging text chunk.
+        // ends without a further diverging text chunk. State-only updates
+        // (usage/model/mode/config/commands/sessionInfo, `toolCallUpdate`,
+        // unknown) append no row and do not close the text message, so they
+        // must NOT flush a still-buffered replay chunk into a duplicate row.
         let shouldFlushPending: Bool
         switch update {
-        case .agentMessageChunk, .agentThoughtChunk:
-            shouldFlushPending = allowsStreamingBoundaryCrossing
-        default:
+        case .toolCall, .plan, .userMessageChunk:
             shouldFlushPending = true
+        default:
+            shouldFlushPending = allowsStreamingBoundaryCrossing
         }
         let flushed = shouldFlushPending ? flushPendingReplayCandidates() : []
         let result: Set<Int> = { () -> Set<Int> in
