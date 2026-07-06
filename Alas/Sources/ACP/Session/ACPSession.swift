@@ -475,14 +475,19 @@ final class ACPSession: ObservableObject, Identifiable {
     private func flushPendingReplayCandidates(kinds: Set<TextMessageKind> = [.agent, .thought]) -> Set<Int> {
         guard !pendingReplayCandidates.isEmpty else { return [] }
         var indices: Set<Int> = []
+        // Compare full-replay equality only against messages that existed
+        // before this flush, so two distinct held chunks with identical text
+        // (two one-chunk "OK" replies) don't collapse — the first materialised
+        // row must not make the second look like a replay of it.
+        let preFlushCount = transcript.messages.count
         let orderedKeys = pendingReplayCandidates.keys.sorted {
             (pendingReplayCandidates[$0]?.arrivalOrder ?? 0) < (pendingReplayCandidates[$1]?.arrivalOrder ?? 0)
         }
         for key in orderedKeys {
             guard kinds.contains(key.kind), let candidate = pendingReplayCandidates[key] else { continue }
             pendingReplayCandidates.removeValue(forKey: key)
-            if existingMessageEquals(kind: key.kind, candidate.display)
-                || existingMessageEquals(kind: key.kind, candidate.raw) {
+            if existingMessageEquals(kind: key.kind, candidate.display, before: preFlushCount)
+                || existingMessageEquals(kind: key.kind, candidate.raw, before: preFlushCount) {
                 continue // pure full replay — keep suppressed
             }
             let message: ACPMessage
@@ -501,10 +506,14 @@ final class ACPSession: ObservableObject, Identifiable {
         return indices
     }
 
-    /// Whether some existing message of `kind` has value exactly equal to
-    /// `text` — i.e. `text` reproduces that complete message (a full replay).
-    private func existingMessageEquals(kind: TextMessageKind, _ text: String) -> Bool {
-        transcript.messages.contains { message in
+    /// Whether some message of `kind` in `transcript.messages[..<upperBound]`
+    /// has value exactly equal to `text` — i.e. `text` reproduces that
+    /// complete message (a full replay). `upperBound` excludes rows appended
+    /// during the current flush so repeated identical outputs are preserved.
+    private func existingMessageEquals(kind: TextMessageKind, _ text: String, before upperBound: Int) -> Bool {
+        let end = min(upperBound, transcript.messages.count)
+        guard end > 0 else { return false }
+        return transcript.messages[..<end].contains { message in
             switch (kind, message) {
             case (.agent, .agent(_, _, let buf)),
                  (.thought, .thought(_, _, let buf)):
@@ -656,12 +665,20 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func appendSystemNotice(_ text: String) {
+        // A system notice closes the current output run; materialise any held
+        // replay candidate first so it keeps its place ahead of the notice.
+        flushPendingReplayCandidates()
         transcript.messages.append(.systemNotice(id: UUID(), text: text))
         didAppendTranscriptMessage()
     }
 
     func appendFileEdit(_ edit: ACPMessage.FileEdit) {
         clearRestoredContextRecoveryStatus()
+        // A file edit closes the current output run (see lastAgent()/
+        // lastThought(), which stop at .fileEdit); materialise any held replay
+        // candidate first so text that arrived before the edit stays ahead of
+        // it. This path does not flow through `apply`, so it must flush here.
+        flushPendingReplayCandidates()
         transcript.messages.append(.fileEdit(id: UUID(), edit))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()

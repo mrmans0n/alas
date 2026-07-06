@@ -510,6 +510,55 @@ struct ACPSessionTests {
         #expect(agentTexts == ["alpha beta", "alpha", "beta"])
     }
 
+    @Test("two repeated held candidates with identical text are both materialized")
+    func repeatedHeldCandidatesBothMaterialized() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK done."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Two distinct new one-chunk "OK" replies, both held as substrings of
+        // "OK done.". Flushing must materialize both — the first must not make
+        // the second look like a full replay of it.
+        session.apply(.agentMessageChunk(.init(messageId: "z-1", content: .text("OK"))))
+        session.apply(.agentMessageChunk(.init(messageId: "a-1", content: .text("OK"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK done.", "OK", "OK"])
+    }
+
+    @Test("a held fragment is flushed before an appended file edit, preserving order")
+    func heldFragmentFlushedBeforeFileEdit() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("editing files"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A held fragment "editing" (substring), then a file edit. The file
+        // edit path does not flow through apply(), so it must flush the held
+        // text ahead of the edit rather than leave it after.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("editing"))))
+        session.appendFileEdit(.init(
+            path: "x.swift", added: 1, removed: 0, oldText: "a\n", newText: "a\nb\n"))
+
+        let ordered: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            case .fileEdit: return "fileEdit"
+            default: return nil
+            }
+        }
+        #expect(ordered == ["agent:editing files", "agent:editing", "fileEdit"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
