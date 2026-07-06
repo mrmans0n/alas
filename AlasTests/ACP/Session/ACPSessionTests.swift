@@ -272,6 +272,57 @@ struct ACPSessionTests {
         #expect(agentTexts.contains("I've made that warning cleanup."))
     }
 
+    @Test("a held short fragment is materialized when a tool call closes the message")
+    func heldFragmentMaterializedOnToolCall() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm working on it."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A new live message whose only chunk "I" is a substring of prior
+        // output is held as a replay candidate. A tool call then closes the
+        // message with no further text chunk — the held "I" must be
+        // materialized (ahead of the tool call), not stranded and dropped.
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["I'm working on it.", "I"])
+        if case .toolCall = session.transcript.messages.last {} else {
+            Issue.record("expected the tool call to follow the materialized fragment")
+        }
+    }
+
+    @Test("a held short fragment is materialized before the next user prompt")
+    func heldFragmentMaterializedBeforeNextPrompt() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("I'm working on it."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // The held fragment "I" is stranded when the turn ends with no further
+        // text chunk; the next prompt must materialize it (keeping its place
+        // before the user message) rather than drop it.
+        session.apply(.agentMessageChunk(.init(messageId: "agent-live-2", content: .text("I"))))
+        session.recordUserPrompt(text: "next", attachments: [])
+
+        let texts: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            case .user(_, _, let t, _): return "user:\(t)"
+            default: return nil
+            }
+        }
+        #expect(texts == ["agent:I'm working on it.", "agent:I", "user:next"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

@@ -259,6 +259,11 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func recordUserPrompt(text: String, attachments: [ACPMessage.Attachment]) {
+        // Materialise any held replay candidate before the new prompt so
+        // stranded live text from the just-ended turn keeps its place ahead
+        // of the user message instead of being dropped. The runner persists
+        // from the pre-call message count, so the flushed rows are saved too.
+        _ = flushPendingReplayCandidates()
         transcript.messages.append(.user(id: UUID(), messageId: nil, text: text, attachments: attachments))
         didAppendTranscriptMessage()
         transcript.completedOutputBoundaryMessageIds.removeAll()
@@ -284,6 +289,22 @@ final class ACPSession: ObservableObject, Identifiable {
     /// transcript, not just the trailing row.
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
+        // A non-text update closes the current in-progress text message, and
+        // once the boundary window has ended every update is genuine new
+        // output. In both cases materialise any held replay candidate first,
+        // so a suppressed short fragment (e.g. "I", buffered because it is a
+        // substring of prior output) is emitted in order rather than being
+        // stranded in `pendingReplayCandidates` and dropped when the message
+        // ends without a further diverging text chunk.
+        let shouldFlushPending: Bool
+        switch update {
+        case .agentMessageChunk, .agentThoughtChunk:
+            shouldFlushPending = allowsStreamingBoundaryCrossing
+        default:
+            shouldFlushPending = true
+        }
+        let flushed = shouldFlushPending ? flushPendingReplayCandidates() : []
+        let result: Set<Int> = { () -> Set<Int> in
         switch update {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
@@ -409,6 +430,35 @@ final class ACPSession: ObservableObject, Identifiable {
         case .unknown:
             return []
         }
+        }()
+        return flushed.union(result)
+    }
+
+    /// Materialise every held replay candidate as a new row (in a stable
+    /// order) and clear the buffer. Returns the indices appended so the
+    /// caller can persist them. Called when the current text message closes
+    /// (a non-text update) or the boundary window ends, so a suppressed
+    /// short fragment is never stranded and dropped.
+    private func flushPendingReplayCandidates() -> Set<Int> {
+        guard !pendingReplayCandidates.isEmpty else { return [] }
+        var indices: Set<Int> = []
+        for key in pendingReplayCandidates.keys.sorted(by: { $0.messageId < $1.messageId }) {
+            guard let candidate = pendingReplayCandidates[key] else { continue }
+            let message: ACPMessage
+            switch key.kind {
+            case .agent:
+                message = .agent(id: UUID(), messageId: key.messageId, StreamingText(candidate.display))
+            case .thought:
+                message = .thought(id: UUID(), messageId: key.messageId, StreamingText(candidate.display))
+            case .user:
+                continue
+            }
+            transcript.messages.append(message)
+            didAppendTranscriptMessage()
+            indices.insert(transcript.messages.count - 1)
+        }
+        pendingReplayCandidates.removeAll()
+        return indices
     }
 
     func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {
@@ -1601,12 +1651,10 @@ final class ACPSession: ObservableObject, Identifiable {
                                  replayCandidateMatches: (String) -> Bool,
                                  adoptContinuation: (String) -> Int?,
                                  makeNew: (String) -> ACPMessage) -> Int? {
-        // Outside the boundary-crossing window there is no late replay to
-        // guard against — drop any accumulated candidates so they never
-        // leak into a later window.
-        if allowsStreamingBoundaryCrossing, !pendingReplayCandidates.isEmpty {
-            pendingReplayCandidates.removeAll(keepingCapacity: false)
-        }
+        // Any held candidates from a prior window are flushed (materialised)
+        // by `apply` before this runs — once `allowsStreamingBoundaryCrossing`
+        // is true, or on the closing non-text update — so they are never
+        // stranded or leaked into a later window.
         let located = if let messageId {
             locateByMessageId(messageId)
         } else {
