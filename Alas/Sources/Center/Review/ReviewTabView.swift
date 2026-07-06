@@ -47,16 +47,23 @@ struct ReviewTabView: View {
     @State private var showWhitespace = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            Divider().overlay(theme.color("line"))
-            CIStatusStrip(checks: reviewRequest?.checks ?? [], onExpand: { check in
-                Task { await fetchAnnotations(for: check) }
-            })
-            OutdatedThreadsDrawer(threads: outdatedAndFileLevelThreads)
-            content
+        GeometryReader { geometry in
+            VStack(spacing: 0) {
+                toolbar
+                Divider().overlay(theme.color("line"))
+                CIStatusStrip(checks: reviewRequest?.checks ?? [], onExpand: { check in
+                    Task { await fetchAnnotations(for: check) }
+                })
+                OutdatedThreadsDrawer(
+                    threads: outdatedAndFileLevelThreads,
+                    maxExpandedListHeight: OutdatedThreadsDrawerPresentation.expandedListMaxHeight(
+                        availableHeight: geometry.size.height
+                    )
+                )
+                content
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.color("bg-1"))
         .overlay(alignment: .bottom) {
             if let msg = errorMessage {
