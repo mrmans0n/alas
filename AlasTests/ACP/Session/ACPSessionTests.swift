@@ -459,6 +459,33 @@ struct ACPSessionTests {
         #expect(ordered == ["thought:thinking hard", "thought:thinking", "agent:here is the answer"])
     }
 
+    @Test("a held thought is not flushed when the following agent chunk is itself suppressed as replay")
+    func heldThoughtNotFlushedWhenAgentChunkSuppressed() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("thinking hard")),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("the answer"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Held thought fragment "thinking", then a replayed agent chunk "the"
+        // (a substring of the existing agent message) that appendStreaming
+        // holds as a replay candidate. Since the agent chunk produces no live
+        // output, the thought must stay buffered — not materialize as a
+        // duplicate thought row.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-thought", content: .text("thinking"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("the"))))
+
+        let ordered: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .thought(_, _, let t): return "thought:\(t.value)"
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            default: return nil
+            }
+        }
+        #expect(ordered == ["thought:thinking hard", "agent:the answer"])
+    }
+
     @Test("multiple held candidates flush in arrival order, not by messageId")
     func heldCandidatesFlushInArrivalOrder() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

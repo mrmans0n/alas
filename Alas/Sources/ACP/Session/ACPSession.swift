@@ -306,8 +306,10 @@ final class ACPSession: ObservableObject, Identifiable {
         //     stops at `.agent`), so flush pending thoughts ahead of it — the
         //     agent candidate itself is handled by `appendStreaming`.
         // State-only updates append no row and must NOT flush a buffered
-        // chunk into a duplicate; `userMessageChunk` is handled inside
-        // `appendUserChunk` (it can itself be a dropped replay).
+        // chunk into a duplicate; `userMessageChunk` (via `appendUserChunk`)
+        // and the thought-before-agent-answer flush (via `appendStreaming`)
+        // are both deferred until the incoming chunk is known to be live
+        // rather than itself a suppressed replay.
         let kindsToFlush: Set<TextMessageKind>
         if allowsStreamingBoundaryCrossing {
             kindsToFlush = [.agent, .thought]
@@ -315,8 +317,6 @@ final class ACPSession: ObservableObject, Identifiable {
             switch update {
             case .toolCall, .plan:
                 kindsToFlush = [.agent, .thought]
-            case .agentMessageChunk:
-                kindsToFlush = [.thought]
             default:
                 kindsToFlush = []
             }
@@ -327,6 +327,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentMessageChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            var flushedForAgent: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
@@ -337,10 +338,11 @@ final class ACPSession: ObservableObject, Identifiable {
                 adoptContinuation: { candidate in
                     chunk.messageId.flatMap { adoptReplayContinuation(kind: .agent, candidate: candidate, messageId: $0) }
                 },
+                flushedReplayIndices: &flushedForAgent,
                 makeNew: { text in .agent(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
-                return []
+                return flushedForAgent
             }
-            return [i]
+            return flushedForAgent.union([i])
         case .userMessageChunk(let chunk):
             let txt = text(of: chunk.content)
             var flushedForUser: Set<Int> = []
@@ -355,6 +357,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
+            var flushedForThought: Set<Int> = []
             guard let i = appendStreaming(
                 text: txt,
                 messageId: chunk.messageId,
@@ -365,10 +368,11 @@ final class ACPSession: ObservableObject, Identifiable {
                 adoptContinuation: { candidate in
                     chunk.messageId.flatMap { adoptReplayContinuation(kind: .thought, candidate: candidate, messageId: $0) }
                 },
+                flushedReplayIndices: &flushedForThought,
                 makeNew: { text in .thought(id: UUID(), messageId: chunk.messageId, StreamingText(text)) }) else {
-                return []
+                return flushedForThought
             }
-            return [i]
+            return flushedForThought.union([i])
         case .toolCall(let payload):
             clearRestoredContextRecoveryStatus()
             let items = payload.content ?? []
@@ -1716,6 +1720,7 @@ final class ACPSession: ObservableObject, Identifiable {
                                  locateLegacy: () -> Int?,
                                  replayCandidateMatches: (String) -> Bool,
                                  adoptContinuation: (String) -> Int?,
+                                 flushedReplayIndices: inout Set<Int>,
                                  makeNew: (String) -> ACPMessage) -> Int? {
         // Any held candidates from a prior window are flushed (materialised)
         // by `apply` before this runs — once `allowsStreamingBoundaryCrossing`
@@ -1797,6 +1802,14 @@ final class ACPSession: ObservableObject, Identifiable {
                 return adopted
             }
             newMessageText = display
+        }
+        // A new agent row is live output that closes an in-progress thought
+        // (`lastThought()` stops at `.agent`); flush pending thoughts ahead of
+        // it now that the chunk is known not to be suppressed as replay. (The
+        // located/adopt paths above continue a bubble that predates any held
+        // thought, so their order is already correct.)
+        if replayKind == .agent {
+            flushedReplayIndices.formUnion(flushPendingReplayCandidates(kinds: [.thought]))
         }
         transcript.messages.append(makeNew(newMessageText))
         didAppendTranscriptMessage()
