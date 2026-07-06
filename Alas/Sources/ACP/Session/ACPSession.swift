@@ -289,27 +289,33 @@ final class ACPSession: ObservableObject, Identifiable {
     /// transcript, not just the trailing row.
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
-        // Materialise any held replay candidate first when a row-appending
-        // update closes the current in-progress text message (a tool call or
-        // plan), or once the boundary window has ended — so a suppressed
-        // short fragment (e.g. "I", buffered because it is a substring of
-        // prior output) is emitted in order rather than being stranded in
-        // `pendingReplayCandidates` and dropped when the message ends without
-        // a further diverging text chunk. State-only updates
-        // (usage/model/mode/config/commands/sessionInfo, `toolCallUpdate`,
-        // unknown) append no row and do not close the text message, so they
-        // must NOT flush a still-buffered replay chunk into a duplicate row.
-        // `userMessageChunk` is handled inside `appendUserChunk` instead: it
-        // can itself be a replay that is dropped, so its flush is deferred
-        // until the chunk is known to append a real new prompt.
-        let shouldFlushPending: Bool
-        switch update {
-        case .toolCall, .plan:
-            shouldFlushPending = true
-        default:
-            shouldFlushPending = allowsStreamingBoundaryCrossing
+        // Materialise held replay candidates in order before an update that
+        // closes their message, so a suppressed short fragment (e.g. "I",
+        // buffered because it is a substring of prior output) is emitted in
+        // place rather than stranded in `pendingReplayCandidates` and dropped.
+        // Once the boundary window has ended, flush everything (residual
+        // candidates are genuine output). Within the window:
+        //   • a tool call or plan closes the whole in-progress run;
+        //   • an agent answer closes an in-progress thought (`lastThought()`
+        //     stops at `.agent`), so flush pending thoughts ahead of it — the
+        //     agent candidate itself is handled by `appendStreaming`.
+        // State-only updates append no row and must NOT flush a buffered
+        // chunk into a duplicate; `userMessageChunk` is handled inside
+        // `appendUserChunk` (it can itself be a dropped replay).
+        let kindsToFlush: Set<TextMessageKind>
+        if allowsStreamingBoundaryCrossing {
+            kindsToFlush = [.agent, .thought]
+        } else {
+            switch update {
+            case .toolCall, .plan:
+                kindsToFlush = [.agent, .thought]
+            case .agentMessageChunk:
+                kindsToFlush = [.thought]
+            default:
+                kindsToFlush = []
+            }
         }
-        let flushed = shouldFlushPending ? flushPendingReplayCandidates() : []
+        let flushed = kindsToFlush.isEmpty ? [] : flushPendingReplayCandidates(kinds: kindsToFlush)
         let result: Set<Int> = { () -> Set<Int> in
         switch update {
         case .agentMessageChunk(let chunk):
@@ -442,16 +448,30 @@ final class ACPSession: ObservableObject, Identifiable {
         return flushed.union(result)
     }
 
-    /// Materialise every held replay candidate as a new row (in a stable
-    /// order) and clear the buffer. Returns the indices appended so the
-    /// caller can persist them. Called when the current text message closes
-    /// (a non-text update) or the boundary window ends, so a suppressed
-    /// short fragment is never stranded and dropped.
-    private func flushPendingReplayCandidates() -> Set<Int> {
+    /// Materialise held replay candidates of the given `kinds` as new rows
+    /// (in a stable order), removing them from the buffer. Returns the
+    /// indices appended so the caller can persist them. Called when the
+    /// current text message closes (a row-appending update), the boundary
+    /// window ends, or the turn completes, so a suppressed short fragment is
+    /// never stranded and dropped.
+    ///
+    /// A candidate whose accumulated text exactly reproduces a complete
+    /// existing message of its kind is a pure full replay that never
+    /// diverged — it is dropped rather than materialised, preserving replay
+    /// suppression. A candidate that merely coincided with a *substring* of a
+    /// longer message (a genuine one-chunk reply like "OK" against an
+    /// existing "OK done.") is materialised.
+    @discardableResult
+    private func flushPendingReplayCandidates(kinds: Set<TextMessageKind> = [.agent, .thought]) -> Set<Int> {
         guard !pendingReplayCandidates.isEmpty else { return [] }
         var indices: Set<Int> = []
         for key in pendingReplayCandidates.keys.sorted(by: { $0.messageId < $1.messageId }) {
-            guard let candidate = pendingReplayCandidates[key] else { continue }
+            guard kinds.contains(key.kind), let candidate = pendingReplayCandidates[key] else { continue }
+            pendingReplayCandidates.removeValue(forKey: key)
+            if existingMessageEquals(kind: key.kind, candidate.display)
+                || existingMessageEquals(kind: key.kind, candidate.raw) {
+                continue // pure full replay — keep suppressed
+            }
             let message: ACPMessage
             switch key.kind {
             case .agent:
@@ -465,8 +485,21 @@ final class ACPSession: ObservableObject, Identifiable {
             didAppendTranscriptMessage()
             indices.insert(transcript.messages.count - 1)
         }
-        pendingReplayCandidates.removeAll()
         return indices
+    }
+
+    /// Whether some existing message of `kind` has value exactly equal to
+    /// `text` — i.e. `text` reproduces that complete message (a full replay).
+    private func existingMessageEquals(kind: TextMessageKind, _ text: String) -> Bool {
+        transcript.messages.contains { message in
+            switch (kind, message) {
+            case (.agent, .agent(_, _, let buf)),
+                 (.thought, .thought(_, _, let buf)):
+                return buf.value == text
+            default:
+                return false
+            }
+        }
     }
 
     func applySuppressedReplaySideEffects(_ update: ACPSessionUpdate) -> Set<Int> {

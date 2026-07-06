@@ -411,6 +411,54 @@ struct ACPSessionTests {
         #expect(agentTexts == ["OK done.", "OK"])
     }
 
+    @Test("a full-replay candidate is kept suppressed on flush, not materialized as a duplicate")
+    func fullReplayCandidateKeptSuppressedOnFlush() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A late replay delivers the complete "OK" under a regenerated id, so
+        // it is held (it matches the existing message exactly). A tool call
+        // then triggers a flush — but a candidate that fully reproduces an
+        // existing message never diverged and must stay suppressed.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK"])
+    }
+
+    @Test("a held thought is flushed before an agent answer, preserving transcript order")
+    func heldThoughtFlushedBeforeAgentAnswer() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .thought(id: UUID(), messageId: "thought-1", StreamingText("thinking hard"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A held thought fragment "thinking" (substring of the prior thought),
+        // then an agent answer. An agent answer closes an in-progress thought,
+        // so the thought must materialize ahead of the answer, not after it.
+        session.apply(.agentThoughtChunk(.init(messageId: "regen-thought", content: .text("thinking"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("here is the answer"))))
+
+        let ordered: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .thought(_, _, let t): return "thought:\(t.value)"
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            default: return nil
+            }
+        }
+        #expect(ordered == ["thought:thinking hard", "thought:thinking", "agent:here is the answer"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
