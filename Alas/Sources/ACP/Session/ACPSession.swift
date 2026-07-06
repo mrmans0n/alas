@@ -290,18 +290,21 @@ final class ACPSession: ObservableObject, Identifiable {
     @discardableResult
     func apply(_ update: ACPSessionUpdate) -> Set<Int> {
         // Materialise any held replay candidate first when a row-appending
-        // update closes the current in-progress text message (a tool call,
-        // plan, or user prompt), or once the boundary window has ended — so a
-        // suppressed short fragment (e.g. "I", buffered because it is a
-        // substring of prior output) is emitted in order rather than being
-        // stranded in `pendingReplayCandidates` and dropped when the message
-        // ends without a further diverging text chunk. State-only updates
+        // update closes the current in-progress text message (a tool call or
+        // plan), or once the boundary window has ended — so a suppressed
+        // short fragment (e.g. "I", buffered because it is a substring of
+        // prior output) is emitted in order rather than being stranded in
+        // `pendingReplayCandidates` and dropped when the message ends without
+        // a further diverging text chunk. State-only updates
         // (usage/model/mode/config/commands/sessionInfo, `toolCallUpdate`,
         // unknown) append no row and do not close the text message, so they
         // must NOT flush a still-buffered replay chunk into a duplicate row.
+        // `userMessageChunk` is handled inside `appendUserChunk` instead: it
+        // can itself be a replay that is dropped, so its flush is deferred
+        // until the chunk is known to append a real new prompt.
         let shouldFlushPending: Bool
         switch update {
-        case .toolCall, .plan, .userMessageChunk:
+        case .toolCall, .plan:
             shouldFlushPending = true
         default:
             shouldFlushPending = allowsStreamingBoundaryCrossing
@@ -328,13 +331,15 @@ final class ACPSession: ObservableObject, Identifiable {
             return [i]
         case .userMessageChunk(let chunk):
             let txt = text(of: chunk.content)
+            var flushedForUser: Set<Int> = []
             guard let i = appendUserChunk(
                 text: txt,
                 attachments: ACPSessionRunner.attachments(of: [chunk.content]),
-                messageId: chunk.messageId) else {
+                messageId: chunk.messageId,
+                flushedReplayIndices: &flushedForUser) else {
                 return []
             }
-            return [i]
+            return flushedForUser.union([i])
         case .agentThoughtChunk(let chunk):
             clearRestoredContextRecoveryStatus()
             let txt = text(of: chunk.content)
@@ -1410,7 +1415,7 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?) -> Int? {
+    private func appendUserChunk(text addition: String, attachments newAttachments: [ACPMessage.Attachment], messageId: String?, flushedReplayIndices: inout Set<Int>) -> Int? {
         let located = messageId.flatMap { messageIndex(messageId: $0, kind: .user) }
         if let i = located,
            case .user(let id, let existingMessageId, let text, let attachments) = transcript.messages[i] {
@@ -1493,6 +1498,11 @@ final class ACPSession: ObservableObject, Identifiable {
 
         if addition.isEmpty {
             guard !newAttachments.isEmpty else { return nil }
+            // A genuine new prompt closes the current text message; flush any
+            // held replay candidate first so it keeps its place ahead of the
+            // prompt. Deferred to here (past the replay guard above) so a
+            // replayed user chunk never materialises a still-buffered chunk.
+            flushedReplayIndices = flushPendingReplayCandidates()
             let id = UUID()
             transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
             if let messageId {
@@ -1505,6 +1515,9 @@ final class ACPSession: ObservableObject, Identifiable {
             return transcript.messages.count - 1
         }
 
+        // Genuine new prompt (past the replay guard): flush held replay
+        // candidates first so they keep their place ahead of the prompt.
+        flushedReplayIndices = flushPendingReplayCandidates()
         let id = UUID()
         transcript.messages.append(.user(id: id, messageId: messageId, text: addition, attachments: newAttachments))
         if let messageId {

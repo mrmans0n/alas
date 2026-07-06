@@ -344,6 +344,51 @@ struct ACPSessionTests {
         #expect(agentTexts == ["hello world"])
     }
 
+    @Test("a replayed user chunk does not flush a held agent replay candidate")
+    func replayedUserChunkDoesNotFlushHeldCandidate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .user(id: UUID(), messageId: "user-1", text: "earlier prompt", attachments: []),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Held agent replay chunk "hello", then a replayed user prompt that
+        // appendUserChunk drops (its text already exists). The held chunk must
+        // not be flushed into a duplicate agent row by that dropped prompt.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("hello"))))
+        session.apply(.userMessageChunk(.init(messageId: "regen-user", content: .text("earlier prompt"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world"])
+    }
+
+    @Test("a real user chunk flushes a held agent replay candidate ahead of the prompt")
+    func realUserChunkFlushesHeldCandidate() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hi there"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Held agent chunk "hi", then a genuinely new user prompt. The held
+        // chunk must materialize in order, ahead of the prompt.
+        session.apply(.agentMessageChunk(.init(messageId: "regen-agent", content: .text("hi"))))
+        session.apply(.userMessageChunk(.init(messageId: "user-new", content: .text("do the thing"))))
+
+        let texts: [String] = session.transcript.messages.compactMap { message in
+            switch message {
+            case .agent(_, _, let t): return "agent:\(t.value)"
+            case .user(_, _, let t, _): return "user:\(t)"
+            default: return nil
+            }
+        }
+        #expect(texts == ["agent:hi there", "agent:hi", "user:do the thing"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
