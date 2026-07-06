@@ -368,13 +368,8 @@ enum ACPMarkdownInlineRenderer {
                     continue
                 }
 
-                if !isSubscript,
-                   let subscriptContentStart = subscriptOpenTagEnd(in: source, at: index),
-                   let closeRange = source.range(
-                       of: "</sub>",
-                       options: [.caseInsensitive],
-                       range: subscriptContentStart..<source.endIndex
-                   ) {
+                if let subscriptContentStart = subscriptOpenTagEnd(in: source, at: index),
+                   let closeRange = matchingSubscriptClose(in: source, from: subscriptContentStart) {
                     let marker = makeSubscriptMarker()
                     output += marker.start
                     output += render(String(source[subscriptContentStart..<closeRange.lowerBound]), isSubscript: true)
@@ -401,6 +396,54 @@ enum ACPMarkdownInlineRenderer {
                 index = source.index(after: index)
             }
             return output
+        }
+
+        private func matchingSubscriptClose(
+            in source: String,
+            from contentStart: String.Index
+        ) -> Range<String.Index>? {
+            var cursor = contentStart
+            var depth = 1
+
+            while cursor < source.endIndex {
+                let closeRange = source.range(
+                    of: "</sub>",
+                    options: [.caseInsensitive],
+                    range: cursor..<source.endIndex
+                )
+
+                if let openRange = nextSubscriptOpenTagRange(
+                    in: source,
+                    range: cursor..<(closeRange?.lowerBound ?? source.endIndex)
+                ) {
+                    depth += 1
+                    cursor = openRange.upperBound
+                    continue
+                }
+
+                guard let closeRange else { return nil }
+                depth -= 1
+                if depth == 0 {
+                    return closeRange
+                }
+                cursor = closeRange.upperBound
+            }
+
+            return nil
+        }
+
+        private func nextSubscriptOpenTagRange(
+            in source: String,
+            range: Range<String.Index>
+        ) -> Range<String.Index>? {
+            var cursor = range.lowerBound
+            while cursor < range.upperBound {
+                if let end = subscriptOpenTagEnd(in: source, at: cursor) {
+                    return cursor..<end
+                }
+                cursor = source.index(after: cursor)
+            }
+            return nil
         }
 
         private func subscriptOpenTagEnd(in source: String, at index: String.Index) -> String.Index? {
