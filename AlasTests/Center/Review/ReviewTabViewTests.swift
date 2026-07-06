@@ -47,4 +47,11 @@ struct ReviewTabViewTests {
             hasPendingReviewScope: false
         ))
     }
+
+    @Test func outdatedDrawerCapsExpandedListHeightToProtectReviewContent() {
+        #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 1_200) == 280)
+        #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 600) == 210)
+        #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 200) == 80)
+        #expect(OutdatedThreadsDrawerPresentation.expandedListMaxHeight(availableHeight: 0) == 280)
+    }
 }

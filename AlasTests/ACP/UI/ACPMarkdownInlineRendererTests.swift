@@ -293,6 +293,54 @@ struct ACPMarkdownInlineRendererTests {
         #expect(!renderedBody.contains("`leadingX`"))
     }
 
+    @Test("outdated drawer short thread list fits content before cap")
+    func outdatedDrawerShortThreadListFitsContentBeforeCap() throws {
+        let comment = ReviewComment(
+            id: "comment-1",
+            author: "chatgpt-codex-connector",
+            body: "Short note.",
+            url: nil,
+            createdAt: nil,
+            viewerCanUpdate: false,
+            viewerCanDelete: false,
+            isPending: false
+        )
+        let thread = ReviewThread(
+            id: "thread-1",
+            path: "Sources/App.swift",
+            line: nil,
+            startLine: nil,
+            originalLine: nil,
+            diffHunk: nil,
+            isResolved: false,
+            isOutdated: true,
+            isFileLevel: false,
+            comments: [comment],
+            viewerCanResolve: false,
+            viewerCanReply: false,
+            url: nil
+        )
+
+        let host = NSHostingView(
+            rootView: OutdatedThreadsDrawer(
+                threads: [thread],
+                maxExpandedListHeight: 280,
+                initiallyExpanded: true
+            )
+            .environment(\.theme, try Theme.loadBundled(id: "cool-slate"))
+            .frame(width: 620, height: 360)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 620, height: 360)
+        host.layoutSubtreeIfNeeded()
+
+        let drawerScrollView = try #require(
+            allSubviews(of: host)
+                .compactMap { $0 as? NSScrollView }
+                .max { $0.frame.height < $1.frame.height }
+        )
+        #expect(drawerScrollView.frame.height < 200)
+    }
+
     @Test("inline markdown text invalidates height when resized narrower")
     func inlineMarkdownTextInvalidatesHeightWhenResizedNarrower() throws {
         let theme = try Theme.loadBundled(id: "cool-slate")
