@@ -440,18 +440,21 @@ struct ACPSessionTests {
         #expect(agentTexts == ["tests completed.Running"])
     }
 
-    @Test("mid-message replay slip followed by real continuation extends the hydrated bubble")
-    func midMessageReplaySlipThenContinuationExtendsBubble() async {
+    @Test("mid-message replay slip followed by real continuation starts its own row, not a merge")
+    func midMessageReplaySlipThenContinuationStartsNewRow() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.transcript.messages = [
             .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
         ]
         session.allowsStreamingBoundaryCrossing = false
 
-        // The "hello " prefix was consumed during suppression; the surviving
-        // replay chunk is the middle fragment "world", which then continues
-        // with "!". This must extend the hydrated bubble to "hello world!"
-        // rather than materialize "world!" as a duplicate row.
+        // The surviving replay chunk is the middle fragment "world", which
+        // then continues with "!". Only a whole-bubble prefix is adopted, so
+        // a partial (suffix) match is NOT merged — it starts its own row.
+        // This is the accepted trade-off (a rare duplicate) for never merging
+        // a genuinely separate message into an existing bubble; a suffix like
+        // "world" is indistinguishable from new output starting with that
+        // word (see postPromptLiveOutputSharingTrailingWordNotAdopted).
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
 
@@ -459,7 +462,28 @@ struct ACPSessionTests {
             if case .agent(_, _, let text) = message { return text.value }
             return nil
         }
-        #expect(agentTexts == ["hello world!"])
+        #expect(agentTexts == ["hello world", "world!"])
+    }
+
+    @Test("post-prompt output sharing only the trailing word of the previous bubble is not merged")
+    func postPromptLiveOutputSharingTrailingWordNotAdopted() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("hello world"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A genuinely separate message that starts with the previous bubble's
+        // last word ("world") then diverges. It must be its own row, never
+        // merged into "hello world" as "hello world again".
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("world"))))
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text(" again"))))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["hello world", "world again"])
     }
 
     @Test("regenerated thought replay is not adopted across a file edit")
@@ -488,31 +512,8 @@ struct ACPSessionTests {
         #expect(thoughtTexts == ["plan", "plan more"])
     }
 
-    @Test("replay resuming after a punctuation-bounded split is adopted as a continuation")
-    func punctuationBoundedReplaySuffixAdopted() async {
-        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
-        // No whitespace at the sentence split, as the raw/display replay case
-        // hydrates it.
-        session.transcript.messages = [
-            .agent(id: UUID(), messageId: "agent-1", StreamingText("tests completed.Running"))
-        ]
-        session.allowsStreamingBoundaryCrossing = false
-
-        // The replay resumes at "Running" (a suffix that begins after the
-        // period, not whitespace) and then continues. It must extend the
-        // hydrated bubble, not spawn a second "Running" row.
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("Running"))))
-        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("!"))))
-
-        let agentTexts = session.transcript.messages.compactMap { message -> String? in
-            if case .agent(_, _, let text) = message { return text.value }
-            return nil
-        }
-        #expect(agentTexts == ["tests completed.Running!"])
-    }
-
-    @Test("a coincidental mid-token suffix overlap is not adopted as a replay continuation")
-    func weakMidTokenSuffixOverlapNotAdopted() async {
+    @Test("a partial (non-whole-bubble) suffix match starts its own row rather than merging")
+    func partialSuffixMatchStartsNewRow() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
         session.transcript.messages = [
             .agent(id: UUID(), messageId: "agent-1", StreamingText("OK"))
@@ -520,9 +521,9 @@ struct ACPSessionTests {
         session.allowsStreamingBoundaryCrossing = false
 
         // A genuinely new message "Keep going" whose first held fragment "K"
-        // coincides with the tail of "OK". The overlap is mid-token (not at a
-        // word boundary), so it must not be adopted into the old bubble as
-        // "OKeep going"; it starts its own row.
+        // coincides with the tail of "OK". Only a whole-bubble prefix is
+        // adopted, so this partial match is not merged into "OK" as
+        // "OKeep going" — it starts its own row.
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("K"))))
         session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("eep going"))))
 

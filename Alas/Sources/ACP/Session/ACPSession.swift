@@ -1523,23 +1523,26 @@ final class ACPSession: ObservableObject, Identifiable {
         }
     }
 
-    /// When a diverged replay `candidate` reproduces the tail of the
-    /// trailing in-progress bubble of `kind` and then continues past it, the
-    /// stream is that already-present message replayed under a regenerated
-    /// id and continued past the boundary window. Append only the text
-    /// beyond the reproduced portion (so nothing already present is
-    /// duplicated) and rebind the bubble to the regenerated `messageId` so
-    /// subsequent chunks target it via `messageIndex`. Returns the adopted
-    /// message's index, or nil when no suffix of the bubble is a prefix of
-    /// the candidate (genuine new output).
+    /// When a diverged replay `candidate` reproduces the *entire* trailing
+    /// in-progress bubble of `kind` as a prefix and then continues past it,
+    /// the stream is that already-present message replayed under a
+    /// regenerated id and continued past the boundary window. Append only
+    /// the text beyond the bubble (so the hydrated prefix is not duplicated)
+    /// and rebind the bubble to the regenerated `messageId` so subsequent
+    /// chunks target it via `messageIndex`. Returns the adopted message's
+    /// index, or nil when the candidate does not begin with the whole bubble
+    /// (genuine new output).
     ///
-    /// Matching the longest *suffix* of the bubble (not just the whole
-    /// bubble) handles a mid-message replay slip: the suppression counter
-    /// can fall between chunks, so the first surviving chunk may be a middle
-    /// fragment (`"world"` of `"hello world"`) that then continues (`"!"`),
-    /// which must extend the bubble to `"hello world!"` rather than spawn a
-    /// duplicate. A full replay is just the special case where the matched
-    /// suffix is the whole bubble.
+    /// Only a *whole-bubble* prefix is adopted, never a partial suffix. A
+    /// regenerated id that reproduces just the tail of the bubble is
+    /// indistinguishable from a genuinely separate message that happens to
+    /// start with the bubble's last word (`"hello world"` followed by a new
+    /// `"world again"` reads identically to a mid-message replay `"world"` +
+    /// `"!"`), and ACP message ids normally delimit separate rows — so a
+    /// partial match starts its own row rather than risk a corrupting merge.
+    /// A mid-message replay slip that is then continued therefore surfaces as
+    /// a (rare) duplicate bubble instead; that is the accepted trade-off for
+    /// never mutating a genuinely separate message into an existing bubble.
     ///
     /// The adoption target is exactly `lastAgent()`/`lastThought()` — the
     /// same trailing bubble a legacy (id-less) chunk would extend — so the
@@ -1561,32 +1564,9 @@ final class ACPSession: ObservableObject, Identifiable {
         default:
             return nil
         }
-        guard !existing.isEmpty else { return nil }
-        // Longest suffix of `existing` that is a prefix of `candidate` — the
-        // reproduced portion. The remaining candidate is the genuine new
-        // continuation to append. The reproduced suffix must begin at a token
-        // boundary (the start of the bubble, or after a non-alphanumeric
-        // character — whitespace or punctuation): unrecognised message ids
-        // otherwise start their own rows, so a coincidental mid-word overlap
-        // (a new message `"Keep going"` whose `"K"` matches the tail of a
-        // hydrated `"OK"`) must not be mistaken for a replay continuation and
-        // merged into the old bubble, while a punctuation-bounded suffix
-        // (`"Running"` after `"tests completed."`) is still adopted.
-        var suffix: String?
-        let existingChars = Array(existing)
-        let maxOverlap = min(existingChars.count, candidate.count)
-        for overlap in stride(from: maxOverlap, through: 1, by: -1) {
-            let startOffset = existingChars.count - overlap
-            if startOffset > 0 {
-                let preceding = existingChars[startOffset - 1]
-                if preceding.isLetter || preceding.isNumber { continue }
-            }
-            if candidate.hasPrefix(String(existingChars[startOffset...])) {
-                suffix = String(candidate.dropFirst(overlap))
-                break
-            }
-        }
-        guard let suffix, !suffix.isEmpty else { return nil }
+        guard !existing.isEmpty, candidate.hasPrefix(existing) else { return nil }
+        let suffix = String(candidate.dropFirst(existing.count))
+        guard !suffix.isEmpty else { return nil }
         switch transcript.messages[i] {
         case .agent(let id, _, let buf):
             buf.append(suffix)
