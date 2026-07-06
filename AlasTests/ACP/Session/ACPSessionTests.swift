@@ -459,6 +459,30 @@ struct ACPSessionTests {
         #expect(ordered == ["thought:thinking hard", "thought:thinking", "agent:here is the answer"])
     }
 
+    @Test("multiple held candidates flush in arrival order, not by messageId")
+    func heldCandidatesFlushInArrivalOrder() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("alpha beta"))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // Two short live agent rows are both held (substrings of prior
+        // output). Their ids sort opposite to arrival ("a-1" < "z-1"), so a
+        // flush must still emit them in arrival order ("alpha" then "beta").
+        session.apply(.agentMessageChunk(.init(messageId: "z-1", content: .text("alpha"))))
+        session.apply(.agentMessageChunk(.init(messageId: "a-1", content: .text("beta"))))
+        session.apply(.toolCall(.init(
+            toolCallId: "tool-1", title: "Run", kind: "execute", status: "completed",
+            content: nil, locations: nil, rawInput: nil, rawOutput: nil)))
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["alpha beta", "alpha", "beta"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

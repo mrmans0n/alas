@@ -112,21 +112,27 @@ final class ACPSession: ObservableObject, Identifiable {
     /// coincided with an earlier message — the full text can be materialised
     /// without losing the leading characters. Cleared once the window ends.
     private var pendingReplayCandidates: [ReplayCandidateKey: ReplayCandidate] = [:]
+    /// Monotonic counter stamping each candidate with its arrival order, so a
+    /// flush materialises them in the order their first chunk arrived rather
+    /// than by the opaque `messageId` (which need not sort chronologically).
+    private var replayCandidateArrivalCounter: Int = 0
 
     private struct ReplayCandidateKey: Hashable {
         let kind: TextMessageKind
         let messageId: String
     }
 
-    /// Two views of the accumulated replay text. `display` carries the
-    /// sentence-boundary separators a live stream injects (used when the
-    /// text turns out to be genuine new output and is materialised);
-    /// `raw` is the plain concatenation used for matching, so a replay that
-    /// splits at a boundary the original stream did not is still recognised
-    /// (the injected `\n` would otherwise cause a false mismatch).
+    /// Two views of the accumulated replay text plus its arrival order.
+    /// `display` carries the sentence-boundary separators a live stream
+    /// injects (used when the text turns out to be genuine new output and is
+    /// materialised); `raw` is the plain concatenation used for matching, so
+    /// a replay that splits at a boundary the original stream did not is still
+    /// recognised (the injected `\n` would otherwise cause a false mismatch).
+    /// `arrivalOrder` preserves first-seen order across the buffer.
     private struct ReplayCandidate {
         var display: String
         var raw: String
+        var arrivalOrder: Int
     }
 
     private var reconciledLocalUserPromptMessageIds: Set<String> = []
@@ -465,7 +471,10 @@ final class ACPSession: ObservableObject, Identifiable {
     private func flushPendingReplayCandidates(kinds: Set<TextMessageKind> = [.agent, .thought]) -> Set<Int> {
         guard !pendingReplayCandidates.isEmpty else { return [] }
         var indices: Set<Int> = []
-        for key in pendingReplayCandidates.keys.sorted(by: { $0.messageId < $1.messageId }) {
+        let orderedKeys = pendingReplayCandidates.keys.sorted {
+            (pendingReplayCandidates[$0]?.arrivalOrder ?? 0) < (pendingReplayCandidates[$1]?.arrivalOrder ?? 0)
+        }
+        for key in orderedKeys {
             guard kinds.contains(key.kind), let candidate = pendingReplayCandidates[key] else { continue }
             pendingReplayCandidates.removeValue(forKey: key)
             if existingMessageEquals(kind: key.kind, candidate.display)
@@ -1772,7 +1781,15 @@ final class ACPSession: ObservableObject, Identifiable {
             // at a sentence boundary the original stream did not is still
             // recognised rather than duplicated by the injected separator.
             if replayCandidateMatches(display) || replayCandidateMatches(raw) {
-                pendingReplayCandidates[candidateKey] = ReplayCandidate(display: display, raw: raw)
+                // Preserve the first-seen arrival order across accumulation.
+                let arrivalOrder: Int
+                if let previous {
+                    arrivalOrder = previous.arrivalOrder
+                } else {
+                    arrivalOrder = replayCandidateArrivalCounter
+                    replayCandidateArrivalCounter += 1
+                }
+                pendingReplayCandidates[candidateKey] = ReplayCandidate(display: display, raw: raw, arrivalOrder: arrivalOrder)
                 return nil
             }
             pendingReplayCandidates.removeValue(forKey: candidateKey)
