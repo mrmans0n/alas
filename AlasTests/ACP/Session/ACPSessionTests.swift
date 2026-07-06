@@ -389,6 +389,28 @@ struct ACPSessionTests {
         #expect(texts == ["agent:hi there", "agent:hi", "user:do the thing"])
     }
 
+    @Test("a held final fragment is materialized when the output boundary completes")
+    func heldFragmentMaterializedOnCompletedOutputBoundary() async {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.transcript.messages = [
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("OK done."))
+        ]
+        session.allowsStreamingBoundaryCrossing = false
+
+        // A one-chunk reply "OK" whose text is a substring of prior output is
+        // held. Turn completion reaches markCompletedOutputBoundary() without
+        // an update, so it must materialize the held chunk rather than leave
+        // it stranded (and lost on detach/reopen).
+        session.apply(.agentMessageChunk(.init(messageId: "regen-1", content: .text("OK"))))
+        session.markCompletedOutputBoundary()
+
+        let agentTexts = session.transcript.messages.compactMap { message -> String? in
+            if case .agent(_, _, let text) = message { return text.value }
+            return nil
+        }
+        #expect(agentTexts == ["OK done.", "OK"])
+    }
+
     @Test("chunked late replay with a regenerated messageId and short first fragment is not duplicated")
     func chunkedLateReplayShortFirstFragmentNotDuplicated() async {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

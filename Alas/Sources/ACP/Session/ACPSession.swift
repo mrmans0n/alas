@@ -647,6 +647,14 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func markCompletedOutputBoundary() {
+        // The turn's output is complete; materialise any held replay
+        // candidate now (before marking boundaries so the flushed final
+        // message is itself recorded as a completed boundary). Otherwise a
+        // buffered final chunk whose text happens to be a substring of prior
+        // output — a one-chunk reply like "OK" — would stay outside
+        // `transcript.messages`, never persist, and be lost on detach/reopen,
+        // since turn completion reaches here without an `ACPSessionUpdate`.
+        _ = flushPendingReplayCandidates()
         transcript.completedOutputBoundaryMessageIds.removeAll()
         for message in transcript.messages.reversed() {
             switch message {
