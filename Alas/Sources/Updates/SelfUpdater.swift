@@ -8,22 +8,40 @@ struct SelfUpdateCommand: Equatable, Sendable {
 
     let executable: String
     let arguments: [String]
+    /// Overrides `displayCommandLine` for commands whose real invocation
+    /// (e.g. a `sh -c` wrapper chaining multiple steps) isn't what a user
+    /// should copy-paste into their own shell.
+    let displayOverride: String?
+
+    init(executable: String, arguments: [String], displayOverride: String? = nil) {
+        self.executable = executable
+        self.arguments = arguments
+        self.displayOverride = displayOverride
+    }
 
     /// Detects the `brew` executable on the host's PATH so the upgrade
     /// works on both Apple Silicon (`/opt/homebrew/bin/brew`) and Intel
     /// (`/usr/local/bin/brew`) Macs. Falls back to the Apple Silicon default
     /// if brew cannot be found.
+    ///
+    /// Runs `brew update` first: Homebrew doesn't always refresh its local
+    /// tap metadata before `upgrade`, so without this a stale local index
+    /// can make `brew upgrade --cask` report nothing to do even though the
+    /// app's own GitHub-based check just found a newer release.
     static var homebrew: SelfUpdateCommand {
         let host = InstallerHost.detect()
-        let executable = host.detected[.brew]?.executable ?? "/opt/homebrew/bin/brew"
+        let brew = host.detected[.brew]?.executable ?? "/opt/homebrew/bin/brew"
+        let updateCommand = "\(brew) update"
+        let upgradeCommand = "\(brew) upgrade --cask \(alasHomebrewCask)"
         return SelfUpdateCommand(
-            executable: executable,
-            arguments: ["upgrade", "--cask", alasHomebrewCask]
+            executable: "/bin/sh",
+            arguments: ["-c", "\(updateCommand) && \(upgradeCommand)"],
+            displayOverride: "brew update && brew upgrade --cask \(alasHomebrewCask)"
         )
     }
 
     var displayCommandLine: String {
-        ((executable as NSString).lastPathComponent as String) + " " + arguments.joined(separator: " ")
+        displayOverride ?? ((executable as NSString).lastPathComponent as String) + " " + arguments.joined(separator: " ")
     }
 }
 

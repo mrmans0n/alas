@@ -4,11 +4,21 @@ import Testing
 
 @Suite("SelfUpdater")
 struct SelfUpdaterTests {
-    @Test("homebrew command has correct arguments and display line")
+    @Test("homebrew command refreshes the tap before upgrading")
     func homebrewCommandShape() {
         let command = SelfUpdateCommand.homebrew
-        #expect(command.arguments == ["upgrade", "--cask", "mrmans0n/tap/alas"])
-        #expect(command.displayCommandLine == "brew upgrade --cask mrmans0n/tap/alas")
+        #expect(command.executable == "/bin/sh")
+        #expect(command.arguments.count == 2)
+        #expect(command.arguments[0] == "-c")
+
+        let steps = command.arguments[1].components(separatedBy: " && ")
+        #expect(steps.count == 2)
+        #expect(steps[0].hasSuffix("brew update"))
+        #expect(steps[1].hasSuffix("brew upgrade --cask mrmans0n/tap/alas"))
+        // Both steps must invoke the same resolved brew executable.
+        #expect(steps[0].dropLast("update".count) == steps[1].dropLast("upgrade --cask mrmans0n/tap/alas".count))
+
+        #expect(command.displayCommandLine == "brew update && brew upgrade --cask mrmans0n/tap/alas")
     }
 
     @Test("echo transitions idle → running → finished(0)")
