@@ -23,10 +23,28 @@ enum CenterTypography {
         (lineHeightMultiple - 1) * size * 1.2
     }
 
+    /// `resolveCodeFont` is called for every visible line of code across the diff,
+    /// merge, and markdown surfaces. The uncached lookup walks `NSFontManager`'s
+    /// font-family enumeration (IPC to fontd), which is expensive enough per call
+    /// to beachball the app when a custom code font is configured and many lines
+    /// re-render. Cache by (family, size) since the resolved font never changes
+    /// for a given input.
+    private static let resolvedFontCache = NSCache<NSString, NSFont>()
+
     static func resolveCodeFont(family: String, size: CGFloat) -> NSFont {
         guard !family.isEmpty else {
             return .monospacedSystemFont(ofSize: size, weight: .regular)
         }
+        let cacheKey = "\(family)|\(size)" as NSString
+        if let cached = resolvedFontCache.object(forKey: cacheKey) {
+            return cached
+        }
+        let font = resolveCodeFontUncached(family: family, size: size)
+        resolvedFontCache.setObject(font, forKey: cacheKey)
+        return font
+    }
+
+    private static func resolveCodeFontUncached(family: String, size: CGFloat) -> NSFont {
         let fixedFontNames = Set(NSFontManager.shared.availableFontNames(with: .fixedPitchFontMask) ?? [])
 
         func fixedPitchFont(named name: String) -> NSFont? {
