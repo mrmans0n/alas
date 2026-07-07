@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.17] - 2026-07-07
+
+### 🐛 Fixes
+
+- Cache the resolved code font to prevent Center beachballs (#643).
+- Fix Codex ACP composer provider logos (#644).
+
 ## [0.8.16] - 2026-07-06
 
 ### 🐛 Fixes
