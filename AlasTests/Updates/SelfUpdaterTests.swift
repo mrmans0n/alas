@@ -4,19 +4,15 @@ import Testing
 
 @Suite("SelfUpdater")
 struct SelfUpdaterTests {
-    @Test("homebrew command refreshes the tap before upgrading")
+    @Test("homebrew command refreshes the tap before upgrading, as two direct steps")
     func homebrewCommandShape() {
         let command = SelfUpdateCommand.homebrew
-        #expect(command.executable == "/bin/sh")
-        #expect(command.arguments.count == 2)
-        #expect(command.arguments[0] == "-c")
-
-        let steps = command.arguments[1].components(separatedBy: " && ")
-        #expect(steps.count == 2)
-        #expect(steps[0].hasSuffix("brew update"))
-        #expect(steps[1].hasSuffix("brew upgrade --cask mrmans0n/tap/alas"))
-        // Both steps must invoke the same resolved brew executable.
-        #expect(steps[0].dropLast("update".count) == steps[1].dropLast("upgrade --cask mrmans0n/tap/alas".count))
+        #expect(command.steps.count == 2)
+        #expect(command.steps[0].arguments == ["update"])
+        #expect(command.steps[1].arguments == ["upgrade", "--cask", "mrmans0n/tap/alas"])
+        // Both steps must invoke the same resolved brew executable directly
+        // (no shell wrapper), so cancellation always signals the real process.
+        #expect(command.steps[0].executable == command.steps[1].executable)
 
         #expect(command.displayCommandLine == "brew update && brew upgrade --cask mrmans0n/tap/alas")
     }
@@ -44,7 +40,7 @@ struct SelfUpdaterTests {
     @MainActor
     func cancelRunning() async throws {
         let updater = SelfUpdater()
-        await updater.runForTesting(executable: "/bin/sleep", arguments: ["30"])
+        Task { await updater.runForTesting(executable: "/bin/sleep", arguments: ["30"]) }
 
         for _ in 0..<50 {
             if case .running = updater.state { break }
@@ -63,6 +59,94 @@ struct SelfUpdaterTests {
             try await Task.sleep(nanoseconds: 50_000_000)
         }
         Issue.record("update did not cancel within timeout, state = \(updater.state)")
+    }
+
+    @Test("multi-step sequence runs steps in order and finishes(0)")
+    @MainActor
+    func multiStepSequenceRunsInOrder() async throws {
+        let updater = SelfUpdater()
+        await updater.runForTesting(steps: [
+            .init(executable: "/bin/echo", arguments: ["first"]),
+            .init(executable: "/bin/echo", arguments: ["second"]),
+        ])
+
+        for _ in 0..<50 {
+            if case .finished = updater.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        if case .finished(let code) = updater.state {
+            #expect(code == 0)
+        } else {
+            Issue.record("expected finished, got \(updater.state)")
+        }
+        let log = updater.logLines.joined(separator: "\n")
+        #expect(log.contains("first"))
+        #expect(log.contains("second"))
+    }
+
+    @Test("a failing step stops the sequence before later steps run")
+    @MainActor
+    func failingStepStopsSequence() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-selfupdater-test-\(UUID().uuidString)")
+        let updater = SelfUpdater()
+        await updater.runForTesting(steps: [
+            .init(executable: "/usr/bin/false", arguments: []),
+            .init(executable: "/usr/bin/touch", arguments: [marker.path]),
+        ])
+
+        for _ in 0..<50 {
+            if case .finished = updater.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        if case .finished(let code) = updater.state {
+            #expect(code != 0)
+        } else {
+            Issue.record("expected finished, got \(updater.state)")
+        }
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    @Test("cancelling the first step prevents the second step from ever running")
+    @MainActor
+    func cancelBetweenStepsStopsSequence() async throws {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-selfupdater-test-\(UUID().uuidString)")
+        let updater = SelfUpdater()
+        Task {
+            await updater.runForTesting(steps: [
+                .init(executable: "/bin/sleep", arguments: ["30"]),
+                .init(executable: "/usr/bin/touch", arguments: [marker.path]),
+            ])
+        }
+
+        for _ in 0..<50 {
+            if case .running = updater.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if case .running = updater.state { } else {
+            Issue.record("expected running state, got \(updater.state)")
+            return
+        }
+
+        updater.cancel()
+
+        for _ in 0..<200 {
+            if case .cancelled = updater.state { break }
+            if case .failed = updater.state { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if case .cancelled = updater.state {
+            // expected
+        } else {
+            Issue.record("update did not cancel within timeout, state = \(updater.state)")
+        }
+
+        // Give a stray second step a moment to run if the bug regressed.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
     }
 
     @Test("missing executable transitions to .failed")
@@ -96,7 +180,7 @@ struct SelfUpdaterTests {
     @MainActor
     func startWhileRunningThrows() async throws {
         let updater = SelfUpdater()
-        await updater.runForTesting(executable: "/bin/sleep", arguments: ["10"])
+        Task { await updater.runForTesting(executable: "/bin/sleep", arguments: ["10"]) }
         for _ in 0..<50 {
             if case .running = updater.state { break }
             try await Task.sleep(nanoseconds: 50_000_000)
