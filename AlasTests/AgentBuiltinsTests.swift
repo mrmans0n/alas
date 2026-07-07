@@ -77,6 +77,41 @@ struct AgentBuiltinsTests {
             #expect(image != nil, "\(entry.id) logo asset '\(name)' not found in main bundle")
         }
     }
+
+    @Test func originalLogoPresentationUsesOriginalBuiltinAsset() throws {
+        let claude = try #require(AgentBuiltins.entry(id: "claude"))
+        let presentation = AgentLogoPresentation.resolve(for: claude)
+        #expect(presentation == .asset(name: "agent-claude"))
+    }
+
+    @Test func logoPresentationKeepsCustomAgentsOnFallbackSymbol() {
+        let custom = AgentDefinition(
+            id: "custom",
+            displayName: "Custom",
+            binary: "custom-agent",
+            binaryOverride: nil,
+            promptModeArgs: ["run"],
+            bypassPermissionsFlag: nil,
+            extraTerminalArgs: nil,
+            isBuiltin: false,
+            isEnabled: true,
+            builtinLogoAssetName: nil
+        )
+        let presentation = AgentLogoPresentation.resolve(for: custom)
+        #expect(presentation == .fallbackSymbol)
+    }
+
+    @Test func codexLogoUsesCloudHexagonSvgWithoutAppIconBackground() throws {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
+        let svg = repoRoot.appendingPathComponent(
+            "Alas/Resources/Assets.xcassets/AgentLogos/agent-codex.imageset/agent-codex.svg"
+        )
+        let source = try String(contentsOf: svg, encoding: .utf8)
+
+        #expect(source.contains(#"id="codex-cloud-hexagon""#))
+        #expect(!source.contains("<rect"))
+    }
 }
 
 /// Marker used to locate the Alas test host bundle from inside Swift Testing.

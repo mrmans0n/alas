@@ -316,7 +316,8 @@ struct ACPComposer: View {
             // composer where focus is.
             ACPPulseDot(color: session.agentState == .disconnected ? theme.color("del") : theme.color("add"))
             if let agent = agentLookup(session.agentId) {
-                AgentLogoView(agent: agent).frame(width: 14, height: 14)
+                AgentLogoView(agent: agent, size: 14)
+                    .frame(width: 14, height: 14)
             }
             if showShortcuts {
                 Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 12).padding(.horizontal, 2)
