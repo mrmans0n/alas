@@ -25,6 +25,11 @@ final class LSPTransport: @unchecked Sendable {
         case exited(Int32)
     }
 
+    private struct DescendantKey: Hashable {
+        let pid: pid_t
+        let command: String
+    }
+
     private let process = Process()
     private let stdin = Pipe()
     private let stdout = Pipe()
@@ -32,11 +37,18 @@ final class LSPTransport: @unchecked Sendable {
     private var decoder = JSONRPCFramer()
     private let lock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
-    /// Captured in the termination handler so `terminate()` can still
-    /// reach descendants after the root exits and the kernel reparents
-    /// them to init (making them unfindable via a ppid walk from the
-    /// original root).
-    private var descendants: [pid_t]?
+    /// Set once the termination handler fires. We can't rely on
+    /// `process.isRunning` after that — the OS may reuse the root pid
+    /// for an unrelated process.
+    private var rootHasExited = false
+    /// `(pid, command)` pairs accumulated by the periodic descendant
+    /// tracker while the root is alive. Needed because the termination
+    /// handler runs after the kernel has reaped the root and reparented
+    /// its children to init, so a fresh ppid walk from the root pid
+    /// returns nothing. The command name lets us re-verify a cached PID
+    /// still belongs to our process before signaling it late.
+    private var orphanedDescendants: Set<DescendantKey> = []
+    private var descendantTracker: Task<Void, Never>?
 
     let incoming: AsyncStream<Incoming>
 
@@ -79,10 +91,8 @@ final class LSPTransport: @unchecked Sendable {
         }
         process.terminationHandler = { [weak self] p in
             guard let self else { return }
-            let pid = p.processIdentifier
-            let kids = Self.collectDescendants(of: pid)
             self.lock.lock()
-            self.descendants = kids
+            self.rootHasExited = true
             self.lock.unlock()
             self.continuation?.yield(.exited(p.terminationStatus))
             self.continuation?.finish()
@@ -96,6 +106,7 @@ final class LSPTransport: @unchecked Sendable {
         // of those two calls succeeds and the child ends up as group
         // leader. Same pattern as `ACPTerminal`.
         _ = setpgid(process.processIdentifier, process.processIdentifier)
+        startDescendantTracker()
     }
 
     /// Writes a JSON-RPC body framed with `Content-Length`. Header and body
@@ -108,38 +119,78 @@ final class LSPTransport: @unchecked Sendable {
     }
 
     func terminate() {
+        descendantTracker?.cancel()
         let pid = process.processIdentifier
         guard pid > 0 else { return }
-        // Signal the whole process group so descendants receive the
-        // signal even when the root doesn't forward it. Per-pid signal
-        // as a fallback for the case where `setpgid` lost the race
-        // against exec. Same pattern as `JSONRPCStdioTransport` and
-        // `ACPTerminal`.
-        _ = Darwin.kill(-pid, SIGTERM)
-        // Walk the process tree and signal any descendants the group
-        // kill may have missed. On macOS, parent-side setpgid frequently
-        // loses the exec race (Foundation's Process can't pass
-        // POSIX_SPAWN_SETPGROUP), leaving no process group to target.
-        // If the root exited before we got here, use the tree captured
-        // by the termination handler; otherwise walk live so we catch
-        // children spawned between handler capture and now.
         lock.lock()
-        let kids = descendants ?? Self.collectDescendants(of: pid)
+        let rootAlive = !rootHasExited
+        var targets = orphanedDescendants
         lock.unlock()
-        for d in kids {
-            _ = Darwin.kill(d, SIGTERM)
+
+        if rootAlive {
+            // Root is still alive: a process-group signal reaches the
+            // whole tree, and we can safely collect a live snapshot of
+            // descendants before the root disappears.
+            _ = Darwin.kill(-pid, SIGTERM)
+            _ = Darwin.kill(pid, SIGTERM)
+            for d in Self.collectDescendants(of: pid) {
+                targets.insert(d)
+            }
+            for d in targets {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
+        } else {
+            // Root has already exited: the process group may have been
+            // reused by an unrelated process, so we only signal cached
+            // descendants whose command name still matches.
+            for d in targets where Self.pidStillMatches(d) {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
         }
-        if process.isRunning { process.terminate() }
+
+        if process.isRunning {
+            process.terminate()
+        }
+    }
+
+    private func startDescendantTracker() {
+        descendantTracker = Task { [weak self] in
+            // Walk the live process tree every second while the root is
+            // alive, accumulating every descendant we observe. The last
+            // pre-exit snapshot is what `terminate()` relies on after
+            // the kernel reparents children to init.
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.refreshOrphanSet()
+                self.lock.lock()
+                let shouldStop = self.rootHasExited
+                self.lock.unlock()
+                if shouldStop { return }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    private func refreshOrphanSet() {
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        let keys = Self.collectDescendants(of: pid)
+        lock.lock()
+        for k in keys { orphanedDescendants.insert(k) }
+        lock.unlock()
     }
 
     /// Walks the live process tree collecting every descendant of `root`.
     /// Returns the list immediately; once the root exits the kernel
     /// reparents children to init so they become unfindable via a ppid
     /// walk from the original root.
-    private static func collectDescendants(of root: pid_t) -> [pid_t] {
+    private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
+        // `comm=` is the executable name (no header). It's stable across
+        // reads of the same process and changes when the PID is reused,
+        // so it's a cheap identity marker for late validation.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,ppid=", "-ax"]
+        proc.arguments = ["-o", "pid=,ppid=,comm=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -151,24 +202,48 @@ final class LSPTransport: @unchecked Sendable {
         }
         guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
                              encoding: .utf8) else { return [] }
-        var childrenOf: [pid_t: [pid_t]] = [:]
+        var childrenOf: [pid_t: [(pid: pid_t, command: String)]] = [:]
         for line in s.split(separator: "\n") {
-            let parts = line.split(separator: " ", maxSplits: 1,
-                                   omittingEmptySubsequences: true)
-            guard parts.count >= 2,
+            let trimmed = line.drop(while: { $0 == " " })
+            let parts = trimmed.split(separator: " ", maxSplits: 2,
+                                      omittingEmptySubsequences: true)
+            guard parts.count >= 3,
                   let pid = pid_t(parts[0]),
                   let ppid = pid_t(parts[1]) else { continue }
-            childrenOf[ppid, default: []].append(pid)
+            childrenOf[ppid, default: []].append((pid, String(parts[2])))
         }
-        var out: [pid_t] = []
+        var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let p = queue.popLast() {
             for c in childrenOf[p] ?? [] {
-                out.append(c)
-                queue.append(c)
+                out.append(DescendantKey(pid: c.pid, command: c.command))
+                queue.append(c.pid)
             }
         }
         return out
+    }
+
+    /// Returns true when the current command for `pid` matches the
+    /// command captured when we recorded it. Used to skip stale cached
+    /// PIDs whose original process has exited and whose PID may have
+    /// been reused for an unrelated process.
+    private static func pidStillMatches(_ key: DescendantKey) -> Bool {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-p", "\(key.pid)", "-o", "comm="]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return false
+        }
+        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8) else { return false }
+        let current = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !current.isEmpty && current == key.command
     }
 }
 
