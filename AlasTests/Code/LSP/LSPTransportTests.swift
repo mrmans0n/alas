@@ -60,6 +60,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.startsDescendantTrackingBeforeSetpgid())
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
+        #expect(source.validatesCachedDescendantsWithStableIdentity())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -72,6 +73,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.startsDescendantTrackingBeforeSetpgid())
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
+        #expect(source.validatesCachedDescendantsWithStableIdentity())
     }
 
     private func source(named path: String) throws -> String {
@@ -146,5 +148,15 @@ private extension String {
             return false
         }
         return read.lowerBound < wait.lowerBound
+    }
+
+    func validatesCachedDescendantsWithStableIdentity() -> Bool {
+        contains("let pgid: pid_t") &&
+            contains("let startedAt: String") &&
+            contains(#""pid=,ppid=,pgid=,lstart=,comm=""#) &&
+            contains(#""pgid=,lstart=,comm=""#) &&
+            contains("current.pgid == key.pgid") &&
+            contains("current.startedAt == key.startedAt") &&
+            contains("current.command == key.command")
     }
 }

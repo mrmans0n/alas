@@ -27,6 +27,8 @@ final class LSPTransport: @unchecked Sendable {
 
     private struct DescendantKey: Hashable {
         let pid: pid_t
+        let pgid: pid_t
+        let startedAt: String
         let command: String
     }
 
@@ -218,12 +220,11 @@ final class LSPTransport: @unchecked Sendable {
     /// reparents children to init so they become unfindable via a ppid
     /// walk from the original root.
     private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
-        // `comm=` is the executable name (no header). It's stable across
-        // reads of the same process and changes when the PID is reused,
-        // so it's a cheap identity marker for late validation.
+        // `lstart` and `pgid` make the cached PID identity stable across
+        // PID reuse, including common executable names like node or sh.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,ppid=,comm=", "-ax"]
+        proc.arguments = ["-o", "pid=,ppid=,pgid=,lstart=,comm=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -236,35 +237,39 @@ final class LSPTransport: @unchecked Sendable {
             return []
         }
         guard let s = String(data: data, encoding: .utf8) else { return [] }
-        var childrenOf: [pid_t: [(pid: pid_t, command: String)]] = [:]
+        var childrenOf: [pid_t: [(pid: pid_t, pgid: pid_t, startedAt: String, command: String)]] = [:]
         for line in s.split(separator: "\n") {
             let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 2,
+            let parts = trimmed.split(separator: " ", maxSplits: 8,
                                       omittingEmptySubsequences: true)
-            guard parts.count >= 3,
+            guard parts.count >= 9,
                   let pid = pid_t(parts[0]),
-                  let ppid = pid_t(parts[1]) else { continue }
-            childrenOf[ppid, default: []].append((pid, String(parts[2])))
+                  let ppid = pid_t(parts[1]),
+                  let pgid = pid_t(parts[2]) else { continue }
+            let startedAt = parts[3...7].joined(separator: " ")
+            let command = String(parts[8])
+            childrenOf[ppid, default: []].append((pid, pgid, startedAt, command))
         }
         var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let p = queue.popLast() {
             for c in childrenOf[p] ?? [] {
-                out.append(DescendantKey(pid: c.pid, command: c.command))
+                out.append(DescendantKey(pid: c.pid, pgid: c.pgid,
+                                         startedAt: c.startedAt, command: c.command))
                 queue.append(c.pid)
             }
         }
         return out
     }
 
-    /// Returns true when the current command for `pid` matches the
-    /// command captured when we recorded it. Used to skip stale cached
-    /// PIDs whose original process has exited and whose PID may have
-    /// been reused for an unrelated process.
+    /// Returns true when the current process identity for `pid` matches
+    /// what we captured earlier. Used to skip stale cached PIDs whose
+    /// original process has exited and whose PID may have been reused
+    /// for an unrelated process.
     private static func pidStillMatches(_ key: DescendantKey) -> Bool {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", "\(key.pid)", "-o", "comm="]
+        proc.arguments = ["-p", "\(key.pid)", "-o", "pgid=,lstart=,comm="]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -277,8 +282,19 @@ final class LSPTransport: @unchecked Sendable {
             return false
         }
         guard let s = String(data: data, encoding: .utf8) else { return false }
-        let current = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !current.isEmpty && current == key.command
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: " ", maxSplits: 6,
+                                  omittingEmptySubsequences: true)
+        guard parts.count >= 7,
+              let pgid = pid_t(parts[0]) else { return false }
+        let current = (
+            pgid: pgid,
+            startedAt: parts[1...5].joined(separator: " "),
+            command: String(parts[6])
+        )
+        return current.pgid == key.pgid &&
+            current.startedAt == key.startedAt &&
+            current.command == key.command
     }
 }
 
