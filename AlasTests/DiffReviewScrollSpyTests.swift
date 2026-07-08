@@ -115,4 +115,31 @@ struct DiffReviewScrollSpyTests {
         #expect(unchanged == nil)
         #expect(changed == first)
     }
+
+    @Test func activeSelectionUsesScrolledContentCoordinatesNearEndOfReview() {
+        let penultimate = DiffReviewFileID(namespace: "commit", path: "Penultimate.swift")
+        let last = DiffReviewFileID(namespace: "commit", path: "Last.swift")
+        let frames = [
+            DiffReviewSectionFrame(id: penultimate, minY: 1_000, maxY: 1_620),
+            DiffReviewSectionFrame(id: last, minY: 1_634, maxY: 1_980),
+        ]
+
+        let changed = DiffReviewActiveFileSelection.updatedSelection(
+            current: penultimate,
+            frames: frames,
+            viewportMinY: 1_500,
+            viewportHeight: 500,
+            programmaticScroll: DiffReviewProgrammaticScrollController()
+        )
+        let unchanged = DiffReviewActiveFileSelection.updatedSelection(
+            current: last,
+            frames: frames,
+            viewportMinY: 1_500,
+            viewportHeight: 500,
+            programmaticScroll: DiffReviewProgrammaticScrollController()
+        )
+
+        #expect(changed == last)
+        #expect(unchanged == nil)
+    }
 }

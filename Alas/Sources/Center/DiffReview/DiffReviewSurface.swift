@@ -43,6 +43,8 @@ struct DiffReviewSurface: View {
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
+    @State private var sectionFrames: [DiffReviewSectionFrame] = []
+    @State private var scrollProbe = DiffReviewScrollProbe(minY: 0, viewportHeight: 0)
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
 
@@ -241,6 +243,7 @@ struct DiffReviewSurface: View {
                             .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))
                             .accessibilityHidden(true)
                         fileSection(file)
+                            .background(DiffReviewSectionFrameReader(fileID: file.summary.id))
                             .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: file.summary.id))
                         if index < renderEligibleFiles.index(before: renderEligibleFiles.endIndex) {
                             Color.clear
@@ -250,13 +253,25 @@ struct DiffReviewSurface: View {
                     }
                 }
                 .padding(16)
-                .scrollTargetLayout()
+                .coordinateSpace(name: DiffReviewSectionFrameReader.coordinateSpaceName)
+                .modifier(DiffReviewFallbackScrollTargetLayout())
             }
-            .onScrollTargetVisibilityChange(
-                idType: String.self,
-                threshold: DiffReviewSurfaceSelectionSync.visibilityThreshold
-            ) { ids in
-                updateSelectedFileFromVisibility(ids)
+            .modifier(DiffReviewScrollTracking(
+                onGeometry: { probe in
+                    updateSelectedFileFromGeometry(probe)
+                },
+                onVisibleTargetIDs: { ids in
+                    updateSelectedFileFromVisibility(ids)
+                }
+            ))
+            .onPreferenceChange(DiffReviewSectionFramePreferenceKey.self) { frames in
+                sectionFrames = frames.sorted {
+                    if $0.minY != $1.minY {
+                        return $0.minY < $1.minY
+                    }
+                    return $0.id.rawValue < $1.id.rawValue
+                }
+                updateSelectedFileFromGeometry()
             }
             .onChange(of: scrollCommand) { _, command in
                 guard let command else { return }
@@ -400,6 +415,24 @@ struct DiffReviewSurface: View {
         selectedFileID = updated
     }
 
+    private func updateSelectedFileFromGeometry(_ probe: DiffReviewScrollProbe) {
+        scrollProbe = probe
+        updateSelectedFileFromGeometry()
+    }
+
+    private func updateSelectedFileFromGeometry() {
+        guard scrollProbe.viewportHeight > 0 else { return }
+        guard let updated = DiffReviewActiveFileSelection.updatedSelection(
+            current: selectedFileID,
+            frames: sectionFrames,
+            viewportMinY: scrollProbe.minY,
+            viewportHeight: scrollProbe.viewportHeight,
+            programmaticScroll: programmaticScroll
+        ) else { return }
+
+        selectedFileID = updated
+    }
+
     private func synchronizeSelectionWithSession() {
         let previousFileSetKey = synchronizedFileSetKey
         let previousSelection = selectedFileID
@@ -477,6 +510,77 @@ struct DiffReviewSurface: View {
                     viewerCanUnresolve: thread.viewerCanUnresolve
                 )
             }
+    }
+}
+
+private struct DiffReviewScrollProbe: Equatable {
+    let minY: CGFloat
+    let viewportHeight: CGFloat
+}
+
+private struct DiffReviewScrollTracking: ViewModifier {
+    let onGeometry: (DiffReviewScrollProbe) -> Void
+    let onVisibleTargetIDs: ([String]) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content.onScrollGeometryChange(for: DiffReviewScrollProbe.self) { geometry in
+                DiffReviewScrollProbe(
+                    minY: geometry.visibleRect.minY,
+                    viewportHeight: geometry.visibleRect.height
+                )
+            } action: { _, new in
+                onGeometry(new)
+            }
+        } else {
+            content.onScrollTargetVisibilityChange(
+                idType: String.self,
+                threshold: DiffReviewSurfaceSelectionSync.visibilityThreshold
+            ) { ids in
+                onVisibleTargetIDs(ids)
+            }
+        }
+    }
+}
+
+private struct DiffReviewFallbackScrollTargetLayout: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content
+        } else {
+            content.scrollTargetLayout()
+        }
+    }
+}
+
+private struct DiffReviewSectionFrameReader: View {
+    static let coordinateSpaceName = "diff-review-section-frame-space"
+
+    let fileID: DiffReviewFileID
+
+    var body: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(
+                key: DiffReviewSectionFramePreferenceKey.self,
+                value: [
+                    DiffReviewSectionFrame(
+                        id: fileID,
+                        minY: geometry.frame(in: .named(Self.coordinateSpaceName)).minY,
+                        maxY: geometry.frame(in: .named(Self.coordinateSpaceName)).maxY
+                    ),
+                ]
+            )
+        }
+    }
+}
+
+private struct DiffReviewSectionFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [DiffReviewSectionFrame] = []
+
+    static func reduce(value: inout [DiffReviewSectionFrame], nextValue: () -> [DiffReviewSectionFrame]) {
+        value.append(contentsOf: nextValue())
     }
 }
 
