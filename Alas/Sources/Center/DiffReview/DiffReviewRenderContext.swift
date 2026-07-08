@@ -674,10 +674,28 @@ private struct ProviderErrorSignature: Hashable {
 private struct PendingDraftPlacementSignature: Hashable {
     let side: String
     let line: Int
+    let rowIndex: Int
+    let endRowIndex: Int
+    let selectedLines: [SelectedLineSignature]
 
     init(_ anchor: DiffReviewLineAnchor) {
         side = anchor.side.rawValue
         line = anchor.endLine ?? anchor.line
+        rowIndex = anchor.rowIndex
+        endRowIndex = anchor.endRowIndex
+        selectedLines = anchor.selectedLines.map(SelectedLineSignature.init)
+    }
+
+    private struct SelectedLineSignature: Hashable {
+        let side: String
+        let line: Int
+        let isChange: Bool
+
+        init(_ line: DiffReviewLineAnchor.SelectedLine) {
+            side = line.side.rawValue
+            self.line = line.line
+            isChange = line.isChange
+        }
     }
 }
 

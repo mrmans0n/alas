@@ -603,7 +603,7 @@ struct DiffReviewFileSection: View {
         guard let pendingDraftAnchor else { return }
         let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(
             pendingDraftAnchor,
-            in: derivedDisplayGroups ?? []
+            in: currentDisplayGroups ?? []
         )
         let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
