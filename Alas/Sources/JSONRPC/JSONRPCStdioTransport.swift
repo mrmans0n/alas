@@ -140,11 +140,12 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
 
         if rootAlive {
             // Root is still alive: a process-group signal reaches the
-            // whole tree, and we can safely collect a live snapshot of
-            // descendants before the root disappears.
+            // whole tree. Take the fallback ppid snapshot before
+            // signaling, while descendants are still parented to root.
+            let liveDescendants = Self.collectDescendants(of: pid)
             _ = Darwin.kill(-pid, SIGTERM)
             _ = Darwin.kill(pid, SIGTERM)
-            for d in Self.collectDescendants(of: pid) {
+            for d in liveDescendants {
                 targets.insert(d)
             }
             for d in targets {

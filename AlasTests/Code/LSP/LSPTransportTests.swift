@@ -47,3 +47,38 @@ struct LSPTransportFramingTests {
         return out
     }
 }
+
+@Suite("Process transport termination")
+struct ProcessTransportTerminationTests {
+    @Test("LSPTransport snapshots live descendants before signaling root")
+    func lspSnapshotsDescendantsBeforeRootSignal() throws {
+        let source = try source(named: "Code/LSP/LSPTransport.swift")
+        #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
+    }
+
+    @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
+    func jsonrpcSnapshotsDescendantsBeforeRootSignal() throws {
+        let source = try source(named: "JSONRPC/JSONRPCStdioTransport.swift")
+        #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
+    }
+
+    private func source(named path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent("Alas/Sources/\(path)"),
+                          encoding: .utf8)
+    }
+}
+
+private extension String {
+    func requiresLiveDescendantSnapshotBeforeRootSignal() -> Bool {
+        guard let snapshot = range(of: "let liveDescendants = Self.collectDescendants(of: pid)"),
+              let groupSignal = range(of: "Darwin.kill(-pid, SIGTERM)") else {
+            return false
+        }
+        return snapshot.lowerBound < groupSignal.lowerBound
+    }
+}
