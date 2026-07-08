@@ -124,6 +124,52 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         // previous behaviour; SIGKILL is not used so a graceful exit
         // can flush buffered output.
         _ = Darwin.kill(-pid, SIGTERM)
+        // Walk the process tree and signal any descendants the group
+        // kill may have missed. On macOS, parent-side setpgid frequently
+        // loses the exec race (Foundation's Process can't pass
+        // POSIX_SPAWN_SETPGROUP), leaving no process group to target.
+        for d in Self.collectDescendants(of: pid) {
+            _ = Darwin.kill(d, SIGTERM)
+        }
         if process.isRunning { process.terminate() }
+    }
+
+    /// Walks the live process tree collecting every descendant of `root`.
+    /// Returns the list immediately; once the root exits the kernel
+    /// reparents children to init so they become unfindable via a ppid
+    /// walk from the original root.
+    private static func collectDescendants(of root: pid_t) -> [pid_t] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-o", "pid=,ppid=", "-ax"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            return []
+        }
+        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8) else { return [] }
+        var childrenOf: [pid_t: [pid_t]] = [:]
+        for line in s.split(separator: "\n") {
+            let parts = line.split(separator: " ", maxSplits: 1,
+                                   omittingEmptySubsequences: true)
+            guard parts.count >= 2,
+                  let pid = pid_t(parts[0]),
+                  let ppid = pid_t(parts[1]) else { continue }
+            childrenOf[ppid, default: []].append(pid)
+        }
+        var out: [pid_t] = []
+        var queue: [pid_t] = [root]
+        while let p = queue.popLast() {
+            for c in childrenOf[p] ?? [] {
+                out.append(c)
+                queue.append(c)
+            }
+        }
+        return out
     }
 }
