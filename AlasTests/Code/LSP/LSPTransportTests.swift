@@ -56,6 +56,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
+        #expect(source.refreshesDescendantsOnFork())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -64,6 +65,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
+        #expect(source.refreshesDescendantsOnFork())
     }
 
     private func source(named path: String) throws -> String {
@@ -96,5 +98,9 @@ private extension String {
             return false
         }
         return handler.lowerBound < groupSignal.lowerBound && groupSignal.lowerBound < rootExited.lowerBound
+    }
+
+    func refreshesDescendantsOnFork() -> Bool {
+        contains("eventMask: .fork") && contains("self?.refreshOrphanSet()")
     }
 }

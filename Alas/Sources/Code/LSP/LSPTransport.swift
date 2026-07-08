@@ -49,6 +49,7 @@ final class LSPTransport: @unchecked Sendable {
     /// still belongs to our process before signaling it late.
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
+    private var descendantForkSource: DispatchSourceProcess?
 
     let incoming: AsyncStream<Incoming>
 
@@ -98,6 +99,7 @@ final class LSPTransport: @unchecked Sendable {
                 // paths avoid group signaling once the root pid can be stale.
                 _ = Darwin.kill(-pid, SIGTERM)
             }
+            self.descendantForkSource?.cancel()
             self.lock.lock()
             self.rootHasExited = true
             self.lock.unlock()
@@ -113,6 +115,7 @@ final class LSPTransport: @unchecked Sendable {
         // of those two calls succeeds and the child ends up as group
         // leader. Same pattern as `ACPTerminal`.
         _ = setpgid(process.processIdentifier, process.processIdentifier)
+        startDescendantForkObserver()
         startDescendantTracker()
     }
 
@@ -127,6 +130,7 @@ final class LSPTransport: @unchecked Sendable {
 
     func terminate() {
         descendantTracker?.cancel()
+        descendantForkSource?.cancel()
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         lock.lock()
@@ -178,6 +182,21 @@ final class LSPTransport: @unchecked Sendable {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
+    }
+
+    private func startDescendantForkObserver() {
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        let source = DispatchSource.makeProcessSource(
+            identifier: pid,
+            eventMask: .fork,
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            self?.refreshOrphanSet()
+        }
+        descendantForkSource = source
+        source.resume()
     }
 
     private func refreshOrphanSet() {
