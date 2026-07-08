@@ -763,6 +763,44 @@ final class RightPaneState {
         }
     }
 
+    /// Rebuilds the child list of the directory at `path` from a fresh
+    /// filesystem listing, dropping entries that no longer exist while carrying
+    /// over any deeper lazy subtrees the user had already expanded (via
+    /// `preservingLazyChildren`). Used when reconciling an already-loaded lazy
+    /// directory on refresh: unlike `mergingChildren`, which only overlays
+    /// incoming entries onto the existing ones, this prunes deletions/renames so
+    /// the tree matches the directory's actual contents.
+    nonisolated static func replacingChildren(
+        in nodes: [FileTreeNode],
+        for path: String,
+        with children: [FileTreeNode],
+        state: DirectoryChildrenState
+    ) -> (nodes: [FileTreeNode], didMerge: Bool) {
+        var didMerge = false
+        let updatedNodes = nodes.map { node -> FileTreeNode in
+            if node.path == path {
+                didMerge = true
+                var updated = node
+                updated.children = preservingLazyChildren(
+                    fresh: children,
+                    previous: node.children ?? []
+                ).sorted { lhs, rhs in
+                    if lhs.kind != rhs.kind { return lhs.kind == .dir }
+                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                }
+                updated.childrenState = state
+                return updated
+            }
+            guard let existing = node.children else { return node }
+            var updated = node
+            let result = replacingChildren(in: existing, for: path, with: children, state: state)
+            didMerge = didMerge || result.didMerge
+            updated.children = result.nodes
+            return updated
+        }
+        return (updatedNodes, didMerge)
+    }
+
     nonisolated static func fileTreeNode(at path: String, in nodes: [FileTreeNode]) -> FileTreeNode? {
         for node in nodes {
             if node.path == path { return node }
@@ -826,7 +864,15 @@ final class RightPaneState {
             do {
                 let children = try await git.fileTreeChildren(worktreePath: worktree.path, path: path)
                 guard self.fileTreeGeneration == generation else { return }
-                let result = Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                // On the first load, merge so concurrent per-level loads (e.g. the
+                // reveal flow expanding several ancestors at once) accumulate.
+                // When reconciling an already-loaded directory, rebuild its child
+                // list from the fresh filesystem listing so deleted/renamed
+                // entries drop out — `mergingChildren` only overlays and would
+                // leave stale children behind.
+                let result = alreadyLoaded
+                    ? Self.replacingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                    : Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
                 self.failedFileTreeChildPaths.remove(path)

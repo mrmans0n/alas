@@ -457,6 +457,102 @@ struct RightPaneStateFileTreeTests {
         #expect(merged.first?.children == nil)
     }
 
+    @Test func replacingChildrenPrunesDeletedEntriesAndPreservesLoadedSubtrees() {
+        // "build" was expanded: it had a stale file and a nested loaded dir.
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "old.o",
+                        path: "build/old.o",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "gen",
+                        path: "build/gen",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "keep.o",
+                                path: "build/gen/keep.o",
+                                kind: .file,
+                                children: nil,
+                                badge: nil,
+                                visibility: .ignored,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+        // Fresh filesystem listing: old.o is gone, gen still exists (relisted as
+        // a lazy dir), and new.o appeared.
+        let incoming = [
+            FileTreeNode(
+                name: "gen",
+                path: "build/gen",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            ),
+            FileTreeNode(
+                name: "new.o",
+                path: "build/new.o",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "build", with: incoming, state: .loaded)
+        let build = result.nodes.first
+        let gen = build?.children?.first { $0.path == "build/gen" }
+
+        #expect(result.didMerge)
+        #expect(build?.children?.contains { $0.path == "build/old.o" } == false)
+        #expect(build?.children?.contains { $0.path == "build/new.o" } == true)
+        // Nested expanded subtree survives the reconcile.
+        #expect(gen?.childrenState == .loaded)
+        #expect(gen?.children?.map(\.path) == ["build/gen/keep.o"])
+    }
+
+    @Test func replacingChildrenReportsMissingTargetWithoutMutating() {
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "missing", with: [], state: .loaded)
+
+        #expect(result.didMerge == false)
+        #expect(result.nodes == tree)
+    }
+
     @Test func fileTreeNodeFindsNestedNodeByPath() {
         let tree = [
             FileTreeNode(
