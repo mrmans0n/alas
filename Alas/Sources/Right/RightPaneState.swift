@@ -764,12 +764,17 @@ final class RightPaneState {
     }
 
     /// Rebuilds the child list of the directory at `path` from a fresh
-    /// filesystem listing, dropping entries that no longer exist while carrying
-    /// over any deeper lazy subtrees the user had already expanded (via
-    /// `preservingLazyChildren`). Used when reconciling an already-loaded lazy
-    /// directory on refresh: unlike `mergingChildren`, which only overlays
-    /// incoming entries onto the existing ones, this prunes deletions/renames so
-    /// the tree matches the directory's actual contents.
+    /// filesystem listing, dropping entries that no longer exist. Used when
+    /// reconciling an already-loaded directory on refresh.
+    ///
+    /// Unlike `mergingChildren`, which seeds from the existing children and
+    /// overlays incoming entries (so deletions/renames linger), this iterates
+    /// the fresh listing as the source of truth for what exists — but still
+    /// carries over each surviving entry's status metadata (badge, visibility,
+    /// submodule flag) and any already-loaded subtree from the existing node.
+    /// `GitService.fileTreeChildren` returns children with `badges: [:]` and a
+    /// `.tracked` default, so taking them verbatim would erase `M`/`A` badges
+    /// and untracked/ignored visibility until the next full refresh.
     nonisolated static func replacingChildren(
         in nodes: [FileTreeNode],
         for path: String,
@@ -781,10 +786,20 @@ final class RightPaneState {
             if node.path == path {
                 didMerge = true
                 var updated = node
-                updated.children = preservingLazyChildren(
-                    fresh: children,
-                    previous: node.children ?? []
-                ).sorted { lhs, rhs in
+                var existingByID: [String: FileTreeNode] = [:]
+                for child in node.children ?? [] { existingByID[child.id] = child }
+                updated.children = children.map { incoming -> FileTreeNode in
+                    guard let existing = existingByID[incoming.id] else { return incoming }
+                    var refreshed = incoming
+                    refreshed.badge = incoming.badge ?? existing.badge
+                    refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: incoming.visibility)
+                    refreshed.isSubmodule = incoming.isSubmodule || existing.isSubmodule
+                    refreshed.childrenState = mergedChildrenState(existing: existing.childrenState, incoming: incoming.childrenState)
+                    if refreshed.children == nil {
+                        refreshed.children = existing.children
+                    }
+                    return refreshed
+                }.sorted { lhs, rhs in
                     if lhs.kind != rhs.kind { return lhs.kind == .dir }
                     return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
                 }
