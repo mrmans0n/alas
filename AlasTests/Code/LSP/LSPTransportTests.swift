@@ -56,6 +56,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
+        #expect(source.signalsCachedDescendantsFromTerminationHandler())
         #expect(source.refreshesDescendantsOnFork())
     }
 
@@ -65,6 +66,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
+        #expect(source.signalsCachedDescendantsFromTerminationHandler())
         #expect(source.refreshesDescendantsOnFork())
     }
 
@@ -98,6 +100,18 @@ private extension String {
             return false
         }
         return handler.lowerBound < groupSignal.lowerBound && groupSignal.lowerBound < rootExited.lowerBound
+    }
+
+    func signalsCachedDescendantsFromTerminationHandler() -> Bool {
+        guard let handler = range(of: "process.terminationHandler"),
+              let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants"),
+              let cachedSignal = range(of: "for d in cachedTargets where Self.pidStillMatches(d)"),
+              let finish = range(of: "self.continuation?.finish()") else {
+            return false
+        }
+        return handler.lowerBound < cachedTargets.lowerBound &&
+            cachedTargets.lowerBound < cachedSignal.lowerBound &&
+            cachedSignal.lowerBound < finish.lowerBound
     }
 
     func refreshesDescendantsOnFork() -> Bool {

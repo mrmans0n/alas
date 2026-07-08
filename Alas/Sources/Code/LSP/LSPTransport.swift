@@ -101,8 +101,12 @@ final class LSPTransport: @unchecked Sendable {
             }
             self.descendantForkSource?.cancel()
             self.lock.lock()
+            let cachedTargets = self.orphanedDescendants
             self.rootHasExited = true
             self.lock.unlock()
+            for d in cachedTargets where Self.pidStillMatches(d) {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
             self.continuation?.yield(.exited(p.terminationStatus))
             self.continuation?.finish()
         }
