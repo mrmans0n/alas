@@ -47,3 +47,188 @@ struct LSPTransportFramingTests {
         return out
     }
 }
+
+@Suite("Process transport termination")
+struct ProcessTransportTerminationTests {
+    @Test("LSPTransport snapshots live descendants before signaling root")
+    func lspSnapshotsDescendantsBeforeRootSignal() throws {
+        let source = try source(named: "Code/LSP/LSPTransport.swift")
+        #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
+        #expect(source.validatesCachedDescendantsBeforeKilling())
+        #expect(source.signalsProcessGroupFromTerminationHandler())
+        #expect(source.signalsCachedDescendantsFromTerminationHandler())
+        #expect(source.attemptsSetpgidBeforeBlockingDescendantSnapshot())
+        #expect(source.refreshesDescendantsOnFork())
+        #expect(source.drainsPsOutputBeforeWaiting())
+        #expect(source.validatesCachedDescendantsWithStableIdentity())
+        #expect(source.checksRootExitBeforeTrackerRefresh())
+        #expect(source.prunesCachedDescendantsWithBatchedLookup())
+        #expect(source.tracksForksFromObservedDescendants())
+        #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
+        #expect(source.preservesCachedDescendantsAcrossExec())
+        #expect(source.serializesRootExitWithDescendantRefresh())
+    }
+
+    @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
+    func jsonrpcSnapshotsDescendantsBeforeRootSignal() throws {
+        let source = try source(named: "JSONRPC/JSONRPCStdioTransport.swift")
+        #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
+        #expect(source.validatesCachedDescendantsBeforeKilling())
+        #expect(source.signalsProcessGroupFromTerminationHandler())
+        #expect(source.signalsCachedDescendantsFromTerminationHandler())
+        #expect(source.attemptsSetpgidBeforeBlockingDescendantSnapshot())
+        #expect(source.refreshesDescendantsOnFork())
+        #expect(source.drainsPsOutputBeforeWaiting())
+        #expect(source.validatesCachedDescendantsWithStableIdentity())
+        #expect(source.checksRootExitBeforeTrackerRefresh())
+        #expect(source.prunesCachedDescendantsWithBatchedLookup())
+        #expect(source.tracksForksFromObservedDescendants())
+        #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
+        #expect(source.preservesCachedDescendantsAcrossExec())
+        #expect(source.serializesRootExitWithDescendantRefresh())
+    }
+
+    private func source(named path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent("Alas/Sources/\(path)"),
+                          encoding: .utf8)
+    }
+}
+
+private extension String {
+    func requiresLiveDescendantSnapshotBeforeRootSignal() -> Bool {
+        guard let snapshot = range(of: "let liveDescendants = Set(Self.collectDescendants(of: pid))") else {
+            return false
+        }
+        return self[snapshot.upperBound...].contains("Darwin.kill(-pid, SIGTERM)")
+    }
+
+    func validatesCachedDescendantsBeforeKilling() -> Bool {
+        contains("for d in Self.currentlyMatching(cachedTargets.subtracting(liveDescendants))")
+    }
+
+    func signalsProcessGroupFromTerminationHandler() -> Bool {
+        guard let handler = range(of: "process.terminationHandler"),
+              let rootExited = range(of: "self.rootHasExited = true"),
+              let groupSignal = range(of: "Darwin.kill(-pid, SIGTERM)") else {
+            return false
+        }
+        return handler.lowerBound < groupSignal.lowerBound && groupSignal.lowerBound < rootExited.lowerBound
+    }
+
+    func signalsCachedDescendantsFromTerminationHandler() -> Bool {
+        guard let handler = range(of: "process.terminationHandler"),
+              let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants"),
+              let cachedSignal = range(of: "for d in Self.currentlyMatching(cachedTargets)"),
+              let finish = range(of: "self.continuation?.finish()") else {
+            return false
+        }
+        return handler.lowerBound < cachedTargets.lowerBound &&
+            cachedTargets.lowerBound < cachedSignal.lowerBound &&
+            cachedSignal.lowerBound < finish.lowerBound
+    }
+
+    func refreshesDescendantsOnFork() -> Bool {
+        contains("eventMask: .fork") && contains("self?.refreshOrphanSet()")
+    }
+
+    func attemptsSetpgidBeforeBlockingDescendantSnapshot() -> Bool {
+        guard let run = range(of: "try process.run()"),
+              let setpgid = range(of: "setpgid(process.processIdentifier", range: run.upperBound..<endIndex),
+              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
+                                   range: setpgid.upperBound..<endIndex),
+              let refresh = range(of: "refreshOrphanSet()", range: observer.upperBound..<endIndex),
+              let tracker = range(of: "startDescendantTracker()", range: setpgid.upperBound..<endIndex) else {
+            return false
+        }
+        return run.lowerBound < setpgid.lowerBound &&
+            setpgid.lowerBound < observer.lowerBound &&
+            observer.lowerBound < refresh.lowerBound &&
+            refresh.lowerBound < tracker.lowerBound
+    }
+
+    func drainsPsOutputBeforeWaiting() -> Bool {
+        guard let collect = range(of: "private static func collectDescendants"),
+              let read = range(
+                  of: "data = pipe.fileHandleForReading.readDataToEndOfFile()",
+                  range: collect.upperBound..<endIndex
+              ),
+              let wait = range(of: "proc.waitUntilExit()", range: collect.upperBound..<endIndex) else {
+            return false
+        }
+        return read.lowerBound < wait.lowerBound
+    }
+
+    func validatesCachedDescendantsWithStableIdentity() -> Bool {
+            contains("let startedAt: String") &&
+            contains(#""pid=,ppid=,lstart=""#) &&
+            contains(#""pid=,lstart=""#) &&
+            !contains("current.pgid == key.pgid") &&
+            contains("return current.intersection(keys)")
+    }
+
+    func checksRootExitBeforeTrackerRefresh() -> Bool {
+        guard let tracker = range(of: "private func startDescendantTracker()"),
+              let refresh = range(of: "self.refreshOrphanSet()", range: tracker.upperBound..<endIndex),
+              let rootExited = range(of: "let shouldStop = self.rootHasExited", range: tracker.upperBound..<endIndex) else {
+            return false
+        }
+        return rootExited.lowerBound < refresh.lowerBound
+    }
+
+    func prunesCachedDescendantsWithBatchedLookup() -> Bool {
+        contains("private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey>") &&
+            contains("let retained = Self.currentlyMatching(cached)") &&
+            contains("orphanedDescendants.subtract(cached.subtracting(retained))") &&
+            contains("orphanedDescendants.formUnion(live)") &&
+            contains("for d in Self.currentlyMatching(targets)")
+    }
+
+    func tracksForksFromObservedDescendants() -> Bool {
+        contains("private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]") &&
+            contains("private func startDescendantForkObserver(for pid: pid_t)") &&
+            contains("for pid in descendants.map(\\.pid)") &&
+            contains("startDescendantForkObserver(for: pid)")
+    }
+
+    func mergesDescendantRefreshesWithoutOverwritingCache() -> Bool {
+        guard let retained = range(of: "let retained = Self.currentlyMatching(cached)"),
+              let subtract = range(of: "orphanedDescendants.subtract(cached.subtracting(retained))",
+                                   range: retained.upperBound..<endIndex),
+              let union = range(of: "orphanedDescendants.formUnion(live)",
+                                range: retained.upperBound..<endIndex) else {
+            return false
+        }
+        return retained.lowerBound < subtract.lowerBound &&
+            subtract.lowerBound < union.lowerBound
+    }
+
+    func preservesCachedDescendantsAcrossExec() -> Bool {
+        contains("while still surviving exec, where `comm` can legitimately change") &&
+            !contains("let command: String") &&
+            !contains(#""comm=""#) &&
+            contains("let startedAt = parts[2...6].joined(separator: \" \")") &&
+            contains("startedAt: parts[1...5].joined(separator: \" \")")
+    }
+
+    func serializesRootExitWithDescendantRefresh() -> Bool {
+        guard let refreshLock = range(of: "private let refreshLock = NSLock()"),
+              let handler = range(of: "process.terminationHandler"),
+              let handlerRefreshLock = range(of: "self.refreshLock.lock()", range: handler.upperBound..<endIndex),
+              let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants",
+                                        range: handlerRefreshLock.upperBound..<endIndex),
+              let refresh = range(of: "private func refreshOrphanSet()"),
+              let refreshRefreshLock = range(of: "refreshLock.lock()", range: refresh.upperBound..<endIndex),
+              let union = range(of: "orphanedDescendants.formUnion(live)", range: refreshRefreshLock.upperBound..<endIndex) else {
+            return false
+        }
+        return refreshLock.lowerBound < handler.lowerBound &&
+            handlerRefreshLock.lowerBound < cachedTargets.lowerBound &&
+            refreshRefreshLock.lowerBound < union.lowerBound &&
+            !contains("if !rootHasExited {\n            orphanedDescendants.subtract")
+    }
+}

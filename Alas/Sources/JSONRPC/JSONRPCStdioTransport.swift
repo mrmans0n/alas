@@ -19,6 +19,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         case exited(Int32)
     }
 
+    private struct DescendantKey: Hashable {
+        let pid: pid_t
+        let startedAt: String
+    }
+
     private let process = Process()
     private let stdin = Pipe()
     private let stdout = Pipe()
@@ -27,7 +32,21 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     private var contentLengthFramer = JSONRPCFramer()
     private var newlineFramer = JSONRPCNewlineFramer()
     private let lock = NSLock()
+    private let refreshLock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
+    /// Set once the termination handler fires. We can't rely on
+    /// `process.isRunning` after that — the OS may reuse the root pid
+    /// for an unrelated process.
+    private var rootHasExited = false
+    /// `(pid, start time)` entries accumulated by the periodic descendant
+    /// tracker while the root is alive. Needed because the
+    /// termination handler runs after the kernel has reaped the root and
+    /// reparented its children to init, so a fresh ppid walk from the root
+    /// pid returns nothing. The start time lets us re-verify a cached PID
+    /// still belongs to the same process before signaling it late.
+    private var orphanedDescendants: Set<DescendantKey> = []
+    private var descendantTracker: Task<Void, Never>?
+    private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]
 
     let incoming: AsyncStream<Incoming>
 
@@ -84,10 +103,39 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             self?.continuation?.yield(.stderr(d))
         }
         process.terminationHandler = { [weak self] p in
-            self?.continuation?.yield(.exited(p.terminationStatus))
-            self?.continuation?.finish()
+            guard let self else { return }
+            let pid = p.processIdentifier
+            if pid > 0 {
+                // Last chance to reach same-group descendants that were
+                // spawned after the most recent tracker tick. Later shutdown
+                // paths avoid group signaling once the root pid can be stale.
+                _ = Darwin.kill(-pid, SIGTERM)
+            }
+            self.refreshLock.lock()
+            self.lock.lock()
+            let cachedTargets = self.orphanedDescendants
+            self.rootHasExited = true
+            self.lock.unlock()
+            self.refreshLock.unlock()
+            self.cancelDescendantForkObservers()
+            for d in Self.currentlyMatching(cachedTargets) {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
+            self.continuation?.yield(.exited(p.terminationStatus))
+            self.continuation?.finish()
         }
         try process.run()
+        // Move the child into its own process group so signals from
+        // `terminate()` can be delivered to the whole tree via
+        // `kill(-pid, …)`. Foundation's Process doesn't expose
+        // POSIX_SPAWN_SETPGROUP, so we race the child via the parent —
+        // either side may EACCES once exec completes, but at least one
+        // of those two calls succeeds and the child ends up as group
+        // leader. Same pattern as `ACPTerminal`.
+        _ = setpgid(process.processIdentifier, process.processIdentifier)
+        startDescendantForkObserver(for: process.processIdentifier)
+        refreshOrphanSet()
+        startDescendantTracker()
     }
 
     func send(_ data: Data) throws {
@@ -99,5 +147,220 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         try stdin.fileHandleForWriting.write(contentsOf: framed)
     }
 
-    func terminate() { if process.isRunning { process.terminate() } }
+    func terminate() {
+        descendantTracker?.cancel()
+        cancelDescendantForkObservers()
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        refreshLock.lock()
+        lock.lock()
+        let rootAlive = !rootHasExited
+        let targets = orphanedDescendants
+        lock.unlock()
+        refreshLock.unlock()
+
+        if rootAlive {
+            // Root is still alive: a process-group signal reaches the
+            // whole tree. Take the fallback ppid snapshot before
+            // signaling, while descendants are still parented to root.
+            let cachedTargets = targets
+            let liveDescendants = Set(Self.collectDescendants(of: pid))
+            _ = Darwin.kill(-pid, SIGTERM)
+            _ = Darwin.kill(pid, SIGTERM)
+            for d in liveDescendants {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
+            for d in Self.currentlyMatching(cachedTargets.subtracting(liveDescendants)) {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
+        } else {
+            // Root has already exited: the process group may have been
+            // reused by an unrelated process, so we only signal cached
+            // descendants whose process identity still matches.
+            for d in Self.currentlyMatching(targets) {
+                _ = Darwin.kill(d.pid, SIGTERM)
+            }
+        }
+
+        if process.isRunning {
+            process.terminate()
+        }
+    }
+
+    private func startDescendantTracker() {
+        descendantTracker = Task { [weak self] in
+            // Walk the live process tree every second while the root is
+            // alive, accumulating every descendant we observe. The last
+            // pre-exit snapshot is what `terminate()` relies on after
+            // the kernel reparents children to init.
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.lock.lock()
+                let shouldStop = self.rootHasExited
+                self.lock.unlock()
+                if shouldStop { return }
+                self.refreshOrphanSet()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    private func startDescendantForkObserver(for pid: pid_t) {
+        guard pid > 0 else { return }
+        lock.lock()
+        let alreadyWatching = descendantForkSources[pid] != nil
+        lock.unlock()
+        if alreadyWatching { return }
+
+        let source = DispatchSource.makeProcessSource(
+            identifier: pid,
+            eventMask: .fork,
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            self?.refreshOrphanSet()
+        }
+        lock.lock()
+        if descendantForkSources[pid] == nil, !rootHasExited {
+            descendantForkSources[pid] = source
+            lock.unlock()
+            source.resume()
+            return
+        }
+        lock.unlock()
+        source.resume()
+        source.cancel()
+    }
+
+    private func cancelDescendantForkObservers() {
+        lock.lock()
+        let sources = Array(descendantForkSources.values)
+        descendantForkSources.removeAll()
+        lock.unlock()
+        for source in sources {
+            source.cancel()
+        }
+    }
+
+    private func pruneDescendantForkObservers(keeping pids: Set<pid_t>) {
+        lock.lock()
+        let stale = descendantForkSources.keys.filter { !pids.contains($0) }
+        let sources = stale.compactMap { descendantForkSources.removeValue(forKey: $0) }
+        lock.unlock()
+        for source in sources {
+            source.cancel()
+        }
+    }
+
+    private func observeForks(from descendants: Set<DescendantKey>) {
+        for pid in descendants.map(\.pid) {
+            startDescendantForkObserver(for: pid)
+        }
+        let rootPid = process.processIdentifier
+        var watched = Set(descendants.map(\.pid))
+        if rootPid > 0 { watched.insert(rootPid) }
+        pruneDescendantForkObservers(keeping: watched)
+    }
+
+    private func refreshOrphanSet() {
+        refreshLock.lock()
+        defer { refreshLock.unlock() }
+        lock.lock()
+        let shouldStop = rootHasExited
+        lock.unlock()
+        guard !shouldStop, process.isRunning else { return }
+
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        let live = Set(Self.collectDescendants(of: pid))
+        lock.lock()
+        let cached = orphanedDescendants
+        lock.unlock()
+        let retained = Self.currentlyMatching(cached)
+        let watched = retained.union(live)
+        lock.lock()
+        orphanedDescendants.subtract(cached.subtracting(retained))
+        orphanedDescendants.formUnion(live)
+        let shouldObserve = !rootHasExited
+        lock.unlock()
+        if shouldObserve {
+            observeForks(from: watched)
+        }
+    }
+
+    /// Walks the live process tree collecting every descendant of `root`.
+    /// Returns the list immediately; once the root exits the kernel
+    /// reparents children to init so they become unfindable via a ppid
+    /// walk from the original root.
+    private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
+        // `lstart` makes the cached PID identity stable across PID reuse
+        // while still surviving exec, where `comm` can legitimately change.
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-o", "pid=,ppid=,lstart=", "-ax"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        let data: Data
+        do {
+            try proc.run()
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+        } catch {
+            return []
+        }
+        guard let s = String(data: data, encoding: .utf8) else { return [] }
+        var childrenOf: [pid_t: [(pid: pid_t, startedAt: String)]] = [:]
+        for line in s.split(separator: "\n") {
+            let trimmed = line.drop(while: { $0 == " " })
+            let parts = trimmed.split(separator: " ", maxSplits: 6,
+                                      omittingEmptySubsequences: true)
+            guard parts.count >= 7,
+                  let pid = pid_t(parts[0]),
+                  let ppid = pid_t(parts[1]) else { continue }
+            let startedAt = parts[2...6].joined(separator: " ")
+            childrenOf[ppid, default: []].append((pid, startedAt))
+        }
+        var out: [DescendantKey] = []
+        var queue: [pid_t] = [root]
+        while let p = queue.popLast() {
+            for c in childrenOf[p] ?? [] {
+                out.append(DescendantKey(pid: c.pid, startedAt: c.startedAt))
+                queue.append(c.pid)
+            }
+        }
+        return out
+    }
+
+    private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
+        guard !keys.isEmpty else { return [] }
+        let pids = Set(keys.map(\.pid))
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+        proc.arguments = ["-o", "pid=,lstart=", "-ax"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        let data: Data
+        do {
+            try proc.run()
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+        } catch {
+            return []
+        }
+        guard let s = String(data: data, encoding: .utf8) else { return [] }
+        var current: Set<DescendantKey> = []
+        for line in s.split(separator: "\n") {
+            let trimmed = line.drop(while: { $0 == " " })
+            let parts = trimmed.split(separator: " ", maxSplits: 5,
+                                      omittingEmptySubsequences: true)
+            guard parts.count >= 6,
+                  let pid = pid_t(parts[0]),
+                  pids.contains(pid) else { continue }
+            current.insert(DescendantKey(pid: pid,
+                                         startedAt: parts[1...5].joined(separator: " ")))
+        }
+        return current.intersection(keys)
+    }
 }
