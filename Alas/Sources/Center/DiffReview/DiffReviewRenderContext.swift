@@ -676,7 +676,7 @@ private struct PendingDraftPlacementSignature: Hashable {
     let line: Int
     let rowIndex: Int
     let endRowIndex: Int
-    let selectedLines: [SelectedLineSignature]
+    private let selectedLines: [SelectedLineSignature]
 
     init(_ anchor: DiffReviewLineAnchor) {
         side = anchor.side.rawValue
