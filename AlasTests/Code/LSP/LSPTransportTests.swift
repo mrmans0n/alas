@@ -61,6 +61,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
+        #expect(source.checksRootExitBeforeTrackerRefresh())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -74,6 +75,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
+        #expect(source.checksRootExitBeforeTrackerRefresh())
     }
 
     private func source(named path: String) throws -> String {
@@ -158,5 +160,14 @@ private extension String {
             contains("current.pgid == key.pgid") &&
             contains("current.startedAt == key.startedAt") &&
             contains("current.command == key.command")
+    }
+
+    func checksRootExitBeforeTrackerRefresh() -> Bool {
+        guard let tracker = range(of: "private func startDescendantTracker()"),
+              let refresh = range(of: "self.refreshOrphanSet()", range: tracker.upperBound..<endIndex),
+              let rootExited = range(of: "let shouldStop = self.rootHasExited", range: tracker.upperBound..<endIndex) else {
+            return false
+        }
+        return rootExited.lowerBound < refresh.lowerBound
     }
 }

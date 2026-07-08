@@ -192,11 +192,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             // the kernel reparents children to init.
             while !Task.isCancelled {
                 guard let self else { return }
-                self.refreshOrphanSet()
                 self.lock.lock()
                 let shouldStop = self.rootHasExited
                 self.lock.unlock()
                 if shouldStop { return }
+                self.refreshOrphanSet()
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -218,6 +218,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     }
 
     private func refreshOrphanSet() {
+        lock.lock()
+        let shouldStop = rootHasExited
+        lock.unlock()
+        guard !shouldStop, process.isRunning else { return }
+
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         let keys = Self.collectDescendants(of: pid)
