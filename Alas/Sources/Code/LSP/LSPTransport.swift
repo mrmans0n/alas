@@ -36,6 +36,7 @@ final class LSPTransport: @unchecked Sendable {
     private let stderr = Pipe()
     private var decoder = JSONRPCFramer()
     private let lock = NSLock()
+    private let refreshLock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
     /// Set once the termination handler fires. We can't rely on
     /// `process.isRunning` after that — the OS may reuse the root pid
@@ -99,10 +100,12 @@ final class LSPTransport: @unchecked Sendable {
                 // paths avoid group signaling once the root pid can be stale.
                 _ = Darwin.kill(-pid, SIGTERM)
             }
+            self.refreshLock.lock()
             self.lock.lock()
             let cachedTargets = self.orphanedDescendants
             self.rootHasExited = true
             self.lock.unlock()
+            self.refreshLock.unlock()
             self.cancelDescendantForkObservers()
             for d in Self.currentlyMatching(cachedTargets) {
                 _ = Darwin.kill(d.pid, SIGTERM)
@@ -138,10 +141,12 @@ final class LSPTransport: @unchecked Sendable {
         cancelDescendantForkObservers()
         let pid = process.processIdentifier
         guard pid > 0 else { return }
+        refreshLock.lock()
         lock.lock()
         let rootAlive = !rootHasExited
         let targets = orphanedDescendants
         lock.unlock()
+        refreshLock.unlock()
 
         if rootAlive {
             // Root is still alive: a process-group signal reaches the
@@ -247,6 +252,8 @@ final class LSPTransport: @unchecked Sendable {
     }
 
     private func refreshOrphanSet() {
+        refreshLock.lock()
+        defer { refreshLock.unlock() }
         lock.lock()
         let shouldStop = rootHasExited
         lock.unlock()
@@ -261,12 +268,13 @@ final class LSPTransport: @unchecked Sendable {
         let retained = Self.currentlyMatching(cached)
         let watched = retained.union(live)
         lock.lock()
-        if !rootHasExited {
-            orphanedDescendants.subtract(cached.subtracting(retained))
-            orphanedDescendants.formUnion(live)
-        }
+        orphanedDescendants.subtract(cached.subtracting(retained))
+        orphanedDescendants.formUnion(live)
+        let shouldObserve = !rootHasExited
         lock.unlock()
-        observeForks(from: watched)
+        if shouldObserve {
+            observeForks(from: watched)
+        }
     }
 
     /// Walks the live process tree collecting every descendant of `root`.

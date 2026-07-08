@@ -66,6 +66,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.tracksForksFromObservedDescendants())
         #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
         #expect(source.preservesCachedDescendantsAcrossExec())
+        #expect(source.serializesRootExitWithDescendantRefresh())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -84,6 +85,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.tracksForksFromObservedDescendants())
         #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
         #expect(source.preservesCachedDescendantsAcrossExec())
+        #expect(source.serializesRootExitWithDescendantRefresh())
     }
 
     private func source(named path: String) throws -> String {
@@ -211,5 +213,22 @@ private extension String {
             !contains(#""comm=""#) &&
             contains("let startedAt = parts[2...6].joined(separator: \" \")") &&
             contains("startedAt: parts[1...5].joined(separator: \" \")")
+    }
+
+    func serializesRootExitWithDescendantRefresh() -> Bool {
+        guard let refreshLock = range(of: "private let refreshLock = NSLock()"),
+              let handler = range(of: "process.terminationHandler"),
+              let handlerRefreshLock = range(of: "self.refreshLock.lock()", range: handler.upperBound..<endIndex),
+              let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants",
+                                        range: handlerRefreshLock.upperBound..<endIndex),
+              let refresh = range(of: "private func refreshOrphanSet()"),
+              let refreshRefreshLock = range(of: "refreshLock.lock()", range: refresh.upperBound..<endIndex),
+              let union = range(of: "orphanedDescendants.formUnion(live)", range: refreshRefreshLock.upperBound..<endIndex) else {
+            return false
+        }
+        return refreshLock.lowerBound < handler.lowerBound &&
+            handlerRefreshLock.lowerBound < cachedTargets.lowerBound &&
+            refreshRefreshLock.lowerBound < union.lowerBound &&
+            !contains("if !rootHasExited {\n            orphanedDescendants.subtract")
     }
 }
