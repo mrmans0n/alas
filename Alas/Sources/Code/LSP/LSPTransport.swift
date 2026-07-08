@@ -32,10 +32,11 @@ final class LSPTransport: @unchecked Sendable {
     private var decoder = JSONRPCFramer()
     private let lock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
-    /// True once the root process has exited so `terminate()` can skip
-    /// signalling a stale pid the OS may have reused. Set synchronously
-    /// in the termination handler.
-    private var rootHasExited = false
+    /// Captured in the termination handler so `terminate()` can still
+    /// reach descendants after the root exits and the kernel reparents
+    /// them to init (making them unfindable via a ppid walk from the
+    /// original root).
+    private var descendants: [pid_t]?
 
     let incoming: AsyncStream<Incoming>
 
@@ -76,10 +77,15 @@ final class LSPTransport: @unchecked Sendable {
             if data.isEmpty { return }
             self?.continuation?.yield(.stderr(data))
         }
-        process.terminationHandler = { [weak self] proc in
-            self?.rootHasExited = true
-            self?.continuation?.yield(.exited(proc.terminationStatus))
-            self?.continuation?.finish()
+        process.terminationHandler = { [weak self] p in
+            guard let self else { return }
+            let pid = p.processIdentifier
+            let kids = Self.collectDescendants(of: pid)
+            self.lock.lock()
+            self.descendants = kids
+            self.lock.unlock()
+            self.continuation?.yield(.exited(p.terminationStatus))
+            self.continuation?.finish()
         }
         try process.run()
         // Move the child into its own process group so signals from
@@ -102,7 +108,6 @@ final class LSPTransport: @unchecked Sendable {
     }
 
     func terminate() {
-        guard !rootHasExited else { return }
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         // Signal the whole process group so descendants receive the
@@ -115,7 +120,13 @@ final class LSPTransport: @unchecked Sendable {
         // kill may have missed. On macOS, parent-side setpgid frequently
         // loses the exec race (Foundation's Process can't pass
         // POSIX_SPAWN_SETPGROUP), leaving no process group to target.
-        for d in Self.collectDescendants(of: pid) {
+        // If the root exited before we got here, use the tree captured
+        // by the termination handler; otherwise walk live so we catch
+        // children spawned between handler capture and now.
+        lock.lock()
+        let kids = descendants ?? Self.collectDescendants(of: pid)
+        lock.unlock()
+        for d in kids {
             _ = Darwin.kill(d, SIGTERM)
         }
         if process.isRunning { process.terminate() }
