@@ -234,17 +234,16 @@ struct DiffReviewSurface: View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
-                    let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
-                    let renderEligibleFiles = session.files.filter { renderEligibleIDs.contains($0.id) }
-                    ForEach(Array(renderEligibleFiles.enumerated()), id: \.element.id) { index, file in
+                    let renderEligibleIDs = renderEligibleFileIDs(in: session, firstFileID: firstFileID)
+                    ForEach(Array(session.files.enumerated()), id: \.element.id) { index, file in
                         Color.clear
                             .frame(height: 1)
                             .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))
                             .accessibilityHidden(true)
-                        fileSection(file)
+                        renderedFileSection(file, isRenderEligible: renderEligibleIDs.contains(file.id))
                             .background(DiffReviewSectionFrameReader(fileID: file.summary.id))
                             .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: file.summary.id))
-                        if index < renderEligibleFiles.index(before: renderEligibleFiles.endIndex) {
+                        if index < session.files.index(before: session.files.endIndex) {
                             Color.clear
                                 .frame(height: 14)
                                 .accessibilityHidden(true)
@@ -311,6 +310,60 @@ struct DiffReviewSurface: View {
             }
         }
         .background(theme.color("bg-1"))
+    }
+
+    private func renderEligibleFileIDs(
+        in session: DiffReviewLoadedSession,
+        firstFileID: DiffReviewFileID
+    ) -> Set<DiffReviewFileID> {
+        DiffReviewRenderEligibility.fileIDs(
+            ordered: session.files.map(\.id),
+            selected: selectedFileID ?? firstFileID,
+            required: contextExpandedFileIDs.union(requiredRenderFileIDs())
+        )
+    }
+
+    private func requiredRenderFileIDs() -> Set<DiffReviewFileID> {
+        var required = Set<DiffReviewFileID>()
+        if let command = scrollCommand {
+            required.insert(command.id)
+        }
+        if let command = inlineFeedbackScrollCommand {
+            required.insert(command.fileID)
+        }
+        if let command = draftCommentScrollCommand {
+            required.insert(command.fileID)
+        }
+        if let focusedFeedbackID,
+           let fileID = inlineFeedbackByFileID.first(where: { _, feedback in
+               feedback.contains { $0.id == focusedFeedbackID }
+           })?.key {
+            required.insert(fileID)
+        }
+        if let focusedDraftCommentID,
+           let fileID = draftCommentsByFileID.first(where: { _, comments in
+               comments.contains { $0.id == focusedDraftCommentID }
+           })?.key {
+            required.insert(fileID)
+        }
+        return required
+    }
+
+    @ViewBuilder
+    private func renderedFileSection(_ file: DiffReviewFileSectionModel, isRenderEligible: Bool) -> some View {
+        if isRenderEligible {
+            fileSection(file)
+        } else {
+            DiffReviewFileSectionPlaceholder(estimatedHeight: estimatedPlaceholderHeight(for: file))
+        }
+    }
+
+    private func estimatedPlaceholderHeight(for file: DiffReviewFileSectionModel) -> CGFloat {
+        DiffReviewFileSectionHeightEstimator.estimatedHeight(
+            for: file,
+            inlineFeedback: inlineFeedbackByFileID[file.id] ?? [],
+            draftComments: draftCommentsByFileID[file.id] ?? []
+        )
     }
 
     @ViewBuilder
@@ -551,6 +604,17 @@ private struct DiffReviewFallbackScrollTargetLayout: ViewModifier {
         } else {
             content.scrollTargetLayout()
         }
+    }
+}
+
+private struct DiffReviewFileSectionPlaceholder: View {
+    let estimatedHeight: CGFloat
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: estimatedHeight)
+            .accessibilityHidden(true)
     }
 }
 
