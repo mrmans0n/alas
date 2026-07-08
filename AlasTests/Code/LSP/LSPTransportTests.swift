@@ -63,6 +63,8 @@ struct ProcessTransportTerminationTests {
         #expect(source.validatesCachedDescendantsWithStableIdentity())
         #expect(source.checksRootExitBeforeTrackerRefresh())
         #expect(source.prunesCachedDescendantsWithBatchedLookup())
+        #expect(source.tracksForksFromObservedDescendants())
+        #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -78,6 +80,8 @@ struct ProcessTransportTerminationTests {
         #expect(source.validatesCachedDescendantsWithStableIdentity())
         #expect(source.checksRootExitBeforeTrackerRefresh())
         #expect(source.prunesCachedDescendantsWithBatchedLookup())
+        #expect(source.tracksForksFromObservedDescendants())
+        #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
     }
 
     private func source(named path: String) throws -> String {
@@ -130,7 +134,8 @@ private extension String {
 
     func startsDescendantTrackingBeforeSetpgid() -> Bool {
         guard let run = range(of: "try process.run()"),
-              let observer = range(of: "startDescendantForkObserver()", range: run.upperBound..<endIndex),
+              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
+                                   range: run.upperBound..<endIndex),
               let refresh = range(of: "refreshOrphanSet()", range: observer.upperBound..<endIndex),
               let setpgid = range(of: "setpgid(process.processIdentifier", range: run.upperBound..<endIndex),
               let tracker = range(of: "startDescendantTracker()", range: setpgid.upperBound..<endIndex) else {
@@ -175,7 +180,27 @@ private extension String {
     func prunesCachedDescendantsWithBatchedLookup() -> Bool {
         contains("private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey>") &&
             contains("let retained = Self.currentlyMatching(cached)") &&
-            contains("orphanedDescendants = retained.union(live)") &&
+            contains("orphanedDescendants.subtract(cached.subtracting(retained))") &&
+            contains("orphanedDescendants.formUnion(live)") &&
             contains("for d in Self.currentlyMatching(targets)")
+    }
+
+    func tracksForksFromObservedDescendants() -> Bool {
+        contains("private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]") &&
+            contains("private func startDescendantForkObserver(for pid: pid_t)") &&
+            contains("for pid in descendants.map(\\.pid)") &&
+            contains("startDescendantForkObserver(for: pid)")
+    }
+
+    func mergesDescendantRefreshesWithoutOverwritingCache() -> Bool {
+        guard let retained = range(of: "let retained = Self.currentlyMatching(cached)"),
+              let subtract = range(of: "orphanedDescendants.subtract(cached.subtracting(retained))",
+                                   range: retained.upperBound..<endIndex),
+              let union = range(of: "orphanedDescendants.formUnion(live)",
+                                range: retained.upperBound..<endIndex) else {
+            return false
+        }
+        return retained.lowerBound < subtract.lowerBound &&
+            subtract.lowerBound < union.lowerBound
     }
 }

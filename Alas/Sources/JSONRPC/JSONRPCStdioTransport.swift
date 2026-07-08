@@ -46,7 +46,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     /// still belongs to our process before signaling it late.
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
-    private var descendantForkSource: DispatchSourceProcess?
+    private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]
 
     let incoming: AsyncStream<Incoming>
 
@@ -111,11 +111,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
                 // paths avoid group signaling once the root pid can be stale.
                 _ = Darwin.kill(-pid, SIGTERM)
             }
-            self.descendantForkSource?.cancel()
             self.lock.lock()
             let cachedTargets = self.orphanedDescendants
             self.rootHasExited = true
             self.lock.unlock()
+            self.cancelDescendantForkObservers()
             for d in Self.currentlyMatching(cachedTargets) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
@@ -123,7 +123,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             self.continuation?.finish()
         }
         try process.run()
-        startDescendantForkObserver()
+        startDescendantForkObserver(for: process.processIdentifier)
         refreshOrphanSet()
         // Move the child into its own process group so signals from
         // `terminate()` can be delivered to the whole tree via
@@ -147,7 +147,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
 
     func terminate() {
         descendantTracker?.cancel()
-        descendantForkSource?.cancel()
+        cancelDescendantForkObservers()
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         lock.lock()
@@ -201,9 +201,13 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         }
     }
 
-    private func startDescendantForkObserver() {
-        let pid = process.processIdentifier
+    private func startDescendantForkObserver(for pid: pid_t) {
         guard pid > 0 else { return }
+        lock.lock()
+        let alreadyWatching = descendantForkSources[pid] != nil
+        lock.unlock()
+        if alreadyWatching { return }
+
         let source = DispatchSource.makeProcessSource(
             identifier: pid,
             eventMask: .fork,
@@ -212,8 +216,46 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         source.setEventHandler { [weak self] in
             self?.refreshOrphanSet()
         }
-        descendantForkSource = source
+        lock.lock()
+        if descendantForkSources[pid] == nil, !rootHasExited {
+            descendantForkSources[pid] = source
+            lock.unlock()
+            source.resume()
+            return
+        }
+        lock.unlock()
         source.resume()
+        source.cancel()
+    }
+
+    private func cancelDescendantForkObservers() {
+        lock.lock()
+        let sources = Array(descendantForkSources.values)
+        descendantForkSources.removeAll()
+        lock.unlock()
+        for source in sources {
+            source.cancel()
+        }
+    }
+
+    private func pruneDescendantForkObservers(keeping pids: Set<pid_t>) {
+        lock.lock()
+        let stale = descendantForkSources.keys.filter { !pids.contains($0) }
+        let sources = stale.compactMap { descendantForkSources.removeValue(forKey: $0) }
+        lock.unlock()
+        for source in sources {
+            source.cancel()
+        }
+    }
+
+    private func observeForks(from descendants: Set<DescendantKey>) {
+        for pid in descendants.map(\.pid) {
+            startDescendantForkObserver(for: pid)
+        }
+        let rootPid = process.processIdentifier
+        var watched = Set(descendants.map(\.pid))
+        if rootPid > 0 { watched.insert(rootPid) }
+        pruneDescendantForkObservers(keeping: watched)
     }
 
     private func refreshOrphanSet() {
@@ -229,11 +271,14 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         let cached = orphanedDescendants
         lock.unlock()
         let retained = Self.currentlyMatching(cached)
+        let watched = retained.union(live)
         lock.lock()
         if !rootHasExited {
-            orphanedDescendants = retained.union(live)
+            orphanedDescendants.subtract(cached.subtracting(retained))
+            orphanedDescendants.formUnion(live)
         }
         lock.unlock()
+        observeForks(from: watched)
     }
 
     /// Walks the live process tree collecting every descendant of `root`.
