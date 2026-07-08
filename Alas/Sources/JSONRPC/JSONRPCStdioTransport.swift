@@ -122,6 +122,8 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             self.continuation?.finish()
         }
         try process.run()
+        startDescendantForkObserver()
+        refreshOrphanSet()
         // Move the child into its own process group so signals from
         // `terminate()` can be delivered to the whole tree via
         // `kill(-pid, …)`. Foundation's Process doesn't expose
@@ -130,7 +132,6 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         // of those two calls succeeds and the child ends up as group
         // leader. Same pattern as `ACPTerminal`.
         _ = setpgid(process.processIdentifier, process.processIdentifier)
-        startDescendantForkObserver()
         startDescendantTracker()
     }
 
