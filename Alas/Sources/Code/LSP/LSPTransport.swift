@@ -43,10 +43,10 @@ final class LSPTransport: @unchecked Sendable {
     /// for an unrelated process.
     private var rootHasExited = false
     /// `(pid, start time, command)` entries accumulated by the periodic
-    /// descendant tracker while the root is alive. Needed because the termination
-    /// handler runs after the kernel has reaped the root and reparented
-    /// its children to init, so a fresh ppid walk from the root pid
-    /// returns nothing. The command name lets us re-verify a cached PID
+    /// descendant tracker while the root is alive. Needed because the
+    /// termination handler runs after the kernel has reaped the root and
+    /// reparented its children to init, so a fresh ppid walk from the root
+    /// pid returns nothing. The command name lets us re-verify a cached PID
     /// still belongs to our process before signaling it late.
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
@@ -303,7 +303,6 @@ final class LSPTransport: @unchecked Sendable {
         }
         return current.intersection(keys)
     }
-
 }
 
 extension LSPTransport: LSPTransporting {}
