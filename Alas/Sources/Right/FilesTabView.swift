@@ -135,9 +135,15 @@ struct FilesTabView: View {
                         }
                         .contentShape(Rectangle())
                         .background(chain.chainPaths.contains(revealPath ?? "") ? theme.color("bg-hover") : Color.clear)
-                        .id("dir:\(terminal.path)")
+                        // Key the row on the chain's root (stable) rather than its
+                        // terminal, which moves deeper as levels load. A stable id
+                        // lets SwiftUI update the label in place while the chain
+                        // compacts instead of tearing the row down and rebuilding
+                        // it (a visible flash). Remaining chain paths get zero-size
+                        // anchors so scroll-to-reveal still works for any of them.
+                        .id("dir:\(node.path)")
                         .overlay(alignment: .top) {
-                            ForEach(chain.chainPaths.dropLast(), id: \.self) { p in
+                            ForEach(chain.chainPaths.dropFirst(), id: \.self) { p in
                                 Color.clear.frame(width: 0, height: 0).id("dir:\(p)")
                             }
                         }

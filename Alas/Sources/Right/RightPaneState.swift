@@ -470,7 +470,7 @@ final class RightPaneState {
             self.stashes = stashes
             self.changesGeneration += 1
             self.indexFingerprint = indexFingerprint
-            self.fileTree = tree
+            self.fileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             self.commits = commits
             self.comparisonRef = ref
             let preferredCommitRemoteRef = ref ?? baseBranch
@@ -723,6 +723,57 @@ final class RightPaneState {
         }
     }
 
+    /// Carries previously loaded lazy-directory subtrees from `previous` into a
+    /// freshly rebuilt `fresh` tree.
+    ///
+    /// `GitService.fileTree` rebuilds lazily-loaded directories (ignored or
+    /// excluded roots, and anything expanded on demand) as `.notLoaded` with no
+    /// children. Assigning that tree verbatim on refresh collapses any directory
+    /// the user had already expanded — it briefly renders the uncompacted tree,
+    /// re-loads it level by level, and re-collapses (the "blink"). Grafting the
+    /// prior subtree keeps the expanded, compacted state stable across refreshes;
+    /// contents are still reconciled in the background by `loadFileTreeChildren`.
+    nonisolated static func preservingLazyChildren(
+        fresh: [FileTreeNode],
+        previous: [FileTreeNode]
+    ) -> [FileTreeNode] {
+        var previousByPath: [String: FileTreeNode] = [:]
+        for node in previous { previousByPath[node.path] = node }
+        return fresh.map { node in
+            var updated = node
+            let prior = previousByPath[node.path]
+            if node.kind == .dir,
+               node.childrenState == .notLoaded,
+               node.children == nil,
+               let prior,
+               prior.kind == .dir,
+               prior.childrenState == .loaded,
+               let priorChildren = prior.children {
+                updated.childrenState = .loaded
+                updated.children = priorChildren
+                return updated
+            }
+            if let children = node.children {
+                updated.children = preservingLazyChildren(
+                    fresh: children,
+                    previous: prior?.children ?? []
+                )
+            }
+            return updated
+        }
+    }
+
+    nonisolated static func fileTreeNode(at path: String, in nodes: [FileTreeNode]) -> FileTreeNode? {
+        for node in nodes {
+            if node.path == path { return node }
+            if let children = node.children,
+               let found = fileTreeNode(at: path, in: children) {
+                return found
+            }
+        }
+        return nil
+    }
+
     nonisolated static func shouldAutoLoadFileTreeChildren(
         path: String,
         childrenState: DirectoryChildrenState,
@@ -750,12 +801,21 @@ final class RightPaneState {
         guard !loadedFileTreeChildPaths.contains(path),
               !loadingFileTreeChildPaths.contains(path) else { return }
         loadingFileTreeChildPaths.insert(path)
-        let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
-        guard loadingMerge.didMerge else {
-            loadingFileTreeChildPaths.remove(path)
-            return
+        // A directory whose children were carried over from a previous load
+        // (e.g. across a refresh) is being reconciled, not loaded for the first
+        // time. Flipping it to `.loading` would drop it out of a compacted chain
+        // and make the row visibly collapse and re-expand, so keep it `.loaded`
+        // and refresh its contents in the background instead.
+        let alreadyLoaded = Self.fileTreeNode(at: path, in: fileTree)
+            .map { $0.childrenState == .loaded && $0.children != nil } ?? false
+        if !alreadyLoaded {
+            let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
+            guard loadingMerge.didMerge else {
+                loadingFileTreeChildPaths.remove(path)
+                return
+            }
+            fileTree = loadingMerge.nodes
         }
-        fileTree = loadingMerge.nodes
         let generation = fileTreeGeneration
         Task { @MainActor in
             defer {

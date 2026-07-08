@@ -321,6 +321,180 @@ struct RightPaneStateFileTreeTests {
         #expect(generated?.children == nil)
     }
 
+    @Test func preservingLazyChildrenGraftsPriorSubtreeOntoNotLoadedDirectory() {
+        // Fresh tree rebuilds the lazy directory as `.notLoaded` with no
+        // children, as `GitService.fileTree` does for ignored/excluded roots.
+        let fresh = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+        let previous = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "out.o",
+                        path: "build/out.o",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+
+        let merged = RightPaneState.preservingLazyChildren(fresh: fresh, previous: previous)
+        let build = merged.first
+
+        #expect(build?.childrenState == .loaded)
+        #expect(build?.children?.map(\.path) == ["build/out.o"])
+    }
+
+    @Test func preservingLazyChildrenGraftsNestedLazySubtreeInsideLoadedDirectory() {
+        let fresh = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .notLoaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        let previous = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "cache.log",
+                                path: "Sources/Generated/cache.log",
+                                kind: .file,
+                                children: nil,
+                                badge: nil,
+                                visibility: .ignored,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let merged = RightPaneState.preservingLazyChildren(fresh: fresh, previous: previous)
+        let generated = merged.first?.children?.first
+
+        #expect(generated?.childrenState == .loaded)
+        #expect(generated?.children?.map(\.path) == ["Sources/Generated/cache.log"])
+    }
+
+    @Test func preservingLazyChildrenLeavesUnmatchedAndUnloadedDirectoriesUntouched() {
+        let fresh = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+        // Previous never loaded this directory either, so there is nothing to
+        // graft and the fresh node must stay `.notLoaded`.
+        let previous = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+
+        let merged = RightPaneState.preservingLazyChildren(fresh: fresh, previous: previous)
+
+        #expect(merged.first?.childrenState == .notLoaded)
+        #expect(merged.first?.children == nil)
+    }
+
+    @Test func fileTreeNodeFindsNestedNodeByPath() {
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "cache.log",
+                                path: "Sources/Generated/cache.log",
+                                kind: .file,
+                                children: nil,
+                                badge: nil,
+                                visibility: .ignored,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        #expect(RightPaneState.fileTreeNode(at: "Sources/Generated", in: tree)?.childrenState == .loaded)
+        #expect(RightPaneState.fileTreeNode(at: "Sources/Generated/cache.log", in: tree)?.kind == .file)
+        #expect(RightPaneState.fileTreeNode(at: "Missing", in: tree) == nil)
+    }
+
     @Test func shouldAutoLoadFileTreeChildrenReconcilesOpenLoadedDirectoriesOnce() {
         #expect(RightPaneState.shouldAutoLoadFileTreeChildren(
             path: "Sources",
