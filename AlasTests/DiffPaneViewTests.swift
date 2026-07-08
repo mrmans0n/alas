@@ -1882,6 +1882,31 @@ let second = true
         #expect(nsView.intrinsicContentSize.height > 0)
     }
 
+    @Test func containerViewLayoutDoesNotInvalidateAncestorConstraints() throws {
+        let rows = Array(try #require(model().groups.first).rows)
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let parent = ConstraintInvalidationCountingView(frame: NSRect(x: 0, y: 0, width: 800, height: 400))
+        let nsView = DiffPaneTextDocumentContainerView(frame: parent.bounds)
+        parent.addSubview(nsView)
+
+        nsView.update(
+            rows: rows,
+            layoutMode: .split,
+            wrapLines: false,
+            showWhitespace: false,
+            fileExtension: "swift",
+            font: font,
+            theme: theme,
+            lspContext: nil
+        )
+        parent.constraintInvalidationCount = 0
+
+        nsView.layout()
+
+        #expect(parent.constraintInvalidationCount == 0)
+    }
+
     @Test func diffPaneSegmentViewHostsContainerViewWithoutCrashing() throws {
         let rows = Array(try #require(model().groups.first).rows)
         let theme = theme()
@@ -2073,6 +2098,17 @@ let second = true
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private final class ConstraintInvalidationCountingView: NSView {
+        var constraintInvalidationCount = 0
+
+        override var needsUpdateConstraints: Bool {
+            didSet {
+                guard needsUpdateConstraints else { return }
+                constraintInvalidationCount += 1
+            }
+        }
     }
 
     private func subview(withAccessibilityIdentifier identifier: String, in view: NSView) -> NSView? {

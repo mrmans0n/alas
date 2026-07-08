@@ -154,6 +154,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
     private var measuredHeight: CGFloat = 0
     private var lastUpdateSignature: UpdateSignature?
     private var lastRowsUpdateSignature: RowsUpdateSignature?
+    private var pendingIntrinsicContentSizeInvalidation = false
 
     private let dividerWidth: CGFloat = 1
 
@@ -287,13 +288,26 @@ final class DiffPaneTextDocumentContainerView: NSView {
     override func layout() {
         super.layout()
         updateVisibility()
+        let previousMeasuredHeight = measuredHeight
         switch layoutMode {
         case .split:
             layoutSplit()
         case .stacked:
             layoutStacked()
         }
-        invalidateIntrinsicContentSize()
+        if abs(measuredHeight - previousMeasuredHeight) > 0.5 {
+            invalidateIntrinsicContentSizeAfterLayout()
+        }
+    }
+
+    private func invalidateIntrinsicContentSizeAfterLayout() {
+        guard !pendingIntrinsicContentSizeInvalidation else { return }
+        pendingIntrinsicContentSizeInvalidation = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            pendingIntrinsicContentSizeInvalidation = false
+            invalidateIntrinsicContentSize()
+        }
     }
 
     private func layoutSplit() {
