@@ -4018,6 +4018,15 @@ extension AppState: RemoteSessionsProvider {
         return nil
     }
 
+    func fullToolCallContent(sessionId: String, toolCallId: String) -> String? {
+        for mgr in acpManagers.values {
+            if let content = mgr.reloadFullToolCallContent(sessionId: sessionId, toolCallId: toolCallId) {
+                return content
+            }
+        }
+        return nil
+    }
+
     func hydrateIfNeeded(id: String) async {
         // The remote list includes recent sessions that aren't currently open
         // on the Mac (no live ACPSession yet). Materialize the session in its

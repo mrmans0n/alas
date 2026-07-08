@@ -137,15 +137,31 @@ final class ACPTranscript: ObservableObject {
             return
         }
         for i in visibleHead..<clamped {
-            markdownCaches.removeValue(forKey: messages[i].stableId)
-            if case .toolCall(var tc) = messages[i] {
-                if tc.status != "in_progress", tc.status != "pending" {
-                    tc.truncateForOffWindow()
-                    messages[i] = .toolCall(tc)
-                }
-            }
+            trimHiddenMessage(at: i)
         }
         visibleHead = clamped
+    }
+
+    /// Shift the render window after hidden messages are prepended at the
+    /// front. This trims every row below the shifted head because prepended
+    /// rows never passed through `setVisibleHead`.
+    func shiftVisibleHeadAfterPrepending(_ insertedCount: Int) {
+        guard insertedCount > 0 else { return }
+        let shiftedHead = max(0, min(visibleHead + insertedCount, messages.count))
+        for i in 0..<shiftedHead {
+            trimHiddenMessage(at: i)
+        }
+        visibleHead = shiftedHead
+    }
+
+    private func trimHiddenMessage(at index: Int) {
+        markdownCaches.removeValue(forKey: messages[index].stableId)
+        if case .toolCall(var tc) = messages[index] {
+            if tc.status != "in_progress", tc.status != "pending" {
+                tc.truncateForOffWindow()
+                messages[index] = .toolCall(tc)
+            }
+        }
     }
 
     #if DEBUG

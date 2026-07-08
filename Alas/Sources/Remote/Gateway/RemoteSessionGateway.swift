@@ -250,7 +250,7 @@ final class RemoteSessionGateway {
     // MARK: snapshot / delta
 
     private func sendSnapshot(id: String, session: ACPSession) {
-        let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
+        let wire = wireMessages(id: id, session: session)
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
                                  canDrive: provider.isWriter(for: id),
@@ -307,13 +307,30 @@ final class RemoteSessionGateway {
     private func sendDelta(id: String, session: ACPSession) {
         // v1: send a full re-snapshot as the "delta" (simple + always correct).
         // A true per-message diff optimization is intentionally deferred (YAGNI).
-        let wire = session.transcript.messages.enumerated().map { Self.toWire($0.element, index: $0.offset) }
+        let wire = wireMessages(id: id, session: session)
         send(.transcriptDelta(sessionId: id,
                               streamingState: Self.stateString(session.transcript.streamingState),
                               canDrive: provider.isWriter(for: id),
                               upserts: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
+    }
+
+    private func wireMessages(id: String, session: ACPSession) -> [RemoteWireMessage] {
+        session.transcript.messages.enumerated().map { index, message in
+            Self.toWire(
+                message,
+                index: index,
+                fullToolCallContent: fullToolCallContentIfNeeded(sessionId: id, message: message)
+            )
+        }
+    }
+
+    private func fullToolCallContentIfNeeded(sessionId: String, message: ACPMessage) -> String? {
+        guard case .toolCall(let toolCall) = message,
+              toolCall.isContentTruncated
+        else { return nil }
+        return provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
     }
 
     private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
@@ -459,7 +476,11 @@ final class RemoteSessionGateway {
     /// stable across our full re-snapshots. Position is — the Nth message stays
     /// the Nth — so the client can upsert idempotently instead of accumulating
     /// duplicate copies of the whole transcript on each refresh.
-    static func toWire(_ message: ACPMessage, index: Int) -> RemoteWireMessage {
+    static func toWire(
+        _ message: ACPMessage,
+        index: Int,
+        fullToolCallContent: String? = nil
+    ) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
         case .user(_, _, let text, let attachments):
@@ -477,7 +498,12 @@ final class RemoteSessionGateway {
         case .systemNotice(_, let text):
             return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
         case .toolCall(let call):
-            return .init(stableId: sid, kind: "toolCall", text: nil, json: Self.encodeJSON(remoteToolCall(call)))
+            return .init(
+                stableId: sid,
+                kind: "toolCall",
+                text: nil,
+                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent))
+            )
         case .fileEdit(_, let edit):
             return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
         case .plan(_, let items):
@@ -485,8 +511,14 @@ final class RemoteSessionGateway {
         }
     }
 
-    private static func remoteToolCall(_ call: ACPMessage.ToolCall) -> ACPMessage.ToolCall {
+    private static func remoteToolCall(
+        _ call: ACPMessage.ToolCall,
+        fullContent: String? = nil
+    ) -> ACPMessage.ToolCall {
         var remote = call
+        if let fullContent {
+            remote.content = fullContent
+        }
         remote.rawOutput = nil
         remote.metadata = nil
         remote.assets = call.assets.map { asset in

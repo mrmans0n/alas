@@ -23,6 +23,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renamed: [(id: String, title: String)] = []
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
+    var fullToolCallContents: [String: String] = [:]
     var sessionSummariesCallCount = 0
     var remoteWorktreesCallCount = 0
     var remoteAgentsCallCount = 0
@@ -70,6 +71,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func hydrateIfNeeded(id: String) async {}
     func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
         lastQuestionResponse = (id, response)
+    }
+
+    func fullToolCallContent(sessionId: String, toolCallId: String) -> String? {
+        fullToolCallContents["\(sessionId)|\(toolCallId)"]
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
@@ -388,6 +393,42 @@ struct RemoteSessionGatewayTests {
         }
         #expect(id == "s1")
         #expect(msgs.contains { $0.kind == "agent" && $0.text == "hello" })
+    }
+
+    @Test func snapshotRestoresFullTruncatedToolCallContent() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old",
+            title: "read",
+            status: "completed",
+            content: fullContent,
+            preview: "abcdef"
+        )
+        toolCall.truncateForOffWindow()
+        let session = try makeSessionWithAgentText("tail")
+        session.transcript.messages = [.toolCall(toolCall)]
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+
+        guard case .transcriptSnapshot(_, _, _, let msgs)? = sent.first,
+              let json = msgs.first(where: { $0.kind == "toolCall" })?.json,
+              let data = json.data(using: .utf8)
+        else {
+            Issue.record("expected tool-call snapshot, got \(sent)")
+            return
+        }
+        let remoteToolCall = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: data)
+        #expect(remoteToolCall.content == fullContent)
+        if case .toolCall(let localToolCall) = session.transcript.messages[0] {
+            #expect(localToolCall.isContentTruncated)
+        } else {
+            Issue.record("expected local tool call")
+        }
     }
 
     @Test func takeOverPushesSnapshotWithCanDrive() async throws {
