@@ -10,7 +10,13 @@ struct DiffPaneViewTests {
 
     private func model() -> DiffDisplayModel {
         DiffDisplayModelBuilder.build(
-            diff: ParsedDiff(hunks: [
+            diff: parsedDiff(),
+            filePath: "a.swift"
+        )
+    }
+
+    private func parsedDiff() -> ParsedDiff {
+        ParsedDiff(hunks: [
                 ParsedDiff.Hunk(
                     header: "@@ -1,2 +1,2 @@",
                     oldStart: 1,
@@ -21,8 +27,7 @@ struct DiffPaneViewTests {
                         .init(kind: .add, text: "let b = 3", oldNumber: nil, newNumber: 2),
                     ]
                 )
-            ]),
-            filePath: "a.swift"
+            ]
         )
     }
 
@@ -108,6 +113,167 @@ struct DiffPaneViewTests {
             inlineSpans: [],
             noTrailingNewline: false
         )
+    }
+
+    private struct MemoryStore: PersistenceStoreProtocol {
+        func write<T: Encodable>(_: T, to _: URL) throws {}
+        func readIfExists<T: Decodable>(_: T.Type, from _: URL) throws -> T? { nil }
+    }
+
+    @Test func diffTabRenderContextMatchesDraftPlacementAndSegmentationHelpers() throws {
+        let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
+        let group = try #require(model.groups.first)
+        let fileID = DiffReviewFileID(namespace: "diff-tab", path: "Sources/App.swift")
+        let comment = ReviewDraftComment(
+            id: "draft-tab",
+            sessionID: .localChanges(
+                worktreeID: "worktree",
+                worktreePath: URL(fileURLWithPath: "/tmp/worktree"),
+                scope: .unstaged
+            ),
+            fileID: fileID,
+            path: "Sources/App.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: 2,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: "Draft body",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+
+        let context = DiffTabRenderContextBuilder.build(
+            model: model,
+            comments: [comment],
+            pendingDraftAnchor: nil
+        )
+
+        let expectedPlacement = ReviewDraftCommentPlacement.position([comment], in: model.groups)
+        let expectedSegments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: expectedPlacement,
+            pendingAnchor: nil
+        )
+
+        #expect(context.fileLevelDraftComments == expectedPlacement.fileLevel)
+        #expect(context.draftPlacement == expectedPlacement)
+        #expect(context.group(id: group.id)?.segments == expectedSegments.items)
+    }
+
+    @MainActor
+    @Test func diffTabRenderContextCacheReusesMatchingKeyAndEvictsPastLimit() throws {
+        let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
+        let cache = DiffTabRenderContextCache(limit: 2)
+        let key = DiffTabRenderContextKey(
+            model: model,
+            comments: [],
+            pendingDraftAnchor: nil
+        )
+        let comment = reviewDraftComment(id: "draft-cache", fileID: DiffReviewFileID(namespace: "diff-tab", path: "Sources/App.swift"))
+        let commentKey = DiffTabRenderContextKey(
+            model: model,
+            comments: [comment],
+            pendingDraftAnchor: nil
+        )
+        let pendingKey = DiffTabRenderContextKey(
+            model: model,
+            comments: [],
+            pendingDraftAnchor: DiffReviewLineAnchor(
+                path: "Sources/App.swift",
+                side: .new,
+                line: 2,
+                rowIndex: 2,
+                selectedText: "let b = 3"
+            )
+        )
+        var buildCount = 0
+
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffTabRenderContextBuilder.build(model: model, comments: [], pendingDraftAnchor: nil)
+        }
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffTabRenderContextBuilder.build(model: model, comments: [], pendingDraftAnchor: nil)
+        }
+
+        #expect(buildCount == 1)
+
+        _ = cache.context(key: commentKey) {
+            buildCount += 1
+            return DiffTabRenderContextBuilder.build(model: model, comments: [comment], pendingDraftAnchor: nil)
+        }
+        _ = cache.context(key: pendingKey) {
+            buildCount += 1
+            return DiffTabRenderContextBuilder.build(model: model, comments: [], pendingDraftAnchor: nil)
+        }
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffTabRenderContextBuilder.build(model: model, comments: [], pendingDraftAnchor: nil)
+        }
+
+        #expect(buildCount == 4)
+    }
+
+    @Test func diffTabRenderContextKeyIgnoresPresentationInputs() {
+        let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
+        let fileID = DiffReviewFileID(namespace: "diff-tab", path: "Sources/App.swift")
+        let comment = reviewDraftComment(id: "draft-key", fileID: fileID)
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .new,
+            line: 2,
+            rowIndex: 2,
+            selectedText: "let b = 3"
+        )
+        let baseKey = DiffTabRenderContextKey(model: model, comments: [], pendingDraftAnchor: nil)
+        let equalKey = DiffTabRenderContextKey(model: model, comments: [], pendingDraftAnchor: nil)
+        let commentKey = DiffTabRenderContextKey(model: model, comments: [comment], pendingDraftAnchor: nil)
+        let pendingKey = DiffTabRenderContextKey(model: model, comments: [], pendingDraftAnchor: pendingAnchor)
+
+        #expect(baseKey == equalKey)
+        #expect(baseKey != commentKey)
+        #expect(baseKey != pendingKey)
+    }
+
+    @MainActor
+    @Test func diffTabViewRenderContextCacheIgnoresPresentationPreferenceChanges() async throws {
+        let repo = try makeTemporaryDiffRepository()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState(store: MemoryStore())
+        state.config.changes.diffLayoutMode = .split
+        state.config.changes.diffWrapLines = false
+        var missCount = 0
+        var view = DiffTabView(
+            worktreePath: repo,
+            relativePath: "Sources/App.swift",
+            staged: false,
+            originalPath: nil,
+            compareWithHEAD: false,
+            worktreeId: "worktree",
+            appState: state,
+            onOpenFile: nil,
+            onRequestDiscardFile: nil
+        )
+        #if DEBUG
+        view.onRenderContextCacheMissForTesting = { missCount += 1 }
+        #endif
+        let controller = NSHostingController(rootView: view.environment(\.theme, theme()))
+        controller.view.frame = NSRect(x: 0, y: 0, width: 900, height: 500)
+
+        try await waitForRenderPass(controller: controller) { missCount == 1 }
+        #expect(visibleCodeTextViews(in: controller.view).count == 2)
+
+        state.config.changes.diffLayoutMode = .stacked
+        state.config.changes.diffWrapLines = true
+        try await waitForRenderPass(controller: controller) {
+            visibleCodeTextViews(in: controller.view).count == 1
+        }
+
+        #expect(missCount == 1)
     }
 
     @Test func splitModeHostsRendererWithoutCrashing() {
@@ -1331,6 +1497,9 @@ let second = true
             side: .new,
             line: 12,
             rowIndex: 0,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .new, line: 12, isChange: false),
+            ],
             selectedText: text
         )
         let sourceLine = DiffDisplayLine(
@@ -2094,6 +2263,83 @@ let second = true
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
         return rect.offsetBy(dx: textView.textContainerInset.width, dy: textView.textContainerInset.height)
+    }
+
+    private func makeTemporaryDiffRepository() throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-diff-tab-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try runGit(["init"], cwd: root)
+        try runGit(["config", "user.name", "Alas Tests"], cwd: root)
+        try runGit(["config", "user.email", "alas-tests@example.com"], cwd: root)
+        try runGit(["config", "commit.gpgsign", "false"], cwd: root)
+        let sourceDir = root.appendingPathComponent("Sources", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        let file = sourceDir.appendingPathComponent("App.swift")
+        try "let a = 1\nlet b = 2\n".write(to: file, atomically: true, encoding: .utf8)
+        try runGit(["add", "Sources/App.swift"], cwd: root)
+        try runGit(["commit", "-m", "Initial"], cwd: root)
+        try "let a = 1\nlet b = 3\n".write(to: file, atomically: true, encoding: .utf8)
+        return root
+    }
+
+    private func runGit(_ arguments: [String], cwd: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git"] + arguments
+        process.currentDirectoryURL = cwd
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let message = String(data: data, encoding: .utf8) ?? "git failed"
+            throw NSError(domain: "DiffPaneViewTests", code: Int(process.terminationStatus), userInfo: [
+                NSLocalizedDescriptionKey: message,
+            ])
+        }
+    }
+
+    private func reviewDraftComment(
+        id: String,
+        fileID: DiffReviewFileID,
+        path: String = "Sources/App.swift",
+        startLine: Int = 2
+    ) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: .localChanges(
+                worktreeID: "worktree",
+                worktreePath: URL(fileURLWithPath: "/tmp/worktree"),
+                scope: .unstaged
+            ),
+            fileID: fileID,
+            path: path,
+            originalPath: nil,
+            side: .new,
+            startLine: startLine,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: "Draft body",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+    }
+
+    @MainActor
+    private func waitForRenderPass(
+        controller: NSHostingController<some View>,
+        until predicate: () -> Bool
+    ) async throws {
+        for _ in 0..<50 {
+            controller.view.layoutSubtreeIfNeeded()
+            if predicate() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw NSError(domain: "DiffPaneViewTests", code: 1, userInfo: [
+            NSLocalizedDescriptionKey: "Timed out waiting for render pass",
+        ])
     }
 
     private func allSubviews(of view: NSView) -> [NSView] {

@@ -56,11 +56,27 @@ enum DiffReviewActiveFileSelection {
         viewportHeight: CGFloat,
         programmaticScroll: DiffReviewProgrammaticScrollController
     ) -> DiffReviewFileID? {
+        updatedSelection(
+            current: current,
+            frames: frames,
+            viewportMinY: 0,
+            viewportHeight: viewportHeight,
+            programmaticScroll: programmaticScroll
+        )
+    }
+
+    static func updatedSelection(
+        current: DiffReviewFileID?,
+        frames: [DiffReviewSectionFrame],
+        viewportMinY: CGFloat,
+        viewportHeight: CGFloat,
+        programmaticScroll: DiffReviewProgrammaticScrollController
+    ) -> DiffReviewFileID? {
         guard
             let active = DiffReviewScrollSpy.activeFile(
                 in: frames,
-                viewportMinY: 0,
-                viewportMaxY: viewportHeight
+                viewportMinY: viewportMinY,
+                viewportMaxY: viewportMinY + viewportHeight
             ),
             active != current,
             programmaticScroll.acceptsScrollSpyUpdate(for: active)

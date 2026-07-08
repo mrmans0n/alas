@@ -46,7 +46,12 @@ struct DiffTabView: View {
     @State private var pendingDraftBody = ""
     @State private var reviewExpandedCollapsedRowIDs: Set<String> = []
     @State private var showWhitespace = false
+    @StateObject private var renderContextCache = DiffTabRenderContextCache()
     @FocusState private var draftComposerFocused: Bool
+
+    #if DEBUG
+    var onRenderContextCacheMissForTesting: (() -> Void)? = nil
+    #endif
 
     private let git = GitService()
 
@@ -535,19 +540,41 @@ struct DiffTabView: View {
     private func reviewDiffBody(model: DiffDisplayModel) -> some View {
         let currentFileID = fileID
         let comments = (draftCommentController?.comments ?? []).filter { $0.fileID == currentFileID }
-        let placement = ReviewDraftCommentPlacement.position(comments, in: model.groups)
+        let key = DiffTabRenderContextKey(
+            model: model,
+            comments: comments,
+            pendingDraftAnchor: pendingDraftAnchor
+        )
+        #if DEBUG
+        let missCountBefore = renderContextCache.missCountForTests
+        #endif
+        let context = renderContextCache.context(key: key) {
+            DiffTabRenderContextBuilder.build(
+                key: key,
+                model: model,
+                comments: comments,
+                pendingDraftAnchor: pendingDraftAnchor
+            )
+        }
+        #if DEBUG
+        let _ = {
+            if renderContextCache.missCountForTests > missCountBefore {
+                onRenderContextCacheMissForTesting?()
+            }
+        }()
+        #endif
         VStack(spacing: 0) {
             reviewDiffToolbar
             GeometryReader { proxy in
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        let fileLevel = placement.fileLevel
+                        let fileLevel = context.fileLevelDraftComments
                         if !fileLevel.isEmpty {
                             reviewDraftCommentStack(fileLevel)
                                 .padding(.bottom, 10)
                         }
-                        ForEach(model.groups) { group in
-                            reviewDiffGroup(group, model: model, placement: placement)
+                        ForEach(context.groupData) { groupData in
+                            reviewDiffGroup(groupData)
                         }
                     }
                     .padding(10)
@@ -639,19 +666,13 @@ struct DiffTabView: View {
 
     @ViewBuilder
     private func reviewDiffGroup(
-        _ group: DiffDisplayGroup,
-        model: DiffDisplayModel,
-        placement: ReviewDraftCommentPlacement.Result
+        _ groupData: DiffTabRenderContext.Group
     ) -> some View {
-        let segments = ReviewDraftCommentRowSegmentation.segments(
-            for: group,
-            placement: placement,
-            pendingAnchor: pendingDraftAnchor
-        )
-        if segments.containsLocalAccessories {
+        let group = groupData.group
+        if groupData.containsLocalAccessories {
             VStack(alignment: .leading, spacing: 0) {
                 reviewHunkHeader(group)
-                ForEach(segments.items) { segment in
+                ForEach(groupData.segments) { segment in
                     if !segment.rows.isEmpty {
                         DiffPaneTextDocumentView(
                             group: DiffDisplayGroup(

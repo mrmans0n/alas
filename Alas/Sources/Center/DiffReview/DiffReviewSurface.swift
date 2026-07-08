@@ -234,8 +234,7 @@ struct DiffReviewSurface: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
                     let renderEligibleFiles = session.files.filter { renderEligibleIDs.contains($0.id) }
-                    ForEach(renderEligibleFiles.indices, id: \.self) { index in
-                        let file = renderEligibleFiles[index]
+                    ForEach(Array(renderEligibleFiles.enumerated()), id: \.element.id) { index, file in
                         Color.clear
                             .frame(height: 1)
                             .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))
@@ -526,7 +525,14 @@ enum DiffReviewSurfaceSelectionSync {
         let sectionTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
             (sectionVisibilityTargetID(for: $0), $0)
         })
-        let active = visibleRawIDs.lazy.compactMap { topTargetLookup[$0] }.first
+        let visibleTopTarget = visibleRawIDs.lazy.compactMap { topTargetLookup[$0] }.first
+        let currentIsVisible = current.map { current in
+            visibleRawIDs.contains(topVisibilityTargetID(for: current))
+                || visibleRawIDs.contains(sectionVisibilityTargetID(for: current))
+        } ?? false
+        guard visibleTopTarget != nil || !currentIsVisible else { return nil }
+
+        let active = visibleTopTarget
             ?? visibleRawIDs.lazy.compactMap { sectionTargetLookup[$0] }.first
         guard let active,
               active != current,

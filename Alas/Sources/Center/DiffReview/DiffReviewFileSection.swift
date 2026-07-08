@@ -39,9 +39,13 @@ struct DiffReviewFileSection: View {
     var canResolve: Bool = false
     var onStageReply: (DiffInlineCommentThread, String) -> Void = { _, _ in }
     var canAddToReview: Bool = false
+    #if DEBUG
+    var onRenderContextCacheMissForTesting: (() -> Void)? = nil
+    #endif
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
+    @StateObject private var renderContextCache = DiffReviewRenderContextCache()
     @State private var pendingDraftAnchor: DiffReviewLineAnchor?
     @State private var pendingDraftBody = ""
     @State private var expandedCollapsedRowIDs: Set<String> = []
@@ -56,12 +60,13 @@ struct DiffReviewFileSection: View {
     @FocusState private var draftComposerFocused: Bool
 
     var body: some View {
+        let renderContext = renderContext
         VStack(spacing: 0) {
             header
             contextLoadErrorRow
-            fileLevelDraftCommentStack
-            fileLevelInlineFeedbackStack
-            content
+            fileLevelDraftCommentStack(renderContext: renderContext)
+            fileLevelInlineFeedbackStack(renderContext: renderContext)
+            content(renderContext: renderContext)
         }
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -221,8 +226,8 @@ struct DiffReviewFileSection: View {
     }
 
     @ViewBuilder
-    private var fileLevelDraftCommentStack: some View {
-        let fileLevel = draftCommentPlacement(groups: derivedDisplayGroups).fileLevel
+    private func fileLevelDraftCommentStack(renderContext: DiffReviewRenderContext?) -> some View {
+        let fileLevel = fileLevelDraftComments(renderContext: renderContext)
         if !fileLevel.isEmpty {
             draftCommentStack(fileLevel)
         }
@@ -252,8 +257,8 @@ struct DiffReviewFileSection: View {
     }
 
     @ViewBuilder
-    private var fileLevelInlineFeedbackStack: some View {
-        let fileLevel = inlineFeedbackPlacement(groups: derivedDisplayGroups).fileLevel
+    private func fileLevelInlineFeedbackStack(renderContext: DiffReviewRenderContext?) -> some View {
+        let fileLevel = fileLevelInlineFeedback(renderContext: renderContext)
         if !fileLevel.isEmpty {
             inlineFeedbackStack(fileLevel, file: file.summary)
         }
@@ -292,47 +297,66 @@ struct DiffReviewFileSection: View {
         Set([focusedFeedbackID, inlineFeedbackScrollTargetID].compactMap(\.self))
     }
 
-    private func inlineFeedbackPlacement(
-        groups: [DiffDisplayGroup]?
-    ) -> DiffReviewInlineFeedbackPlacement.Result {
-        guard let groups else {
-            return DiffReviewInlineFeedbackPlacement.Result(fileLevel: inlineFeedback, byGroupID: [:])
-        }
-        return DiffReviewInlineFeedbackPlacement.position(inlineFeedback, in: groups)
+    private func fileLevelInlineFeedback(renderContext: DiffReviewRenderContext?) -> [DiffReviewInlineFeedback] {
+        guard let renderContext else { return inlineFeedback }
+        return renderContext.fileLevelInlineFeedback
     }
 
-    private func draftCommentPlacement(
-        groups: [DiffDisplayGroup]?
-    ) -> ReviewDraftCommentPlacement.Result {
-        guard let groups else {
-            return ReviewDraftCommentPlacement.position(draftComments, in: [])
+    private func fileLevelDraftComments(renderContext: DiffReviewRenderContext?) -> [ReviewDraftComment] {
+        guard let renderContext else {
+            return ReviewDraftCommentPlacement.position(draftComments, in: []).fileLevel
         }
-        return ReviewDraftCommentPlacement.position(draftComments, in: groups)
+        return renderContext.fileLevelDraftComments
     }
 
-    private var derivedDisplayGroups: [DiffDisplayGroup]? {
+    private var renderContext: DiffReviewRenderContext? {
         guard let displayModel = file.displayModel else { return nil }
-        return DiffContextExpandedDisplayBuilder.derive(
-            groups: displayModel.groups,
-            snapshot: contextSnapshot,
-            providerAvailable: file.contextProvider != nil,
-            expansion: contextExpansion,
-            filePath: displayModel.filePath,
-            chunkSize: 10
+        let key = DiffReviewRenderContextKey(
+            fileID: file.id,
+            displayModel: displayModel,
+            contextSnapshot: contextSnapshot,
+            contextProviderAvailable: file.contextProvider != nil,
+            contextExpansion: contextExpansion,
+            inlineFeedback: inlineFeedback,
+            draftComments: draftComments,
+            pendingDraftAnchor: pendingDraftAnchor,
+            canCreateDraftComment: allowsDraftCommentCreation,
+            threads: threads,
+            annotations: annotations
         )
+        return renderContextCache.context(key: key) {
+            #if DEBUG
+            onRenderContextCacheMissForTesting?()
+            #endif
+            return DiffReviewRenderContextBuilder.build(
+                fileID: file.id,
+                displayModel: displayModel,
+                contextSnapshot: contextSnapshot,
+                contextProviderAvailable: file.contextProvider != nil,
+                contextExpansion: contextExpansion,
+                inlineFeedback: inlineFeedback,
+                draftComments: draftComments,
+                pendingDraftAnchor: pendingDraftAnchor,
+                canCreateDraftComment: allowsDraftCommentCreation,
+                threads: threads,
+                annotations: annotations
+            )
+        }
+    }
+
+    private var currentDisplayGroups: [DiffDisplayGroup]? {
+        renderContext?.groups.map(\.displayGroup)
     }
 
     @ViewBuilder
-    private var content: some View {
-        if let displayModel = file.displayModel, let groups = derivedDisplayGroups {
-            let inlinePlacement = inlineFeedbackPlacement(groups: groups)
-            let draftPlacement = draftCommentPlacement(groups: groups)
+    private func content(renderContext: DiffReviewRenderContext?) -> some View {
+        if let displayModel = file.displayModel, let renderContext {
             VStack(spacing: 0) {
-                ForEach(groups) { group in
-                    if let groupFeedback = inlinePlacement.byGroupID[group.id], !groupFeedback.isEmpty {
-                        inlineFeedbackStack(groupFeedback, file: file.summary)
+                ForEach(renderContext.groups) { group in
+                    if !group.inlineFeedback.isEmpty {
+                        inlineFeedbackStack(group.inlineFeedback, file: file.summary)
                     }
-                    reviewGroup(group, displayModel: displayModel, placement: draftPlacement)
+                    reviewGroup(group, displayModel: displayModel)
                 }
             }
         } else {
@@ -355,44 +379,23 @@ struct DiffReviewFileSection: View {
 
     @ViewBuilder
     private func reviewGroup(
-        _ group: DiffDisplayGroup,
-        displayModel: DiffDisplayModel,
-        placement: ReviewDraftCommentPlacement.Result
+        _ group: DiffReviewRenderContext.Group,
+        displayModel: DiffDisplayModel
     ) -> some View {
-        let segments = ReviewDraftCommentRowSegmentation.segments(
-            for: group,
-            placement: placement,
-            pendingAnchor: pendingDraftAnchor,
-            canCreateDraftComment: allowsDraftCommentCreation
-        )
-        if segments.containsLocalAccessories {
+        let displayGroup = group.displayGroup
+        if group.containsLocalAccessories {
             VStack(alignment: .leading, spacing: 0) {
-                segmentedHunkHeader(group)
-                ForEach(segments.items) { segment in
+                segmentedHunkHeader(displayGroup)
+                ForEach(group.segments) { segment in
                     if !segment.rows.isEmpty {
-                        let matchedThreads = threads.filter { thread in
-                            segment.rows.contains {
-                                thread.isOldSide
-                                    ? $0.old?.anchor.oldLine == thread.newLine
-                                    : $0.new?.anchor.newLine == thread.newLine
-                            }
-                        }
-                        let matchedAnnotations = annotations.filter { annotation in
-                            segment.rows.contains { $0.new?.anchor.newLine == annotation.newLine }
-                        }
-                        let blocks = DiffInlineCommentLayout.blocks(
-                            visibleRows: segment.rows,
-                            threads: matchedThreads,
-                            annotations: matchedAnnotations
-                        )
-                        ForEach(blocks) { block in
+                        ForEach(segment.blocks) { block in
                             switch block {
                             case .rows(let rowSeg):
                                 DiffPaneTextDocumentView(
                                     group: DiffDisplayGroup(
                                         id: "\(segment.id)-\(rowSeg.id)",
-                                        header: group.header,
-                                        sourceHunk: group.sourceHunk,
+                                        header: displayGroup.header,
+                                        sourceHunk: displayGroup.sourceHunk,
                                         rows: rowSeg.rows
                                     ),
                                     expandedCollapsedRowIDs: expandedCollapsedRowIDs,
@@ -449,7 +452,7 @@ struct DiffReviewFileSection: View {
             .padding(.bottom, 10)
         } else {
             DiffPaneView(
-                model: DiffDisplayModel(filePath: displayModel.filePath, groups: [group]),
+                model: DiffDisplayModel(filePath: displayModel.filePath, groups: [displayGroup]),
                 fileExtension: LanguageRegistry.highlighterExtension(forPath: file.summary.path),
                 layoutMode: $layoutMode,
                 wrapLines: $wrapLines,
@@ -600,7 +603,7 @@ struct DiffReviewFileSection: View {
         guard let pendingDraftAnchor else { return }
         let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(
             pendingDraftAnchor,
-            in: derivedDisplayGroups ?? []
+            in: currentDisplayGroups ?? []
         )
         let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
@@ -623,7 +626,7 @@ struct DiffReviewFileSection: View {
     }
 
     private var currentDraftRowKeys: Set<ReviewDraftCommentPlacement.RowKey> {
-        guard let groups = derivedDisplayGroups else { return [] }
+        guard let groups = currentDisplayGroups else { return [] }
         return Set(groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
     }
 

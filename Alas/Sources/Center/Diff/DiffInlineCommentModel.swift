@@ -44,12 +44,12 @@ struct DiffInlineComment: Identifiable, Equatable {
 }
 
 enum DiffInlineCommentLayout {
-    struct RowSegment: Identifiable {
+    struct RowSegment: Equatable, Identifiable {
         let id: String
         let rows: [DiffDisplayRow]
     }
 
-    enum Block: Identifiable {
+    enum Block: Equatable, Identifiable {
         case rows(RowSegment)
         case thread(DiffInlineCommentThread)
         case annotation(DiffInlineAnnotation)

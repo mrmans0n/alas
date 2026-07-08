@@ -625,6 +625,348 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
+    @Test func renderContextBuilderMatchesExistingPlacementHelpers() throws {
+        let model = displayModel()
+        let firstGroup = try #require(model.groups.first)
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        let lineFeedback = DiffReviewInlineFeedback(
+            id: "thread-new-line",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review this new line.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: model.filePath, line: 2, side: .new),
+            evidenceItemID: "thread-new-line"
+        )
+        let fileFeedback = DiffReviewInlineFeedback(
+            id: "thread-file",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review the whole file.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: model.filePath, line: nil, side: .unknown),
+            evidenceItemID: "thread-file"
+        )
+        let draft = draftComment(id: "draft-line", fileID: fileID, path: model.filePath, side: .new, startLine: 2)
+        let thread = DiffInlineCommentThread(
+            id: "provider-thread",
+            filePath: model.filePath,
+            newLine: 2,
+            isResolved: false,
+            isOutdated: false,
+            comments: [
+                DiffInlineComment(id: "provider-comment", author: "reviewer", body: "Provider comment"),
+            ]
+        )
+        let annotation = DiffInlineAnnotation(
+            id: "annotation-new-line",
+            checkName: "SwiftLint",
+            newLine: 2,
+            level: .warning,
+            message: "Prefer explicit access control.",
+            rawDetails: "Access control details."
+        )
+
+        let context = DiffReviewRenderContextBuilder.build(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [lineFeedback, fileFeedback],
+            draftComments: [draft],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [thread],
+            annotations: [annotation]
+        )
+        let inlinePlacement = DiffReviewInlineFeedbackPlacement.position([lineFeedback, fileFeedback], in: model.groups)
+        let draftPlacement = ReviewDraftCommentPlacement.position([draft], in: model.groups)
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: firstGroup,
+            placement: draftPlacement,
+            pendingAnchor: nil,
+            canCreateDraftComment: true
+        )
+        let expectedBlocks = DiffInlineCommentLayout.blocks(
+            visibleRows: try #require(segments.items.first).rows,
+            threads: [thread],
+            annotations: [annotation]
+        )
+
+        #expect(context.groups.map(\.displayGroup) == model.groups)
+        #expect(context.fileLevelInlineFeedback == inlinePlacement.fileLevel)
+        #expect(context.inlineFeedbackByGroupID == inlinePlacement.byGroupID)
+        #expect(context.fileLevelDraftComments == draftPlacement.fileLevel)
+        #expect(context.draftPlacement == draftPlacement)
+        #expect(context.group(id: firstGroup.id)?.segments.map(\.id) == segments.items.map(\.id))
+        #expect(context.group(id: firstGroup.id)?.segments.flatMap(\.draftComments) == [draft])
+        #expect(context.group(id: firstGroup.id)?.segments.first?.blocks == expectedBlocks)
+        #expect(context.groupData[firstGroup.id] == context.group(id: firstGroup.id))
+    }
+
+    @Test func renderContextCacheReusesSameKeyWithoutRebuilding() {
+        let model = displayModel()
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        let key = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let cache = DiffReviewRenderContextCache(limit: 2)
+        var buildCount = 0
+
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffReviewRenderContextBuilder.build(
+                fileID: fileID,
+                displayModel: model,
+                contextSnapshot: nil,
+                contextProviderAvailable: false,
+                contextExpansion: DiffContextExpansionState(),
+                inlineFeedback: [],
+                draftComments: [],
+                pendingDraftAnchor: nil,
+                canCreateDraftComment: true,
+                threads: [],
+                annotations: []
+            )
+        }
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffReviewRenderContextBuilder.build(
+                fileID: fileID,
+                displayModel: model,
+                contextSnapshot: nil,
+                contextProviderAvailable: false,
+                contextExpansion: DiffContextExpansionState(),
+                inlineFeedback: [],
+                draftComments: [],
+                pendingDraftAnchor: nil,
+                canCreateDraftComment: true,
+                threads: [],
+                annotations: []
+            )
+        }
+
+        #expect(buildCount == 1)
+        #expect(cache.missCountForTests == 1)
+    }
+
+    @Test func renderContextKeyChangesForPlacementInputsButNotPresentationInputs() {
+        let model = displayModel()
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        let baseKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let equalKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let draftKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [
+                draftComment(id: "draft-line", fileID: fileID, path: model.filePath, side: .new, startLine: 2),
+            ],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let pendingKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: DiffReviewLineAnchor(
+                path: model.filePath,
+                side: .new,
+                line: 2,
+                rowIndex: 1,
+                selectedText: "let b = 3"
+            ),
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: model.filePath, line: 2, side: .new),
+            evidenceItemID: "feedback"
+        )
+        let feedbackKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [feedback],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let feedbackURLKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [
+                DiffReviewInlineFeedback(
+                    id: feedback.id,
+                    providerName: feedback.providerName,
+                    author: feedback.author,
+                    bodyPreview: feedback.bodyPreview,
+                    status: feedback.status,
+                    providerURL: URL(string: "https://example.com/review"),
+                    anchor: feedback.anchor,
+                    evidenceItemID: feedback.evidenceItemID
+                ),
+            ],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        var draftWithDifferentSelection = draftComment(
+            id: "draft-line",
+            fileID: fileID,
+            path: model.filePath,
+            side: .new,
+            startLine: 2
+        )
+        draftWithDifferentSelection.selectedText = "let changed = 4"
+        let draftSelectionKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [draftWithDifferentSelection],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        var draftWithDifferentCreationDate = draftWithDifferentSelection
+        draftWithDifferentCreationDate.selectedText = "let b = 3"
+        draftWithDifferentCreationDate.createdAt = Date(timeIntervalSince1970: 3)
+        let draftCreatedAtKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [draftWithDifferentCreationDate],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+
+        #expect(baseKey == equalKey)
+        #expect(baseKey != draftKey)
+        #expect(baseKey != pendingKey)
+        #expect(feedbackKey != feedbackURLKey)
+        #expect(draftKey != draftSelectionKey)
+        #expect(draftKey != draftCreatedAtKey)
+    }
+
+    @Test func renderContextKeyChangesWhenExpandedContextTextChangesWithSameLineCount() {
+        let model = displayModel()
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        var expansion = DiffContextExpansionState()
+        expansion.expand(
+            DiffContextExpansionKey(groupID: model.groups[0].id, boundary: .below),
+            available: 1,
+            mode: .chunk(size: 1)
+        )
+        let firstSnapshot = DiffReviewFileContextSnapshot(
+            old: .available(["let a = 1", "let b = 2", "let c = 3"]),
+            new: .available(["let a = 1", "let b = 3", "let c = 3"])
+        )
+        let secondSnapshot = DiffReviewFileContextSnapshot(
+            old: .available(["let a = 1", "let b = 2", "let renamed = 3"]),
+            new: .available(["let a = 1", "let b = 3", "let renamed = 3"])
+        )
+
+        let firstKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: firstSnapshot,
+            contextProviderAvailable: true,
+            contextExpansion: expansion,
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let secondKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: secondSnapshot,
+            contextProviderAvailable: true,
+            contextExpansion: expansion,
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+
+        #expect(firstKey != secondKey)
+    }
+
     @Test func localDraftCommentsPositionAtExactMatchingRows() throws {
         let model = displayModel()
         let comment = draftComment(id: "draft-line", path: "A.swift", side: .new, startLine: 2)
@@ -1085,6 +1427,99 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "Local draft") != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
+    }
+
+    @Test func fileSectionRenderContextCacheIgnoresPresentationOnlyChanges() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let comment = draftComment(id: "draft-visible", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var cacheMisses = 0
+
+        func makeView() -> some View {
+            DiffReviewFileSection(
+                file: file,
+                draftComments: [comment],
+                layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+                wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+                showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+                codeFontFamily: "",
+                codeFontSize: 13,
+                showsSourceBadge: false,
+                onRenderContextCacheMissForTesting: { cacheMisses += 1 }
+            )
+            .environment(\.theme, theme())
+        }
+
+        let controller = host(makeView(), width: 900, height: 500)
+        #expect(cacheMisses == 1)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
+
+        wrap = true
+        whitespace = true
+        layout = .stacked
+        controller.rootView = makeView()
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(cacheMisses == 1)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
+    }
+
+    @Test func fileSectionCachedRenderContextRendersInlineFeedbackAndDraftComment() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-cached-inline",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review this cached line.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: 2, side: .new),
+            evidenceItemID: "thread-cached-inline"
+        )
+        let comment = draftComment(
+            id: "draft-cached-inline",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 2
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: [feedback],
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 620)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-cached-inline", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-cached-inline", in: controller.view) != nil)
     }
 
     @Test func fileSectionDraftCommentCardShowsProviderPublishAndErrorState() {
@@ -2219,6 +2654,23 @@ struct DiffReviewSurfaceTests {
         )
 
         #expect(result == second)
+    }
+
+    @Test func visibleScrollTargetsKeepCurrentSelectionWhenCurrentFileRemainsVisible() {
+        let penultimate = DiffReviewFileID(namespace: "commit", path: "Penultimate.swift")
+        let last = DiffReviewFileID(namespace: "commit", path: "Last.swift")
+
+        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
+            current: last,
+            visibleRawIDs: [
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: penultimate),
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: last)
+            ],
+            fileIDs: [penultimate, last],
+            programmaticScroll: DiffReviewProgrammaticScrollController()
+        )
+
+        #expect(result == nil)
     }
 
     @Test func visibleScrollTargetsRespectProgrammaticScrollSuppression() {
