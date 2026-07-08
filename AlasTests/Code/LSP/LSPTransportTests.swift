@@ -57,7 +57,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
         #expect(source.signalsCachedDescendantsFromTerminationHandler())
-        #expect(source.startsDescendantTrackingBeforeSetpgid())
+        #expect(source.attemptsSetpgidBeforeBlockingDescendantSnapshot())
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
@@ -75,7 +75,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
         #expect(source.signalsCachedDescendantsFromTerminationHandler())
-        #expect(source.startsDescendantTrackingBeforeSetpgid())
+        #expect(source.attemptsSetpgidBeforeBlockingDescendantSnapshot())
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
@@ -134,19 +134,19 @@ private extension String {
         contains("eventMask: .fork") && contains("self?.refreshOrphanSet()")
     }
 
-    func startsDescendantTrackingBeforeSetpgid() -> Bool {
+    func attemptsSetpgidBeforeBlockingDescendantSnapshot() -> Bool {
         guard let run = range(of: "try process.run()"),
-              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
-                                   range: run.upperBound..<endIndex),
-              let refresh = range(of: "refreshOrphanSet()", range: observer.upperBound..<endIndex),
               let setpgid = range(of: "setpgid(process.processIdentifier", range: run.upperBound..<endIndex),
+              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
+                                   range: setpgid.upperBound..<endIndex),
+              let refresh = range(of: "refreshOrphanSet()", range: observer.upperBound..<endIndex),
               let tracker = range(of: "startDescendantTracker()", range: setpgid.upperBound..<endIndex) else {
             return false
         }
-        return run.lowerBound < observer.lowerBound &&
+        return run.lowerBound < setpgid.lowerBound &&
+            setpgid.lowerBound < observer.lowerBound &&
             observer.lowerBound < refresh.lowerBound &&
-            refresh.lowerBound < setpgid.lowerBound &&
-            setpgid.lowerBound < tracker.lowerBound
+            refresh.lowerBound < tracker.lowerBound
     }
 
     func drainsPsOutputBeforeWaiting() -> Bool {
