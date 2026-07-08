@@ -65,6 +65,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.prunesCachedDescendantsWithBatchedLookup())
         #expect(source.tracksForksFromObservedDescendants())
         #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
+        #expect(source.preservesCachedDescendantsAcrossExec())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -82,6 +83,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.prunesCachedDescendantsWithBatchedLookup())
         #expect(source.tracksForksFromObservedDescendants())
         #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
+        #expect(source.preservesCachedDescendantsAcrossExec())
     }
 
     private func source(named path: String) throws -> String {
@@ -161,10 +163,9 @@ private extension String {
 
     func validatesCachedDescendantsWithStableIdentity() -> Bool {
             contains("let startedAt: String") &&
-            contains(#""pid=,ppid=,lstart=,comm=""#) &&
-            contains(#""pid=,lstart=,comm=""#) &&
+            contains(#""pid=,ppid=,lstart=""#) &&
+            contains(#""pid=,lstart=""#) &&
             !contains("current.pgid == key.pgid") &&
-            contains("startedAt: parts[1...5].joined(separator: \" \")") &&
             contains("return current.intersection(keys)")
     }
 
@@ -202,5 +203,13 @@ private extension String {
         }
         return retained.lowerBound < subtract.lowerBound &&
             subtract.lowerBound < union.lowerBound
+    }
+
+    func preservesCachedDescendantsAcrossExec() -> Bool {
+        contains("while still surviving exec, where `comm` can legitimately change") &&
+            !contains("let command: String") &&
+            !contains(#""comm=""#) &&
+            contains("let startedAt = parts[2...6].joined(separator: \" \")") &&
+            contains("startedAt: parts[1...5].joined(separator: \" \")")
     }
 }

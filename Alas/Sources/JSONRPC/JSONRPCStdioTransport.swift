@@ -22,7 +22,6 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     private struct DescendantKey: Hashable {
         let pid: pid_t
         let startedAt: String
-        let command: String
     }
 
     private let process = Process()
@@ -38,12 +37,12 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     /// `process.isRunning` after that — the OS may reuse the root pid
     /// for an unrelated process.
     private var rootHasExited = false
-    /// `(pid, start time, command)` entries accumulated by the periodic
-    /// descendant tracker while the root is alive. Needed because the
+    /// `(pid, start time)` entries accumulated by the periodic descendant
+    /// tracker while the root is alive. Needed because the
     /// termination handler runs after the kernel has reaped the root and
     /// reparented its children to init, so a fresh ppid walk from the root
-    /// pid returns nothing. The command name lets us re-verify a cached PID
-    /// still belongs to our process before signaling it late.
+    /// pid returns nothing. The start time lets us re-verify a cached PID
+    /// still belongs to the same process before signaling it late.
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
     private var descendantForkSources: [pid_t: DispatchSourceProcess] = [:]
@@ -286,11 +285,11 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     /// reparents children to init so they become unfindable via a ppid
     /// walk from the original root.
     private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
-        // `lstart` makes the cached PID identity stable across PID reuse,
-        // including common executable names like node or sh.
+        // `lstart` makes the cached PID identity stable across PID reuse
+        // while still surviving exec, where `comm` can legitimately change.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,ppid=,lstart=,comm=", "-ax"]
+        proc.arguments = ["-o", "pid=,ppid=,lstart=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -303,24 +302,22 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             return []
         }
         guard let s = String(data: data, encoding: .utf8) else { return [] }
-        var childrenOf: [pid_t: [(pid: pid_t, startedAt: String, command: String)]] = [:]
+        var childrenOf: [pid_t: [(pid: pid_t, startedAt: String)]] = [:]
         for line in s.split(separator: "\n") {
             let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 7,
+            let parts = trimmed.split(separator: " ", maxSplits: 6,
                                       omittingEmptySubsequences: true)
-            guard parts.count >= 8,
+            guard parts.count >= 7,
                   let pid = pid_t(parts[0]),
                   let ppid = pid_t(parts[1]) else { continue }
             let startedAt = parts[2...6].joined(separator: " ")
-            let command = String(parts[7])
-            childrenOf[ppid, default: []].append((pid, startedAt, command))
+            childrenOf[ppid, default: []].append((pid, startedAt))
         }
         var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let p = queue.popLast() {
             for c in childrenOf[p] ?? [] {
-                out.append(DescendantKey(pid: c.pid, startedAt: c.startedAt,
-                                         command: c.command))
+                out.append(DescendantKey(pid: c.pid, startedAt: c.startedAt))
                 queue.append(c.pid)
             }
         }
@@ -332,7 +329,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         let pids = Set(keys.map(\.pid))
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,lstart=,comm=", "-ax"]
+        proc.arguments = ["-o", "pid=,lstart=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -348,14 +345,13 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         var current: Set<DescendantKey> = []
         for line in s.split(separator: "\n") {
             let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 6,
+            let parts = trimmed.split(separator: " ", maxSplits: 5,
                                       omittingEmptySubsequences: true)
-            guard parts.count >= 7,
+            guard parts.count >= 6,
                   let pid = pid_t(parts[0]),
                   pids.contains(pid) else { continue }
             current.insert(DescendantKey(pid: pid,
-                                         startedAt: parts[1...5].joined(separator: " "),
-                                         command: String(parts[6])))
+                                         startedAt: parts[1...5].joined(separator: " ")))
         }
         return current.intersection(keys)
     }
