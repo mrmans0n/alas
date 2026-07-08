@@ -625,6 +625,292 @@ struct DiffReviewSurfaceTests {
         #expect(placement.fileLevel.map(\.id) == ["thread-file", "thread-unmatched"])
     }
 
+    @Test func renderContextBuilderMatchesExistingPlacementHelpers() throws {
+        let model = displayModel()
+        let firstGroup = try #require(model.groups.first)
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        let lineFeedback = DiffReviewInlineFeedback(
+            id: "thread-new-line",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review this new line.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: model.filePath, line: 2, side: .new),
+            evidenceItemID: "thread-new-line"
+        )
+        let fileFeedback = DiffReviewInlineFeedback(
+            id: "thread-file",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review the whole file.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: model.filePath, line: nil, side: .unknown),
+            evidenceItemID: "thread-file"
+        )
+        let draft = draftComment(id: "draft-line", fileID: fileID, path: model.filePath, side: .new, startLine: 2)
+        let thread = DiffInlineCommentThread(
+            id: "provider-thread",
+            filePath: model.filePath,
+            newLine: 2,
+            isResolved: false,
+            isOutdated: false,
+            comments: [
+                DiffInlineComment(id: "provider-comment", author: "reviewer", body: "Provider comment"),
+            ]
+        )
+        let annotation = DiffInlineAnnotation(
+            id: "annotation-new-line",
+            checkName: "SwiftLint",
+            newLine: 2,
+            level: .warning,
+            message: "Prefer explicit access control.",
+            rawDetails: "Access control details."
+        )
+
+        let context = DiffReviewRenderContextBuilder.build(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [lineFeedback, fileFeedback],
+            draftComments: [draft],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [thread],
+            annotations: [annotation]
+        )
+        let inlinePlacement = DiffReviewInlineFeedbackPlacement.position([lineFeedback, fileFeedback], in: model.groups)
+        let draftPlacement = ReviewDraftCommentPlacement.position([draft], in: model.groups)
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: firstGroup,
+            placement: draftPlacement,
+            pendingAnchor: nil,
+            canCreateDraftComment: true
+        )
+        let expectedBlocks = DiffInlineCommentLayout.blocks(
+            visibleRows: try #require(segments.items.first).rows,
+            threads: [thread],
+            annotations: [annotation]
+        )
+
+        #expect(context.groups.map(\.displayGroup) == model.groups)
+        #expect(context.fileLevelInlineFeedback == inlinePlacement.fileLevel)
+        #expect(context.inlineFeedbackByGroupID == inlinePlacement.byGroupID)
+        #expect(context.fileLevelDraftComments == draftPlacement.fileLevel)
+        #expect(context.draftPlacement == draftPlacement)
+        #expect(context.group(id: firstGroup.id)?.segments.map(\.id) == segments.items.map(\.id))
+        #expect(context.group(id: firstGroup.id)?.segments.flatMap(\.draftComments) == [draft])
+        #expect(context.group(id: firstGroup.id)?.segments.first?.blocks == expectedBlocks)
+        #expect(context.groupData[firstGroup.id] == context.group(id: firstGroup.id))
+    }
+
+    @Test func renderContextKeyChangesForPlacementInputsButNotPresentationInputs() {
+        let model = displayModel()
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        let baseKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let equalKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let draftKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [
+                draftComment(id: "draft-line", fileID: fileID, path: model.filePath, side: .new, startLine: 2),
+            ],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let pendingKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: DiffReviewLineAnchor(
+                path: model.filePath,
+                side: .new,
+                line: 2,
+                rowIndex: 1,
+                selectedText: "let b = 3"
+            ),
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: model.filePath, line: 2, side: .new),
+            evidenceItemID: "feedback"
+        )
+        let feedbackKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [feedback],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let feedbackURLKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [
+                DiffReviewInlineFeedback(
+                    id: feedback.id,
+                    providerName: feedback.providerName,
+                    author: feedback.author,
+                    bodyPreview: feedback.bodyPreview,
+                    status: feedback.status,
+                    providerURL: URL(string: "https://example.com/review"),
+                    anchor: feedback.anchor,
+                    evidenceItemID: feedback.evidenceItemID
+                ),
+            ],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        var draftWithDifferentSelection = draftComment(
+            id: "draft-line",
+            fileID: fileID,
+            path: model.filePath,
+            side: .new,
+            startLine: 2
+        )
+        draftWithDifferentSelection.selectedText = "let changed = 4"
+        let draftSelectionKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [draftWithDifferentSelection],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        var draftWithDifferentCreationDate = draftWithDifferentSelection
+        draftWithDifferentCreationDate.selectedText = "let b = 3"
+        draftWithDifferentCreationDate.createdAt = Date(timeIntervalSince1970: 3)
+        let draftCreatedAtKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [draftWithDifferentCreationDate],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+
+        #expect(baseKey == equalKey)
+        #expect(baseKey != draftKey)
+        #expect(baseKey != pendingKey)
+        #expect(feedbackKey != feedbackURLKey)
+        #expect(draftKey != draftSelectionKey)
+        #expect(draftKey != draftCreatedAtKey)
+    }
+
+    @Test func renderContextKeyChangesWhenExpandedContextTextChangesWithSameLineCount() {
+        let model = displayModel()
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        var expansion = DiffContextExpansionState()
+        expansion.expand(
+            DiffContextExpansionKey(groupID: model.groups[0].id, boundary: .below),
+            available: 1,
+            mode: .chunk(size: 1)
+        )
+        let firstSnapshot = DiffReviewFileContextSnapshot(
+            old: .available(["let a = 1", "let b = 2", "let c = 3"]),
+            new: .available(["let a = 1", "let b = 3", "let c = 3"])
+        )
+        let secondSnapshot = DiffReviewFileContextSnapshot(
+            old: .available(["let a = 1", "let b = 2", "let renamed = 3"]),
+            new: .available(["let a = 1", "let b = 3", "let renamed = 3"])
+        )
+
+        let firstKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: firstSnapshot,
+            contextProviderAvailable: true,
+            contextExpansion: expansion,
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let secondKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: secondSnapshot,
+            contextProviderAvailable: true,
+            contextExpansion: expansion,
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+
+        #expect(firstKey != secondKey)
+    }
+
     @Test func localDraftCommentsPositionAtExactMatchingRows() throws {
         let model = displayModel()
         let comment = draftComment(id: "draft-line", path: "A.swift", side: .new, startLine: 2)
