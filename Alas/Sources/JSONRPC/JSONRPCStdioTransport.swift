@@ -237,14 +237,15 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
+        let data: Data
         do {
             try proc.run()
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
         } catch {
             return []
         }
-        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) else { return [] }
+        guard let s = String(data: data, encoding: .utf8) else { return [] }
         var childrenOf: [pid_t: [(pid: pid_t, command: String)]] = [:]
         for line in s.split(separator: "\n") {
             let trimmed = line.drop(while: { $0 == " " })
@@ -277,14 +278,15 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
+        let data: Data
         do {
             try proc.run()
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
         } catch {
             return false
         }
-        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) else { return false }
+        guard let s = String(data: data, encoding: .utf8) else { return false }
         let current = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return !current.isEmpty && current == key.command
     }

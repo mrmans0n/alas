@@ -58,6 +58,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.signalsProcessGroupFromTerminationHandler())
         #expect(source.signalsCachedDescendantsFromTerminationHandler())
         #expect(source.refreshesDescendantsOnFork())
+        #expect(source.drainsPsOutputBeforeWaiting())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -68,6 +69,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.signalsProcessGroupFromTerminationHandler())
         #expect(source.signalsCachedDescendantsFromTerminationHandler())
         #expect(source.refreshesDescendantsOnFork())
+        #expect(source.drainsPsOutputBeforeWaiting())
     }
 
     private func source(named path: String) throws -> String {
@@ -116,5 +118,17 @@ private extension String {
 
     func refreshesDescendantsOnFork() -> Bool {
         contains("eventMask: .fork") && contains("self?.refreshOrphanSet()")
+    }
+
+    func drainsPsOutputBeforeWaiting() -> Bool {
+        guard let collect = range(of: "private static func collectDescendants"),
+              let read = range(
+                  of: "data = pipe.fileHandleForReading.readDataToEndOfFile()",
+                  range: collect.upperBound..<endIndex
+              ),
+              let wait = range(of: "proc.waitUntilExit()", range: collect.upperBound..<endIndex) else {
+            return false
+        }
+        return read.lowerBound < wait.lowerBound
     }
 }
