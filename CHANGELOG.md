@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.18] - 2026-07-08
+
+### 🐛 Fixes
+
+- Run `brew update` before upgrading the cask (#645).
+- Stop diff pane layout invalidation churn (#647).
+- Stop compacted directory rows blinking on refresh (#649).
+- Improve Center diff scroll performance (#648).
+- Terminate JSON-RPC child process trees (#646).
+
 ## [0.8.17] - 2026-07-07
 
 ### 🐛 Fixes
