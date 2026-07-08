@@ -123,12 +123,7 @@ struct CommitTabView: View {
                         codeFontSize: CGFloat(appState.config.code.fontSize),
                         worktreeId: worktreeId,
                         worktreePath: worktreePath,
-                        reviewDraftSessionID: CommitReviewBody.reviewDraftSessionID(
-                            worktreeID: worktreeId,
-                            repositoryPath: worktreePath,
-                            sha: sha
-                        ),
-                        reviewedCommitSHA: sha,
+                        allowsReviewing: false,
                         appState: appState
                     )
                 }
@@ -345,6 +340,7 @@ struct CommitReviewBody: View {
     var worktreePath: URL? = nil
     var reviewDraftSessionID: ReviewDraftSessionID? = nil
     var reviewedCommitSHA: String? = nil
+    var allowsReviewing = true
     var appState: AppState? = nil
 
     @State private var reviewSummaryCollapsed = false
@@ -367,6 +363,7 @@ struct CommitReviewBody: View {
         worktreePath: URL? = nil,
         reviewDraftSessionID: ReviewDraftSessionID? = nil,
         reviewedCommitSHA: String? = nil,
+        allowsReviewing: Bool = true,
         appState: AppState? = nil
     ) {
         self.session = session
@@ -381,6 +378,7 @@ struct CommitReviewBody: View {
         self.worktreePath = worktreePath
         self.reviewDraftSessionID = reviewDraftSessionID
         self.reviewedCommitSHA = reviewedCommitSHA
+        self.allowsReviewing = allowsReviewing
         self.appState = appState
     }
 
@@ -421,16 +419,16 @@ struct CommitReviewBody: View {
             codeFontSize: codeFontSize,
             showsSourceBadges: false,
             showsRailDisplayControls: true,
-            showsDraftSummaryRail: reviewDraftSessionID != nil,
-            allowsDraftCommentCreation: reviewDraftSessionID != nil,
+            showsDraftSummaryRail: effectiveReviewDraftSessionID != nil,
+            allowsDraftCommentCreation: effectiveReviewDraftSessionID != nil,
             lspContextForFile: { file in
                 makeLSPContext(relativePath: file.summary.path)
             },
             reviewFeedbackTarget: reviewFeedbackTarget,
-            draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? []),
+            draftCommentsByFileID: effectiveDraftCommentsByFileID,
             focusedDraftCommentID: focusedDraftCommentID,
             draftCommentScrollCommand: draftCommentScrollCommand,
-            draftCommentActions: draftCommentActions(),
+            draftCommentActions: effectiveDraftCommentActions,
             onSelectDraftComment: selectDraftComment,
             onSaveDraftComment: { fileID, originalPath, anchor, body in
                 saveDraftComment(fileID: fileID, originalPath: originalPath, anchor: anchor, body: body)
@@ -446,14 +444,29 @@ struct CommitReviewBody: View {
         .onAppear {
             loadDraftCommentController()
         }
-        .onChange(of: reviewDraftSessionID?.rawValue) { _, _ in
+        .onChange(of: effectiveReviewDraftSessionID?.rawValue) { _, _ in
             loadDraftCommentController()
         }
     }
 
+    private var effectiveReviewDraftSessionID: ReviewDraftSessionID? {
+        allowsReviewing ? reviewDraftSessionID : nil
+    }
+
     private var reviewFeedbackTarget: ReviewFeedbackTarget? {
+        guard allowsReviewing else { return nil }
         guard let worktreePath else { return nil }
         return Self.reviewFeedbackTarget(repositoryPath: worktreePath, sha: reviewedCommitSHA)
+    }
+
+    private var effectiveDraftCommentsByFileID: [DiffReviewFileID: [ReviewDraftComment]] {
+        guard allowsReviewing else { return [:] }
+        return ReviewDraftCommentGrouping.commentsByFileID(draftCommentController?.comments ?? [])
+    }
+
+    private var effectiveDraftCommentActions: ReviewDraftCommentActions {
+        guard allowsReviewing else { return ReviewDraftCommentActions() }
+        return draftCommentActions()
     }
 
     private func makeLSPContext(relativePath: String) -> DiffPaneLSPContext? {
@@ -523,7 +536,13 @@ struct CommitReviewBody: View {
     }
 
     private func loadDraftCommentController() {
-        guard let sessionID = reviewDraftSessionID else { return }
+        guard let sessionID = effectiveReviewDraftSessionID else {
+            draftCommentController = nil
+            loadedDraftSessionID = nil
+            focusedDraftCommentID = nil
+            draftCommentScrollCommand = nil
+            return
+        }
         if loadedDraftSessionID != sessionID {
             draftCommentController = ReviewDraftCommentController(sessionID: sessionID)
             loadedDraftSessionID = sessionID

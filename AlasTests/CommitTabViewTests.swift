@@ -97,6 +97,52 @@ struct CommitTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-whitespace-toggle", in: controller.view) != nil)
     }
 
+    @Test func commitReviewBodyCanDisableDraftReviewControls() {
+        let file = summary(path: "Sources/App.swift")
+        let session = DiffReviewLoadedSession(
+            files: [
+                DiffReviewFileSectionModel(
+                    summary: file,
+                    parsedDiff: nil,
+                    displayModel: nil,
+                    placeholderMessage: "No diff.",
+                    openFile: nil,
+                    contextProvider: nil
+                ),
+            ],
+            summary: DiffReviewSessionModel(files: [file], groupsEnabled: false)
+        )
+        var selectedFileID: DiffReviewFileID?
+        var railCollapsed = false
+        var layoutMode = DiffLayoutMode.split
+        var wrapLines = false
+        var showWhitespace = false
+
+        let view = CommitReviewBody(
+            session: session,
+            selectedFileID: Binding(get: { selectedFileID }, set: { selectedFileID = $0 }),
+            railCollapsed: Binding(get: { railCollapsed }, set: { railCollapsed = $0 }),
+            layoutMode: Binding(get: { layoutMode }, set: { layoutMode = $0 }),
+            wrapLines: Binding(get: { wrapLines }, set: { wrapLines = $0 }),
+            showWhitespace: Binding(get: { showWhitespace }, set: { showWhitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            reviewDraftSessionID: .commit(
+                worktreeID: "wt",
+                repositoryPath: URL(fileURLWithPath: "/repo"),
+                sha: "abc"
+            ),
+            allowsReviewing: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 1000, height: 700)
+
+        #expect(subview(withAccessibilityIdentifier: "commit-review-body", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-draft-summary-rail", in: controller.view) == nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-composer", in: controller.view) == nil)
+    }
+
     @Test func commitReviewLoadIdentityRejectsStaleDetails() {
         let current = details(sha: "current-sha")
         let stale = details(sha: "stale-sha")
