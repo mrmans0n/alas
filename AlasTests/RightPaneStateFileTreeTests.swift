@@ -321,6 +321,399 @@ struct RightPaneStateFileTreeTests {
         #expect(generated?.children == nil)
     }
 
+    @Test func preservingLazyChildrenGraftsPriorSubtreeOntoNotLoadedDirectory() {
+        // Fresh tree rebuilds the lazy directory as `.notLoaded` with no
+        // children, as `GitService.fileTree` does for ignored/excluded roots.
+        let fresh = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+        let previous = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "out.o",
+                        path: "build/out.o",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+
+        let merged = RightPaneState.preservingLazyChildren(fresh: fresh, previous: previous)
+        let build = merged.first
+
+        #expect(build?.childrenState == .loaded)
+        #expect(build?.children?.map(\.path) == ["build/out.o"])
+    }
+
+    @Test func preservingLazyChildrenGraftsNestedLazySubtreeInsideLoadedDirectory() {
+        let fresh = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .notLoaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        let previous = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "cache.log",
+                                path: "Sources/Generated/cache.log",
+                                kind: .file,
+                                children: nil,
+                                badge: nil,
+                                visibility: .ignored,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let merged = RightPaneState.preservingLazyChildren(fresh: fresh, previous: previous)
+        let generated = merged.first?.children?.first
+
+        #expect(generated?.childrenState == .loaded)
+        #expect(generated?.children?.map(\.path) == ["Sources/Generated/cache.log"])
+    }
+
+    @Test func preservingLazyChildrenLeavesUnmatchedAndUnloadedDirectoriesUntouched() {
+        let fresh = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+        // Previous never loaded this directory either, so there is nothing to
+        // graft and the fresh node must stay `.notLoaded`.
+        let previous = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+
+        let merged = RightPaneState.preservingLazyChildren(fresh: fresh, previous: previous)
+
+        #expect(merged.first?.childrenState == .notLoaded)
+        #expect(merged.first?.children == nil)
+    }
+
+    @Test func replacingChildrenPrunesDeletedEntriesAndPreservesLoadedSubtrees() {
+        // "build" was expanded: it had a stale file and a nested loaded dir.
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "old.o",
+                        path: "build/old.o",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "gen",
+                        path: "build/gen",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "keep.o",
+                                path: "build/gen/keep.o",
+                                kind: .file,
+                                children: nil,
+                                badge: nil,
+                                visibility: .ignored,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+        // Fresh filesystem listing: old.o is gone, gen still exists (relisted as
+        // a lazy dir), and new.o appeared.
+        let incoming = [
+            FileTreeNode(
+                name: "gen",
+                path: "build/gen",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            ),
+            FileTreeNode(
+                name: "new.o",
+                path: "build/new.o",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "build", with: incoming, state: .loaded)
+        let build = result.nodes.first
+        let gen = build?.children?.first { $0.path == "build/gen" }
+
+        #expect(result.didMerge)
+        #expect(build?.children?.contains { $0.path == "build/old.o" } == false)
+        #expect(build?.children?.contains { $0.path == "build/new.o" } == true)
+        // Nested expanded subtree survives the reconcile.
+        #expect(gen?.childrenState == .loaded)
+        #expect(gen?.children?.map(\.path) == ["build/gen/keep.o"])
+    }
+
+    @Test func replacingChildrenPreservesStatusMetadataForSurvivingChildren() {
+        // An open, loaded tracked directory with a modified and an untracked
+        // file — the badges/visibility come from the full-tree git status.
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "App.swift",
+                        path: "Sources/App.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "M",
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "New.swift",
+                        path: "Sources/New.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "A",
+                        visibility: .untracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        // A background reconcile from `fileTreeChildren`: no badges, defaults to
+        // `.tracked`.
+        let incoming = [
+            FileTreeNode(
+                name: "App.swift",
+                path: "Sources/App.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            ),
+            FileTreeNode(
+                name: "New.swift",
+                path: "Sources/New.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "Sources", with: incoming, state: .loaded)
+        let sources = result.nodes.first
+        let app = sources?.children?.first { $0.path == "Sources/App.swift" }
+        let new = sources?.children?.first { $0.path == "Sources/New.swift" }
+
+        #expect(result.didMerge)
+        #expect(app?.badge == "M")
+        #expect(new?.badge == "A")
+        #expect(new?.visibility == .untracked)
+    }
+
+    @Test func replacingChildrenKeepsTrackedDeletionAbsentFromDiskListing() {
+        // An open tracked directory whose tracked file was deleted from disk:
+        // the full tree still carries the `D` node (from git's cached paths),
+        // but a filesystem listing cannot include it.
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Gone.swift",
+                        path: "Sources/Gone.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "D",
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "Kept.swift",
+                        path: "Sources/Kept.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        // Filesystem listing only sees the file still on disk.
+        let incoming = [
+            FileTreeNode(
+                name: "Kept.swift",
+                path: "Sources/Kept.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "Sources", with: incoming, state: .loaded)
+        let sources = result.nodes.first
+        let gone = sources?.children?.first { $0.path == "Sources/Gone.swift" }
+
+        #expect(result.didMerge)
+        #expect(gone?.badge == "D")
+        #expect(sources?.children?.contains { $0.path == "Sources/Kept.swift" } == true)
+    }
+
+    @Test func replacingChildrenReportsMissingTargetWithoutMutating() {
+        let tree = [
+            FileTreeNode(
+                name: "build",
+                path: "build",
+                kind: .dir,
+                children: nil,
+                badge: nil,
+                visibility: .ignored,
+                childrenState: .notLoaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "missing", with: [], state: .loaded)
+
+        #expect(result.didMerge == false)
+        #expect(result.nodes == tree)
+    }
+
+    @Test func fileTreeNodeFindsNestedNodeByPath() {
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Generated",
+                        path: "Sources/Generated",
+                        kind: .dir,
+                        children: [
+                            FileTreeNode(
+                                name: "cache.log",
+                                path: "Sources/Generated/cache.log",
+                                kind: .file,
+                                children: nil,
+                                badge: nil,
+                                visibility: .ignored,
+                                childrenState: .loaded
+                            )
+                        ],
+                        badge: nil,
+                        visibility: .ignored,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        #expect(RightPaneState.fileTreeNode(at: "Sources/Generated", in: tree)?.childrenState == .loaded)
+        #expect(RightPaneState.fileTreeNode(at: "Sources/Generated/cache.log", in: tree)?.kind == .file)
+        #expect(RightPaneState.fileTreeNode(at: "Missing", in: tree) == nil)
+    }
+
     @Test func shouldAutoLoadFileTreeChildrenReconcilesOpenLoadedDirectoriesOnce() {
         #expect(RightPaneState.shouldAutoLoadFileTreeChildren(
             path: "Sources",

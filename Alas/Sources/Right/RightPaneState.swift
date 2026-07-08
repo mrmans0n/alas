@@ -470,7 +470,7 @@ final class RightPaneState {
             self.stashes = stashes
             self.changesGeneration += 1
             self.indexFingerprint = indexFingerprint
-            self.fileTree = tree
+            self.fileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             self.commits = commits
             self.comparisonRef = ref
             let preferredCommitRemoteRef = ref ?? baseBranch
@@ -723,6 +723,127 @@ final class RightPaneState {
         }
     }
 
+    /// Carries previously loaded lazy-directory subtrees from `previous` into a
+    /// freshly rebuilt `fresh` tree.
+    ///
+    /// `GitService.fileTree` rebuilds lazily-loaded directories (ignored or
+    /// excluded roots, and anything expanded on demand) as `.notLoaded` with no
+    /// children. Assigning that tree verbatim on refresh collapses any directory
+    /// the user had already expanded — it briefly renders the uncompacted tree,
+    /// re-loads it level by level, and re-collapses (the "blink"). Grafting the
+    /// prior subtree keeps the expanded, compacted state stable across refreshes;
+    /// contents are still reconciled in the background by `loadFileTreeChildren`.
+    nonisolated static func preservingLazyChildren(
+        fresh: [FileTreeNode],
+        previous: [FileTreeNode]
+    ) -> [FileTreeNode] {
+        var previousByPath: [String: FileTreeNode] = [:]
+        for node in previous { previousByPath[node.path] = node }
+        return fresh.map { node in
+            var updated = node
+            let prior = previousByPath[node.path]
+            if node.kind == .dir,
+               node.childrenState == .notLoaded,
+               node.children == nil,
+               let prior,
+               prior.kind == .dir,
+               prior.childrenState == .loaded,
+               let priorChildren = prior.children {
+                updated.childrenState = .loaded
+                updated.children = priorChildren
+                return updated
+            }
+            if let children = node.children {
+                updated.children = preservingLazyChildren(
+                    fresh: children,
+                    previous: prior?.children ?? []
+                )
+            }
+            return updated
+        }
+    }
+
+    /// Reconciles the child list of the directory at `path` against a fresh
+    /// listing from `GitService.fileTreeChildren`. Used when re-loading an
+    /// already-loaded directory on refresh.
+    ///
+    /// `mergingChildren` seeds from the existing children and only overlays
+    /// incoming entries, so deletions/renames linger. This instead treats the
+    /// listing as authoritative for what exists on disk and prunes entries that
+    /// are gone — but only when they are *filesystem*-authoritative (ignored or
+    /// excluded, with no git badge). Git-authoritative entries are kept even
+    /// when the listing omits them, because `fileTreeChildren` is a filesystem
+    /// scan and cannot represent them:
+    ///   - a tracked file deleted from disk still appears in the full tree with
+    ///     a `D` badge and must remain selectable;
+    ///   - surviving entries keep their badge, visibility, submodule flag, and
+    ///     any already-loaded subtree, since the listing has `badges: [:]` and a
+    ///     `.tracked` default that would otherwise erase that metadata.
+    nonisolated static func replacingChildren(
+        in nodes: [FileTreeNode],
+        for path: String,
+        with children: [FileTreeNode],
+        state: DirectoryChildrenState
+    ) -> (nodes: [FileTreeNode], didMerge: Bool) {
+        var didMerge = false
+        let updatedNodes = nodes.map { node -> FileTreeNode in
+            if node.path == path {
+                didMerge = true
+                var updated = node
+                var existingByID: [String: FileTreeNode] = [:]
+                for child in node.children ?? [] { existingByID[child.id] = child }
+                let incomingIDs = Set(children.map(\.id))
+                var reconciled = children.map { incoming -> FileTreeNode in
+                    guard let existing = existingByID[incoming.id] else { return incoming }
+                    var refreshed = incoming
+                    refreshed.badge = incoming.badge ?? existing.badge
+                    refreshed.visibility = mergedVisibility(existing: existing.visibility, incoming: incoming.visibility)
+                    refreshed.isSubmodule = incoming.isSubmodule || existing.isSubmodule
+                    refreshed.childrenState = mergedChildrenState(existing: existing.childrenState, incoming: incoming.childrenState)
+                    if refreshed.children == nil {
+                        refreshed.children = existing.children
+                    }
+                    return refreshed
+                }
+                // Keep git-authoritative entries the filesystem listing can't
+                // show (e.g. tracked deletions); drop only ignored/excluded
+                // entries with no badge that are actually gone from disk.
+                let keptDeletions = (node.children ?? []).filter { existing in
+                    guard !incomingIDs.contains(existing.id) else { return false }
+                    let filesystemAuthoritative =
+                        (existing.visibility == .ignored || existing.visibility == .excluded)
+                        && existing.badge == nil
+                    return !filesystemAuthoritative
+                }
+                reconciled.append(contentsOf: keptDeletions)
+                updated.children = reconciled.sorted { lhs, rhs in
+                    if lhs.kind != rhs.kind { return lhs.kind == .dir }
+                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                }
+                updated.childrenState = state
+                return updated
+            }
+            guard let existing = node.children else { return node }
+            var updated = node
+            let result = replacingChildren(in: existing, for: path, with: children, state: state)
+            didMerge = didMerge || result.didMerge
+            updated.children = result.nodes
+            return updated
+        }
+        return (updatedNodes, didMerge)
+    }
+
+    nonisolated static func fileTreeNode(at path: String, in nodes: [FileTreeNode]) -> FileTreeNode? {
+        for node in nodes {
+            if node.path == path { return node }
+            if let children = node.children,
+               let found = fileTreeNode(at: path, in: children) {
+                return found
+            }
+        }
+        return nil
+    }
+
     nonisolated static func shouldAutoLoadFileTreeChildren(
         path: String,
         childrenState: DirectoryChildrenState,
@@ -750,12 +871,21 @@ final class RightPaneState {
         guard !loadedFileTreeChildPaths.contains(path),
               !loadingFileTreeChildPaths.contains(path) else { return }
         loadingFileTreeChildPaths.insert(path)
-        let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
-        guard loadingMerge.didMerge else {
-            loadingFileTreeChildPaths.remove(path)
-            return
+        // A directory whose children were carried over from a previous load
+        // (e.g. across a refresh) is being reconciled, not loaded for the first
+        // time. Flipping it to `.loading` would drop it out of a compacted chain
+        // and make the row visibly collapse and re-expand, so keep it `.loaded`
+        // and refresh its contents in the background instead.
+        let alreadyLoaded = Self.fileTreeNode(at: path, in: fileTree)
+            .map { $0.childrenState == .loaded && $0.children != nil } ?? false
+        if !alreadyLoaded {
+            let loadingMerge = Self.mergingChildren(in: fileTree, for: path, with: [], state: .loading)
+            guard loadingMerge.didMerge else {
+                loadingFileTreeChildPaths.remove(path)
+                return
+            }
+            fileTree = loadingMerge.nodes
         }
-        fileTree = loadingMerge.nodes
         let generation = fileTreeGeneration
         Task { @MainActor in
             defer {
@@ -766,7 +896,15 @@ final class RightPaneState {
             do {
                 let children = try await git.fileTreeChildren(worktreePath: worktree.path, path: path)
                 guard self.fileTreeGeneration == generation else { return }
-                let result = Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                // On the first load, merge so concurrent per-level loads (e.g. the
+                // reveal flow expanding several ancestors at once) accumulate.
+                // When reconciling an already-loaded directory, rebuild its child
+                // list from the fresh filesystem listing so deleted/renamed
+                // entries drop out — `mergingChildren` only overlays and would
+                // leave stale children behind.
+                let result = alreadyLoaded
+                    ? Self.replacingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
+                    : Self.mergingChildren(in: self.fileTree, for: path, with: children, state: .loaded)
                 guard result.didMerge else { return }
                 self.loadedFileTreeChildPaths.insert(path)
                 self.failedFileTreeChildPaths.remove(path)
