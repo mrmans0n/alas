@@ -12,6 +12,7 @@ protocol RemoteSessionsProvider: AnyObject {
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async
     func answerQuestion(for id: String, _ response: ACPQuestionResponse)
+    func fullToolCallContent(sessionId: String, toolCallId: String) -> String?
     func isWriter(for id: String) -> Bool
     func takeOver(for id: String)
     /// `onResult` fires once with the final outcome (false = refused now or

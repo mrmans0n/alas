@@ -28,6 +28,27 @@ struct ACPSessionToolCallTruncationTests {
         }
     }
 
+    @Test("prepending hidden older messages truncates completed tool calls")
+    func prependTruncatesHiddenOlderToolCalls() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        let older = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read",
+            status: "completed", content: bigContent(),
+            preview: "aaa...", locations: [])
+        let tail = ACPMessage.systemNotice(id: UUID(), text: "tail")
+        session.replaceTranscriptMessages([tail])
+
+        session.prependTranscriptMessages([.toolCall(older)])
+
+        #expect(session.transcript.visibleHead == 1)
+        if case .toolCall(let after) = session.transcript.messages[0] {
+            #expect(after.content.utf8.count <= ACPMessage.ToolCall.truncatedTailBytes + 64)
+            #expect(after.isContentTruncated)
+        } else {
+            Issue.record("expected prepended toolCall")
+        }
+    }
+
     @Test("setVisibleHead does NOT truncate in-progress or pending tool calls")
     func skipsLive() {
         let t = ACPTranscript()

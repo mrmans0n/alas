@@ -702,11 +702,8 @@ final class ACPSession: ObservableObject, Identifiable {
         // any chance of drift if a streaming update lands mid-shift.
         rebuildToolCallIndices()
         // Keep the visible window anchored to the tail the user is already
-        // looking at. Bypass `setVisibleHead` — it strips markdown caches
-        // for messages below the new head, which is exactly what we want
-        // to *avoid* here (older messages weren't visible before the shift
-        // and never had caches; the tail's caches must survive untouched).
-        transcript.visibleHead = transcript.visibleHead + older.count
+        // looking at while trimming newly-hidden historical tool output.
+        transcript.shiftVisibleHeadAfterPrepending(older.count)
     }
 
     func markCompletedOutputBoundary() {
