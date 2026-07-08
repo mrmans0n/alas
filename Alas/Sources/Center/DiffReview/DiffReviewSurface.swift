@@ -43,8 +43,6 @@ struct DiffReviewSurface: View {
     @State private var programmaticScroll = DiffReviewProgrammaticScrollController()
     @State private var scrollCommandController = DiffReviewScrollCommandController()
     @State private var scrollCommand: DiffReviewScrollCommand?
-    @State private var sectionFrames: [DiffReviewSectionFrame] = []
-    @State private var scrollProbe = DiffReviewScrollProbe(minY: 0, viewportHeight: 0)
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
 
@@ -233,17 +231,17 @@ struct DiffReviewSurface: View {
     private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 0) {
-                    let renderEligibleIDs = renderEligibleFileIDs(in: session, firstFileID: firstFileID)
-                    ForEach(Array(session.files.enumerated()), id: \.element.id) { index, file in
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
+                    let renderEligibleFiles = session.files.filter { renderEligibleIDs.contains($0.id) }
+                    ForEach(Array(renderEligibleFiles.enumerated()), id: \.element.id) { index, file in
                         Color.clear
                             .frame(height: 1)
                             .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))
                             .accessibilityHidden(true)
-                        renderedFileSection(file, isRenderEligible: renderEligibleIDs.contains(file.id))
-                            .background(DiffReviewSectionFrameReader(fileID: file.summary.id))
+                        fileSection(file)
                             .id(DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: file.summary.id))
-                        if index < session.files.index(before: session.files.endIndex) {
+                        if index < renderEligibleFiles.index(before: renderEligibleFiles.endIndex) {
                             Color.clear
                                 .frame(height: 14)
                                 .accessibilityHidden(true)
@@ -251,25 +249,13 @@ struct DiffReviewSurface: View {
                     }
                 }
                 .padding(16)
-                .coordinateSpace(name: DiffReviewSectionFrameReader.coordinateSpaceName)
-                .modifier(DiffReviewFallbackScrollTargetLayout())
+                .scrollTargetLayout()
             }
-            .modifier(DiffReviewScrollTracking(
-                onGeometry: { probe in
-                    updateSelectedFileFromGeometry(probe)
-                },
-                onVisibleTargetIDs: { ids in
-                    updateSelectedFileFromVisibility(ids)
-                }
-            ))
-            .onPreferenceChange(DiffReviewSectionFramePreferenceKey.self) { frames in
-                sectionFrames = frames.sorted {
-                    if $0.minY != $1.minY {
-                        return $0.minY < $1.minY
-                    }
-                    return $0.id.rawValue < $1.id.rawValue
-                }
-                updateSelectedFileFromGeometry()
+            .onScrollTargetVisibilityChange(
+                idType: String.self,
+                threshold: DiffReviewSurfaceSelectionSync.visibilityThreshold
+            ) { ids in
+                updateSelectedFileFromVisibility(ids)
             }
             .onChange(of: scrollCommand) { _, command in
                 guard let command else { return }
@@ -310,60 +296,6 @@ struct DiffReviewSurface: View {
             }
         }
         .background(theme.color("bg-1"))
-    }
-
-    private func renderEligibleFileIDs(
-        in session: DiffReviewLoadedSession,
-        firstFileID: DiffReviewFileID
-    ) -> Set<DiffReviewFileID> {
-        DiffReviewRenderEligibility.fileIDs(
-            ordered: session.files.map(\.id),
-            selected: selectedFileID ?? firstFileID,
-            required: contextExpandedFileIDs.union(requiredRenderFileIDs())
-        )
-    }
-
-    private func requiredRenderFileIDs() -> Set<DiffReviewFileID> {
-        var required = Set<DiffReviewFileID>()
-        if let command = scrollCommand {
-            required.insert(command.id)
-        }
-        if let command = inlineFeedbackScrollCommand {
-            required.insert(command.fileID)
-        }
-        if let command = draftCommentScrollCommand {
-            required.insert(command.fileID)
-        }
-        if let focusedFeedbackID,
-           let fileID = inlineFeedbackByFileID.first(where: { _, feedback in
-               feedback.contains { $0.id == focusedFeedbackID }
-           })?.key {
-            required.insert(fileID)
-        }
-        if let focusedDraftCommentID,
-           let fileID = draftCommentsByFileID.first(where: { _, comments in
-               comments.contains { $0.id == focusedDraftCommentID }
-           })?.key {
-            required.insert(fileID)
-        }
-        return required
-    }
-
-    @ViewBuilder
-    private func renderedFileSection(_ file: DiffReviewFileSectionModel, isRenderEligible: Bool) -> some View {
-        if isRenderEligible {
-            fileSection(file)
-        } else {
-            DiffReviewFileSectionPlaceholder(estimatedHeight: estimatedPlaceholderHeight(for: file))
-        }
-    }
-
-    private func estimatedPlaceholderHeight(for file: DiffReviewFileSectionModel) -> CGFloat {
-        DiffReviewFileSectionHeightEstimator.estimatedHeight(
-            for: file,
-            inlineFeedback: inlineFeedbackByFileID[file.id] ?? [],
-            draftComments: draftCommentsByFileID[file.id] ?? []
-        )
     }
 
     @ViewBuilder
@@ -467,24 +399,6 @@ struct DiffReviewSurface: View {
         selectedFileID = updated
     }
 
-    private func updateSelectedFileFromGeometry(_ probe: DiffReviewScrollProbe) {
-        scrollProbe = probe
-        updateSelectedFileFromGeometry()
-    }
-
-    private func updateSelectedFileFromGeometry() {
-        guard scrollProbe.viewportHeight > 0 else { return }
-        guard let updated = DiffReviewActiveFileSelection.updatedSelection(
-            current: selectedFileID,
-            frames: sectionFrames,
-            viewportMinY: scrollProbe.minY,
-            viewportHeight: scrollProbe.viewportHeight,
-            programmaticScroll: programmaticScroll
-        ) else { return }
-
-        selectedFileID = updated
-    }
-
     private func synchronizeSelectionWithSession() {
         let previousFileSetKey = synchronizedFileSetKey
         let previousSelection = selectedFileID
@@ -562,88 +476,6 @@ struct DiffReviewSurface: View {
                     viewerCanUnresolve: thread.viewerCanUnresolve
                 )
             }
-    }
-}
-
-private struct DiffReviewScrollProbe: Equatable {
-    let minY: CGFloat
-    let viewportHeight: CGFloat
-}
-
-private struct DiffReviewScrollTracking: ViewModifier {
-    let onGeometry: (DiffReviewScrollProbe) -> Void
-    let onVisibleTargetIDs: ([String]) -> Void
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content.onScrollGeometryChange(for: DiffReviewScrollProbe.self) { geometry in
-                DiffReviewScrollProbe(
-                    minY: geometry.visibleRect.minY,
-                    viewportHeight: geometry.visibleRect.height
-                )
-            } action: { _, new in
-                onGeometry(new)
-            }
-        } else {
-            content.onScrollTargetVisibilityChange(
-                idType: String.self,
-                threshold: DiffReviewSurfaceSelectionSync.visibilityThreshold
-            ) { ids in
-                onVisibleTargetIDs(ids)
-            }
-        }
-    }
-}
-
-private struct DiffReviewFallbackScrollTargetLayout: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content
-        } else {
-            content.scrollTargetLayout()
-        }
-    }
-}
-
-private struct DiffReviewFileSectionPlaceholder: View {
-    let estimatedHeight: CGFloat
-
-    var body: some View {
-        Color.clear
-            .frame(maxWidth: .infinity)
-            .frame(height: estimatedHeight)
-            .accessibilityHidden(true)
-    }
-}
-
-private struct DiffReviewSectionFrameReader: View {
-    static let coordinateSpaceName = "diff-review-section-frame-space"
-
-    let fileID: DiffReviewFileID
-
-    var body: some View {
-        GeometryReader { geometry in
-            Color.clear.preference(
-                key: DiffReviewSectionFramePreferenceKey.self,
-                value: [
-                    DiffReviewSectionFrame(
-                        id: fileID,
-                        minY: geometry.frame(in: .named(Self.coordinateSpaceName)).minY,
-                        maxY: geometry.frame(in: .named(Self.coordinateSpaceName)).maxY
-                    ),
-                ]
-            )
-        }
-    }
-}
-
-private struct DiffReviewSectionFramePreferenceKey: PreferenceKey {
-    static let defaultValue: [DiffReviewSectionFrame] = []
-
-    static func reduce(value: inout [DiffReviewSectionFrame], nextValue: () -> [DiffReviewSectionFrame]) {
-        value.append(contentsOf: nextValue())
     }
 }
 

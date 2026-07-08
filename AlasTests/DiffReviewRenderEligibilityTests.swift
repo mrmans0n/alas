@@ -7,46 +7,15 @@ struct DiffReviewRenderEligibilityTests {
         DiffReviewFileID(namespace: "unstaged", path: path)
     }
 
-    @Test func keepsWindowAroundSelectedFileEligibleForRendering() {
+    @Test func keepsEveryLoadedFileEligibleForRendering() {
         let files = (0..<20).map { id("f\($0).swift") }
 
-        let eligible = DiffReviewRenderEligibility.fileIDs(
-            ordered: files,
-            selected: files[10],
-            required: [],
-            neighborCount: 2
-        )
+        let eligible = DiffReviewRenderEligibility.fileIDs(ordered: files)
 
-        #expect(eligible == Set(files[8...12]))
-    }
-
-    @Test func includesRequiredFilesOutsideSelectedWindow() {
-        let files = (0..<20).map { id("f\($0).swift") }
-
-        let eligible = DiffReviewRenderEligibility.fileIDs(
-            ordered: files,
-            selected: files[10],
-            required: [files[0], files[19]],
-            neighborCount: 1
-        )
-
-        #expect(eligible == Set([files[0], files[9], files[10], files[11], files[19]]))
-    }
-
-    @Test func fallsBackToFirstFileWhenSelectionIsUnavailable() {
-        let files = (0..<20).map { id("f\($0).swift") }
-
-        let eligible = DiffReviewRenderEligibility.fileIDs(
-            ordered: files,
-            selected: id("missing.swift"),
-            required: [],
-            neighborCount: 2
-        )
-
-        #expect(eligible == Set(files[0...2]))
+        #expect(eligible == Set(files))
     }
 
     @Test func preservesEmptySessions() {
-        #expect(DiffReviewRenderEligibility.fileIDs(ordered: [], selected: nil, required: []).isEmpty)
+        #expect(DiffReviewRenderEligibility.fileIDs(ordered: []).isEmpty)
     }
 }
