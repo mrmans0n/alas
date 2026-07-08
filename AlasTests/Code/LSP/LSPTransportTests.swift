@@ -62,6 +62,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
         #expect(source.checksRootExitBeforeTrackerRefresh())
+        #expect(source.prunesCachedDescendantsWithBatchedLookup())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
@@ -76,6 +77,7 @@ struct ProcessTransportTerminationTests {
         #expect(source.drainsPsOutputBeforeWaiting())
         #expect(source.validatesCachedDescendantsWithStableIdentity())
         #expect(source.checksRootExitBeforeTrackerRefresh())
+        #expect(source.prunesCachedDescendantsWithBatchedLookup())
     }
 
     private func source(named path: String) throws -> String {
@@ -98,7 +100,7 @@ private extension String {
     }
 
     func validatesCachedDescendantsBeforeKilling() -> Bool {
-        contains("for d in cachedTargets where !liveDescendants.contains(d) && Self.pidStillMatches(d)")
+        contains("for d in Self.currentlyMatching(cachedTargets.subtracting(liveDescendants))")
     }
 
     func signalsProcessGroupFromTerminationHandler() -> Bool {
@@ -113,7 +115,7 @@ private extension String {
     func signalsCachedDescendantsFromTerminationHandler() -> Bool {
         guard let handler = range(of: "process.terminationHandler"),
               let cachedTargets = range(of: "let cachedTargets = self.orphanedDescendants"),
-              let cachedSignal = range(of: "for d in cachedTargets where Self.pidStillMatches(d)"),
+              let cachedSignal = range(of: "for d in Self.currentlyMatching(cachedTargets)"),
               let finish = range(of: "self.continuation?.finish()") else {
             return false
         }
@@ -153,13 +155,12 @@ private extension String {
     }
 
     func validatesCachedDescendantsWithStableIdentity() -> Bool {
-        contains("let pgid: pid_t") &&
             contains("let startedAt: String") &&
-            contains(#""pid=,ppid=,pgid=,lstart=,comm=""#) &&
-            contains(#""pgid=,lstart=,comm=""#) &&
-            contains("current.pgid == key.pgid") &&
-            contains("current.startedAt == key.startedAt") &&
-            contains("current.command == key.command")
+            contains(#""pid=,ppid=,lstart=,comm=""#) &&
+            contains(#""pid=,lstart=,comm=""#) &&
+            !contains("current.pgid == key.pgid") &&
+            contains("startedAt: parts[1...5].joined(separator: \" \")") &&
+            contains("return current.intersection(keys)")
     }
 
     func checksRootExitBeforeTrackerRefresh() -> Bool {
@@ -169,5 +170,12 @@ private extension String {
             return false
         }
         return rootExited.lowerBound < refresh.lowerBound
+    }
+
+    func prunesCachedDescendantsWithBatchedLookup() -> Bool {
+        contains("private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey>") &&
+            contains("let retained = Self.currentlyMatching(cached)") &&
+            contains("orphanedDescendants = retained.union(live)") &&
+            contains("for d in Self.currentlyMatching(targets)")
     }
 }

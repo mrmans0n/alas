@@ -27,7 +27,6 @@ final class LSPTransport: @unchecked Sendable {
 
     private struct DescendantKey: Hashable {
         let pid: pid_t
-        let pgid: pid_t
         let startedAt: String
         let command: String
     }
@@ -43,8 +42,8 @@ final class LSPTransport: @unchecked Sendable {
     /// `process.isRunning` after that — the OS may reuse the root pid
     /// for an unrelated process.
     private var rootHasExited = false
-    /// `(pid, command)` pairs accumulated by the periodic descendant
-    /// tracker while the root is alive. Needed because the termination
+    /// `(pid, start time, command)` entries accumulated by the periodic
+    /// descendant tracker while the root is alive. Needed because the termination
     /// handler runs after the kernel has reaped the root and reparented
     /// its children to init, so a fresh ppid walk from the root pid
     /// returns nothing. The command name lets us re-verify a cached PID
@@ -106,7 +105,7 @@ final class LSPTransport: @unchecked Sendable {
             let cachedTargets = self.orphanedDescendants
             self.rootHasExited = true
             self.lock.unlock()
-            for d in cachedTargets where Self.pidStillMatches(d) {
+            for d in Self.currentlyMatching(cachedTargets) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
             self.continuation?.yield(.exited(p.terminationStatus))
@@ -156,14 +155,14 @@ final class LSPTransport: @unchecked Sendable {
             for d in liveDescendants {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
-            for d in cachedTargets where !liveDescendants.contains(d) && Self.pidStillMatches(d) {
+            for d in Self.currentlyMatching(cachedTargets.subtracting(liveDescendants)) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
         } else {
             // Root has already exited: the process group may have been
             // reused by an unrelated process, so we only signal cached
-            // descendants whose command name still matches.
-            for d in targets where Self.pidStillMatches(d) {
+            // descendants whose process identity still matches.
+            for d in Self.currentlyMatching(targets) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
         }
@@ -214,9 +213,15 @@ final class LSPTransport: @unchecked Sendable {
 
         let pid = process.processIdentifier
         guard pid > 0 else { return }
-        let keys = Self.collectDescendants(of: pid)
+        let live = Set(Self.collectDescendants(of: pid))
         lock.lock()
-        for k in keys { orphanedDescendants.insert(k) }
+        let cached = orphanedDescendants
+        lock.unlock()
+        let retained = Self.currentlyMatching(cached)
+        lock.lock()
+        if !rootHasExited {
+            orphanedDescendants = retained.union(live)
+        }
         lock.unlock()
     }
 
@@ -225,11 +230,11 @@ final class LSPTransport: @unchecked Sendable {
     /// reparents children to init so they become unfindable via a ppid
     /// walk from the original root.
     private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
-        // `lstart` and `pgid` make the cached PID identity stable across
-        // PID reuse, including common executable names like node or sh.
+        // `lstart` makes the cached PID identity stable across PID reuse,
+        // including common executable names like node or sh.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,ppid=,pgid=,lstart=,comm=", "-ax"]
+        proc.arguments = ["-o", "pid=,ppid=,lstart=,comm=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -242,39 +247,36 @@ final class LSPTransport: @unchecked Sendable {
             return []
         }
         guard let s = String(data: data, encoding: .utf8) else { return [] }
-        var childrenOf: [pid_t: [(pid: pid_t, pgid: pid_t, startedAt: String, command: String)]] = [:]
+        var childrenOf: [pid_t: [(pid: pid_t, startedAt: String, command: String)]] = [:]
         for line in s.split(separator: "\n") {
             let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 8,
+            let parts = trimmed.split(separator: " ", maxSplits: 7,
                                       omittingEmptySubsequences: true)
-            guard parts.count >= 9,
+            guard parts.count >= 8,
                   let pid = pid_t(parts[0]),
-                  let ppid = pid_t(parts[1]),
-                  let pgid = pid_t(parts[2]) else { continue }
-            let startedAt = parts[3...7].joined(separator: " ")
-            let command = String(parts[8])
-            childrenOf[ppid, default: []].append((pid, pgid, startedAt, command))
+                  let ppid = pid_t(parts[1]) else { continue }
+            let startedAt = parts[2...6].joined(separator: " ")
+            let command = String(parts[7])
+            childrenOf[ppid, default: []].append((pid, startedAt, command))
         }
         var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let p = queue.popLast() {
             for c in childrenOf[p] ?? [] {
-                out.append(DescendantKey(pid: c.pid, pgid: c.pgid,
-                                         startedAt: c.startedAt, command: c.command))
+                out.append(DescendantKey(pid: c.pid, startedAt: c.startedAt,
+                                         command: c.command))
                 queue.append(c.pid)
             }
         }
         return out
     }
 
-    /// Returns true when the current process identity for `pid` matches
-    /// what we captured earlier. Used to skip stale cached PIDs whose
-    /// original process has exited and whose PID may have been reused
-    /// for an unrelated process.
-    private static func pidStillMatches(_ key: DescendantKey) -> Bool {
+    private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
+        guard !keys.isEmpty else { return [] }
+        let pids = Set(keys.map(\.pid))
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", "\(key.pid)", "-o", "pgid=,lstart=,comm="]
+        proc.arguments = ["-o", "pid=,lstart=,comm=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -284,23 +286,24 @@ final class LSPTransport: @unchecked Sendable {
             data = pipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
         } catch {
-            return false
+            return []
         }
-        guard let s = String(data: data, encoding: .utf8) else { return false }
-        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        let parts = trimmed.split(separator: " ", maxSplits: 6,
-                                  omittingEmptySubsequences: true)
-        guard parts.count >= 7,
-              let pgid = pid_t(parts[0]) else { return false }
-        let current = (
-            pgid: pgid,
-            startedAt: parts[1...5].joined(separator: " "),
-            command: String(parts[6])
-        )
-        return current.pgid == key.pgid &&
-            current.startedAt == key.startedAt &&
-            current.command == key.command
+        guard let s = String(data: data, encoding: .utf8) else { return [] }
+        var current: Set<DescendantKey> = []
+        for line in s.split(separator: "\n") {
+            let trimmed = line.drop(while: { $0 == " " })
+            let parts = trimmed.split(separator: " ", maxSplits: 6,
+                                      omittingEmptySubsequences: true)
+            guard parts.count >= 7,
+                  let pid = pid_t(parts[0]),
+                  pids.contains(pid) else { continue }
+            current.insert(DescendantKey(pid: pid,
+                                         startedAt: parts[1...5].joined(separator: " "),
+                                         command: String(parts[6])))
+        }
+        return current.intersection(keys)
     }
+
 }
 
 extension LSPTransport: LSPTransporting {}
