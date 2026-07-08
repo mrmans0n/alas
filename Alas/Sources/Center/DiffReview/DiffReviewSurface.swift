@@ -233,11 +233,10 @@ struct DiffReviewSurface: View {
     private func mainReviewStream(_ session: DiffReviewLoadedSession, firstFileID: DiffReviewFileID) -> some View {
         ScrollViewReader { scrollProxy in
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     let renderEligibleIDs = DiffReviewRenderEligibility.fileIDs(ordered: session.files.map(\.id))
                     let renderEligibleFiles = session.files.filter { renderEligibleIDs.contains($0.id) }
-                    ForEach(renderEligibleFiles.indices, id: \.self) { index in
-                        let file = renderEligibleFiles[index]
+                    ForEach(Array(renderEligibleFiles.enumerated()), id: \.element.id) { index, file in
                         Color.clear
                             .frame(height: 1)
                             .id(DiffReviewSurfaceSelectionSync.topVisibilityTargetID(for: file.summary.id))

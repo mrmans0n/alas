@@ -1497,6 +1497,9 @@ let second = true
             side: .new,
             line: 12,
             rowIndex: 0,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .new, line: 12, isChange: false),
+            ],
             selectedText: text
         )
         let sourceLine = DiffDisplayLine(

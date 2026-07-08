@@ -208,19 +208,29 @@ struct DiffPaneView: View {
         if verticalScrollMode == .internalScroll {
             GeometryReader { proxy in
                 ScrollView(.vertical) {
-                    rowsStack
+                    lazyRowsStack
                         .frame(minWidth: proxy.size.width, alignment: .topLeading)
                 }
                 .defaultScrollAnchor(.topLeading)
             }
         } else {
-            rowsStack
+            staticRowsStack
                 .frame(maxWidth: .infinity, alignment: .topLeading)
         }
     }
 
-    private var rowsStack: some View {
+    private var lazyRowsStack: some View {
         LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(model.groups) { group in
+                hunk(group)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+    }
+
+    private var staticRowsStack: some View {
+        VStack(alignment: .leading, spacing: 0) {
             ForEach(model.groups) { group in
                 hunk(group)
             }
