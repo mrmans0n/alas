@@ -97,7 +97,7 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(client.sent.map(\.method) == ["initialize", "session/load"])
         #expect(session.transcript.messages.count == 3)
         #expect(try store.loadMessages(sessionId: "local").count == 3)
-        guard case .user(_, let text, let attachments) = session.transcript.messages[0] else {
+        guard case .user(_, _, let text, let attachments) = session.transcript.messages[0] else {
             Issue.record("Expected hydrated user message to remain first")
             return
         }
@@ -108,7 +108,7 @@ struct ACPSessionManagerAttachRestoreTests {
 
         client.emit(.init(sessionId: "remote-restored", update: .agentMessageChunk(.text("live follow-up"))))
         try await waitUntil { session.transcript.messages.count == 4 }
-        guard case .agent(_, let liveText) = session.transcript.messages[3] else {
+        guard case .agent(_, _, let liveText) = session.transcript.messages[3] else {
             Issue.record("Expected post-load live update to be applied")
             return
         }
@@ -124,6 +124,54 @@ struct ACPSessionManagerAttachRestoreTests {
                 && session.transcript.streamingState == .idle
                 && session.transcript.messages.count == 6
         }
+    }
+
+    @Test("mirror refresh syncs generated title metadata")
+    func mirrorRefreshSyncsGeneratedTitleMetadata() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(.init(
+            id: "local",
+            agentId: "claude",
+            title: "Old generated",
+            titleSource: ACPSessionTitleSource.generated,
+            remoteSessionId: "remote-old",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 0,
+            updatedAt: 0,
+            lastOpenedAt: 0,
+            archived: false
+        ))
+        var titleCallbacks: [(ACPSession.ID, String)] = []
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            onSessionTitleUpdated: { titleCallbacks.append(($0, $1)) },
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _ in ACPConnection(client: ACPMockClient()) }
+        )
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        #expect(session.title == "Old generated")
+        #expect(session.titleSource == ACPSessionTitleSource.generated)
+
+        #expect(try store.updateGeneratedTitleIfNotManual(
+            id: "local",
+            title: "Adapter Title",
+            updatedAt: 10
+        ))
+
+        await manager.refreshMirror(sessionId: "local")
+
+        #expect(session.title == "Adapter Title")
+        #expect(session.titleSource == .generated)
+        #expect(manager.recent.first?.title == "Adapter Title")
+        #expect(titleCallbacks.count == 1)
+        #expect(titleCallbacks.first?.0 == "local")
+        #expect(titleCallbacks.first?.1 == "Adapter Title")
     }
 
     @Test("fresh attach exposes initializing phase while initialize is pending")
@@ -238,7 +286,7 @@ struct ACPSessionManagerAttachRestoreTests {
         await manager.attach(to: session.id, freshlyCreated: true)
         try await waitUntil { session.transcript.messages.count == 1 }
 
-        guard case .agent(_, let text) = session.transcript.messages[0] else {
+        guard case .agent(_, _, let text) = session.transcript.messages[0] else {
             Issue.record("Expected fresh session update to be applied")
             return
         }
@@ -277,7 +325,7 @@ struct ACPSessionManagerAttachRestoreTests {
                 && session.queue.isEmpty
         }
         #expect(session.transcript.messages.count == 2)
-        guard case .user(_, let text, _) = session.transcript.messages[1] else {
+        guard case .user(_, _, let text, _) = session.transcript.messages[1] else {
             Issue.record("Expected queued prompt to append after hydrated transcript")
             return
         }
@@ -957,6 +1005,107 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(second.prompt == [.text("normal prompt")])
     }
 
+    @Test("recovery context superseded by a steer clears the restoring status")
+    func recoveryContextSupersededBySteerClearsStatus() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-new"))
+        try appendMessage(
+            .user(id: UUID(), text: "What changed?", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let client = ACPMockClient()
+        let recoveryGate = PromptGate()
+        let steerGate = PromptGate()
+        let promptCount = PromptCounter()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
+        // Gate the first (recovery) prompt so it stays in flight while the
+        // user steers, and hold the steer's replacement prompt so it still
+        // owns the transport when the recovery RPC finally returns.
+        client.scriptAsync(method: "session/prompt") { _ in
+            switch await promptCount.next() {
+            case 1: await recoveryGate.waitInPrompt()
+            case 2: await steerGate.waitInPrompt()
+            default: break
+            }
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id])
+        session.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
+
+        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
+        #expect(session.contextRecoveryStatus == .sendingTranscript)
+        try await waitUntilAsync { await recoveryGate.hasEntered }
+
+        // User steers a new prompt while the recovery context is still in
+        // flight — the steer's replacement prompt takes over the transport.
+        runner.steer(blocks: [.text("actually do this instead")])
+        try await waitUntilAsync { await steerGate.hasEntered }
+
+        // The recovery RPC now returns, superseded by the steer. The
+        // "Restoring…" spinner must resolve rather than strand forever.
+        await recoveryGate.release()
+        try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
+
+        await steerGate.release()
+    }
+
+    @Test("recovery context superseded by a newer prompt clears the restoring status")
+    func recoveryContextSupersededByNewerPromptClearsStatus() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-new"))
+        try appendMessage(
+            .user(id: UUID(), text: "What changed?", attachments: []),
+            to: store,
+            seq: 0
+        )
+        let client = ACPMockClient()
+        let recoveryGate = PromptGate()
+        let newerPromptGate = PromptGate()
+        let promptCount = PromptCounter()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
+        client.scriptAsync(method: "session/prompt") { _ in
+            switch await promptCount.next() {
+            case 1: await recoveryGate.waitInPrompt()
+            case 2: await newerPromptGate.waitInPrompt()
+            default: break
+            }
+            return Data("null".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+        let runner = try #require(manager.runners[session.id])
+        session.contextRestoreWarning = .init(
+            message: "Agent context could not be restored.",
+            canSendTranscript: true
+        )
+
+        #expect(manager.sendTranscriptAsContext(sessionId: session.id, agentName: "Agent"))
+        #expect(session.contextRecoveryStatus == .sendingTranscript)
+        try await waitUntilAsync { await recoveryGate.hasEntered }
+
+        runner.sendNow(blocks: [.text("actually do this instead")], queuedItemId: nil)
+        try await waitUntilAsync { await newerPromptGate.hasEntered }
+
+        await recoveryGate.release()
+        try await waitUntil { session.contextRecoveryStatus != .sendingTranscript }
+
+        await newerPromptGate.release()
+    }
+
     @Test("transcript context prompt requires conversation")
     func transcriptContextPromptRequiresConversation() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1195,6 +1344,15 @@ struct ACPSessionManagerAttachRestoreTests {
             released = true
             continuation?.resume()
             continuation = nil
+        }
+    }
+
+    private actor PromptCounter {
+        private var count = 0
+
+        func next() -> Int {
+            count += 1
+            return count
         }
     }
 

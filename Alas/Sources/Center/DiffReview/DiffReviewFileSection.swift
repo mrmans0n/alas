@@ -601,17 +601,21 @@ struct DiffReviewFileSection: View {
 
     private func savePendingDraft() {
         guard let pendingDraftAnchor else { return }
+        let canonicalAnchor = ReviewDraftCommentRowSegmentation.canonicalPendingAnchor(
+            pendingDraftAnchor,
+            in: derivedDisplayGroups ?? []
+        )
         let body = pendingDraftBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         guard currentDraftRowKeys.contains(ReviewDraftCommentPlacement.RowKey(
-            side: pendingDraftAnchor.side,
-            line: pendingDraftAnchor.draftPlacementLine
+            side: canonicalAnchor.side,
+            line: canonicalAnchor.draftPlacementLine
         )) else {
             clearPendingDraft()
             return
         }
 
-        onSaveDraftComment(pendingDraftAnchor, body)
+        onSaveDraftComment(canonicalAnchor, body)
         clearPendingDraft()
     }
 
@@ -1052,9 +1056,7 @@ enum ReviewDraftCommentRowSegmentation {
         pendingAnchor: DiffReviewLineAnchor?,
         canCreateDraftComment: Bool = true
     ) -> Result {
-        let pendingKey = pendingAnchor.map {
-            ReviewDraftCommentPlacement.RowKey(side: $0.side, line: $0.draftPlacementLine)
-        }
+        let pendingKey = pendingAnchor.flatMap { pendingRowKey(for: $0, in: group) }
         var segments: [Segment] = []
         var bufferedRows: [DiffDisplayRow] = []
         var emittedCommentIDs: Set<String> = []
@@ -1091,6 +1093,81 @@ enum ReviewDraftCommentRowSegmentation {
         }
 
         return Result(items: segments)
+    }
+
+    static func canonicalPendingAnchor(
+        _ anchor: DiffReviewLineAnchor,
+        in groups: [DiffDisplayGroup]
+    ) -> DiffReviewLineAnchor {
+        guard anchor.side == .unknown else { return anchor }
+        guard groups.contains(where: { canPlaceUnknownAnchor(anchor, in: $0) }) else { return anchor }
+
+        if let range = selectedLineRange(anchor.selectedLines, side: .new, requiresChange: true) {
+            return DiffReviewLineAnchor(
+                path: anchor.path,
+                side: .new,
+                line: range.lowerBound,
+                endLine: range.lowerBound == range.upperBound ? nil : range.upperBound,
+                rowIndex: anchor.rowIndex,
+                endRowIndex: anchor.endRowIndex,
+                selectedLines: anchor.selectedLines,
+                selectedText: anchor.selectedText
+            )
+        }
+
+        if let range = selectedLineRange(anchor.selectedLines, side: .old, requiresChange: true) {
+            return DiffReviewLineAnchor(
+                path: anchor.path,
+                side: .old,
+                line: range.lowerBound,
+                endLine: range.lowerBound == range.upperBound ? nil : range.upperBound,
+                rowIndex: anchor.rowIndex,
+                endRowIndex: anchor.endRowIndex,
+                selectedLines: anchor.selectedLines,
+                selectedText: anchor.selectedText
+            )
+        }
+
+        return anchor
+    }
+
+    private static func pendingRowKey(
+        for anchor: DiffReviewLineAnchor,
+        in group: DiffDisplayGroup
+    ) -> ReviewDraftCommentPlacement.RowKey? {
+        guard anchor.side == .unknown else {
+            return ReviewDraftCommentPlacement.RowKey(side: anchor.side, line: anchor.draftPlacementLine)
+        }
+
+        guard canPlaceUnknownAnchor(anchor, in: group) else { return nil }
+        let canonicalAnchor = canonicalPendingAnchor(anchor, in: [group])
+        return ReviewDraftCommentPlacement.RowKey(
+            side: canonicalAnchor.side,
+            line: canonicalAnchor.draftPlacementLine
+        )
+    }
+
+    private static func canPlaceUnknownAnchor(
+        _ anchor: DiffReviewLineAnchor,
+        in group: DiffDisplayGroup
+    ) -> Bool {
+        let keys = Set(ReviewDraftCommentPlacement.allRowKeys(in: group))
+        return keys.contains(ReviewDraftCommentPlacement.RowKey(side: .unknown, line: anchor.draftPlacementLine))
+            || keys.contains(ReviewDraftCommentPlacement.RowKey(side: .unknown, line: anchor.line))
+    }
+
+    private static func selectedLineRange(
+        _ selectedLines: [DiffReviewLineAnchor.SelectedLine],
+        side: DiffReviewInlineFeedbackSide,
+        requiresChange: Bool
+    ) -> ClosedRange<Int>? {
+        let lines = selectedLines.compactMap { line -> Int? in
+            guard line.side == side else { return nil }
+            guard !requiresChange || line.isChange else { return nil }
+            return line.line
+        }
+        guard let lower = lines.min(), let upper = lines.max() else { return nil }
+        return lower...upper
     }
 }
 

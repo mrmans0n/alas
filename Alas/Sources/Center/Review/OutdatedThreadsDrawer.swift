@@ -1,10 +1,33 @@
 import SwiftUI
 
+enum OutdatedThreadsDrawerPresentation {
+    static let defaultMaxExpandedListHeight: CGFloat = 280
+
+    static func expandedListMaxHeight(availableHeight: CGFloat) -> CGFloat {
+        guard availableHeight.isFinite, availableHeight > 0 else {
+            return defaultMaxExpandedListHeight
+        }
+
+        return min(defaultMaxExpandedListHeight, max(80, floor(availableHeight * 0.35)))
+    }
+}
+
 struct OutdatedThreadsDrawer: View {
     let threads: [ReviewThread]  // already filtered: isFileLevel || isOutdated
+    let maxExpandedListHeight: CGFloat
     @State private var isExpanded = false
 
     @Environment(\.theme) private var theme
+
+    init(
+        threads: [ReviewThread],
+        maxExpandedListHeight: CGFloat = OutdatedThreadsDrawerPresentation.defaultMaxExpandedListHeight,
+        initiallyExpanded: Bool = false
+    ) {
+        self.threads = threads
+        self.maxExpandedListHeight = maxExpandedListHeight
+        _isExpanded = State(initialValue: initiallyExpanded)
+    }
 
     var body: some View {
         if threads.isEmpty {
@@ -38,12 +61,16 @@ struct OutdatedThreadsDrawer: View {
 
                 if isExpanded {
                     Divider().overlay(theme.color("line"))
-                    VStack(spacing: 0) {
-                        ForEach(threads) { thread in
-                            OutdatedThreadRow(thread: thread)
+                    ScrollView(.vertical) {
+                        LazyVStack(spacing: 0) {
+                            ForEach(threads) { thread in
+                                OutdatedThreadRow(thread: thread)
+                            }
                         }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxHeight: maxExpandedListHeight)
                 }
             }
             .background(theme.color("bg-2"))
@@ -116,11 +143,11 @@ private struct OutdatedThreadRow: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(theme.color("accent"))
                 }
-                Text(body)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg"))
+                DiffReviewInlineFeedbackMarkdown.view(body)
                     .lineLimit(4)
                     .truncationMode(.tail)
+                    .frame(maxHeight: 72, alignment: .top)
+                    .clipped()
                     .textSelection(.enabled)
             }
         }

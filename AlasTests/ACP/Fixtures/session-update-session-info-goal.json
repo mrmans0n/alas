@@ -1,0 +1,12 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"s",
+  "update":{"sessionUpdate":"session_info_update","title":"Investigate ACP events","_meta":{
+    "codex":{
+      "goal":{
+        "objective":"Surface richer ACP events",
+        "status":"in_progress",
+        "tokenBudget":12000
+      }
+    }
+  }}
+}}

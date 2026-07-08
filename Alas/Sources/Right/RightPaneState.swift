@@ -116,10 +116,29 @@ final class RightPaneState {
     /// the global config default on the next render.
     var userOverrodeBaseBranch: Bool = false
 
-    /// The last base branch value that came from `AppConfig` (not from the
-    /// selector). Used by `RightPaneStore` to distinguish a Settings change
-    /// (new config value) from a normal render (same config value).
+    /// The last raw base branch value that came from `AppConfig` (not from the
+    /// selector, and not the effective `origin/<base>` default). Used by
+    /// `RightPaneStore` to distinguish a Settings change (new config value)
+    /// from a normal render (same config value).
     var lastConfigBaseBranch: String = ""
+
+    /// The last effective base branch default applied by `RightPaneStore`
+    /// (e.g. `origin/main` when on the base branch). Used to detect when the
+    /// effective default changed because the worktree branch changed, without
+    /// overwriting a verified fallback on every render.
+    var lastEffectiveBaseBranch: String = ""
+
+    /// Task handle for the async origin-ref probe, if one is in flight.
+    /// Cancelled when the base branch changes again before verification
+    /// finishes, so stale probe results never overwrite a newer default.
+    @ObservationIgnored
+    var baseBranchProbeTask: Task<Void, Never>? = nil
+
+    /// True for newly-created states whose initial `start()` is being deferred
+    /// until the `origin/<base>` probe confirms or falls back. Prevents
+    /// activation from starting an unverified refresh.
+    @ObservationIgnored
+    var isAwaitingBaseBranchProbe: Bool = false
 
     /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
     /// `RightPaneStore` on every `state(for:)` call. When false (the
@@ -130,6 +149,9 @@ final class RightPaneState {
 
     var pendingDiscard: PendingDiscard? = nil
     var pendingCherryPickSHA: String? = nil
+    var pendingMerge: ReviewLoopSnapshot? = nil
+    var mergeError: String? = nil
+    var mergeQueuedMessage: String? = nil
 
     /// True while the workspace-level agent invocation is running.
     /// Surfaced in the Conflicts section header as a spinner; the
@@ -329,7 +351,10 @@ final class RightPaneState {
                 }
             }
         case .merge:
-            break
+            guard let snapshot = reviewLoop.snapshot,
+                  ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot)
+            else { return }
+            pendingMerge = snapshot
         }
     }
 
@@ -557,7 +582,7 @@ final class RightPaneState {
         let local = ReviewLoopLocalState(
             branchName: currentBranch,
             headSHA: headSHA,
-            baseBranch: baseBranch,
+            baseBranch: reviewLoop.currentBaseBranch,
             hasWorkingTreeChanges: !changes.isEmpty,
             hasStagedChanges: changes.contains { $0.stage == .staged },
             aheadCommitCount: Self.reviewLoopAheadCommitCount(
@@ -859,6 +884,104 @@ final class RightPaneState {
     func cancelDiscard() {
         pendingDiscard = nil
     }
+
+    func cancelMerge() {
+        pendingMerge = nil
+    }
+
+    func clearMergeError() {
+        mergeError = nil
+    }
+
+    func clearMergeQueuedMessage() {
+        mergeQueuedMessage = nil
+    }
+
+    static func mergeConfirmationMessage(for request: ReviewRequest?) -> String {
+        guard let request else {
+            return "Squash-merge this review request and delete the branch."
+        }
+        if request.isMergeQueueEnabled {
+            return "Add \(request.displayIdentity) to the merge queue for \(request.baseRefName)."
+        }
+        return "Squash-merge \(request.displayIdentity) into \(request.baseRefName) and delete the branch."
+    }
+
+    func performMerge() {
+        guard let pending = pendingMerge else { return }
+        pendingMerge = nil
+        // Fast reject against the currently-cached snapshot (also re-validates
+        // if the dialog captured a now-stale snapshot).
+        guard let cached = reviewLoop.snapshot,
+              ReviewReadinessModel.canMergeReviewRequest(snapshot: cached) else {
+            mergeError = Self.mergeUnavailableMessage
+            return
+        }
+        // The PR + head the user actually confirmed. After the forced refresh we
+        // require the fresh snapshot to still be this exact request/head, so a
+        // branch switch mid-dialog can't redirect the merge to a different PR.
+        let confirmedRequestID = pending.reviewRequest?.id
+        let confirmedHeadSHA = pending.reviewRequest?.headSHA
+        guard reviewLoop.beginAction(.merge) else { return }
+        Task { @MainActor in
+            defer { reviewLoop.endAction(.merge) }
+            // The cached snapshot can still lag reality: WorktreeWatcher
+            // debounces change events up to ~2s, so a commit created just
+            // before confirming may not have flipped `needsPush` yet. Force a
+            // live refresh (recomputes HEAD/upstream + provider checks and
+            // mergeability), then re-validate and merge the fresh snapshot.
+            await refresh()
+            guard let snapshot = reviewLoop.snapshot,
+                  ReviewReadinessModel.canMergeReviewRequest(snapshot: snapshot),
+                  snapshot.reviewRequest?.id == confirmedRequestID,
+                  snapshot.reviewRequest?.headSHA == confirmedHeadSHA
+            else {
+                mergeError = Self.mergeUnavailableMessage
+                return
+            }
+            // The generation-guarded refresh above can be superseded by a
+            // concurrent watcher refresh and return without publishing, leaving
+            // the snapshot stale. Do a final authoritative read straight from
+            // git so a just-created commit or dirty tree can't slip through.
+            guard let reviewedHead = snapshot.reviewRequest?.headSHA,
+                  await localHeadIsCleanlyAt(reviewedHead)
+            else {
+                mergeError = Self.mergeUnavailableMessage
+                return
+            }
+            switch await reviewLoop.merge(snapshot: snapshot) {
+            case .merged:
+                await refresh()
+            case .queued:
+                mergeQueuedMessage = "Added to merge queue."
+                await refresh()
+            case nil:
+                mergeError = reviewLoop.lastError ?? "Merge failed."
+            }
+        }
+    }
+
+    /// Authoritative, point-in-time check that the worktree HEAD is exactly the
+    /// reviewed head and the tree is clean — read straight from git, not via the
+    /// review-loop refresh (whose generation guard lets a concurrent watcher
+    /// refresh supersede the merge-triggered one without publishing).
+    private func localHeadIsCleanlyAt(_ reviewedHeadSHA: String) async -> Bool {
+        guard let head = try? await Process.git(["rev-parse", "HEAD"], cwd: worktree.path),
+              head.exitCode == 0,
+              head.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == reviewedHeadSHA
+        else { return false }
+        guard let status = try? await Process.git(["status", "--porcelain"], cwd: worktree.path),
+              status.exitCode == 0
+        else { return false }
+        return status.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // Merge failures are surfaced via an app-level alert (hosted in RootView
+    // next to the confirmation dialog) rather than `sidebarError`, because a
+    // merge can be launched from the Review tab in the center pane while the
+    // right pane — the only place `sidebarError` renders — is collapsed.
+    private static let mergeUnavailableMessage =
+        "Merge is no longer available — the branch or review state changed."
 
     func requestCherryPick(sha: String) {
         pendingCherryPickSHA = sha

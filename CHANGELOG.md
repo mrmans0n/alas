@@ -6,6 +6,87 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.17] - 2026-07-07
+
+### 🐛 Fixes
+
+- Cache the resolved code font to prevent Center beachballs (#643).
+- Fix Codex ACP composer provider logos (#644).
+
+## [0.8.16] - 2026-07-06
+
+### 🐛 Fixes
+
+- Cap outdated review thread drawer height (#642).
+- Stop dropping leading fragments of new ACP messages after transcript restore (#639).
+- Render subscript tags in review comments (#641).
+- Improve diff comment contrast.
+- Measure ACP chat width during task resize (#638).
+
+## [0.8.15] - 2026-07-05
+
+### 🐛 Fixes
+
+- Clarify remote QR address selection (#637).
+- Stop duplicate stacked diff draft composers (#636).
+
+## [0.8.14] - 2026-07-05
+
+### ✨ Features
+
+- Default main worktree comparisons to `origin/baseBranch` (#631).
+- Merge PRs in-app to close the review loop (#633).
+- Support GitHub merge queues in review flows (#635).
+
+### 🐛 Fixes
+
+- Keep ACP transcript layout stable after pane resize (#632).
+
+## [0.8.13] - 2026-07-04
+
+### ✨ Features
+
+- Add custom project icons (#630).
+
+### 🐛 Fixes
+
+- Hide Prepare/Push affordances when there is nothing to push (#629).
+
+## [0.8.12] - 2026-07-04
+
+### ✨ Features
+
+- Enrich ACP transcript event handling (#627).
+
+### 🐛 Fixes
+
+- Stop remote web tool cards collapsing to 1px as the transcript fills (#628).
+- Make the remote web config sheet scrollable when the model list overflows (#626).
+
+### 🏗️ Internal
+
+- Cover superseded ACP transcript restore status in tests (#625).
+
+## [0.8.11] - 2026-07-03
+
+### ✨ Features
+
+- Support ACP message IDs (#619).
+- Update ACP session titles from session info notifications (#622).
+
+### 🐛 Fixes
+
+- Clear stranded transcript-restore spinners when ACP sessions are steered (#620).
+- Render subscript tags in markdown previews (#621).
+- Harden ACP JSON-RPC cancellation teardown (#624).
+- Trust Sparkle cask updates from the stable cask endpoint (#623).
+
+## [0.8.10] - 2026-07-02
+
+### 🐛 Fixes
+
+- Make fast mode a composer button (#618).
+
 ## [0.8.9] - 2026-07-02
 
 ### ✨ Features

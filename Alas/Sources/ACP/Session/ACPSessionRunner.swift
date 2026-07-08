@@ -43,6 +43,7 @@ final class ACPSessionRunner {
     private let ownerInstanceId: String?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
+    private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
     private var questionsTask: Task<Void, Never>?
@@ -92,6 +93,7 @@ final class ACPSessionRunner {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
+         onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          ownerInstanceId: String? = nil)
@@ -105,8 +107,12 @@ final class ACPSessionRunner {
         self.ownerInstanceId = ownerInstanceId
         self.onAuthRequired = onAuthRequired
         self.onPersist = onPersist
+        self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
+        if suppressingLoadReplay {
+            session.beginSuppressedReplaySideEffects()
+        }
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onResumeTranscriptTail = onResumeTranscriptTail
@@ -134,10 +140,22 @@ final class ACPSessionRunner {
                 await MainActor.run {
                     self.observedUpdateCount += 1
                     self.appliedUpdateCount += 1
+                    let preAppliedSessionInfoDirty: Set<Int>?
+                    if case .sessionInfoUpdate(let info) = u.update {
+                        self.flushStreamingPersist()
+                        preAppliedSessionInfoDirty = self.session.apply(u.update)
+                        self.applySessionInfoTitle(info)
+                    } else {
+                        preAppliedSessionInfoDirty = nil
+                    }
                     if self.suppressingLoadReplay {
+                        let dirty = preAppliedSessionInfoDirty
+                            ?? self.session.applySuppressedReplaySideEffects(u.update)
+                        self.persistIndices(dirty)
                         if let target = self.loadReplaySuppressionTarget,
                            self.observedUpdateCount >= target {
                             self.suppressingLoadReplay = false
+                            self.session.endSuppressedReplaySideEffects()
                             // Disallow streaming boundary crossings until the next prompt
                             // starts. Any agentMessageChunk that would cross a completed-
                             // output boundary in this window is a late replay slip — the
@@ -147,13 +165,17 @@ final class ACPSessionRunner {
                         }
                         return
                     }
-                    let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
-                    let dirty = self.session.apply(u.update)
-                    if shouldBatchStreamingPersist {
-                        self.scheduleStreamingPersist(dirty)
-                    } else {
-                        self.flushStreamingPersist()
+                    if let dirty = preAppliedSessionInfoDirty {
                         self.persistIndices(dirty)
+                    } else {
+                        let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
+                        let dirty = self.session.apply(u.update)
+                        if shouldBatchStreamingPersist {
+                            self.scheduleStreamingPersist(dirty)
+                        } else {
+                            self.flushStreamingPersist()
+                            self.persistIndices(dirty)
+                        }
                     }
                     if self.applyPendingCompletedOutputBoundaryIfReady() {
                         self.flushQueueIfIdle()
@@ -306,6 +328,7 @@ final class ACPSessionRunner {
         loadReplaySuppressionTarget = target
         if observedUpdateCount >= target {
             suppressingLoadReplay = false
+            session.endSuppressedReplaySideEffects()
             session.allowsStreamingBoundaryCrossing = false
         }
     }
@@ -318,6 +341,10 @@ final class ACPSessionRunner {
         filesTask?.cancel()
         terminalsTask?.cancel()
         resolvePendingQuestion(.init(outcome: .cancelled), restorePreviousState: false)
+        // A detach/takeover can land while a permission prompt is parked.
+        // userCancel() already resolves it; stop() must too, or the policy's
+        // continuation is stranded when we tear the connection down.
+        policy.userCancelled()
         // Kill agent-spawned subprocesses now. ACPSessionManager keeps
         // the ACPSession cached after detach, so the session's deinit-
         // time killAll() won't fire on tab close — without this an
@@ -514,6 +541,63 @@ final class ACPSessionRunner {
             }
             return
         }
+    }
+
+    func applySessionInfoTitle(_ info: ACPSessionInfoUpdate) {
+        guard holdsLeaseForWrite() else { return }
+        switch info.title {
+        case .absent:
+            return
+        case .null:
+            clearSessionInfoTitle()
+        case .value(let rawTitle):
+            applySessionInfoTitleValue(rawTitle)
+        }
+    }
+
+    private func applySessionInfoTitleValue(_ rawTitle: String) {
+        let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard session.titleSource != .manual else { return }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        guard (try? store.updateGeneratedTitleIfNotManual(
+            id: sessionId,
+            title: trimmed,
+            updatedAt: now
+        )) == true else {
+            guard let row = try? store.loadSession(id: sessionId) else { return }
+            if row.titleSource == .manual {
+                session.title = row.title
+                session.titleSource = row.titleSource
+            }
+            return
+        }
+
+        session.title = trimmed
+        session.titleSource = .generated
+        onSessionTitleUpdated?(trimmed)
+    }
+
+    private func clearSessionInfoTitle() {
+        guard session.titleSource != .manual else { return }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        guard (try? store.clearGeneratedTitleIfNotManual(
+            id: sessionId,
+            updatedAt: now
+        )) == true else {
+            guard let row = try? store.loadSession(id: sessionId) else { return }
+            if row.titleSource == .manual {
+                session.title = row.title
+                session.titleSource = row.titleSource
+            }
+            return
+        }
+
+        session.title = "New session"
+        session.titleSource = .placeholder
+        onSessionTitleUpdated?("New session")
     }
 
     /// Returns `absolutePath` relative to the runner's worktree, or
@@ -1180,30 +1264,32 @@ extension ACPSessionRunner {
                 await MainActor.run {
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
-                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.activePromptID = nil
                         if self.deferCompletedOutputBoundaryUntilUpdatesDrain() {
                             self.flushQueueIfIdle()
                         }
                     }
-                    if !hasNewerActivePrompt {
-                        onCompleted?(isActivePrompt && !wasCancelled)
-                    }
+                    // Always resolve the recovery status, even when a newer
+                    // prompt (e.g. the user steered) has taken over the
+                    // transport. Unlike `sendNow`, whose completion legitimately
+                    // hands UI state to its successor turn, this callback is the
+                    // ONLY thing that clears the "Restoring…" spinner — skipping
+                    // it on supersession strands the spinner forever.
+                    onCompleted?(isActivePrompt && !wasCancelled)
                 }
             } catch {
                 await MainActor.run {
                     _ = self.cancelledPromptIDs.remove(promptID)
                     let isActivePrompt = self.activePromptID == promptID
-                    let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
                     if isActivePrompt {
                         self.flushStreamingPersist()
                         self.activePromptID = nil
                         self.session.transcript.streamingState = .idle
                     }
-                    if !hasNewerActivePrompt {
-                        onCompleted?(false)
-                    }
+                    // See the success path above: the recovery status must
+                    // resolve regardless of supersession or the spinner strands.
+                    onCompleted?(false)
                 }
             }
         }
@@ -1256,7 +1342,14 @@ extension ACPSessionRunner {
         else { return false }
         pendingCompletedOutputBoundaryUpdateCount = nil
         flushStreamingPersist()
+        // markCompletedOutputBoundary() materialises any held replay candidate
+        // (a stranded final chunk); persist the appended rows so they survive
+        // detach/reopen — no `ACPSessionUpdate` carries them here.
+        let before = session.transcript.messages.count
         session.markCompletedOutputBoundary()
+        if session.transcript.messages.count > before {
+            persistFromIndex(before)
+        }
         guard activePromptID == nil else { return false }
         session.transcript.streamingState = .idle
         return true
@@ -1300,7 +1393,7 @@ extension ACPSessionRunner {
         case .agentMessageChunk, .agentThoughtChunk, .toolCallUpdate:
             return true
         case .userMessageChunk, .toolCall, .plan, .availableModelsUpdate,
-             .currentModeUpdate, .currentModelUpdate,
+             .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
              .usageUpdate, .unknown:
             return false
@@ -1354,7 +1447,7 @@ extension ACPSessionRunner {
         let messages = session.transcript.messages
         for i in indices {
             guard i >= 0, i < messages.count else { continue }
-            let message = messages[i]
+            let message = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
             let id = "msg-\(sessionId)-\(i)"
             let basePayload = i < persistedMessageCount ? try? store.loadMessagePayload(id: id) : nil
@@ -1410,7 +1503,7 @@ extension ACPSessionRunner {
         let now = Int64(Date().timeIntervalSince1970)
         for i in indices.sorted() {
             guard i >= 0, i < messages.count else { continue }
-            let m = messages[i]
+            let m = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
             if i < persistedMessageCount {
@@ -1429,6 +1522,20 @@ extension ACPSessionRunner {
         }
         onPersist?()
         return true
+    }
+
+    private func messageForPersistence(_ message: ACPMessage) -> ACPMessage {
+        guard case .toolCall(var toolCall) = message,
+              toolCall.isContentTruncated,
+              let storedContent = try? store.loadToolCallContent(
+                sessionId: sessionId,
+                toolCallId: toolCall.toolCallId
+              )
+        else {
+            return message
+        }
+        toolCall.content = storedContent
+        return .toolCall(toolCall)
     }
 
     /// Persist messages from the apply() boundary. Three cases:

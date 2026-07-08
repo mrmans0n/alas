@@ -462,7 +462,7 @@ final class RemoteSessionGateway {
     static func toWire(_ message: ACPMessage, index: Int) -> RemoteWireMessage {
         let sid = "m\(index)"
         switch message {
-        case .user(_, let text, let attachments):
+        case .user(_, _, let text, let attachments):
             // The wire carries user text only; surface attachments as a labelled
             // placeholder so an image-only prompt isn't a blank bubble on the
             // phone (we don't serve the image bytes to the client in v1).
@@ -470,19 +470,41 @@ final class RemoteSessionGateway {
             if !text.isEmpty { parts.append(text) }
             parts.append(contentsOf: attachments.map { "🖼 \($0.name ?? "Image")" })
             return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil)
-        case .agent(_, let streaming):
+        case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil)
-        case .thought(_, let streaming):
+        case .thought(_, _, let streaming):
             return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil)
         case .systemNotice(_, let text):
             return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
         case .toolCall(let call):
-            return .init(stableId: sid, kind: "toolCall", text: nil, json: Self.encodeJSON(call))
+            return .init(stableId: sid, kind: "toolCall", text: nil, json: Self.encodeJSON(remoteToolCall(call)))
         case .fileEdit(_, let edit):
             return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items))
         }
+    }
+
+    private static func remoteToolCall(_ call: ACPMessage.ToolCall) -> ACPMessage.ToolCall {
+        var remote = call
+        remote.rawOutput = nil
+        remote.metadata = nil
+        remote.assets = call.assets.map { asset in
+            ACPMessage.ToolCallAsset(
+                kind: asset.kind,
+                data: nil,
+                uri: Self.remoteAssetURI(asset.uri),
+                mimeType: asset.mimeType,
+                name: asset.name
+            )
+        }
+        return remote
+    }
+
+    private static func remoteAssetURI(_ uri: String?) -> String? {
+        guard let uri else { return nil }
+        let normalized = uri.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasPrefix("data:") ? nil : uri
     }
 
     private static func encodeJSON<T: Encodable>(_ value: T) -> String? {

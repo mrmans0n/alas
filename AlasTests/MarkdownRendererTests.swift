@@ -54,6 +54,18 @@ struct MarkdownRendererTests {
         #expect(font?.isFixedPitch == true)
     }
 
+    @Test func consumesSubscriptHTMLTags() throws {
+        let r = try MarkdownRendererTests.render("Before <sub><sub>P2</sub></sub> after")
+        let s = r.attributedString
+        #expect(s.string.contains("Before P2 after"))
+        #expect(!s.string.contains("<sub>"))
+        #expect(!s.string.contains("</sub>"))
+
+        let range = (s.string as NSString).range(of: "P2")
+        let baseline = s.attribute(.baselineOffset, at: range.location, effectiveRange: nil) as? CGFloat
+        #expect((baseline ?? 0) < 0)
+    }
+
     @Test func linkRunCarriesURLAttribute() throws {
         let r = try MarkdownRendererTests.render("[example](https://example.com)")
         let s = r.attributedString

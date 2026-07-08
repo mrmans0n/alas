@@ -305,7 +305,7 @@ struct ReviewChangesModelsTests {
 
         #expect(model.reviewAction == nil)
         #expect(model.draftAction == nil)
-        #expect(model.reviewRequestAction == nil)
+        #expect(model.reviewRequestActions.isEmpty)
         #expect(!model.isVisible)
     }
 
@@ -324,7 +324,7 @@ struct ReviewChangesModelsTests {
 
         #expect(model.reviewAction == nil)
         #expect(model.draftAction == nil)
-        let request = try #require(model.reviewRequestAction)
+        let request = try #require(model.reviewRequestActions.first)
         #expect(request.kind == .pushBranch)
         #expect(request.title == "Push")
         #expect(model.isVisible)
@@ -356,10 +356,40 @@ struct ReviewChangesModelsTests {
 
         #expect(model.reviewAction == nil)
         #expect(model.draftAction == nil)
-        let request = try #require(model.reviewRequestAction)
+        let request = try #require(model.reviewRequestActions.first)
         #expect(request.kind == .pushBranch)
         #expect(request.title == "Push")
         #expect(model.isVisible)
+    }
+
+    @Test func preparationModelHidesPushWhenBranchHasNoUpstreamAndNoCommits() {
+        let actions = [
+            ReviewReadinessModel.Action(kind: .pushBranch, title: "Push", isEnabled: true),
+        ]
+        let local = ReviewLoopLocalState(
+            branchName: "feature",
+            headSHA: "abc123",
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 0,
+            hasUpstream: false,
+            needsPush: true
+        )
+
+        let model = ChangesPreparationModel(
+            changes: [],
+            hasDraft: false,
+            draftNonEmpty: false,
+            aheadCommitCount: 0,
+            local: local,
+            readinessActions: actions
+        )
+
+        #expect(model.reviewAction == nil)
+        #expect(model.draftAction == nil)
+        #expect(model.reviewRequestActions.isEmpty)
+        #expect(!model.isVisible)
     }
 
     @Test func preparationModelShowsPushUsingLocalStateCommitCount() throws {
@@ -388,7 +418,7 @@ struct ReviewChangesModelsTests {
 
         #expect(model.reviewAction == nil)
         #expect(model.draftAction == nil)
-        let request = try #require(model.reviewRequestAction)
+        let request = try #require(model.reviewRequestActions.first)
         #expect(request.kind == .pushBranch)
         #expect(request.title == "Push")
         #expect(model.isVisible)
@@ -417,7 +447,7 @@ struct ReviewChangesModelsTests {
 
         #expect(model.reviewAction == nil)
         #expect(model.draftAction == nil)
-        #expect(model.reviewRequestAction == nil)
+        #expect(model.reviewRequestActions.isEmpty)
         #expect(!model.isVisible)
     }
 
@@ -436,7 +466,7 @@ struct ReviewChangesModelsTests {
 
         #expect(model.reviewAction == nil)
         #expect(model.draftAction == nil)
-        let request = try #require(model.reviewRequestAction)
+        let request = try #require(model.reviewRequestActions.first)
         #expect(request.kind == .pushBranch)
         #expect(request.title == "Push")
         #expect(model.isVisible)
@@ -464,7 +494,7 @@ struct ReviewChangesModelsTests {
 
         #expect(model.draftAction == nil)
         #expect(model.reviewAction == nil)
-        #expect(model.reviewRequestAction == nil)
+        #expect(model.reviewRequestActions.isEmpty)
         #expect(!model.isVisible)
     }
 
@@ -533,7 +563,7 @@ struct ReviewChangesModelsTests {
             readinessActions: actions
         )
 
-        let reviewRequest = try #require(model.reviewRequestAction)
+        let reviewRequest = try #require(model.reviewRequestActions.first)
         #expect(reviewRequest.kind == .createReviewRequest)
         #expect(reviewRequest.title == "Create PR")
     }
@@ -552,7 +582,7 @@ struct ReviewChangesModelsTests {
             readinessActions: actions
         )
 
-        let reviewRequest = try #require(model.reviewRequestAction)
+        let reviewRequest = try #require(model.reviewRequestActions.first)
         #expect(reviewRequest.kind == .pushBranch)
         #expect(reviewRequest.title == "Push")
     }
@@ -574,7 +604,7 @@ struct ReviewChangesModelsTests {
             readinessActions: actions
         )
 
-        let reviewRequest = try #require(model.reviewRequestAction)
+        let reviewRequest = try #require(model.reviewRequestActions.first)
         #expect(reviewRequest.kind == .pushBranch)
         #expect(!reviewRequest.isEnabled)
         #expect(reviewRequest.isInFlight)
@@ -602,7 +632,7 @@ struct ReviewChangesModelsTests {
             readinessActions: actions
         )
 
-        let reviewRequest = try #require(model.reviewRequestAction)
+        let reviewRequest = try #require(model.reviewRequestActions.first)
         #expect(reviewRequest.kind == .rerunFailedChecks)
         #expect(reviewRequest.title == "Rerun")
         #expect(reviewRequest.isInFlight)
@@ -623,8 +653,8 @@ struct ReviewChangesModelsTests {
         )
 
         #expect(model.reviewAction?.title == "Review current changes")
-        #expect(model.reviewRequestAction?.kind == .createReviewRequest)
-        #expect(model.reviewRequestAction?.title == "Create PR")
+        #expect(model.reviewRequestActions.first?.kind == .createReviewRequest)
+        #expect(model.reviewRequestActions.first?.title == "Create PR")
     }
 
     @Test func preparationModelDoesNotShowStandaloneRefreshWhileReadinessLoads() {
@@ -641,7 +671,7 @@ struct ReviewChangesModelsTests {
             readinessActions: loadingReadiness.actions
         )
 
-        #expect(model.reviewRequestAction == nil)
+        #expect(model.reviewRequestActions.isEmpty)
         #expect(!model.isVisible)
     }
 
@@ -660,7 +690,7 @@ struct ReviewChangesModelsTests {
         )
 
         #expect(model.isVisible)
-        let action = try #require(model.reviewRequestAction)
+        let action = try #require(model.reviewRequestActions.first)
         #expect(action.kind == .refresh)
     }
 
@@ -681,7 +711,7 @@ struct ReviewChangesModelsTests {
             readinessActions: readiness.actions
         )
 
-        let action = try #require(model.reviewRequestAction)
+        let action = try #require(model.reviewRequestActions.first)
         #expect(action.kind == .inspectReviewEvidence)
         #expect(action.title == "Inspect")
     }

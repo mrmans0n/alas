@@ -1,20 +1,35 @@
 import Foundation
 
 enum ACPMessage: Equatable {
-    case user(id: UUID, text: String, attachments: [Attachment])
-    case agent(id: UUID, StreamingText)
-    case thought(id: UUID, StreamingText)
+    case user(id: UUID, messageId: String?, text: String, attachments: [Attachment])
+    case agent(id: UUID, messageId: String?, StreamingText)
+    case thought(id: UUID, messageId: String?, StreamingText)
     case toolCall(ToolCall)
     case fileEdit(id: UUID, FileEdit)
     case plan(id: UUID, [PlanItem])
     case systemNotice(id: UUID, text: String)
 
+    static func user(id: UUID, text: String, attachments: [Attachment]) -> ACPMessage {
+        .user(id: id, messageId: nil, text: text, attachments: attachments)
+    }
+
+    static func agent(id: UUID, _ text: StreamingText) -> ACPMessage {
+        .agent(id: id, messageId: nil, text)
+    }
+
+    static func thought(id: UUID, _ text: StreamingText) -> ACPMessage {
+        .thought(id: id, messageId: nil, text)
+    }
+
     var stableId: String {
         switch self {
-        case .user(let id, _, _),
-             .agent(let id, _),
-             .thought(let id, _),
-             .fileEdit(let id, _),
+        case .user(let id, let messageId, _, _):
+            return messageId.map { "acp-user:\($0)" } ?? id.uuidString
+        case .agent(let id, let messageId, _):
+            return messageId.map { "acp-agent:\($0)" } ?? id.uuidString
+        case .thought(let id, let messageId, _):
+            return messageId.map { "acp-thought:\($0)" } ?? id.uuidString
+        case .fileEdit(let id, _),
              .plan(let id, _),
              .systemNotice(let id, _):
             return id.uuidString
@@ -51,6 +66,50 @@ enum ACPMessage: Equatable {
         }
     }
 
+    struct ToolCallAsset: Codable, Equatable, Hashable, Sendable {
+        enum Kind: String, Codable, Equatable, Hashable, Sendable {
+            case image
+            case resource
+        }
+
+        let kind: Kind
+        let data: String?
+        let uri: String?
+        let mimeType: String?
+        let name: String?
+
+        init(
+            kind: Kind,
+            data: String? = nil,
+            uri: String? = nil,
+            mimeType: String? = nil,
+            name: String? = nil
+        ) {
+            self.kind = kind
+            self.data = data
+            self.uri = uri
+            self.mimeType = mimeType
+            self.name = name
+        }
+
+        static func image(
+            data: String? = nil,
+            uri: String? = nil,
+            mimeType: String? = nil,
+            name: String? = nil
+        ) -> ToolCallAsset {
+            .init(kind: .image, data: data, uri: uri, mimeType: mimeType, name: name)
+        }
+
+        static func resource(
+            uri: String,
+            name: String?,
+            mimeType: String? = nil
+        ) -> ToolCallAsset {
+            .init(kind: .resource, uri: uri, mimeType: mimeType, name: name)
+        }
+    }
+
     struct ToolCall: Codable, Equatable, Hashable, Sendable {
         let toolCallId: String
         var title: String
@@ -70,6 +129,13 @@ enum ACPMessage: Equatable {
         /// Compact JSON/string form of the tool input reported by ACP. Kept so
         /// remote mirrors can show useful params even before output arrives.
         var rawInput: String?
+        /// Compact JSON/string form of the tool output reported by ACP.
+        var rawOutput: String?
+        /// Structured metadata emitted by protocol payloads. Persisted for
+        /// richer rendering and replay.
+        var metadata: AnyCodable?
+        /// Preserved assets produced with the tool call.
+        var assets: [ToolCallAsset]
         var locations: [String]
         /// Terminal IDs referenced by this call's structured content, in
         /// declaration order. The expanded card renders one
@@ -99,19 +165,24 @@ enum ACPMessage: Equatable {
         }
 
         init(toolCallId: String, title: String, kind: String? = nil,
-             status: String, content: String = "", preview: String? = nil,
+             status: String, content: String? = nil, preview: String? = nil,
              contentLanguage: String? = nil, rawInput: String? = nil,
-             locations: [String] = [], terminalIds: [String] = [])
+             rawOutput: String? = nil, metadata: AnyCodable? = nil,
+             assets: [ToolCallAsset] = [],
+             locations: [String]? = nil, terminalIds: [String] = [])
         {
             self.toolCallId = toolCallId
             self.title = title
             self.kind = kind
             self.status = status
-            self.content = content
+            self.content = content ?? ""
             self.preview = preview
             self.contentLanguage = contentLanguage
             self.rawInput = rawInput
-            self.locations = locations
+            self.rawOutput = rawOutput
+            self.metadata = metadata
+            self.assets = assets
+            self.locations = locations ?? []
             self.terminalIds = terminalIds
         }
 
@@ -120,7 +191,8 @@ enum ACPMessage: Equatable {
         // session history doesn't go blank after upgrade.
         enum CodingKeys: String, CodingKey {
             case toolCallId, title, kind, status, content, preview,
-                 contentSummary, contentLanguage, rawInput, locations, terminalIds
+                 contentSummary, contentLanguage, rawInput, rawOutput, metadata,
+                 assets, locations, terminalIds
         }
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -133,6 +205,9 @@ enum ACPMessage: Equatable {
                 ?? (try? c.decode(String.self, forKey: .contentSummary))
             contentLanguage = try? c.decode(String.self, forKey: .contentLanguage)
             rawInput = try? c.decode(String.self, forKey: .rawInput)
+            rawOutput = try? c.decode(String.self, forKey: .rawOutput)
+            metadata = try? c.decode(AnyCodable.self, forKey: .metadata)
+            assets = (try? c.decode([ToolCallAsset].self, forKey: .assets)) ?? []
             locations = (try? c.decode([String].self, forKey: .locations)) ?? []
             terminalIds = (try? c.decode([String].self, forKey: .terminalIds)) ?? []
         }
@@ -146,6 +221,9 @@ enum ACPMessage: Equatable {
             try c.encodeIfPresent(preview, forKey: .preview)
             try c.encodeIfPresent(contentLanguage, forKey: .contentLanguage)
             try c.encodeIfPresent(rawInput, forKey: .rawInput)
+            try c.encodeIfPresent(rawOutput, forKey: .rawOutput)
+            try c.encodeIfPresent(metadata, forKey: .metadata)
+            try c.encode(assets, forKey: .assets)
             try c.encode(locations, forKey: .locations)
             try c.encode(terminalIds, forKey: .terminalIds)
         }
@@ -163,7 +241,11 @@ enum ACPMessage: Equatable {
                 && lhs.preview == rhs.preview
                 && lhs.contentLanguage == rhs.contentLanguage
                 && lhs.rawInput == rhs.rawInput
+                && lhs.rawOutput == rhs.rawOutput
+                && lhs.metadata == rhs.metadata
+                && lhs.assets == rhs.assets
                 && lhs.locations == rhs.locations
+                && lhs.terminalIds == rhs.terminalIds
         }
 
         func hash(into hasher: inout Hasher) {
@@ -175,7 +257,11 @@ enum ACPMessage: Equatable {
             hasher.combine(preview)
             hasher.combine(contentLanguage)
             hasher.combine(rawInput)
+            hasher.combine(rawOutput)
+            hasher.combine(metadata)
+            hasher.combine(assets)
             hasher.combine(locations)
+            hasher.combine(terminalIds)
         }
     }
 
@@ -224,9 +310,9 @@ enum ACPMessageCodec {
     @MainActor
     static func encode(_ m: ACPMessage) throws -> Data {
         switch m {
-        case .user(_, let text, let atts): return try encoder.encode(UserPayload(text: text, attachments: atts))
-        case .agent(_, let buf):            return try encoder.encode(TextPayload(text: buf.value))
-        case .thought(_, let buf):          return try encoder.encode(TextPayload(text: buf.value))
+        case .user(_, let messageId, let text, let atts): return try encoder.encode(UserPayload(messageId: messageId, text: text, attachments: atts))
+        case .agent(_, let messageId, let buf):            return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
+        case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value))
         case .toolCall(let tc):             return try encoder.encode(tc)
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
         case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
@@ -239,11 +325,13 @@ enum ACPMessageCodec {
         switch kind {
         case "user":
             let p = try JSONDecoder().decode(UserPayload.self, from: payload)
-            return .user(id: UUID(), text: p.text, attachments: p.attachments)
+            return .user(id: UUID(), messageId: p.messageId, text: p.text, attachments: p.attachments)
         case "agent":
-            return .agent(id: UUID(), StreamingText(try JSONDecoder().decode(TextPayload.self, from: payload).text))
+            let p = try JSONDecoder().decode(TextPayload.self, from: payload)
+            return .agent(id: UUID(), messageId: p.messageId, StreamingText(p.text))
         case "thought":
-            return .thought(id: UUID(), StreamingText(try JSONDecoder().decode(TextPayload.self, from: payload).text))
+            let p = try JSONDecoder().decode(TextPayload.self, from: payload)
+            return .thought(id: UUID(), messageId: p.messageId, StreamingText(p.text))
         case "tool_call":
             return .toolCall(try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload))
         case "file_edit":
@@ -257,8 +345,25 @@ enum ACPMessageCodec {
         }
     }
 
-    private struct TextPayload: Codable { let text: String }
-    private struct UserPayload: Codable { let text: String
-    let attachments: [ACPMessage.Attachment] }
+    private struct TextPayload: Codable {
+        let messageId: String?
+        let text: String
+
+        init(messageId: String? = nil, text: String) {
+            self.messageId = messageId
+            self.text = text
+        }
+    }
+    private struct UserPayload: Codable {
+        let messageId: String?
+        let text: String
+        let attachments: [ACPMessage.Attachment]
+
+        init(messageId: String? = nil, text: String, attachments: [ACPMessage.Attachment]) {
+            self.messageId = messageId
+            self.text = text
+            self.attachments = attachments
+        }
+    }
     private struct PlanPayload: Codable { let items: [ACPMessage.PlanItem] }
 }

@@ -49,10 +49,10 @@ struct RemoteWebAssetTests {
         let sw = try asset("sw.js")
 
         #expect(html.contains(#"/app.js?v=48"#))
-        #expect(html.contains(#"/style.css?v=33"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v24";"#))
+        #expect(html.contains(#"/style.css?v=35"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v26";"#))
         #expect(sw.contains(#""/app.js?v=48""#))
-        #expect(sw.contains(#""/style.css?v=33""#))
+        #expect(sw.contains(#""/style.css?v=35""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -66,10 +66,10 @@ struct RemoteWebAssetTests {
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
         #expect(html.contains(#"/app.js?v=48"#))
-        #expect(html.contains(#"/style.css?v=33"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v24";"#))
+        #expect(html.contains(#"/style.css?v=35"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v26";"#))
         #expect(sw.contains(#""/app.js?v=48""#))
-        #expect(sw.contains(#""/style.css?v=33""#))
+        #expect(sw.contains(#""/style.css?v=35""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -111,7 +111,7 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
         #expect(html.contains("/app.js?v=48"))
-        #expect(html.contains("/style.css?v=33"))
+        #expect(html.contains("/style.css?v=35"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -137,7 +137,29 @@ struct RemoteWebAssetTests {
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
         #expect(sw.contains(#""/app.js?v=48""#))
-        #expect(sw.contains(#""/style.css?v=33""#))
+        #expect(sw.contains(#""/style.css?v=35""#))
+    }
+
+    @Test func configSheetScrollsWhenModelListOverflows() throws {
+        let html = try asset("index.html")
+        let css = try asset("style.css")
+
+        // The config sheet content lives in a dedicated scroll region so that a
+        // long model list stays reachable instead of overflowing off the top of
+        // the viewport (the sheet is anchored to the bottom via align-items: flex-end).
+        #expect(html.contains(#"<div id="cfg-scroll">"#))
+        #expect(css.contains("#cfg .sheet-card { max-height: min(85vh, 640px); display: flex; flex-direction: column; }"))
+        #expect(css.contains("#cfg-scroll { min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; }"))
+        #expect(css.contains("#cfg-close { flex: 0 0 auto; }"))
+    }
+
+    @Test func messageRowsDoNotShrinkInTranscriptFlexColumn() throws {
+        let css = try asset("style.css")
+
+        // #messages is a flex column; its children must not shrink or tool cards
+        // (overflow: hidden → automatic min-size 0) collapse to ~1px lines once
+        // the transcript fills the viewport.
+        #expect(css.contains("#messages > * { flex-shrink: 0; }"))
     }
 
     @Test func remoteWebIncludesNewSessionControls() throws {

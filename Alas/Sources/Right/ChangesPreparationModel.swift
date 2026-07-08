@@ -27,10 +27,10 @@ struct ChangesPreparationModel: Equatable {
 
     let reviewAction: ReviewAction?
     let draftAction: DraftAction?
-    let reviewRequestAction: ReviewRequestAction?
+    let reviewRequestActions: [ReviewRequestAction]
 
     var isVisible: Bool {
-        reviewAction != nil || draftAction != nil || reviewRequestAction != nil
+        reviewAction != nil || draftAction != nil || !reviewRequestActions.isEmpty
     }
 
     init(
@@ -69,58 +69,106 @@ struct ChangesPreparationModel: Equatable {
 
         reviewAction = builtReviewAction
         draftAction = builtDraftAction
-        let builtReviewRequestAction = Self.compactReviewRequestAction(from: readinessActions)
+        let builtActions = Self.compactReviewRequestActions(from: readinessActions)
         let effectiveAheadCommitCount = local?.aheadCommitCount ?? aheadCommitCount
-        if builtReviewRequestAction?.kind == .refresh,
-           builtReviewRequestAction?.isInFlight != true,
-           builtReviewAction == nil,
-           builtDraftAction == nil,
-           effectiveAheadCommitCount == 0 {
-            reviewRequestAction = nil
-        } else if builtReviewRequestAction?.kind == .pushBranch,
-                   builtReviewRequestAction?.isInFlight != true,
-                   local?.needsPush == false,
-                   builtReviewAction == nil,
-                   builtDraftAction == nil {
-            reviewRequestAction = nil
-        } else {
-            reviewRequestAction = builtReviewRequestAction
-        }
+        reviewRequestActions = Self.applyingHideRules(
+            builtActions,
+            hasReviewAction: builtReviewAction != nil,
+            hasDraftAction: builtDraftAction != nil,
+            local: local,
+            aheadCommitCount: effectiveAheadCommitCount
+        )
     }
 
-    private static func compactReviewRequestAction(
+    private static func compactReviewRequestActions(
+        from actions: [ReviewReadinessModel.Action]
+    ) -> [ReviewRequestAction] {
+        if let merge = actions.first(where: { $0.kind == .merge }) {
+            var pair = [convert(merge)]
+            if let review = actions.first(where: { $0.kind == .inspectReviewEvidence }) {
+                pair.append(convert(review))
+            }
+            return pair
+        }
+        if let single = compactSingleAction(from: actions) {
+            return [single]
+        }
+        return []
+    }
+
+    private static func compactSingleAction(
         from actions: [ReviewReadinessModel.Action]
     ) -> ReviewRequestAction? {
         if let action = actions.first(where: { $0.isInFlight }) {
-            return ReviewRequestAction(
-                kind: action.kind,
-                title: action.title,
-                isEnabled: action.isEnabled,
-                isInFlight: action.isInFlight,
-                iconName: action.iconName,
-                emphasis: action.emphasis
-            )
+            return convert(action)
         }
-
         for kind in compactActionPriority {
             guard let action = actions.first(where: { $0.kind == kind }) else { continue }
-            return ReviewRequestAction(
-                kind: action.kind,
-                title: action.title,
-                isEnabled: action.isEnabled,
-                isInFlight: action.isInFlight,
-                iconName: action.iconName,
-                emphasis: action.emphasis
-            )
+            return convert(action)
         }
         return nil
     }
 
+    private static func convert(_ action: ReviewReadinessModel.Action) -> ReviewRequestAction {
+        ReviewRequestAction(
+            kind: action.kind,
+            title: action.title,
+            isEnabled: action.isEnabled,
+            isInFlight: action.isInFlight,
+            iconName: action.iconName,
+            emphasis: action.emphasis
+        )
+    }
+
+    private static func applyingHideRules(
+        _ actions: [ReviewRequestAction],
+        hasReviewAction: Bool,
+        hasDraftAction: Bool,
+        local: ReviewLoopLocalState?,
+        aheadCommitCount: Int
+    ) -> [ReviewRequestAction] {
+        guard actions.count == 1, let only = actions.first else { return actions }
+        if only.kind == .refresh,
+           !only.isInFlight,
+           !hasReviewAction,
+           !hasDraftAction,
+           aheadCommitCount == 0 {
+            return []
+        }
+        if only.kind == .pushBranch,
+           !only.isInFlight,
+           !hasReviewAction,
+           !hasDraftAction,
+           pushHasNothingToPush(local: local, aheadCommitCount: aheadCommitCount) {
+            return []
+        }
+        return actions
+    }
+
     private static let compactActionPriority: [ReviewReadinessActionKind] = [
+        // `.merge` is handled by the pair path before the single-action
+        // fallback runs, so this entry is defensive and never actually matches.
+        .merge,
         .createReviewRequest,
         .pushBranch,
         .inspectReviewEvidence,
         .openReviewRequest,
         .refresh,
     ]
+
+    /// A `pushBranch` action is only useful when there's something to push.
+    /// `GitService.needsPush` returns `true` whenever the branch has no
+    /// upstream (so a fresh branch with no commits still reports "needs
+    /// push"), which surfaces a no-op Push button on clean worktrees. Hide
+    /// it when there's no upstream and no commits ahead of base — pushing
+    /// in that state has nothing to send. When an upstream exists, trust
+    /// `needsPush` since `@{u}..HEAD` reflects real unpushed commits.
+    private static func pushHasNothingToPush(
+        local: ReviewLoopLocalState?,
+        aheadCommitCount: Int
+    ) -> Bool {
+        guard let local else { return aheadCommitCount == 0 }
+        if local.needsPush == false { return true }
+        return !local.hasUpstream && local.aheadCommitCount == 0
+    }
 }

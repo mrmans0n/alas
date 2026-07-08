@@ -3,6 +3,54 @@ import Foundation
 @testable import Alas
 
 struct CodeHostModelsTests {
+    @Test func withChecksAndWithThreadsPreserveHeadMetadata() {
+        let request = ReviewRequest(
+            remote: CodeHostRemote(
+                kind: .github,
+                host: "github.com",
+                owner: "mrmans0n",
+                repository: "alas",
+                remoteName: "origin",
+                webURL: URL(string: "https://github.com/mrmans0n/alas")!
+            ),
+            number: 42,
+            title: "PR",
+            url: URL(string: "https://github.com/mrmans0n/alas/pull/42")!,
+            state: .open,
+            isDraft: false,
+            headRefName: "feature/x",
+            baseRefName: "main",
+            headSHA: "reviewed-head",
+            headRepositoryOwner: "mrmans0n",
+            reviewDecision: .approved,
+            mergeState: .clean,
+            checks: [],
+            threads: [],
+            isMergeQueueEnabled: true,
+            isInMergeQueue: true
+        )
+        let check = ReviewCheck(id: "c", name: "CI", workflow: "CI", bucket: .pass, detailURL: nil, completedAt: nil)
+
+        let requestWithChecks = request.withChecks([check])
+        #expect(requestWithChecks.headSHA == "reviewed-head")
+        #expect(requestWithChecks.headRepositoryOwner == "mrmans0n")
+        #expect(requestWithChecks.isMergeQueueEnabled)
+        #expect(requestWithChecks.isInMergeQueue)
+        #expect(requestWithChecks.checks == [check])
+
+        let requestWithThreads = request.withThreads([])
+        #expect(requestWithThreads.headSHA == "reviewed-head")
+        #expect(requestWithThreads.headRepositoryOwner == "mrmans0n")
+        #expect(requestWithThreads.isMergeQueueEnabled)
+        #expect(requestWithThreads.isInMergeQueue)
+        #expect(requestWithThreads.areThreadsComplete)
+
+        // A failed thread load flags the copy incomplete; withChecks preserves it.
+        let incomplete = request.withThreads([], complete: false)
+        #expect(!incomplete.areThreadsComplete)
+        #expect(!incomplete.withChecks([check]).areThreadsComplete)
+    }
+
     @Test func checkBucketSeverityOrdersFailuresBeforePendingBeforePass() {
         #expect(ReviewCheckBucket.fail.severity > ReviewCheckBucket.pending.severity)
         #expect(ReviewCheckBucket.pending.severity > ReviewCheckBucket.pass.severity)

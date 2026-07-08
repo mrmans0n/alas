@@ -22,7 +22,7 @@ struct ACPParameterChip: Identifiable, Equatable {
 enum ACPParameterChipPresentation: Equatable {
     case standard
     case cursorContextWindow
-    case cursorFast
+    case fastMode
 }
 
 /// A single chip's data, plus a tag remembering where it came from so the
@@ -206,6 +206,10 @@ extension ACPChipState {
         for option: ACPConfigOption,
         agentId: String
     ) -> ACPParameterChipPresentation {
+        if isFastModeConfigOption(option) {
+            return .fastMode
+        }
+
         guard agentId == "cursor-agent" else { return .standard }
 
         let id = option.id.lowercased()
@@ -213,10 +217,19 @@ extension ACPChipState {
         if id == "context" || id == "context_window" || name == "context window" {
             return .cursorContextWindow
         }
-        if id == "fast" || name == "fast" {
-            return .cursorFast
-        }
         return .standard
+    }
+
+    static func isFastModeConfigOption(_ option: ACPConfigOption) -> Bool {
+        let id = normalizedFastModeToken(option.id)
+        let name = normalizedFastModeToken(option.name)
+        return id == "fast" || id == "fastmode" || name == "fast" || name == "fastmode"
+    }
+
+    private static func normalizedFastModeToken(_ value: String) -> String {
+        value
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
     }
 
     private static func configOptionId(from spec: ChipSpec?) -> String? {

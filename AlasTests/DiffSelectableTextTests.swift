@@ -74,6 +74,54 @@ struct Foo {
         #expect(result.lines.last?.range.location == (result.attributedString.string as NSString).length - 1)
     }
 
+    @Test func diffSelectableTextBuilderUsesReadableCommentColorOnChangedRows() throws {
+        let theme = currentTheme()
+        let text = "let value = 1 // whether this contains text"
+        let commentSpan = try #require(TreeSitterHighlighter.tokenize(line: text, fileExtension: "swift").first { $0.capture == .comment })
+        let hunk = ParsedDiff.Hunk(
+            header: "@@ -1,0 +1,1 @@",
+            oldStart: 1,
+            newStart: 1,
+            lines: [
+                .init(kind: .add, text: text, oldNumber: nil, newNumber: 1),
+            ]
+        )
+
+        let result = DiffSelectableTextBuilder.build(
+            hunk: hunk,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            theme: theme
+        )
+        let foreground = try #require(result.attributedString.attribute(
+            .foregroundColor,
+            at: commentSpan.range.location,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("fg")))))
+    }
+
+    @Test func diffCodeTextUsesReadableCommentColorOnChangedRows() throws {
+        let theme = currentTheme()
+        let text = "let value = 1 // whether this contains text"
+        #expect(!colorComponents(NSColor(theme.color("fg-faint"))).isClose(to: colorComponents(NSColor(theme.color("fg")))))
+        let commentSpan = try #require(TreeSitterHighlighter.tokenize(line: text, fileExtension: "swift").first { $0.capture == .comment })
+        let rendered = DiffCodeText.attributedString(
+            text: text,
+            fileExtension: "swift",
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showWhitespace: false,
+            inlineSpans: [],
+            inlineTone: .add,
+            theme: theme
+        )
+        let foreground = try #require(rendered.attribute(.foregroundColor, at: commentSpan.range.location, effectiveRange: nil) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("fg")))))
+    }
+
     @Test func diffSelectableTextViewHostsCodeOnlyNativeTextView() throws {
         let view = DiffSelectableTextView(
             hunk: sampleHunk(),
@@ -182,6 +230,30 @@ struct Foo {
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private struct ColorComponents {
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+
+        func isClose(to other: ColorComponents, tolerance: Double = 0.001) -> Bool {
+            abs(red - other.red) <= tolerance
+                && abs(green - other.green) <= tolerance
+                && abs(blue - other.blue) <= tolerance
+                && abs(alpha - other.alpha) <= tolerance
+        }
+    }
+
+    private func colorComponents(_ color: NSColor) -> ColorComponents {
+        let normalized = color.usingColorSpace(.sRGB) ?? color
+        return ColorComponents(
+            red: Double(normalized.redComponent),
+            green: Double(normalized.greenComponent),
+            blue: Double(normalized.blueComponent),
+            alpha: Double(normalized.alphaComponent)
+        )
     }
 
     private func ancestorSubviews(of view: NSView) -> [NSView] {

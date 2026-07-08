@@ -1,5 +1,80 @@
 import SwiftUI
 
+enum ACPComposerControlPresentation {
+    static func fastModeIconName(isEnabled: Bool) -> String {
+        isEnabled ? "bolt.fill" : "bolt"
+    }
+
+    static func autoRunIconName(isEnabled: Bool) -> String {
+        isEnabled ? "play.fill" : "play"
+    }
+
+    static func fastModeHelp(isEnabled: Bool, canToggle: Bool) -> String {
+        guard canToggle else { return "Fast mode cannot be changed" }
+        return isEnabled
+            ? "Fast mode is ON — click to disable"
+            : "Click to enable fast mode"
+    }
+
+    static func canRenderFastModeButton(for spec: ChipSpec) -> Bool {
+        isFastModeToggleSelect(spec) && rawFastModeToggleTarget(for: spec) != nil
+    }
+
+    static func fastModeToggleTarget(for spec: ChipSpec) -> String? {
+        guard isFastModeToggleSelect(spec) else { return nil }
+        return rawFastModeToggleTarget(for: spec)
+    }
+
+    static func isFastModeEnabled(_ spec: ChipSpec) -> Bool {
+        guard let currentId = spec.currentId else { return false }
+        if let item = spec.options.first(where: { $0.id == currentId }) {
+            return isFastModeOn(id: item.id, name: item.name)
+        }
+        return isFastModeOn(id: currentId, name: currentId)
+    }
+
+    private static func isFastModeToggleSelect(_ spec: ChipSpec) -> Bool {
+        guard !spec.options.isEmpty else { return false }
+
+        var hasOnOption = false
+        var hasOffOption = false
+        for option in spec.options {
+            if isFastModeOn(id: option.id, name: option.name) {
+                hasOnOption = true
+            } else if isFastModeOff(id: option.id, name: option.name) {
+                hasOffOption = true
+            } else {
+                return false
+            }
+        }
+
+        return hasOnOption && hasOffOption
+    }
+
+    private static func rawFastModeToggleTarget(for spec: ChipSpec) -> String? {
+        if isFastModeEnabled(spec) {
+            return spec.options.first(where: { isFastModeOff(id: $0.id, name: $0.name) })?.id
+        }
+        return spec.options.first(where: { isFastModeOn(id: $0.id, name: $0.name) })?.id
+    }
+
+    private static func isFastModeOn(id: String, name: String) -> Bool {
+        let tokens = [normalizedFastModeValue(id), normalizedFastModeValue(name)]
+        return tokens.contains { ["true", "on", "enabled", "yes", "1", "fast"].contains($0) }
+    }
+
+    private static func isFastModeOff(id: String, name: String) -> Bool {
+        let tokens = [normalizedFastModeValue(id), normalizedFastModeValue(name)]
+        return tokens.contains { ["false", "off", "disabled", "no", "0", "standard"].contains($0) }
+    }
+
+    private static func normalizedFastModeValue(_ value: String) -> String {
+        value
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+}
+
 enum ACPComposerPlacement: Equatable {
     case bottom
     case inFlow
@@ -169,11 +244,16 @@ struct ACPComposer: View {
                 ACPContextUsageButton(usage: session.contextUsage,
                                       modelName: session.currentModelDisplayName)
                 attachButton
+                if let fastMode = fastModeParameter {
+                    selectFastModeToggle(fastMode)
+                } else if let fastMode = fastModeBooleanOption {
+                    booleanFastModeToggle(fastMode)
+                }
                 autoRunToggle
                 if let thinking = session.chipState.thinking {
                     thinkingChip(thinking)
                 }
-                ForEach(session.chipState.parameters) { parameter in
+                ForEach(parameterChips) { parameter in
                     parameterChip(parameter)
                 }
                 ForEach(booleanConfigOptions) { option in
@@ -236,7 +316,8 @@ struct ACPComposer: View {
             // composer where focus is.
             ACPPulseDot(color: session.agentState == .disconnected ? theme.color("del") : theme.color("add"))
             if let agent = agentLookup(session.agentId) {
-                AgentLogoView(agent: agent).frame(width: 14, height: 14)
+                AgentLogoView(agent: agent, size: 14)
+                    .frame(width: 14, height: 14)
             }
             if showShortcuts {
                 Rectangle().fill(theme.color("line")).frame(width: 0.5, height: 12).padding(.horizontal, 2)
@@ -270,7 +351,7 @@ struct ACPComposer: View {
             session.autoRunEnabled.toggle()
             manager.persist(session)
         } label: {
-            Image(systemName: session.autoRunEnabled ? "bolt.fill" : "bolt")
+            Image(systemName: ACPComposerControlPresentation.autoRunIconName(isEnabled: session.autoRunEnabled))
                 .font(.system(size: 12, weight: .bold))
                 .foregroundStyle(autoRunFg)
                 .frame(width: 28, height: 24)
@@ -346,6 +427,111 @@ struct ACPComposer: View {
         .help("Attach an image")
     }
 
+    private func selectFastModeToggle(_ parameter: ACPParameterChip) -> some View {
+        Button {
+            guard let targetId = fastModeToggleTarget(for: parameter.spec) else { return }
+            apply(spec: parameter.spec, selectedId: targetId)
+        } label: {
+            fastModeIcon(isEnabled: isFastModeEnabled(parameter.spec))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Fast mode")
+        .disabled(fastModeToggleTarget(for: parameter.spec) == nil)
+        .opacity(fastModeToggleTarget(for: parameter.spec) == nil ? 0.5 : 1.0)
+        .help(fastModeHelp(isEnabled: isFastModeEnabled(parameter.spec),
+                           canToggle: fastModeToggleTarget(for: parameter.spec) != nil))
+    }
+
+    private func booleanFastModeToggle(_ option: ACPConfigOption) -> some View {
+        let isEnabled = option.currentBoolValue ?? false
+        return Button {
+            apply(configOptionId: option.id, value: .boolean(!isEnabled))
+        } label: {
+            fastModeIcon(isEnabled: isEnabled)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Fast mode")
+        .help(fastModeHelp(isEnabled: isEnabled, canToggle: true))
+    }
+
+    private func fastModeIcon(isEnabled: Bool) -> some View {
+        Image(systemName: ACPComposerControlPresentation.fastModeIconName(isEnabled: isEnabled))
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(fastModeFg(isEnabled: isEnabled))
+            .frame(width: 28, height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6).fill(fastModeBg(isEnabled: isEnabled))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(fastModeBorder(isEnabled: isEnabled), lineWidth: 0.75)
+            )
+    }
+
+    private func fastModeHelp(isEnabled: Bool, canToggle: Bool) -> String {
+        ACPComposerControlPresentation.fastModeHelp(isEnabled: isEnabled, canToggle: canToggle)
+    }
+
+    private var fastModeParameter: ACPParameterChip? {
+        session.chipState.parameters.first {
+            $0.presentation == .fastMode
+                && ACPComposerControlPresentation.canRenderFastModeButton(for: $0.spec)
+        }
+    }
+
+    private var fastModeBooleanOption: ACPConfigOption? {
+        session.availableConfigOptions.first {
+            $0.type == "boolean"
+                && $0.currentBoolValue != nil
+                && ACPChipState.isFastModeConfigOption($0)
+        }
+    }
+
+    private var parameterChips: [ACPParameterChip] {
+        session.chipState.parameters.filter {
+            $0.presentation != .fastMode
+                || !ACPComposerControlPresentation.canRenderFastModeButton(for: $0.spec)
+        }
+    }
+
+    private func fastModeToggleTarget(for spec: ChipSpec) -> String? {
+        ACPComposerControlPresentation.fastModeToggleTarget(for: spec)
+    }
+
+    private func isFastModeEnabled(_ spec: ChipSpec) -> Bool {
+        ACPComposerControlPresentation.isFastModeEnabled(spec)
+    }
+
+    private func fastModeBg(_ spec: ChipSpec) -> Color {
+        fastModeBg(isEnabled: isFastModeEnabled(spec))
+    }
+
+    private func fastModeBg(isEnabled: Bool) -> Color {
+        isEnabled
+            ? cursorFastAccent.opacity(0.20)
+            : theme.color("bg-3").opacity(0.7)
+    }
+
+    private func fastModeBorder(_ spec: ChipSpec) -> Color {
+        fastModeBorder(isEnabled: isFastModeEnabled(spec))
+    }
+
+    private func fastModeBorder(isEnabled: Bool) -> Color {
+        isEnabled
+            ? cursorFastAccent.opacity(0.55)
+            : theme.color("line")
+    }
+
+    private func fastModeFg(_ spec: ChipSpec) -> Color {
+        fastModeFg(isEnabled: isFastModeEnabled(spec))
+    }
+
+    private func fastModeFg(isEnabled: Bool) -> Color {
+        isEnabled
+            ? Color.blend(cursorFastAccent, .white, t: 0.45)
+            : theme.color("fg-muted")
+    }
+
     // MARK: - Chip builders driven by ACPChipState
 
     private func modeChip(_ spec: ChipSpec) -> some View {
@@ -372,6 +558,7 @@ struct ACPComposer: View {
              searchDescriptions: false)
     }
 
+    @ViewBuilder
     private func parameterChip(_ parameter: ACPParameterChip) -> some View {
         switch parameter.presentation {
         case .cursorContextWindow:
@@ -379,9 +566,9 @@ struct ACPComposer: View {
                  label: iconChipLabel(icon: "🪟", spec: parameter.spec, fallback: parameter.label),
                  placeholder: parameter.label,
                  accent: cursorContextAccent)
-        case .cursorFast:
+        case .fastMode:
             chip(spec: parameter.spec,
-                 label: iconChipLabel(icon: "🚀", spec: parameter.spec, fallback: parameter.label),
+                 label: chipLabel(prefix: parameter.label, spec: parameter.spec),
                  placeholder: parameter.label,
                  accent: cursorFastAccent)
         case .standard:
@@ -403,6 +590,7 @@ struct ACPComposer: View {
     private var booleanConfigOptions: [ACPConfigOption] {
         session.availableConfigOptions.filter {
             $0.type == "boolean" && $0.currentBoolValue != nil
+                && !ACPChipState.isFastModeConfigOption($0)
         }
     }
 

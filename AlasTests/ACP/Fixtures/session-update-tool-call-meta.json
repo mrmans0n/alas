@@ -1,0 +1,9 @@
+{"jsonrpc":"2.0","method":"session/update","params":{
+  "sessionId":"s",
+  "update":{"sessionUpdate":"tool_call","toolCallId":"cmd-1","title":"swift test","kind":"execute","status":"in_progress","content":[{"type":"terminal","terminalId":"cmd-1"}],"rawInput":{"command":"swift test","cwd":"/repo"},"_meta":{
+    "terminal_info":{
+      "terminal_id":"cmd-1",
+      "cwd":"/repo"
+    }
+  }}
+}}

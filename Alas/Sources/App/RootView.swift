@@ -15,227 +15,152 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        ZStack {
-            Group {
-                if state.projects.isEmpty {
-                    EmptyState(
-                        canCreateWorktree: false,
-                        onAddProject: { showNewProject = true },
-                        onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
-                    )
-                } else {
-                    ThreePaneLayout(
-                        sidebarWidth: Binding(
-                            get: { state.config.sidebarWidth },
-                            set: { state.config.sidebarWidth = $0 }
-                        ),
-                        rightWidth: Binding(
-                            get: { state.config.rightPaneWidth },
-                            set: { state.config.rightPaneWidth = $0 }
-                        ),
-                        sidebarVisible: state.config.sidebarVisible,
-                        rightVisible: state.config.rightPaneVisible,
-                        onWidthsChanged: { state.saveConfig() },
-                        sidebar: {
-                            SidebarView(
-                                state: state,
-                                collapsedProjects: Binding(
-                                    get: { Set(state.config.collapsedProjectIds) },
-                                    set: { collapsedProjects in
-                                        state.config.collapsedProjectIds = collapsedProjects.sorted()
-                                        state.saveConfig()
-                                    }
-                                ),
-                                onSettings: { openSettingsWindow() },
-                                onAddProject: { showNewProject = true },
-                                onEditProject: { projectId in
-                                    editingProject = state.projects.first { $0.id == projectId }
-                                },
-                                onRemoveProject: { projectId in
-                                    removingProject = state.projects.first { $0.id == projectId }
-                                },
-                                onNewWorktree: { projectId in
-                                    newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
-                                },
-                                onHideSidebar: {
-                                    state.config.sidebarVisible = false
-                                    state.saveConfig()
-                                }
-                            )
-                        },
-                        center: {
-                            centerContent()
-                        },
-                        right: {
-                            let resolver = RightPaneSelectionStateResolver(
-                                selectedWorktreeId: state.selectedWorktreeId,
-                                projects: state.activeSpaceProjects,
-                                projectsManager: state.projectsManager
-                            )
-                            switch resolver.resolve() {
-                            case .empty:
-                                EmptyView()
-                            case .active(let wt):
-                                RightPaneView(
-                                    state: state,
-                                    worktree: wt,
-                                    onSelectChangedFile: { file in
-                                        openOrFocusDiff(
-                                            worktree: wt,
-                                            path: file.path,
-                                            staged: file.stage == .staged,
-                                            originalPath: file.renameFrom
-                                        )
-                                    },
-                                    onSelectTreeFile: { node in
-                                        openOrFocusEditor(worktree: wt, path: node.path)
-                                    },
-                                    onSelectCommit: { commit in
-                                        openOrFocusCommit(worktree: wt, commit: commit)
-                                    },
-                                    onEditCommit: { commit, baseRef in
-                                        openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
-                                    }
-                                )
-                            case .creating(let wt):
-                                RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
-                            case .deleting(let wt):
-                                RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
-                            case .createFailed(let wt):
-                                RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
-                            }
-                        }
-                    )
-                }
+        rootContent
+            .environment(\.theme, state.themeStore.current)
+            .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
+                // `initial: true` is load-bearing: AppState.init() calls
+                // WindowAppearance.apply too, but that runs before the SwiftUI
+                // Window's NSWindow exists, so the per-window appearance never
+                // gets set. Without firing on first appearance, light-mode
+                // launches render half-dark until the user toggles the theme.
+                WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
             }
+            .background(WindowConfigurator(disablesSystemDrag: true))
+            .frame(minWidth: 700, minHeight: 600)
+            .ignoresSafeArea()
+            .modifier(RootCommandHandlers(
+                state: state,
+                newWorktreePresentation: $newWorktreePresentation,
+                showNewProject: $showNewProject,
+                selectedWorktree: selectedWorktree,
+                openSettings: openSettingsWindow
+            ))
+            .modifier(RootPresentationHandlers(
+                state: state,
+                showNewProject: $showNewProject,
+                editingProject: $editingProject,
+                removingProject: $removingProject,
+                newWorktreePresentation: $newWorktreePresentation
+            ))
+            .task {
+                state.startHarness()
+                if await state.projectsManager.refreshAll() {
+                    state.saveProjects()
+                }
+                // Worktrees now exist — load any persisted tab files for them. Init
+                // can't do this because refreshAll runs async after init.
+                state.reloadTabs()
+                if state.selectedWorktreeId == nil {
+                    state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
+                }
+                state.startAllProjectGitWatchers()
+                state.rescanAgents()
+            }
+    }
+
+    private var rootContent: some View {
+        ZStack {
+            mainContent
             FileSearchDialog(appState: state)
             RepoSelectorDialog(appState: state)
             AgentLauncherDialog(appState: state, selectedWorktree: selectedWorktree)
         }
-        .environment(\.theme, state.themeStore.current)
-        .onChange(of: state.themeStore.current.id, initial: true) { _, _ in
-            // `initial: true` is load-bearing: AppState.init() calls
-            // WindowAppearance.apply too, but that runs before the SwiftUI
-            // Window's NSWindow exists, so the per-window appearance never
-            // gets set. Without firing on first appearance, light-mode
-            // launches render half-dark until the user toggles the theme.
-            WindowAppearance.apply(darkMode: state.themeStore.current.darkMode)
+    }
+
+    @ViewBuilder
+    private var mainContent: some View {
+        if state.projects.isEmpty {
+            EmptyState(
+                canCreateWorktree: false,
+                onAddProject: { showNewProject = true },
+                onNewWorktree: { newWorktreePresentation = NewWorktreePresentation(projectId: nil) }
+            )
+        } else {
+            ThreePaneLayout(
+                sidebarWidth: Binding(
+                    get: { state.config.sidebarWidth },
+                    set: { state.config.sidebarWidth = $0 }
+                ),
+                rightWidth: Binding(
+                    get: { state.config.rightPaneWidth },
+                    set: { state.config.rightPaneWidth = $0 }
+                ),
+                sidebarVisible: state.config.sidebarVisible,
+                rightVisible: state.config.rightPaneVisible,
+                onWidthsChanged: { state.saveConfig() },
+                sidebar: { sidebarContent },
+                center: { centerContent() },
+                right: { rightContent }
+            )
         }
-        .background(WindowConfigurator(disablesSystemDrag: true))
-        .frame(minWidth: 700, minHeight: 600)
-        .ignoresSafeArea()
-        .modifier(RootCommandHandlers(
+    }
+
+    private var sidebarContent: some View {
+        SidebarView(
             state: state,
-            newWorktreePresentation: $newWorktreePresentation,
-            showNewProject: $showNewProject,
-            selectedWorktree: selectedWorktree,
-            openSettings: openSettingsWindow
-        ))
-        .sheet(isPresented: $showNewProject) {
-            NewProjectDialog(state: state, presented: $showNewProject)
-        }
-        .sheet(item: $editingProject) { project in
-            EditProjectDialog(
-                state: state,
-                presented: Binding(
-                    get: { editingProject != nil },
-                    set: { if !$0 { editingProject = nil } }
-                ),
-                project: project
-            )
-        }
-        .sheet(item: $newWorktreePresentation) { presentation in
-            NewWorktreeDialog(
-                state: state,
-                presented: Binding(
-                    get: { newWorktreePresentation != nil },
-                    set: { if !$0 { newWorktreePresentation = nil } }
-                ),
-                presetProjectId: presentation.projectId
-            )
-        }
-        .alert(
-            "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
-            isPresented: Binding(
-                get: { state.pendingForceDeleteWorktree != nil },
-                set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
+            collapsedProjects: Binding(
+                get: { Set(state.config.collapsedProjectIds) },
+                set: { collapsedProjects in
+                    state.config.collapsedProjectIds = collapsedProjects.sorted()
+                    state.saveConfig()
+                }
             ),
-            actions: {
-                Button("Force Delete", role: .destructive) {
-                    state.confirmForceDeletePendingWorktree()
-                }
-                Button("Cancel", role: .cancel) {
-                    state.cancelForceDeletePendingWorktree()
-                }
+            onSettings: { openSettingsWindow() },
+            onAddProject: { showNewProject = true },
+            onEditProject: { projectId in
+                editingProject = state.projects.first { $0.id == projectId }
             },
-            message: {
-                Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
+            onRemoveProject: { projectId in
+                removingProject = state.projects.first { $0.id == projectId }
+            },
+            onNewWorktree: { projectId in
+                newWorktreePresentation = NewWorktreePresentation(projectId: projectId)
+            },
+            onHideSidebar: {
+                state.config.sidebarVisible = false
+                state.saveConfig()
             }
         )
-        .alert(
-            "Remove \u{201C}\(removingProject?.name ?? "")\u{201D}?",
-            isPresented: Binding(
-                get: { removingProject != nil },
-                set: { if !$0 { removingProject = nil } }
-            ),
-            presenting: removingProject,
-            actions: { project in
-                Button("Remove", role: .destructive) {
-                    state.removeProject(id: project.id)
-                    removingProject = nil
-                }
-                Button("Cancel", role: .cancel) {
-                    removingProject = nil
-                }
-            },
-            message: { _ in
-                Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
-            }
+    }
+
+    @ViewBuilder
+    private var rightContent: some View {
+        let resolver = RightPaneSelectionStateResolver(
+            selectedWorktreeId: state.selectedWorktreeId,
+            projects: state.activeSpaceProjects,
+            projectsManager: state.projectsManager
         )
-        .onAppear {
-            state.updates.checkOnLaunch()
-        }
-        .sheet(item: Binding(
-            get: { state.updates.presentedUpdate },
-            set: { state.updates.presentedUpdate = $0 }
-        ), onDismiss: {
-            guard state.pendingSelfUpdate else { return }
-            state.pendingSelfUpdate = false
-            state.presentUpdateProgress = true
-            Task {
-                try? await state.selfUpdater.start(command: .homebrew)
-            }
-        }) { info in
-            UpdateAvailableSheet(
-                info: info,
-                source: state.updates.track == .nightly ? .direct : state.updates.source,
-                onDismiss: { state.updates.presentedUpdate = nil },
-                onRunUpdate: {
-                    state.pendingSelfUpdate = true
-                    state.updates.presentedUpdate = nil
+        switch resolver.resolve() {
+        case .empty:
+            EmptyView()
+        case .active(let wt):
+            RightPaneView(
+                state: state,
+                worktree: wt,
+                onSelectChangedFile: { file in
+                    openOrFocusDiff(
+                        worktree: wt,
+                        path: file.path,
+                        staged: file.stage == .staged,
+                        originalPath: file.renameFrom
+                    )
+                },
+                onSelectTreeFile: { node in
+                    openOrFocusEditor(worktree: wt, path: node.path)
+                },
+                onSelectCommit: { commit in
+                    openOrFocusCommit(worktree: wt, commit: commit)
+                },
+                onEditCommit: { commit, baseRef in
+                    openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
                 }
             )
-            .environment(\.theme, state.themeStore.current)
-        }
-        .sheet(isPresented: $state.presentUpdateProgress) {
-            UpdateProgressSheet(updater: state.selfUpdater) {
-                state.presentUpdateProgress = false
-            }
-            .environment(\.theme, state.themeStore.current)
-        }
-        .task {
-            state.startHarness()
-            if await state.projectsManager.refreshAll() {
-                state.saveProjects()
-            }
-            // Worktrees now exist — load any persisted tab files for them. Init
-            // can't do this because refreshAll runs async after init.
-            state.reloadTabs()
-            if state.selectedWorktreeId == nil {
-                state.selectWorktree(id: state.resolvedSelectionForActiveSpaceForStartup())
-            }
-            state.startAllProjectGitWatchers()
-            state.rescanAgents()
+        case .creating(let wt):
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .creating)
+        case .deleting(let wt):
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .deleting)
+        case .createFailed(let wt):
+            RightPaneTransitionalView(state: state, worktree: wt, kind: .createFailed)
         }
     }
 
@@ -342,6 +267,156 @@ struct RootView: View {
             title: title
         )
         state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+    }
+}
+
+private struct RootPresentationHandlers: ViewModifier {
+    @Bindable var state: AppState
+    @Binding var showNewProject: Bool
+    @Binding var editingProject: ProjectConfig?
+    @Binding var removingProject: ProjectConfig?
+    @Binding var newWorktreePresentation: NewWorktreePresentation?
+
+    func body(content: Content) -> some View {
+        content
+        .sheet(isPresented: $showNewProject) {
+            NewProjectDialog(state: state, presented: $showNewProject)
+        }
+        .sheet(item: $editingProject) { project in
+            EditProjectDialog(
+                state: state,
+                presented: Binding(
+                    get: { editingProject != nil },
+                    set: { if !$0 { editingProject = nil } }
+                ),
+                project: project
+            )
+        }
+        .sheet(item: $newWorktreePresentation) { presentation in
+            NewWorktreeDialog(
+                state: state,
+                presented: Binding(
+                    get: { newWorktreePresentation != nil },
+                    set: { if !$0 { newWorktreePresentation = nil } }
+                ),
+                presetProjectId: presentation.projectId
+            )
+        }
+        .alert(
+            "'\(state.pendingForceDeleteWorktree?.branch ?? "")' \(state.pendingForceDeleteWorktree?.reason.alertTitleSuffix ?? "requires force delete.")",
+            isPresented: Binding(
+                get: { state.pendingForceDeleteWorktree != nil },
+                set: { if !$0 { state.cancelForceDeletePendingWorktree() } }
+            ),
+            actions: {
+                Button("Force Delete", role: .destructive) {
+                    state.confirmForceDeletePendingWorktree()
+                }
+                Button("Cancel", role: .cancel) {
+                    state.cancelForceDeletePendingWorktree()
+                }
+            },
+            message: {
+                Text(state.pendingForceDeleteWorktree?.reason.alertMessage ?? "Force delete?")
+            }
+        )
+        .alert(
+            "Remove \u{201C}\(removingProject?.name ?? "")\u{201D}?",
+            isPresented: Binding(
+                get: { removingProject != nil },
+                set: { if !$0 { removingProject = nil } }
+            ),
+            presenting: removingProject,
+            actions: { project in
+                Button("Remove", role: .destructive) {
+                    state.removeProject(id: project.id)
+                    removingProject = nil
+                }
+                Button("Cancel", role: .cancel) {
+                    removingProject = nil
+                }
+            },
+            message: { _ in
+                Text("Alas will stop tracking this project and its worktrees. No files will be deleted from disk. If any editor tabs have unsaved changes, you'll be asked to save or discard them.")
+            }
+        )
+        .confirmationDialog(
+            "Merge review request?",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateWithPendingMerge() != nil },
+                set: { if !$0 { state.rightPaneStore.stateWithPendingMerge()?.cancelMerge() } }
+            ),
+            titleVisibility: .visible,
+            presenting: state.rightPaneStore.stateWithPendingMerge()?.pendingMerge
+        ) { snapshot in
+            Button("Merge", role: .destructive) {
+                state.rightPaneStore.stateWithPendingMerge()?.performMerge()
+            }
+            Button("Cancel", role: .cancel) {
+                state.rightPaneStore.stateWithPendingMerge()?.cancelMerge()
+            }
+        } message: { snapshot in
+            Text(RightPaneState.mergeConfirmationMessage(for: snapshot.reviewRequest))
+        }
+        .alert(
+            "Merge failed",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateReportingMergeError() != nil },
+                set: { if !$0 { state.rightPaneStore.stateReportingMergeError()?.clearMergeError() } }
+            ),
+            presenting: state.rightPaneStore.stateReportingMergeError()?.mergeError
+        ) { _ in
+            Button("OK", role: .cancel) {
+                state.rightPaneStore.stateReportingMergeError()?.clearMergeError()
+            }
+        } message: { message in
+            Text(message)
+        }
+        .alert(
+            "Added to merge queue",
+            isPresented: Binding(
+                get: { state.rightPaneStore.stateReportingMergeQueuedMessage() != nil },
+                set: { if !$0 { state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage() } }
+            ),
+            presenting: state.rightPaneStore.stateReportingMergeQueuedMessage()?.mergeQueuedMessage
+        ) { _ in
+            Button("OK", role: .cancel) {
+                state.rightPaneStore.stateReportingMergeQueuedMessage()?.clearMergeQueuedMessage()
+            }
+        } message: { message in
+            Text(message)
+        }
+        .onAppear {
+            state.updates.checkOnLaunch()
+        }
+        .sheet(item: Binding(
+            get: { state.updates.presentedUpdate },
+            set: { state.updates.presentedUpdate = $0 }
+        ), onDismiss: {
+            guard state.pendingSelfUpdate else { return }
+            state.pendingSelfUpdate = false
+            state.presentUpdateProgress = true
+            Task {
+                try? await state.selfUpdater.start(command: .homebrew)
+            }
+        }) { info in
+            UpdateAvailableSheet(
+                info: info,
+                source: state.updates.track == .nightly ? .direct : state.updates.source,
+                onDismiss: { state.updates.presentedUpdate = nil },
+                onRunUpdate: {
+                    state.pendingSelfUpdate = true
+                    state.updates.presentedUpdate = nil
+                }
+            )
+            .environment(\.theme, state.themeStore.current)
+        }
+        .sheet(isPresented: $state.presentUpdateProgress) {
+            UpdateProgressSheet(updater: state.selfUpdater) {
+                state.presentUpdateProgress = false
+            }
+            .environment(\.theme, state.themeStore.current)
+        }
     }
 }
 

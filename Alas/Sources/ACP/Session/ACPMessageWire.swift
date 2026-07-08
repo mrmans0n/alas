@@ -6,9 +6,9 @@ import Foundation
 /// converts each variant into a full `ACPMessage`, which is the only
 /// place we allocate `StreamingText` (a `@MainActor` class).
 enum ACPMessageWire: Sendable {
-    case user(text: String, attachments: [ACPMessage.Attachment])
-    case agent(text: String)
-    case thought(text: String)
+    case user(messageId: String?, text: String, attachments: [ACPMessage.Attachment])
+    case agent(messageId: String?, text: String)
+    case thought(messageId: String?, text: String)
     case toolCall(ACPMessage.ToolCall)
     case fileEdit(ACPMessage.FileEdit)
     case plan([ACPMessage.PlanItem])
@@ -30,11 +30,13 @@ enum ACPMessageWire: Sendable {
         switch kind {
         case "user":
             let p = try decoder.decode(UserPayload.self, from: payload)
-            return .user(text: p.text, attachments: p.attachments)
+            return .user(messageId: p.messageId, text: p.text, attachments: p.attachments)
         case "agent":
-            return .agent(text: try decoder.decode(TextPayload.self, from: payload).text)
+            let p = try decoder.decode(TextPayload.self, from: payload)
+            return .agent(messageId: p.messageId, text: p.text)
         case "thought":
-            return .thought(text: try decoder.decode(TextPayload.self, from: payload).text)
+            let p = try decoder.decode(TextPayload.self, from: payload)
+            return .thought(messageId: p.messageId, text: p.text)
         case "tool_call":
             return .toolCall(try decoder.decode(ACPMessage.ToolCall.self, from: payload))
         case "file_edit":
@@ -53,12 +55,12 @@ enum ACPMessageWire: Sendable {
     @MainActor
     func toMessage() -> ACPMessage {
         switch self {
-        case .user(let text, let attachments):
-            return .user(id: UUID(), text: text, attachments: attachments)
-        case .agent(let text):
-            return .agent(id: UUID(), StreamingText(text))
-        case .thought(let text):
-            return .thought(id: UUID(), StreamingText(text))
+        case .user(let messageId, let text, let attachments):
+            return .user(id: UUID(), messageId: messageId, text: text, attachments: attachments)
+        case .agent(let messageId, let text):
+            return .agent(id: UUID(), messageId: messageId, StreamingText(text))
+        case .thought(let messageId, let text):
+            return .thought(id: UUID(), messageId: messageId, StreamingText(text))
         case .toolCall(let tc):
             return .toolCall(tc)
         case .fileEdit(let fe):
@@ -70,8 +72,12 @@ enum ACPMessageWire: Sendable {
         }
     }
 
-    private struct TextPayload: Decodable { let text: String }
+    private struct TextPayload: Decodable {
+        let messageId: String?
+        let text: String
+    }
     private struct UserPayload: Decodable {
+        let messageId: String?
         let text: String
         let attachments: [ACPMessage.Attachment]
     }

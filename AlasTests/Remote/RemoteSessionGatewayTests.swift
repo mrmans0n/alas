@@ -803,6 +803,75 @@ struct RemoteSessionGatewayTests {
         #expect((wire.text ?? "").isEmpty == false)
     }
 
+    @Test func toolCallWireOmitsInlineAssetData() throws {
+        let msg = ACPMessage.toolCall(.init(
+            toolCallId: "tc-image",
+            title: "Image generation",
+            kind: "other",
+            status: "completed",
+            content: "",
+            preview: nil,
+            rawOutput: #"{"b64_json":"raw-output-base64"}"#,
+            metadata: AnyCodable([
+                "terminal_output_delta": AnyCodable([
+                    "terminal_id": AnyCodable("term-remote"),
+                    "data": AnyCodable("large terminal output")
+                ])
+            ]),
+            assets: [
+                .image(
+                    data: "base64-image-data",
+                    uri: "file:///tmp/shot.png",
+                    mimeType: "image/png",
+                    name: "shot.png"
+                ),
+                .image(
+                    data: nil,
+                    uri: " \ndata:image/png;base64,inline-uri-data",
+                    mimeType: "image/png",
+                    name: "inline-uri.png"
+                ),
+                .resource(
+                    uri: "data:application/json;base64,inline-resource-data",
+                    name: "inline-resource.json",
+                    mimeType: "application/json"
+                )
+            ]))
+
+        let wire = RemoteSessionGateway.toWire(msg, index: 0)
+        let json = try #require(wire.json)
+        #expect(!json.contains("base64-image-data"))
+        #expect(!json.contains("inline-uri-data"))
+        #expect(!json.contains("inline-resource-data"))
+        #expect(!json.contains("raw-output-base64"))
+        #expect(!json.contains("large terminal output"))
+
+        let payload = try #require(json.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: payload)
+        #expect(decoded.rawOutput == nil)
+        #expect(decoded.metadata == nil)
+        #expect(decoded.assets == [
+            .image(
+                data: nil,
+                uri: "file:///tmp/shot.png",
+                mimeType: "image/png",
+                name: "shot.png"
+            ),
+            .image(
+                data: nil,
+                uri: nil,
+                mimeType: "image/png",
+                name: "inline-uri.png"
+            ),
+            .init(
+                kind: .resource,
+                uri: nil,
+                mimeType: "application/json",
+                name: "inline-resource.json"
+            )
+        ])
+    }
+
     @Test func tooManyAttachmentsRejected() async {
         // Count cap (parity with ACPComposer.maxImagesPerMessage) — a single
         // prompt can't write an unbounded number of tiny files.

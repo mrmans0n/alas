@@ -1,0 +1,45 @@
+import Testing
+@testable import Alas
+
+struct ProjectIconTests {
+    @Test func defaultIconUsesLetterModeAndColor() {
+        let icon = ProjectIcon.default(color: "#123456")
+
+        #expect(icon.mode == .letter)
+        #expect(icon.color == "#123456")
+        #expect(icon.label == nil)
+        #expect(icon.symbolName == nil)
+        #expect(icon.emoji == nil)
+        #expect(icon.imagePath == nil)
+    }
+
+    @Test func fallbackLabelUsesLastPathComponentInitial() {
+        #expect(ProjectIcon.fallbackLabel(projectName: "mrmans0n/alas") == "A")
+        #expect(ProjectIcon.fallbackLabel(projectName: "  ") == "?")
+    }
+
+    @Test func sanitizedLabelClampsToTwoCharacters() {
+        #expect(ProjectIcon.sanitizedLabel("abc") == "AB")
+        #expect(ProjectIcon.sanitizedLabel("z") == "Z")
+        #expect(ProjectIcon.sanitizedLabel("  ") == nil)
+    }
+
+    @Test func sanitizedColorRequiresSixDigitHex() {
+        #expect(ProjectIcon.sanitizedColor("#aabbcc") == "#aabbcc")
+        #expect(ProjectIcon.sanitizedColor("AABBCC") == "#AABBCC")
+        #expect(ProjectIcon.sanitizedColor("bad") == ProjectIcon.defaultColor)
+        #expect(ProjectIcon.sanitizedColor("#12345g") == ProjectIcon.defaultColor)
+    }
+
+    @Test func sanitizedColorCanUseCallerFallback() {
+        #expect(ProjectIcon.sanitizedColor(nil, fallback: "#112233") == "#112233")
+        #expect(ProjectIcon.sanitizedColor("nope", fallback: "#112233") == "#112233")
+        #expect(ProjectIcon.sanitizedColor("nope", fallback: "also-bad") == ProjectIcon.defaultColor)
+    }
+
+    @Test func sanitizedEmojiUsesFirstValidEmojiOnly() {
+        #expect(ProjectIcon.sanitizedEmoji("abc 🚀") == "🚀")
+        #expect(ProjectIcon.sanitizedEmoji("abc") == nil)
+        #expect(ProjectIcon(mode: .emoji, color: "#112233", emoji: "abc").emoji == nil)
+    }
+}

@@ -1,8 +1,14 @@
 import SwiftUI
 
+enum DialogContainerLayout {
+    static let defaultWidth: CGFloat = 480
+    static let projectWidth: CGFloat = 640
+}
+
 struct DialogContainer<Content: View>: View {
     let title: String
     let subtitle: String?
+    let width: CGFloat
     @ViewBuilder let content: () -> Content
     let cancelTitle: String
     let confirmTitle: String
@@ -12,6 +18,30 @@ struct DialogContainer<Content: View>: View {
     let confirmEnabled: Bool
 
     @Environment(\.theme) var theme
+
+    init(
+        title: String,
+        subtitle: String?,
+        width: CGFloat = DialogContainerLayout.defaultWidth,
+        @ViewBuilder content: @escaping () -> Content,
+        cancelTitle: String,
+        confirmTitle: String,
+        confirmStyle: AlasButtonStyle,
+        onCancel: @escaping () -> Void,
+        onConfirm: @escaping () -> Void,
+        confirmEnabled: Bool
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.width = width
+        self.content = content
+        self.cancelTitle = cancelTitle
+        self.confirmTitle = confirmTitle
+        self.confirmStyle = confirmStyle
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+        self.confirmEnabled = confirmEnabled
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,7 +70,7 @@ struct DialogContainer<Content: View>: View {
             .background(theme.color("bg-2"))
             .overlay(Divider(), alignment: .top)
         }
-        .frame(width: 480)
+        .frame(width: width)
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.6), radius: 80, y: 30)

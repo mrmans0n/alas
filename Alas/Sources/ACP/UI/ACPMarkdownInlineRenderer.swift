@@ -368,16 +368,11 @@ enum ACPMarkdownInlineRenderer {
                     continue
                 }
 
-                if !isSubscript,
-                   hasSubscriptOpenTag(in: source, at: index),
-                   let closeRange = source.range(
-                       of: "</sub>",
-                       options: [.caseInsensitive],
-                       range: source.index(index, offsetBy: 5)..<source.endIndex
-                   ) {
+                if let subscriptContentStart = subscriptOpenTagEnd(in: source, at: index),
+                   let closeRange = matchingSubscriptClose(in: source, from: subscriptContentStart) {
                     let marker = makeSubscriptMarker()
                     output += marker.start
-                    output += render(String(source[source.index(index, offsetBy: 5)..<closeRange.lowerBound]), isSubscript: true)
+                    output += render(String(source[subscriptContentStart..<closeRange.lowerBound]), isSubscript: true)
                     output += marker.end
                     subscriptMarkers.append(marker)
                     index = closeRange.upperBound
@@ -403,11 +398,74 @@ enum ACPMarkdownInlineRenderer {
             return output
         }
 
-        private func hasSubscriptOpenTag(in source: String, at index: String.Index) -> Bool {
-            guard let end = source.index(index, offsetBy: 5, limitedBy: source.endIndex) else {
-                return false
+        private func matchingSubscriptClose(
+            in source: String,
+            from contentStart: String.Index
+        ) -> Range<String.Index>? {
+            var cursor = contentStart
+            var depth = 1
+
+            while cursor < source.endIndex {
+                let closeRange = source.range(
+                    of: "</sub>",
+                    options: [.caseInsensitive],
+                    range: cursor..<source.endIndex
+                )
+
+                if let openRange = nextSubscriptOpenTagRange(
+                    in: source,
+                    range: cursor..<(closeRange?.lowerBound ?? source.endIndex)
+                ) {
+                    depth += 1
+                    cursor = openRange.upperBound
+                    continue
+                }
+
+                guard let closeRange else { return nil }
+                depth -= 1
+                if depth == 0 {
+                    return closeRange
+                }
+                cursor = closeRange.upperBound
             }
-            return source[index..<end].caseInsensitiveCompare("<sub>") == .orderedSame
+
+            return nil
+        }
+
+        private func nextSubscriptOpenTagRange(
+            in source: String,
+            range: Range<String.Index>
+        ) -> Range<String.Index>? {
+            var cursor = range.lowerBound
+            while cursor < range.upperBound {
+                if let end = subscriptOpenTagEnd(in: source, at: cursor) {
+                    return cursor..<end
+                }
+                cursor = source.index(after: cursor)
+            }
+            return nil
+        }
+
+        private func subscriptOpenTagEnd(in source: String, at index: String.Index) -> String.Index? {
+            guard source[index...].hasPrefix("<"),
+                  let nameEnd = source.index(index, offsetBy: 4, limitedBy: source.endIndex),
+                  source[index..<nameEnd].caseInsensitiveCompare("<sub") == .orderedSame
+            else {
+                return nil
+            }
+
+            guard nameEnd < source.endIndex else { return nil }
+            let next = source[nameEnd]
+            guard next == ">" || next.isWhitespace else { return nil }
+
+            var cursor = nameEnd
+            while cursor < source.endIndex {
+                if source[cursor] == ">" {
+                    return source.index(after: cursor)
+                }
+                cursor = source.index(after: cursor)
+            }
+            return nil
         }
 
         mutating private func makeImagePlaceholder() -> String {

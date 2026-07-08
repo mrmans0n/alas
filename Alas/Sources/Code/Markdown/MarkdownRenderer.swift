@@ -37,6 +37,7 @@ final class MarkdownRenderer {
 
     private var currentTraits: NSFontDescriptor.SymbolicTraits = []
     private var inStrikethrough: Bool = false
+    private var subscriptDepth: Int = 0
     private var listDepth: Int = 0
     /// Counts how many times each base slug has been seen so duplicate
     /// headings get GitHub-style `-1`, `-2`, … suffixes instead of clobbering
@@ -80,6 +81,7 @@ final class MarkdownRenderer {
         self.worktreeRoot = worktreeRoot
         self.currentTraits = []
         self.inStrikethrough = false
+        self.subscriptDepth = 0
         self.listDepth = 0
         self.slugCounts = [:]
 
@@ -107,6 +109,7 @@ final class MarkdownRenderer {
         case let s as Strong:           withTrait(.bold) { visitChildren(s) }
         case let s as Strikethrough:    withStrikethrough { visitChildren(s) }
         case let c as InlineCode:       appendText(c.code, attributes: inlineCodeAttributes())
+        case let h as InlineHTML:       visitInlineHTML(h)
         case _ as SoftBreak:            appendPlain(" ")
         case _ as LineBreak:            appendPlain("\n")
         case let l as Markdown.Link:    visitLink(l)
@@ -178,6 +181,26 @@ final class MarkdownRenderer {
             remoteImages.append(RemoteImageReference(url: url, attachment: attachment))
             output.append(NSAttributedString(attachment: attachment))
         }
+    }
+
+    private func visitInlineHTML(_ html: InlineHTML) {
+        let raw = html.rawHTML.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.isSubscriptOpenTag(raw) {
+            subscriptDepth += 1
+        } else if raw.caseInsensitiveCompare("</sub>") == .orderedSame {
+            subscriptDepth = max(0, subscriptDepth - 1)
+        }
+    }
+
+    private static func isSubscriptOpenTag(_ raw: String) -> Bool {
+        guard raw.hasPrefix("<") else { return false }
+        let lower = raw.lowercased()
+        guard lower.hasPrefix("<sub") else { return false }
+        let nameEnd = lower.index(lower.startIndex, offsetBy: 4)
+        guard nameEnd < lower.endIndex else { return false }
+        let next = lower[nameEnd]
+        guard next == ">" || next.isWhitespace else { return false }
+        return lower.last == ">"
     }
 
     private func attachmentString(for image: NSImage) -> NSAttributedString {
@@ -338,11 +361,13 @@ final class MarkdownRenderer {
         let savedOutput = output
         let savedTraits = currentTraits
         let savedStrikethrough = inStrikethrough
+        let savedSubscriptDepth = subscriptDepth
         let cellOutput = NSMutableAttributedString()
 
         output = cellOutput
         currentTraits = []
         inStrikethrough = false
+        subscriptDepth = 0
 
         for child in cell.children {
             if let paragraph = child as? Paragraph {
@@ -358,6 +383,7 @@ final class MarkdownRenderer {
         output = savedOutput
         currentTraits = savedTraits
         inStrikethrough = savedStrikethrough
+        subscriptDepth = savedSubscriptDepth
 
         if rendered.length > 0 {
             return rendered
@@ -611,29 +637,42 @@ final class MarkdownRenderer {
     // MARK: - Attributes
 
     private func bodyAttributes() -> [NSAttributedString.Key: Any] {
+        let isSubscript = subscriptDepth > 0
         var attrs: [NSAttributedString.Key: Any] = [
-            .font: bodyFont(),
+            .font: bodyFont(size: isSubscript ? subscriptFontSize(base: NSFont.systemFontSize) : NSFont.systemFontSize),
             .foregroundColor: NSColor(theme.color("fg"))
         ]
         if inStrikethrough {
             attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
+        if isSubscript {
+            attrs[.baselineOffset] = -max(1, subscriptFontSize(base: NSFont.systemFontSize) * 0.22)
+        }
         return attrs
     }
 
     private func inlineCodeAttributes() -> [NSAttributedString.Key: Any] {
-        [
-            .font: monospaceFont(size: monoSize - 1),
+        let isSubscript = subscriptDepth > 0
+        var attrs: [NSAttributedString.Key: Any] = [
+            .font: monospaceFont(size: isSubscript ? subscriptFontSize(base: monoSize - 1) : monoSize - 1),
             .foregroundColor: NSColor(theme.color("fg")),
             .backgroundColor: NSColor(theme.color("bg-2"))
         ]
+        if isSubscript {
+            attrs[.baselineOffset] = -max(1, subscriptFontSize(base: monoSize - 1) * 0.22)
+        }
+        return attrs
     }
 
-    private func bodyFont() -> NSFont {
-        let base = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+    private func bodyFont(size: CGFloat = NSFont.systemFontSize) -> NSFont {
+        let base = NSFont.systemFont(ofSize: size)
         if currentTraits.isEmpty { return base }
         let desc = base.fontDescriptor.withSymbolicTraits(currentTraits)
         return NSFont(descriptor: desc, size: base.pointSize) ?? base
+    }
+
+    private func subscriptFontSize(base: CGFloat) -> CGFloat {
+        max(7, base * 0.82)
     }
 
     private func headerTableFont() -> NSFont {

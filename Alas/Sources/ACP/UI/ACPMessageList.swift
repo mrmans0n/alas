@@ -9,6 +9,7 @@ struct ACPMessageList: View {
     let onOpenDiff: (String) -> Void
     let onOpenTranscriptLink: (URL) -> Bool
     let policy: ACPPermissionPolicy?
+    let trustedImageRoot: URL?
     let scopeKey: String
     let onQuestionResponse: (ACPQuestionResponse) -> Void
     /// Callbacks invoked by the pending bubbles + header. The host wires
@@ -82,7 +83,7 @@ struct ACPMessageList: View {
         if let last = transcript.messages.last {
             hasher.combine(last.kind)
             switch last {
-            case .agent(_, let buf), .thought(_, let buf):
+            case .agent(_, _, let buf), .thought(_, _, let buf):
                 hasher.combine(buf.value.count)
             case .systemNotice(_, let t):
                 hasher.combine(t.count)
@@ -94,7 +95,7 @@ struct ACPMessageList: View {
                 hasher.combine(e.removed)
             case .plan:
                 break
-            case .user(_, let t, _):
+            case .user(_, _, let t, _):
                 hasher.combine(t.count)
             }
         }
@@ -220,6 +221,16 @@ struct ACPMessageList: View {
                 }
                 .onChange(of: viewport.size.height) { _, _ in
                     restoreTailIfNeeded(proxy: proxy, animated: false)
+                    restoreRememberedAnchorIfNeeded(proxy: proxy)
+                }
+                .onChange(of: viewport.size.width) { oldWidth, newWidth in
+                    if Self.shouldRestoreTailAfterViewportWidthChange(
+                        previousWidth: oldWidth,
+                        newWidth: newWidth,
+                        followsTranscriptTail: session.followsTranscriptTail
+                    ) {
+                        restoreTailIfNeeded(proxy: proxy, animated: false)
+                    }
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
                 .onChange(of: scrollSignature) { _, _ in
@@ -519,6 +530,15 @@ struct ACPMessageList: View {
         followsTranscriptTail
     }
 
+    nonisolated static func shouldRestoreTailAfterViewportWidthChange(
+        previousWidth: CGFloat,
+        newWidth: CGFloat,
+        followsTranscriptTail: Bool
+    ) -> Bool {
+        guard followsTranscriptTail else { return false }
+        return abs(newWidth - previousWidth) > 0.5
+    }
+
     nonisolated static func topVisibleAnchorID(in frames: [String: CGRect]) -> String? {
         frames
             .filter { _, frame in frame.height > 0 && frame.maxY > 0 }
@@ -734,7 +754,7 @@ struct ACPMessageList: View {
     @ViewBuilder
     private func row(for m: ACPMessage) -> some View {
         switch m {
-        case .user(_, let text, let attachments):
+        case .user(_, _, let text, let attachments):
             ACPMessageGutter(markdown: { text }) {
                 UserMessageRow(
                     text: text,
@@ -743,20 +763,21 @@ struct ACPMessageList: View {
                     typography: typography
                 )
             }
-        case .agent(let id, let buf):
+        case .agent(_, _, let buf):
             ACPMessageGutter(markdown: { buf.value }) {
                 AgentMessageRow(
-                    messageId: id.uuidString,
+                    messageId: Self.markdownCacheMessageId(for: m),
                     transcript: transcript,
                     buffer: buf,
                     typography: typography
                 )
             }
-        case .thought(_, let buf):
+        case .thought(_, _, let buf):
             ACPThoughtView(buffer: buf)
         case .toolCall(let tc):
             ACPToolCallCard(
                 toolCall: tc,
+                trustedImageRoot: trustedImageRoot,
                 loadFullContent: tc.isContentTruncated
                     ? { [tcid = tc.toolCallId] in onLoadFullToolCallContent(tcid) }
                     : nil)
@@ -768,6 +789,10 @@ struct ACPMessageList: View {
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         }
+    }
+
+    static func markdownCacheMessageId(for message: ACPMessage) -> String {
+        message.stableId
     }
 }
 

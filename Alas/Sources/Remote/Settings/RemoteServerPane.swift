@@ -46,9 +46,7 @@ struct RemoteServerPane: View {
                             let fallbackURL = "http://localhost:\(port)"
                             SettingsRow(name: "Localhost", desc: fallbackURL) {
                                 Button {
-                                    let pasteboard = NSPasteboard.general
-                                    pasteboard.clearContents()
-                                    pasteboard.setString(fallbackURL, forType: .string)
+                                    copyAddress(fallbackURL)
                                 } label: {
                                     Text("Copy")
                                         .font(.system(size: 12, weight: .medium))
@@ -61,30 +59,27 @@ struct RemoteServerPane: View {
                                 name: addressLabel(address),
                                 desc: addressDescription(address)
                             ) {
-                                HStack(spacing: 8) {
-                                    if selectedAddress()?.id == address.id {
-                                        Image(systemName: "checkmark")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(theme.color("accent"))
-                                    }
-                                    Button {
-                                        let pasteboard = NSPasteboard.general
-                                        pasteboard.clearContents()
-                                        pasteboard.setString(address.url, forType: .string)
-                                    } label: {
-                                        Text("Copy")
-                                            .font(.system(size: 12, weight: .medium))
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Button {
-                                        chooseAddress(address)
-                                    } label: {
-                                        Text("Use for QR")
-                                            .font(.system(size: 12, weight: .medium))
-                                    }
-                                    .buttonStyle(.plain)
+                                Button {
+                                    copyAddress(address.url)
+                                } label: {
+                                    Text("Copy")
+                                        .font(.system(size: 12, weight: .medium))
                                 }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        if let selected = selectedAddress(), !state.remoteAdvertisedAddresses.isEmpty {
+                            SettingsRow(
+                                name: "Pairing QR address",
+                                desc: "QR will use \(addressLabel(selected)): \(selected.url)"
+                            ) {
+                                Picker("Pairing QR address", selection: selectedAddressBinding()) {
+                                    ForEach(state.remoteAdvertisedAddresses) { address in
+                                        Text(pickerAddressLabel(address)).tag(address.id)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
                             }
                         }
                         SettingsRow(
@@ -194,6 +189,34 @@ struct RemoteServerPane: View {
             return "\(address.url) on \(interface)"
         }
         return address.url
+    }
+
+    private func pickerAddressLabel(_ address: RemoteAdvertisedAddress) -> String {
+        let label = addressLabel(address)
+        let matching = state.remoteAdvertisedAddresses.filter { addressLabel($0) == label }
+        guard matching.count > 1 else { return label }
+
+        if let interfaceName = address.interfaceName,
+           matching.filter({ $0.interfaceName == interfaceName }).count == 1 {
+            return "\(label) \(interfaceName)"
+        }
+        return "\(label) \(address.host)"
+    }
+
+    private func selectedAddressBinding() -> Binding<String> {
+        Binding(
+            get: { selectedAddress()?.id ?? "" },
+            set: { id in
+                guard let address = state.remoteAdvertisedAddresses.first(where: { $0.id == id }) else { return }
+                chooseAddress(address)
+            }
+        )
+    }
+
+    private func copyAddress(_ url: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(url, forType: .string)
     }
 
     private func chooseAddress(_ address: RemoteAdvertisedAddress) {

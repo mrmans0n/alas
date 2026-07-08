@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// A generic JSON-RPC 2.0 envelope. Shared by every ACP wire type.
@@ -332,9 +333,126 @@ struct ACPInitializeResult: Codable, Equatable {
 }
 
 /// Type-erased Codable used for `JSONRPCError.data` and `_meta` fields.
-struct AnyCodable: Codable, Equatable {
+/// It only carries values that are JSON-compatible and safe to move across
+/// actor boundaries as immutable payload data.
+struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
     let value: Any
     init(_ value: Any) { self.value = value }
+
+    private enum CanonicalValue: Equatable, Hashable, Encodable {
+        case null
+        case bool(Bool)
+        case int(Int)
+        case double(Double)
+        case string(String)
+        case array([CanonicalValue])
+        case object([CanonicalObjectMember])
+
+        func encode(to encoder: Encoder) throws {
+            switch self {
+            case .null:
+                var c = encoder.singleValueContainer()
+                try c.encodeNil()
+            case .bool(let value):
+                var c = encoder.singleValueContainer()
+                try c.encode(value)
+            case .int(let value):
+                var c = encoder.singleValueContainer()
+                try c.encode(value)
+            case .double(let value):
+                var c = encoder.singleValueContainer()
+                try c.encode(value)
+            case .string(let value):
+                var c = encoder.singleValueContainer()
+                try c.encode(value)
+            case .array(let values):
+                var c = encoder.unkeyedContainer()
+                for value in values { try c.encode(value) }
+            case .object(let members):
+                var c = encoder.container(keyedBy: CanonicalObjectCodingKey.self)
+                for member in members {
+                    try c.encode(member.value, forKey: .init(member.key))
+                }
+            }
+        }
+    }
+
+    private struct CanonicalObjectCodingKey: CodingKey {
+        let stringValue: String
+        let intValue: Int? = nil
+
+        init(_ stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            return nil
+        }
+    }
+
+    private struct CanonicalObjectMember: Equatable, Hashable {
+        let key: String
+        let value: CanonicalValue
+    }
+
+    private var canonicalValue: CanonicalValue {
+        return AnyCodable.canonicalize(value)
+    }
+
+    private static func canonicalize(_ value: Any) -> CanonicalValue {
+        if let value = value as? AnyCodable { return value.canonicalValue }
+        if value is NSNull { return .null }
+        if let value = value as? NSNumber {
+            let cfValue = value as CFNumber
+            if CFGetTypeID(cfValue) == CFBooleanGetTypeID() {
+                return .bool(value.boolValue)
+            }
+            if CFNumberIsFloatType(cfValue) {
+                return .double(value.doubleValue)
+            }
+            return .int(value.intValue)
+        }
+        if let value = value as? Bool { return .bool(value) }
+        if let value = value as? Int { return .int(value) }
+        if let value = value as? Double { return .double(value) }
+        if let value = value as? String { return .string(value) }
+        if let value = value as? [AnyCodable] {
+            return .array(value.map { $0.canonicalValue })
+        }
+        if let value = value as? [String: AnyCodable] {
+            return .object(value
+                .sorted(by: { $0.key < $1.key })
+                .map { key, value in
+                    CanonicalObjectMember(key: key, value: value.canonicalValue)
+                })
+        }
+        if let value = value as? [Any] {
+            return .array(value.map { AnyCodable.canonicalize($0) })
+        }
+        if let value = value as? NSArray {
+            return .array(value.map { AnyCodable.canonicalize($0) })
+        }
+        if let value = value as? [String: Any] {
+            return .object(value
+                .sorted(by: { $0.key < $1.key })
+                .map { key, value in
+                    CanonicalObjectMember(key: key, value: AnyCodable.canonicalize(value))
+                })
+        }
+        if let value = value as? NSDictionary {
+            var members: [CanonicalObjectMember] = []
+            for (rawKey, rawValue) in value {
+                guard let key = rawKey as? String else { return .null }
+                members.append(CanonicalObjectMember(key: key, value: canonicalize(rawValue)))
+            }
+            return .object(members.sorted(by: { $0.key < $1.key }))
+        }
+        return .null
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
@@ -356,20 +474,15 @@ struct AnyCodable: Codable, Equatable {
     }
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
-        switch value {
-        case is NSNull: try c.encodeNil()
-        case let v as Bool: try c.encode(v)
-        case let v as Int: try c.encode(v)
-        case let v as Double: try c.encode(v)
-        case let v as String: try c.encode(v)
-        case let v as [AnyCodable]: try c.encode(v)
-        case let v as [String: AnyCodable]: try c.encode(v)
-        default: try c.encodeNil()
-        }
+        try c.encode(canonicalValue)
     }
 
     static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
-        String(describing: lhs.value) == String(describing: rhs.value)
+        lhs.canonicalValue == rhs.canonicalValue
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(canonicalValue)
     }
 }
 
