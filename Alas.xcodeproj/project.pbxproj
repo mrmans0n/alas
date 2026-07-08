@@ -317,6 +317,7 @@
 		45EEE2F32712FDEE392A9707 /* ZmxEnv.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4E0BB32D1A3B26473464A0F /* ZmxEnv.swift */; };
 		466F3E1F73B23B2819A69DD4 /* GeneralPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0240C5961343C3042D865570 /* GeneralPane.swift */; };
 		467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F68A9692F85197ED9E16262 /* WorktreesPane.swift */; };
+		46A9AFFA9A459522F71E073E /* DiffTabRenderContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2F14E32DEBE042825BCA44A /* DiffTabRenderContext.swift */; };
 		46E3CCB2AC426BD5F8CB55DC /* ACPImageBlocksTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE0DA8D81AE8E0BFE54D279 /* ACPImageBlocksTests.swift */; };
 		474DF7FE50CB6146644B2450 /* ImageDiffEndToEndTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 638E94907851A6D0B4AB8F52 /* ImageDiffEndToEndTests.swift */; };
 		476CE4945CF013F76A96AFC6 /* MergeConflictTabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A69F4742D3C251A59F400B8 /* MergeConflictTabState.swift */; };
@@ -2091,6 +2092,7 @@
 		E288FF8FA00AC18E1CDD3CA2 /* NewWorktreeDialogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorktreeDialogTests.swift; sourceTree = "<group>"; };
 		E2C5BD0110EB8EDE7BB4ED93 /* ACPHistorySidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPHistorySidebar.swift; sourceTree = "<group>"; };
 		E2D5632302DE981B0BD36273 /* ACPSelectChipMetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSelectChipMetricsTests.swift; sourceTree = "<group>"; };
+		E2F14E32DEBE042825BCA44A /* DiffTabRenderContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffTabRenderContext.swift; sourceTree = "<group>"; };
 		E373805AEFD068B97BC33A82 /* StashDiffTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StashDiffTabView.swift; sourceTree = "<group>"; };
 		E43F9F04AF6A6FF0A4D328F4 /* CommitHeaderViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitHeaderViewTests.swift; sourceTree = "<group>"; };
 		E444D51CB35528C8E5AB150A /* FuzzyMatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatchTests.swift; sourceTree = "<group>"; };
@@ -3272,6 +3274,7 @@
 				ACCA6B39E2B172FADFD9E0E6 /* DiffPaneTextDocumentView.swift */,
 				DF32A1544E13321E9E223AFF /* DiffPaneView.swift */,
 				3F8435ABAF423A6F5BC28E4C /* DiffPreferenceBindings.swift */,
+				E2F14E32DEBE042825BCA44A /* DiffTabRenderContext.swift */,
 			);
 			path = Diff;
 			sourceTree = "<group>";
@@ -4691,6 +4694,7 @@
 				6094D26DB816FAD6FD9BE7F9 /* DiffReviewSurface.swift in Sources */,
 				CAD36BB3EBF8B31309B7BEFF /* DiffSelectableTextBuilder.swift in Sources */,
 				250F0E2CB26CC16D2FFDB9DD /* DiffSelectableTextView.swift in Sources */,
+				46A9AFFA9A459522F71E073E /* DiffTabRenderContext.swift in Sources */,
 				AC47E67A657F67FF9374C654 /* DiffTabView.swift in Sources */,
 				CDD25FF161CF6DC83D92EA77 /* DraftAmendPrefill.swift in Sources */,
 				9E349701BA73BBCCCBB135B3 /* DraftCommitTabView.swift in Sources */,
