@@ -601,6 +601,62 @@ struct RightPaneStateFileTreeTests {
         #expect(new?.visibility == .untracked)
     }
 
+    @Test func replacingChildrenKeepsTrackedDeletionAbsentFromDiskListing() {
+        // An open tracked directory whose tracked file was deleted from disk:
+        // the full tree still carries the `D` node (from git's cached paths),
+        // but a filesystem listing cannot include it.
+        let tree = [
+            FileTreeNode(
+                name: "Sources",
+                path: "Sources",
+                kind: .dir,
+                children: [
+                    FileTreeNode(
+                        name: "Gone.swift",
+                        path: "Sources/Gone.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: "D",
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    ),
+                    FileTreeNode(
+                        name: "Kept.swift",
+                        path: "Sources/Kept.swift",
+                        kind: .file,
+                        children: nil,
+                        badge: nil,
+                        visibility: .tracked,
+                        childrenState: .loaded
+                    )
+                ],
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+        // Filesystem listing only sees the file still on disk.
+        let incoming = [
+            FileTreeNode(
+                name: "Kept.swift",
+                path: "Sources/Kept.swift",
+                kind: .file,
+                children: nil,
+                badge: nil,
+                visibility: .tracked,
+                childrenState: .loaded
+            )
+        ]
+
+        let result = RightPaneState.replacingChildren(in: tree, for: "Sources", with: incoming, state: .loaded)
+        let sources = result.nodes.first
+        let gone = sources?.children?.first { $0.path == "Sources/Gone.swift" }
+
+        #expect(result.didMerge)
+        #expect(gone?.badge == "D")
+        #expect(sources?.children?.contains { $0.path == "Sources/Kept.swift" } == true)
+    }
+
     @Test func replacingChildrenReportsMissingTargetWithoutMutating() {
         let tree = [
             FileTreeNode(
