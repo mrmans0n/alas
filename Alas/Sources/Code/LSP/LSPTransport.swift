@@ -32,6 +32,10 @@ final class LSPTransport: @unchecked Sendable {
     private var decoder = JSONRPCFramer()
     private let lock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
+    /// True once the root process has exited so `terminate()` can skip
+    /// signalling a stale pid the OS may have reused. Set synchronously
+    /// in the termination handler.
+    private var rootHasExited = false
 
     let incoming: AsyncStream<Incoming>
 
@@ -73,10 +77,19 @@ final class LSPTransport: @unchecked Sendable {
             self?.continuation?.yield(.stderr(data))
         }
         process.terminationHandler = { [weak self] proc in
+            self?.rootHasExited = true
             self?.continuation?.yield(.exited(proc.terminationStatus))
             self?.continuation?.finish()
         }
         try process.run()
+        // Move the child into its own process group so signals from
+        // `terminate()` can be delivered to the whole tree via
+        // `kill(-pid, …)`. Foundation's Process doesn't expose
+        // POSIX_SPAWN_SETPGROUP, so we race the child via the parent —
+        // either side may EACCES once exec completes, but at least one
+        // of those two calls succeeds and the child ends up as group
+        // leader. Same pattern as `ACPTerminal`.
+        _ = setpgid(process.processIdentifier, process.processIdentifier)
     }
 
     /// Writes a JSON-RPC body framed with `Content-Length`. Header and body
@@ -89,6 +102,15 @@ final class LSPTransport: @unchecked Sendable {
     }
 
     func terminate() {
+        guard !rootHasExited else { return }
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        // Signal the whole process group so descendants receive the
+        // signal even when the root doesn't forward it. Per-pid signal
+        // as a fallback for the case where `setpgid` lost the race
+        // against exec. Same pattern as `JSONRPCStdioTransport` and
+        // `ACPTerminal`.
+        _ = Darwin.kill(-pid, SIGTERM)
         if process.isRunning { process.terminate() }
     }
 }

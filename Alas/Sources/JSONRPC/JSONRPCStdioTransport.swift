@@ -28,6 +28,10 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     private var newlineFramer = JSONRPCNewlineFramer()
     private let lock = NSLock()
     private var continuation: AsyncStream<Incoming>.Continuation?
+    /// True once the root process has exited so `terminate()` can skip
+    /// signalling a stale pid the OS may have reused. Set synchronously
+    /// in the termination handler.
+    private var rootHasExited = false
 
     let incoming: AsyncStream<Incoming>
 
@@ -84,10 +88,19 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             self?.continuation?.yield(.stderr(d))
         }
         process.terminationHandler = { [weak self] p in
+            self?.rootHasExited = true
             self?.continuation?.yield(.exited(p.terminationStatus))
             self?.continuation?.finish()
         }
         try process.run()
+        // Move the child into its own process group so signals from
+        // `terminate()` can be delivered to the whole tree via
+        // `kill(-pid, …)`. Foundation's Process doesn't expose
+        // POSIX_SPAWN_SETPGROUP, so we race the child via the parent —
+        // either side may EACCES once exec completes, but at least one
+        // of those two calls succeeds and the child ends up as group
+        // leader. Same pattern as `ACPTerminal`.
+        _ = setpgid(process.processIdentifier, process.processIdentifier)
     }
 
     func send(_ data: Data) throws {
@@ -99,5 +112,18 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         try stdin.fileHandleForWriting.write(contentsOf: framed)
     }
 
-    func terminate() { if process.isRunning { process.terminate() } }
+    func terminate() {
+        guard !rootHasExited else { return }
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        // Signal the whole process group first so descendants (node →
+        // codex, node → claude, etc.) receive the signal even when the
+        // root process doesn't forward it. Per-pid signal as a fallback
+        // for the case where `setpgid` lost the race against exec and
+        // the child never became a group leader. SIGTERM mirrors the
+        // previous behaviour; SIGKILL is not used so a graceful exit
+        // can flush buffered output.
+        _ = Darwin.kill(-pid, SIGTERM)
+        if process.isRunning { process.terminate() }
+    }
 }
