@@ -91,6 +91,13 @@ final class LSPTransport: @unchecked Sendable {
         }
         process.terminationHandler = { [weak self] p in
             guard let self else { return }
+            let pid = p.processIdentifier
+            if pid > 0 {
+                // Last chance to reach same-group descendants that were
+                // spawned after the most recent tracker tick. Later shutdown
+                // paths avoid group signaling once the root pid can be stale.
+                _ = Darwin.kill(-pid, SIGTERM)
+            }
             self.lock.lock()
             self.rootHasExited = true
             self.lock.unlock()
@@ -124,20 +131,21 @@ final class LSPTransport: @unchecked Sendable {
         guard pid > 0 else { return }
         lock.lock()
         let rootAlive = !rootHasExited
-        var targets = orphanedDescendants
+        let targets = orphanedDescendants
         lock.unlock()
 
         if rootAlive {
             // Root is still alive: a process-group signal reaches the
             // whole tree. Take the fallback ppid snapshot before
             // signaling, while descendants are still parented to root.
-            let liveDescendants = Self.collectDescendants(of: pid)
+            let cachedTargets = targets
+            let liveDescendants = Set(Self.collectDescendants(of: pid))
             _ = Darwin.kill(-pid, SIGTERM)
             _ = Darwin.kill(pid, SIGTERM)
             for d in liveDescendants {
-                targets.insert(d)
+                _ = Darwin.kill(d.pid, SIGTERM)
             }
-            for d in targets {
+            for d in cachedTargets where !liveDescendants.contains(d) && Self.pidStillMatches(d) {
                 _ = Darwin.kill(d.pid, SIGTERM)
             }
         } else {

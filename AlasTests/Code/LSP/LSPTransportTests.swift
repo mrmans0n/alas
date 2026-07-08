@@ -54,12 +54,16 @@ struct ProcessTransportTerminationTests {
     func lspSnapshotsDescendantsBeforeRootSignal() throws {
         let source = try source(named: "Code/LSP/LSPTransport.swift")
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
+        #expect(source.validatesCachedDescendantsBeforeKilling())
+        #expect(source.signalsProcessGroupFromTerminationHandler())
     }
 
     @Test("JSONRPCStdioTransport snapshots live descendants before signaling root")
     func jsonrpcSnapshotsDescendantsBeforeRootSignal() throws {
         let source = try source(named: "JSONRPC/JSONRPCStdioTransport.swift")
         #expect(source.requiresLiveDescendantSnapshotBeforeRootSignal())
+        #expect(source.validatesCachedDescendantsBeforeKilling())
+        #expect(source.signalsProcessGroupFromTerminationHandler())
     }
 
     private func source(named path: String) throws -> String {
@@ -75,10 +79,22 @@ struct ProcessTransportTerminationTests {
 
 private extension String {
     func requiresLiveDescendantSnapshotBeforeRootSignal() -> Bool {
-        guard let snapshot = range(of: "let liveDescendants = Self.collectDescendants(of: pid)"),
+        guard let snapshot = range(of: "let liveDescendants = Set(Self.collectDescendants(of: pid))") else {
+            return false
+        }
+        return self[snapshot.upperBound...].contains("Darwin.kill(-pid, SIGTERM)")
+    }
+
+    func validatesCachedDescendantsBeforeKilling() -> Bool {
+        contains("for d in cachedTargets where !liveDescendants.contains(d) && Self.pidStillMatches(d)")
+    }
+
+    func signalsProcessGroupFromTerminationHandler() -> Bool {
+        guard let handler = range(of: "process.terminationHandler"),
+              let rootExited = range(of: "self.rootHasExited = true"),
               let groupSignal = range(of: "Darwin.kill(-pid, SIGTERM)") else {
             return false
         }
-        return snapshot.lowerBound < groupSignal.lowerBound
+        return handler.lowerBound < groupSignal.lowerBound && groupSignal.lowerBound < rootExited.lowerBound
     }
 }
