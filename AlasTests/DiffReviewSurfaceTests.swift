@@ -707,6 +707,62 @@ struct DiffReviewSurfaceTests {
         #expect(context.groupData[firstGroup.id] == context.group(id: firstGroup.id))
     }
 
+    @Test func renderContextCacheReusesSameKeyWithoutRebuilding() {
+        let model = displayModel()
+        let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
+        let key = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [],
+            annotations: []
+        )
+        let cache = DiffReviewRenderContextCache(limit: 2)
+        var buildCount = 0
+
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffReviewRenderContextBuilder.build(
+                fileID: fileID,
+                displayModel: model,
+                contextSnapshot: nil,
+                contextProviderAvailable: false,
+                contextExpansion: DiffContextExpansionState(),
+                inlineFeedback: [],
+                draftComments: [],
+                pendingDraftAnchor: nil,
+                canCreateDraftComment: true,
+                threads: [],
+                annotations: []
+            )
+        }
+        _ = cache.context(key: key) {
+            buildCount += 1
+            return DiffReviewRenderContextBuilder.build(
+                fileID: fileID,
+                displayModel: model,
+                contextSnapshot: nil,
+                contextProviderAvailable: false,
+                contextExpansion: DiffContextExpansionState(),
+                inlineFeedback: [],
+                draftComments: [],
+                pendingDraftAnchor: nil,
+                canCreateDraftComment: true,
+                threads: [],
+                annotations: []
+            )
+        }
+
+        #expect(buildCount == 1)
+        #expect(cache.missCountForTests == 1)
+    }
+
     @Test func renderContextKeyChangesForPlacementInputsButNotPresentationInputs() {
         let model = displayModel()
         let fileID = DiffReviewFileID(namespace: "commit", path: model.filePath)
@@ -1178,6 +1234,99 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "Local draft") != nil)
         #expect(accessibilityLabel(in: controller.view, containing: "Please revisit this line.") != nil)
+    }
+
+    @Test func fileSectionRenderContextCacheIgnoresPresentationOnlyChanges() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let comment = draftComment(id: "draft-visible", fileID: file.id, path: file.summary.path, side: .new, startLine: 2)
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        var cacheMisses = 0
+
+        func makeView() -> some View {
+            DiffReviewFileSection(
+                file: file,
+                draftComments: [comment],
+                layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+                wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+                showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+                codeFontFamily: "",
+                codeFontSize: 13,
+                showsSourceBadge: false,
+                onRenderContextCacheMissForTesting: { cacheMisses += 1 }
+            )
+            .environment(\.theme, theme())
+        }
+
+        let controller = host(makeView(), width: 900, height: 500)
+        #expect(cacheMisses == 1)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
+
+        wrap = true
+        whitespace = true
+        layout = .stacked
+        controller.rootView = makeView()
+        controller.view.layoutSubtreeIfNeeded()
+
+        #expect(cacheMisses == 1)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-visible", in: controller.view) != nil)
+    }
+
+    @Test func fileSectionCachedRenderContextRendersInlineFeedbackAndDraftComment() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "thread-cached-inline",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Review this cached line.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(path: file.summary.path, line: 2, side: .new),
+            evidenceItemID: "thread-cached-inline"
+        )
+        let comment = draftComment(
+            id: "draft-cached-inline",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 2
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+
+        let view = DiffReviewFileSection(
+            file: file,
+            inlineFeedback: [feedback],
+            draftComments: [comment],
+            layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsSourceBadge: false
+        )
+        .environment(\.theme, theme())
+
+        let controller = host(view, width: 900, height: 620)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-thread-cached-inline", in: controller.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-cached-inline", in: controller.view) != nil)
     }
 
     @Test func fileSectionDraftCommentCardShowsProviderPublishAndErrorState() {

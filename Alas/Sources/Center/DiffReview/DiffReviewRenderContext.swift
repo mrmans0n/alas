@@ -159,6 +159,8 @@ final class DiffReviewRenderContextCache: ObservableObject {
 
     #if DEBUG
     private(set) var missCount = 0
+
+    var missCountForTests: Int { missCount }
     #endif
 
     init(limit: Int = 8) {
