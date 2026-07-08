@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.19] - 2026-07-08
+
+### 🐛 Fixes
+
+- Disable review controls while viewing commit details (#650).
+- Trim hidden ACP tool output from remote transcripts (#651).
+
 ## [0.8.18] - 2026-07-08
 
 ### 🐛 Fixes
