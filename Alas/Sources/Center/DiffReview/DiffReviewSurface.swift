@@ -526,7 +526,14 @@ enum DiffReviewSurfaceSelectionSync {
         let sectionTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
             (sectionVisibilityTargetID(for: $0), $0)
         })
-        let active = visibleRawIDs.lazy.compactMap { topTargetLookup[$0] }.first
+        let visibleTopTarget = visibleRawIDs.lazy.compactMap { topTargetLookup[$0] }.first
+        let currentIsVisible = current.map { current in
+            visibleRawIDs.contains(topVisibilityTargetID(for: current))
+                || visibleRawIDs.contains(sectionVisibilityTargetID(for: current))
+        } ?? false
+        guard visibleTopTarget != nil || !currentIsVisible else { return nil }
+
+        let active = visibleTopTarget
             ?? visibleRawIDs.lazy.compactMap { sectionTargetLookup[$0] }.first
         guard let active,
               active != current,

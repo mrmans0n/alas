@@ -2656,6 +2656,23 @@ struct DiffReviewSurfaceTests {
         #expect(result == second)
     }
 
+    @Test func visibleScrollTargetsKeepCurrentSelectionWhenCurrentFileRemainsVisible() {
+        let penultimate = DiffReviewFileID(namespace: "commit", path: "Penultimate.swift")
+        let last = DiffReviewFileID(namespace: "commit", path: "Last.swift")
+
+        let result = DiffReviewSurfaceSelectionSync.updatedSelectionFromVisibility(
+            current: last,
+            visibleRawIDs: [
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: penultimate),
+                DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: last)
+            ],
+            fileIDs: [penultimate, last],
+            programmaticScroll: DiffReviewProgrammaticScrollController()
+        )
+
+        #expect(result == nil)
+    }
+
     @Test func visibleScrollTargetsRespectProgrammaticScrollSuppression() {
         let first = DiffReviewFileID(namespace: "commit", path: "First.swift")
         let second = DiffReviewFileID(namespace: "commit", path: "Second.swift")
