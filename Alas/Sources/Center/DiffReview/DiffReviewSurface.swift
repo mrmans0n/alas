@@ -340,6 +340,7 @@ struct DiffReviewSurface: View {
             onStageReply: onStageReply,
             canAddToReview: canAddToReview
         )
+        .equatable()
     }
 
     private func inlineFeedbackScrollTargetID(for fileID: DiffReviewFileID) -> String? {

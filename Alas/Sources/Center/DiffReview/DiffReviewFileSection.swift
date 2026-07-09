@@ -878,6 +878,40 @@ struct DiffReviewFileSection: View {
     }
 }
 
+extension DiffReviewFileSection: Equatable {
+    /// Render-relevant equality so SwiftUI can skip this subtree — which hosts
+    /// one `NSViewRepresentable` per diff segment — when a parent body storm
+    /// (watcher refresh, keystroke, unrelated observable write) did not change
+    /// anything visible here. Closure inputs (action structs, selection
+    /// callbacks) are intentionally excluded: an older closure generation
+    /// stays correct because they read live values through `@State` /
+    /// `@Observable` storage or capture per-file constants that the content
+    /// comparison already covers. `@State` / `@StateObject` / `@Environment`
+    /// dependencies are tracked by SwiftUI independently of this comparison.
+    static func == (lhs: DiffReviewFileSection, rhs: DiffReviewFileSection) -> Bool {
+        lhs.file.hasSameRenderableContent(as: rhs.file)
+            && lhs.inlineFeedback == rhs.inlineFeedback
+            && lhs.focusedFeedbackID == rhs.focusedFeedbackID
+            && lhs.inlineFeedbackScrollTargetID == rhs.inlineFeedbackScrollTargetID
+            && lhs.draftComments == rhs.draftComments
+            && lhs.focusedDraftCommentID == rhs.focusedDraftCommentID
+            && lhs.layoutMode == rhs.layoutMode
+            && lhs.wrapLines == rhs.wrapLines
+            && lhs.showWhitespace == rhs.showWhitespace
+            && lhs.codeFontFamily == rhs.codeFontFamily
+            && lhs.codeFontSize == rhs.codeFontSize
+            && lhs.showsSourceBadge == rhs.showsSourceBadge
+            && DiffPaneLSPContext.rendersEqual(lhs.lspContext, rhs.lspContext)
+            && lhs.allowsDraftCommentCreation == rhs.allowsDraftCommentCreation
+            && lhs.reviewFeedbackTarget == rhs.reviewFeedbackTarget
+            && lhs.threads == rhs.threads
+            && lhs.annotations == rhs.annotations
+            && lhs.canReply == rhs.canReply
+            && lhs.canResolve == rhs.canResolve
+            && lhs.canAddToReview == rhs.canAddToReview
+    }
+}
+
 enum ReviewDraftComposerKeyboardAction: Equatable {
     case save
     case cancel
