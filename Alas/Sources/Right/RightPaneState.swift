@@ -464,33 +464,43 @@ final class RightPaneState {
             guard snapshotGeneration == snapshotInvalidationGeneration else {
                 return
             }
-            self.upstreamRef = resolvedUpstream?.ref
-            self.changes = entries
+            // Watcher-driven refreshes fire continuously while agents or
+            // builds write into the worktree. @Observable invalidates every
+            // observer on assignment regardless of value, so skip writes
+            // whose value did not change — otherwise each refresh re-renders
+            // everything observing these properties (see the draft-commit
+            // diff live-lock: docs/plans/2026-07-09-draft-commit-diff-livelock-fix.md).
+            if self.upstreamRef != resolvedUpstream?.ref { self.upstreamRef = resolvedUpstream?.ref }
+            if self.changes != entries { self.changes = entries }
             self.reconcileStashCaches(with: stashes)
-            self.stashes = stashes
+            if self.stashes != stashes { self.stashes = stashes }
             self.changesGeneration += 1
-            self.indexFingerprint = indexFingerprint
-            self.fileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
-            self.commits = commits
-            self.comparisonRef = ref
+            if self.indexFingerprint != indexFingerprint { self.indexFingerprint = indexFingerprint }
+            let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
+            if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
+            if self.commits != commits { self.commits = commits }
+            if self.comparisonRef != ref { self.comparisonRef = ref }
             let preferredCommitRemoteRef = ref ?? baseBranch
-            self.commitRemote = CodeHostRemoteDetector.detect(
+            let commitRemote = CodeHostRemoteDetector.detect(
                 from: remotes,
                 preferredRemoteName: CodeHostRemoteDetector.preferredRemoteName(
                     forBaseBranch: preferredCommitRemoteRef,
                     remotes: remotes
                 )
             )
+            if self.commitRemote != commitRemote { self.commitRemote = commitRemote }
+            let primaryCommitRemote: CodeHostRemote?
             if let upstreamRemoteName = resolvedUpstream?.remote {
-                self.primaryCommitRemote = CodeHostRemoteDetector.detectAll(
+                primaryCommitRemote = CodeHostRemoteDetector.detectAll(
                     from: remotes,
                     preferredRemoteName: upstreamRemoteName
                 ).first { $0.remoteName == upstreamRemoteName }
             } else {
-                self.primaryCommitRemote = nil
+                primaryCommitRemote = nil
             }
-            self.currentBranch = currentBranch
-            self.currentHeadSHA = headSHA
+            if self.primaryCommitRemote != primaryCommitRemote { self.primaryCommitRemote = primaryCommitRemote }
+            if self.currentBranch != currentBranch { self.currentBranch = currentBranch }
+            if self.currentHeadSHA != headSHA { self.currentHeadSHA = headSHA }
             if previousBranch != currentBranch || previousHeadSHA != headSHA {
                 // Branch or HEAD changed (checkout, rebase, reset, amend, …).
                 // The behind chips were probed against the OLD branch's base

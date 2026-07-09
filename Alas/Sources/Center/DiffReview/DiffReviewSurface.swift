@@ -302,44 +302,53 @@ struct DiffReviewSurface: View {
     private func fileSection(_ file: DiffReviewFileSectionModel) -> some View {
         let inlineFeedback = inlineFeedbackByFileID[file.id] ?? []
         let draftComments = draftCommentsByFileID[file.id] ?? []
-        DiffReviewFileSection(
-            file: file,
-            inlineFeedback: inlineFeedback,
-            focusedFeedbackID: focusedFeedbackID,
-            inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
-            draftComments: draftComments,
-            focusedDraftCommentID: focusedDraftCommentID,
-            layoutMode: $layoutMode,
-            wrapLines: $wrapLines,
-            showWhitespace: $showWhitespace,
-            codeFontFamily: codeFontFamily,
-            codeFontSize: codeFontSize,
-            showsSourceBadge: showsSourceBadges,
-            lspContext: lspContextForFile(file),
-            inlineFeedbackActions: inlineFeedbackActions,
-            onSelectInlineFeedback: onSelectInlineFeedback,
-            draftCommentActions: draftCommentActions,
-            onSelectDraftComment: onSelectDraftComment,
-            onSaveDraftComment: { anchor, body in
-                onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
-            },
-            allowsDraftCommentCreation: allowsDraftCommentCreation,
-            onContextExpansionActivated: {
-                contextExpandedFileIDs.insert(file.id)
-            },
-            reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-            threads: inlineThreads(for: file.summary.path),
-            annotations: inlineAnnotations(for: file.summary.path),
-            onReply: onReply,
-            onResolve: onResolve,
-            onUnresolve: onUnresolve,
-            onEdit: onEdit,
-            onDelete: onDelete,
-            canReply: canReply,
-            canResolve: canResolve,
-            onStageReply: onStageReply,
-            canAddToReview: canAddToReview
+        EquatableDiffReviewFileSection(
+            section: DiffReviewFileSection(
+                file: file,
+                inlineFeedback: inlineFeedback,
+                focusedFeedbackID: focusedFeedbackID,
+                inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID(for: file.id),
+                draftComments: draftComments,
+                focusedDraftCommentID: focusedDraftCommentID,
+                layoutMode: $layoutMode,
+                wrapLines: $wrapLines,
+                showWhitespace: $showWhitespace,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                showsSourceBadge: showsSourceBadges,
+                lspContext: lspContextForFile(file),
+                inlineFeedbackActions: inlineFeedbackActions,
+                onSelectInlineFeedback: onSelectInlineFeedback,
+                draftCommentActions: draftCommentActions,
+                onSelectDraftComment: onSelectDraftComment,
+                onSaveDraftComment: { anchor, body in
+                    onSaveDraftComment(file.id, file.summary.originalPath, anchor, body)
+                },
+                allowsDraftCommentCreation: allowsDraftCommentCreation,
+                onContextExpansionActivated: {
+                    contextExpandedFileIDs.insert(file.id)
+                },
+                reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+                threads: inlineThreads(for: file.summary.path),
+                annotations: inlineAnnotations(for: file.summary.path),
+                onReply: onReply,
+                onResolve: onResolve,
+                onUnresolve: onUnresolve,
+                onEdit: onEdit,
+                onDelete: onDelete,
+                canReply: canReply,
+                canResolve: canResolve,
+                onStageReply: onStageReply,
+                canAddToReview: canAddToReview
+            ),
+            layoutMode: layoutMode,
+            wrapLines: wrapLines,
+            showWhitespace: showWhitespace,
+            draftCommentAvailability: draftComments.map(draftCommentActions.availability),
+            inlineFeedbackAvailability: inlineFeedback.map { inlineFeedbackActions.availability($0, file.summary) },
+            draftCommentAgentTargets: draftCommentActions.agentTargets()
         )
+        .equatable()
     }
 
     private func inlineFeedbackScrollTargetID(for fileID: DiffReviewFileID) -> String? {

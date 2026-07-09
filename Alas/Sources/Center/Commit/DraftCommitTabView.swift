@@ -19,6 +19,7 @@ struct DraftCommitTabView: View {
     @State private var generation: Task<Void, Never>? = nil
 
     @State private var stagedSession: DiffReviewLoadedSession?
+    @State private var sessionWithActions: DiffReviewLoadedSession?
     @State private var selectedFileID: DiffReviewFileID?
     @State private var loadingSession = false
     @State private var railCollapsed = false
@@ -64,10 +65,16 @@ struct DraftCommitTabView: View {
         appState.rightPaneStore.activeState(worktreeId: worktreeId)?.currentHeadSHA ?? ""
     }
 
-    // Computed property that overlays mutation actions onto the loaded session.
-    // Reads `busy` fresh on each render so closures always see current value.
-    private var sessionWithActions: DiffReviewLoadedSession? {
-        guard let session = stagedSession else { return nil }
+    // Overlays mutation actions onto a loaded session. Built once per load
+    // (not per render): rebuilding on every body evaluation created fresh
+    // closures each time, which made the whole review subtree incomparable
+    // for SwiftUI and re-diffed hundreds of platform views on every
+    // watcher-driven refresh. `unstageEnabledBase` is captured as plain data
+    // (not just read live inside the closure) so the equality-gated
+    // DiffReviewFileSection can detect a `busy` flip even when the session's
+    // content is otherwise unchanged — see `refreshActionsOverlay`.
+    private func overlayingActions(on session: DiffReviewLoadedSession) -> DiffReviewLoadedSession {
+        let unstageEnabledBase = !busy
         let filesWithActions = session.files.map { model in
             var m = model
             m.stagedMutationActions = DiffReviewStagedMutationActions(
@@ -78,12 +85,33 @@ struct DraftCommitTabView: View {
                     unstageHunk(path: model.summary.path, hunk: hunk)
                 },
                 isHunkUnstageEnabled: { hunk in
-                    !busy && model.summary.gitStatus == "M" && !hunk.lines.isEmpty
-                }
+                    unstageEnabledBase && model.summary.gitStatus == "M" && !hunk.lines.isEmpty
+                },
+                unstageEnabledBase: unstageEnabledBase
             )
             return m
         }
         return DiffReviewLoadedSession(files: filesWithActions, summary: session.summary)
+    }
+
+    private func publishLoadedSession(_ session: DiffReviewLoadedSession) {
+        // Same visible content: keep the existing instances so the
+        // equality-gated file sections hit the O(1) same-storage fast path
+        // and nothing downstream re-renders.
+        if let existing = stagedSession, existing.hasSameRenderableContent(as: session) {
+            return
+        }
+        stagedSession = session
+        sessionWithActions = overlayingActions(on: session)
+    }
+
+    // `busy` isn't part of `stagedKey`, so it never triggers a session
+    // reload — but it does change what `isHunkUnstageEnabled` should
+    // return. Rebuild just the (cheap, no-I/O) action overlay so that
+    // change is visible to the equality-gated file sections.
+    private func refreshActionsOverlay() {
+        guard let stagedSession else { return }
+        sessionWithActions = overlayingActions(on: stagedSession)
     }
 
     var body: some View {
@@ -140,6 +168,7 @@ struct DraftCommitTabView: View {
             }
         }
         .onChange(of: selectedFileID) { _, new in persist(selectedPath: new?.path) }
+        .onChange(of: busy) { _, _ in refreshActionsOverlay() }
         .task(id: stagedKey) { await loadStagedSession() }
     }
 
@@ -313,13 +342,14 @@ struct DraftCommitTabView: View {
         do {
             let session = try await StagedDiffLoader().load(worktreePath: worktreePath)
             guard !Task.isCancelled, stagedKey == token else { return }
-            stagedSession = session
+            publishLoadedSession(session)
             synchronizeSelection(with: session)
         } catch is CancellationError {
             // ignore
         } catch {
             guard stagedKey == token else { return }
             stagedSession = nil
+            sessionWithActions = nil
             self.error = (error as NSError).localizedDescription
         }
     }
