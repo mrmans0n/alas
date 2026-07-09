@@ -128,14 +128,18 @@ struct ACPSlashPickerView: View {
                 .foregroundStyle(theme.color("fg"))
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
+            if let hint = s.hint, !hint.isEmpty {
+                Text("‹\(hint)›")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
             if let d = s.description, !d.isEmpty {
                 MarqueeText(
                     text: d,
                     font: .system(size: 11),
                     color: theme.color("fg-faint"),
-                    // Marquee only for the currently-selected row; the
-                    // others stay statically truncated to keep visual
-                    // noise low.
                     isActive: isSelected
                 )
             }
