@@ -128,7 +128,8 @@ struct DiffReviewFileSectionEqualityTests {
                 wrapLines: false,
                 showWhitespace: false,
                 draftCommentAvailability: [],
-                inlineFeedbackAvailability: []
+                inlineFeedbackAvailability: [],
+                draftCommentAgentTargets: []
             )
         }
 
@@ -177,6 +178,39 @@ struct DiffReviewFileSectionEqualityTests {
         #expect(base != changed)
     }
 
+    @Test func draftCommentAgentTargetsChangeIsDetectedEvenWhenAvailabilityIsUnchanged() {
+        // agentTargets() can change shape (one target becomes two, or a
+        // session title changes) while canSendToAgent/canShowSendToAgent
+        // stay true — sendToAgentControl renders the target list itself
+        // (single button vs. menu, per-target titles), so that must
+        // participate in equality too.
+        let file = fileModel(path: "a.swift")
+        let availability = [ReviewDraftCommentActionAvailability(
+            canEdit: false,
+            canDelete: false,
+            canResolve: false,
+            canDismiss: false,
+            canCopyPrompt: false,
+            canShowSendToAgent: true,
+            canSendToAgent: true
+        )]
+        let base = section(
+            file: file,
+            draftCommentAvailability: availability,
+            draftCommentAgentTargets: [.newChat(agentID: "claude", title: "Claude")]
+        )
+        let changed = section(
+            file: file,
+            draftCommentAvailability: availability,
+            draftCommentAgentTargets: [
+                .newChat(agentID: "claude", title: "Claude"),
+                .existingSession(worktreeID: "wt", sessionID: "s1", title: "Session 1"),
+            ]
+        )
+
+        #expect(base != changed)
+    }
+
     @Test func lspContextRendersEqualIgnoresOpenTargetClosure() {
         #expect(DiffPaneLSPContext.rendersEqual(nil, nil))
 
@@ -219,7 +253,8 @@ private func section(
     canResolve: Bool = false,
     canAddToReview: Bool = false,
     draftCommentAvailability: [ReviewDraftCommentActionAvailability] = [],
-    inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability] = []
+    inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability] = [],
+    draftCommentAgentTargets: [ReviewFeedbackAgentTarget] = []
 ) -> EquatableDiffReviewFileSection {
     EquatableDiffReviewFileSection(
         section: DiffReviewFileSection(
@@ -248,7 +283,8 @@ private func section(
         wrapLines: wrapLines,
         showWhitespace: showWhitespace,
         draftCommentAvailability: draftCommentAvailability,
-        inlineFeedbackAvailability: inlineFeedbackAvailability
+        inlineFeedbackAvailability: inlineFeedbackAvailability,
+        draftCommentAgentTargets: draftCommentAgentTargets
     )
 }
 

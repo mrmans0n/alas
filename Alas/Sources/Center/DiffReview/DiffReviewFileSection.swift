@@ -896,13 +896,14 @@ struct DiffReviewFileSection: View {
 /// through a binding), are what actually distinguish "before" from
 /// "after".
 ///
-/// The same problem applies to `draftCommentActions.availability` and
-/// `inlineFeedbackActions.availability`: the comment/feedback lists they're
-/// applied to can stay unchanged while what's available for them changes
-/// (e.g. an agent send-target becomes available), and `ReviewDraftCommentCard`
-/// / `DiffReviewInlineFeedbackCard` render their action rows from that
-/// result. The closures aren't comparable, so the caller evaluates them
-/// once per item and passes the plain `Equatable` results instead.
+/// The same problem applies to `draftCommentActions.availability`,
+/// `inlineFeedbackActions.availability`, and `draftCommentActions.agentTargets()`:
+/// the comment/feedback lists they're applied to can stay unchanged while
+/// what's available for them (or the send-to-agent target list itself)
+/// changes, and `ReviewDraftCommentCard` / `DiffReviewInlineFeedbackCard`
+/// render their action rows from that result. The closures aren't
+/// comparable, so the caller evaluates them once and passes the plain
+/// `Equatable` results instead.
 struct EquatableDiffReviewFileSection: View, Equatable {
     let section: DiffReviewFileSection
     let layoutMode: DiffLayoutMode
@@ -910,6 +911,13 @@ struct EquatableDiffReviewFileSection: View, Equatable {
     let showWhitespace: Bool
     let draftCommentAvailability: [ReviewDraftCommentActionAvailability]
     let inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability]
+    /// Snapshot of `draftCommentActions.agentTargets()`. `sendToAgentControl`
+    /// renders this list live (as a single button or a menu with per-target
+    /// titles) independent of the `canSendToAgent`/`canShowSendToAgent`
+    /// booleans already captured above — the target set (or a target's
+    /// title) can change while availability stays true, and the closure
+    /// itself isn't comparable.
+    let draftCommentAgentTargets: [ReviewFeedbackAgentTarget]
 
     var body: some View { section }
 
@@ -928,6 +936,7 @@ struct EquatableDiffReviewFileSection: View, Equatable {
             && lhs.showWhitespace == rhs.showWhitespace
             && lhs.draftCommentAvailability == rhs.draftCommentAvailability
             && lhs.inlineFeedbackAvailability == rhs.inlineFeedbackAvailability
+            && lhs.draftCommentAgentTargets == rhs.draftCommentAgentTargets
             && lhs.section.file.hasSameRenderableContent(as: rhs.section.file)
             && lhs.section.inlineFeedback == rhs.section.inlineFeedback
             && lhs.section.focusedFeedbackID == rhs.section.focusedFeedbackID
