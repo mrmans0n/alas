@@ -474,10 +474,10 @@ struct DiffPaneTextDocumentBuilder {
         font: NSFont,
         theme: Theme
     ) -> NSAttributedString {
-        NSAttributedString(
-            string: "      \(expandableContextLabel(row))",
-            attributes: collapsedTextAttributes(font: font, theme: theme)
-        )
+        // Unified/stacked column. Previously prefixed with six spaces for indent,
+        // which pushed the label off-center inside the pill. Indent now comes from
+        // the paragraph style, so the pill wraps the glyphs symmetrically.
+        expandableContextAttributedString(row, font: font, theme: theme)
     }
 
     private static func collapsedCodeText(
@@ -496,18 +496,69 @@ struct DiffPaneTextDocumentBuilder {
         font: NSFont,
         theme: Theme
     ) -> NSAttributedString {
-        NSAttributedString(
-            string: expandableContextLabel(row),
-            attributes: collapsedTextAttributes(font: font, theme: theme)
-        )
+        expandableContextAttributedString(row, font: font, theme: theme)
     }
 
-    private static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
+    private static func expandableContextAttributedString(
+        _ row: DiffDisplayRow,
+        font: NSFont,
+        theme: Theme
+    ) -> NSAttributedString {
+        let attributes = expandableContextAttributes(font: font, theme: theme)
+        let result = NSMutableAttributedString()
+
+        let symbolName = expandableContextSymbolName(boundary: row.contextExpansion?.boundary)
+        let tint = NSColor(theme.color("seg-pill-active-fg"))
+        if let attachment = chevronAttachment(symbolName: symbolName, font: font, color: tint) {
+            result.append(NSAttributedString(attachment: attachment))
+            result.append(NSAttributedString(string: " ", attributes: attributes))
+        }
+        result.append(NSAttributedString(string: expandableContextLabel(row), attributes: attributes))
+        result.addAttributes(attributes, range: NSRange(location: 0, length: result.length))
+        return result
+    }
+
+    private static func expandableContextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.setParagraphStyle(CenterTypography.paragraphStyle())
+        paragraph.firstLineHeadIndent = expandableContextHeadIndent
+        paragraph.headIndent = expandableContextHeadIndent
+        return [
+            .font: font,
+            .foregroundColor: NSColor(theme.color("seg-pill-active-fg")),
+            .paragraphStyle: paragraph,
+        ]
+    }
+
+    /// Left inset of the expand button from the code column edge. Replaces the old
+    /// six-space string prefix; keeps the pill from hugging the gutter.
+    private static let expandableContextHeadIndent: CGFloat = 8
+
+    private static func chevronAttachment(symbolName: String, font: NSFont, color: NSColor) -> NSTextAttachment? {
+        let config = NSImage.SymbolConfiguration(pointSize: font.pointSize - 1, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        guard let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        else { return nil }
+        let attachment = NSTextAttachment()
+        attachment.image = image
+        let size = image.size
+        // Center the glyph on the font's cap height so it sits inline with the label.
+        let yOffset = (font.capHeight - size.height) / 2
+        attachment.bounds = CGRect(x: 0, y: yOffset, width: size.width, height: size.height)
+        return attachment
+    }
+
+    static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
         let boundaryText = row.contextExpansion?.boundary == .below ? "below" : "above"
         guard row.collapsedLineCount > 0 else {
             return "Expand context \(boundaryText)"
         }
         return "Expand \(row.collapsedLineCount) unchanged lines \(boundaryText)"
+    }
+
+    static func expandableContextSymbolName(boundary: DiffContextBoundary?) -> String {
+        boundary == .above ? "chevron.up" : "chevron.down"
     }
 
     private static func collapsedTextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
