@@ -964,7 +964,20 @@ final class DiffPaneCodeTextView: NSTextView {
     private var lspController: DiffPaneLSPController?
     private var cachedRowGeometry: RowGeometry?
     private var rowGeometryComputationCount = 0
-    private var isPointingHandCursor = false
+    private var hoverExpansionRow: Int? {
+        didSet { if hoverExpansionRow != oldValue { needsDisplay = true } }
+    }
+    private var pressedExpansionRow: Int? {
+        didSet { if pressedExpansionRow != oldValue { needsDisplay = true } }
+    }
+    private var armedExpansionRow: Int?
+    private var armedExpansionOptionKey = false
+
+    static func expandPillFillAlpha(hovered: Bool, pressed: Bool) -> CGFloat {
+        if pressed { return 0.36 }
+        if hovered { return 0.28 }
+        return 0.18
+    }
 
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
@@ -1073,12 +1086,15 @@ final class DiffPaneCodeTextView: NSTextView {
         super.mouseMoved(with: event)
         let point = convert(event.locationInWindow, from: nil)
         hoverHandler?(point)
-        updateCursor(at: point)
+        hoverExpansionRow = expansionRow(at: point)
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if invokeExpansion(at: point, optionKey: event.modifierFlags.contains(.option)) {
+        if let row = expansionRow(at: point) {
+            armedExpansionRow = row
+            armedExpansionOptionKey = event.modifierFlags.contains(.option)
+            pressedExpansionRow = row
             return
         }
         if event.modifierFlags.contains(.command), let commandClickHandler {
@@ -1088,6 +1104,30 @@ final class DiffPaneCodeTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
+    override func mouseDragged(with event: NSEvent) {
+        guard let armed = armedExpansionRow else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        pressedExpansionRow = expansionRow(at: point) == armed ? armed : nil
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let armed = armedExpansionRow else {
+            super.mouseUp(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        let releasedInside = expansionRow(at: point) == armed
+        let optionKey = armedExpansionOptionKey
+        pressedExpansionRow = nil
+        armedExpansionRow = nil
+        if releasedInside, let key = expansionKey(atRow: armed) {
+            invokeExpansion(key: key, optionKey: optionKey)
+        }
+    }
+
     override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         flagsChangedHandler?(event)
@@ -1095,7 +1135,7 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        clearPointingHandCursor()
+        hoverExpansionRow = nil
         mouseExitedHandler?()
     }
 
@@ -1127,6 +1167,7 @@ final class DiffPaneCodeTextView: NSTextView {
 
     func invalidateDiffRowGeometry() {
         cachedRowGeometry = nil
+        window?.invalidateCursorRects(for: self)
     }
 
     private func rowGeometry() -> RowGeometry {
@@ -1366,14 +1407,11 @@ final class DiffPaneCodeTextView: NSTextView {
         return rowRects.firstIndex(where: { $0.contains(point) })
     }
 
-    private func updateCursor(at point: NSPoint) {
-        guard let row = reviewLineRow(at: point),
-              rowShouldUsePointingHandCursor(row)
-        else {
-            clearPointingHandCursor()
-            return
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for (row, rect) in diffRowRects().enumerated() where rowShouldUsePointingHandCursor(row) {
+            addCursorRect(rect, cursor: .pointingHand)
         }
-        setPointingHandCursor()
     }
 
     private func rowShouldUsePointingHandCursor(_ row: Int) -> Bool {
@@ -1382,32 +1420,18 @@ final class DiffPaneCodeTextView: NSTextView {
         return metadata.expansionKey != nil || metadata.sourceLine != nil
     }
 
-    private func setPointingHandCursor() {
-        guard !isPointingHandCursor else { return }
-        NSCursor.pointingHand.set()
-        isPointingHandCursor = true
-    }
-
-    private func clearPointingHandCursor() {
-        guard isPointingHandCursor else { return }
-        NSCursor.arrow.set()
-        isPointingHandCursor = false
-    }
-
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {
         guard let key = expansionKey(atRow: row) else { return }
         invokeExpansion(key: key, optionKey: optionKey)
     }
 
-    private func invokeExpansion(at point: NSPoint, optionKey: Bool) -> Bool {
+    /// Row index of the expandable-context button under `point`, if any.
+    private func expansionRow(at point: NSPoint) -> Int? {
         let rowRects = diffRowRects()
         guard let row = rowRects.firstIndex(where: { $0.contains(point) }),
-              let key = expansionKey(atRow: row)
-        else {
-            return false
-        }
-        invokeExpansion(key: key, optionKey: optionKey)
-        return true
+              expansionKey(atRow: row) != nil
+        else { return nil }
+        return row
     }
 
     private func expansionKey(atRow row: Int) -> DiffContextExpansionKey? {
@@ -1605,12 +1629,13 @@ final class DiffPaneCodeTextView: NSTextView {
             width: textRect.width + 20,
             height: pillHeight
         )
-        let path = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
-        NSColor(theme.color("bg-1")).withAlphaComponent(0.72).setFill()
+        let alpha = Self.expandPillFillAlpha(
+            hovered: hoverExpansionRow == row,
+            pressed: pressedExpansionRow == row
+        )
+        let path = NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6)
+        NSColor(theme.color("accent")).withAlphaComponent(alpha).setFill()
         path.fill()
-        NSColor(theme.color("line")).withAlphaComponent(0.55).setStroke()
-        path.lineWidth = 1
-        path.stroke()
     }
 }
 
