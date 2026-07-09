@@ -240,6 +240,14 @@ struct ACPMarkdownInlineRendererTests {
         #expect(accessibilityLabel(in: host, containing: "`leadingX`") == nil)
     }
 
+    @Test("inline provider thread stays active while hovered or focused")
+    func inlineProviderThreadStaysActiveWhileHoveredOrFocused() {
+        #expect(DiffInlineCommentCard.isActive(isHovered: true, isFocused: false))
+        #expect(DiffInlineCommentCard.isActive(isHovered: false, isFocused: true))
+        #expect(DiffInlineCommentCard.isActive(isHovered: true, isFocused: true))
+        #expect(!DiffInlineCommentCard.isActive(isHovered: false, isFocused: false))
+    }
+
     @Test("outdated drawer thread body renders markdown")
     func outdatedDrawerThreadBodyRendersMarkdown() throws {
         let comment = ReviewComment(

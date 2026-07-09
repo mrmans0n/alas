@@ -26,6 +26,7 @@ struct DiffInlineCommentThread: Identifiable, Equatable {
     let id: String
     let filePath: String
     let newLine: Int
+    var startLine: Int? = nil
     var isOldSide: Bool = false
     let isResolved: Bool
     let isOutdated: Bool
@@ -33,6 +34,10 @@ struct DiffInlineCommentThread: Identifiable, Equatable {
     var viewerCanReply: Bool = true
     var viewerCanResolve: Bool = true
     var viewerCanUnresolve: Bool = true
+
+    var lineRange: ClosedRange<Int> {
+        min(startLine ?? newLine, newLine)...max(startLine ?? newLine, newLine)
+    }
 }
 
 struct DiffInlineComment: Identifiable, Equatable {
@@ -84,8 +89,8 @@ enum DiffInlineCommentLayout {
         threads: [DiffInlineCommentThread],
         annotations: [DiffInlineAnnotation]
     ) -> [Block] {
-        // Build map from row index → threads anchored after that row.
-        // A thread matches the first row where row.new?.anchor.newLine == thread.newLine.
+        // Build map from row index → threads anchored after their end row.
+        // Multi-line threads still render after the provider's end line.
         var threadsByRowIndex: [Int: [DiffInlineCommentThread]] = [:]
         for thread in threads {
             let rowIndex: Int?

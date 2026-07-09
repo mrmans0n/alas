@@ -6,6 +6,30 @@ private struct PendingContextExpansion {
     let mode: DiffContextExpansionMode
 }
 
+enum DiffReviewActiveCommentCandidate: Equatable {
+    case draft(String)
+    case inlineFeedback(String)
+    case thread(String)
+}
+
+struct DiffReviewActiveCommentIDs {
+    var hoveredDraftCommentID: String?
+    var focusedDraftCommentID: String?
+    var hoveredInlineFeedbackID: String?
+    var focusedFeedbackID: String?
+    var activeThreadID: String?
+
+    var orderedCandidates: [DiffReviewActiveCommentCandidate] {
+        [
+            hoveredDraftCommentID.map(DiffReviewActiveCommentCandidate.draft),
+            hoveredInlineFeedbackID.map(DiffReviewActiveCommentCandidate.inlineFeedback),
+            activeThreadID.map(DiffReviewActiveCommentCandidate.thread),
+            focusedDraftCommentID.map(DiffReviewActiveCommentCandidate.draft),
+            focusedFeedbackID.map(DiffReviewActiveCommentCandidate.inlineFeedback),
+        ].compactMap(\.self)
+    }
+}
+
 struct DiffReviewFileSection: View {
     let file: DiffReviewFileSectionModel
     var inlineFeedback: [DiffReviewInlineFeedback] = []
@@ -57,6 +81,9 @@ struct DiffReviewFileSection: View {
     @State private var contextLoadGeneration = 0
     @State private var contextLoadError: String?
     @State private var pendingContextExpansions: [PendingContextExpansion] = []
+    @State private var hoveredInlineFeedbackID: String?
+    @State private var hoveredDraftCommentID: String?
+    @State private var activeThreadID: String?
     @FocusState private var draftComposerFocused: Bool
 
     var body: some View {
@@ -244,7 +271,10 @@ struct DiffReviewFileSection: View {
                         isFocused: comment.id == focusedDraftCommentID,
                         actions: feedbackDraftCommentActions,
                         reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                        onSelect: onSelectDraftComment
+                        onSelect: onSelectDraftComment,
+                        onHoverChange: { isHovered in
+                            hoveredDraftCommentID = isHovered ? comment.id : (hoveredDraftCommentID == comment.id ? nil : hoveredDraftCommentID)
+                        }
                     )
                     .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
                 }
@@ -278,7 +308,10 @@ struct DiffReviewFileSection: View {
                         file: file,
                         isFocused: item.id == focusedFeedbackID,
                         actions: inlineFeedbackActions,
-                        onSelect: onSelectInlineFeedback
+                        onSelect: onSelectInlineFeedback,
+                        onHoverChange: { isHovered in
+                            hoveredInlineFeedbackID = isHovered ? item.id : (hoveredInlineFeedbackID == item.id ? nil : hoveredInlineFeedbackID)
+                        }
                     )
                     .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
                 }
@@ -407,6 +440,7 @@ struct DiffReviewFileSection: View {
                                     codeFontSize: codeFontSize,
                                     theme: theme,
                                     lspContext: lspContext,
+                                    activeCommentHighlight: activeHighlight(for: rowSeg.rows),
                                     allowsReviewLineSelection: allowsDraftCommentCreation,
                                     onReviewLineSelected: { anchor in
                                         pendingDraftAnchor = anchor
@@ -426,7 +460,10 @@ struct DiffReviewFileSection: View {
                                     onDelete: { comment in onDelete(thread, comment) },
                                     canReply: canReply && thread.viewerCanReply,
                                     canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
-                                    canAddToReview: canAddToReview
+                                    canAddToReview: canAddToReview,
+                                    onActiveChange: { active in
+                                        activeThreadID = active ? thread.id : (activeThreadID == thread.id ? nil : activeThreadID)
+                                    }
                                 )
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             case .annotation(let annotation):
@@ -462,6 +499,7 @@ struct DiffReviewFileSection: View {
                 showsToolbar: false,
                 verticalScrollMode: .staticHeight,
                 lspContext: lspContext,
+                activeCommentHighlight: activeHighlight(for: displayGroup.rows),
                 allowsReviewLineSelection: allowsDraftCommentCreation,
                 onReviewLineSelected: { anchor in
                     pendingDraftAnchor = anchor
@@ -487,6 +525,70 @@ struct DiffReviewFileSection: View {
                 }
             )
         }
+    }
+
+    private func activeHighlight(for rows: [DiffDisplayRow]) -> DiffReviewCommentHighlight? {
+        let highlight = activeCommentIDs.orderedCandidates.lazy.compactMap(activeHighlight(for:)).first
+        guard let highlight, rowsContainHighlight(highlight, rows: rows) else { return nil }
+        return highlight
+    }
+
+    private var activeCommentIDs: DiffReviewActiveCommentIDs {
+        DiffReviewActiveCommentIDs(
+            hoveredDraftCommentID: hoveredDraftCommentID,
+            focusedDraftCommentID: focusedDraftCommentID,
+            hoveredInlineFeedbackID: hoveredInlineFeedbackID,
+            focusedFeedbackID: focusedFeedbackID,
+            activeThreadID: activeThreadID
+        )
+    }
+
+    private func activeHighlight(for candidate: DiffReviewActiveCommentCandidate) -> DiffReviewCommentHighlight? {
+        switch candidate {
+        case .draft(let id):
+            return draftCommentHighlight(id: id)
+        case .inlineFeedback(let id):
+            return inlineFeedbackHighlight(id: id)
+        case .thread(let id):
+            return threadHighlight(id: id)
+        }
+    }
+
+    private func draftCommentHighlight(id: String) -> DiffReviewCommentHighlight? {
+        guard let comment = draftComments.first(where: { $0.id == id }),
+              comment.state != .dismissed
+        else { return nil }
+        return DiffReviewCommentHighlight(
+            path: comment.path,
+            side: comment.side,
+            lineRange: comment.normalizedLineRange
+        )
+    }
+
+    private func inlineFeedbackHighlight(id: String) -> DiffReviewCommentHighlight? {
+        guard let item = inlineFeedback.first(where: { $0.id == id }),
+              let line = item.anchor.line
+        else { return nil }
+        return DiffReviewCommentHighlight(path: item.anchor.path, side: item.anchor.side, line: line)
+    }
+
+    private func threadHighlight(id: String) -> DiffReviewCommentHighlight? {
+        guard let activeThread = threads.first(where: { $0.id == id }) else { return nil }
+        return DiffReviewCommentHighlight(
+            path: activeThread.filePath,
+            side: activeThread.isOldSide ? .old : .new,
+            lineRange: activeThread.lineRange
+        )
+    }
+
+    private func rowsContainHighlight(_ highlight: DiffReviewCommentHighlight, rows: [DiffDisplayRow]) -> Bool {
+        rows.contains { row in
+            rowContainsHighlight(highlight, row: row)
+        }
+    }
+
+    private func rowContainsHighlight(_ highlight: DiffReviewCommentHighlight, row: DiffDisplayRow) -> Bool {
+        highlight.matchesVisibleSourceLine(row.old) || highlight.matchesVisibleSourceLine(row.new)
     }
 
     private func segmentedHunkHeader(_ group: DiffDisplayGroup) -> some View {
@@ -1375,6 +1477,7 @@ struct ReviewDraftCommentCard: View {
     let actions: ReviewDraftCommentActions
     let reviewFeedbackTarget: ReviewFeedbackTarget
     let onSelect: (ReviewDraftComment) -> Void
+    var onHoverChange: (Bool) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var isEditing = false
@@ -1413,6 +1516,13 @@ struct ReviewDraftCommentCard: View {
             )
         )
         .background(focusedMarker)
+        .onHover { hovering in
+            onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
+        }
+    }
+
+    static func reportsHover(isHovered: Bool, isFocused: Bool) -> Bool {
+        isHovered
     }
 
     private var cardContent: some View {
@@ -1730,12 +1840,13 @@ final class ReviewDraftCommentActionPressView: NSView {
     }
 }
 
-private struct DiffReviewInlineFeedbackCard: View {
+struct DiffReviewInlineFeedbackCard: View {
     let item: DiffReviewInlineFeedback
     let file: DiffReviewFileSummary
     let isFocused: Bool
     let actions: DiffReviewInlineFeedbackActions
     let onSelect: (DiffReviewInlineFeedback) -> Void
+    var onHoverChange: (Bool) -> Void = { _ in }
 
     @Environment(\.theme) private var theme
     @State private var replyEditor = DiffReviewInlineFeedbackReplyEditorState()
@@ -1798,6 +1909,13 @@ private struct DiffReviewInlineFeedbackCard: View {
             )
         )
         .background(focusedMarker)
+        .onHover { hovering in
+            onHoverChange(Self.reportsHover(isHovered: hovering, isFocused: isFocused))
+        }
+    }
+
+    static func reportsHover(isHovered: Bool, isFocused: Bool) -> Bool {
+        isHovered
     }
 
     @ViewBuilder

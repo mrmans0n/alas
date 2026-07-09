@@ -459,6 +459,7 @@ struct DiffReviewSurface: View {
                     id: thread.id,
                     filePath: thread.path ?? "",
                     newLine: line,
+                    startLine: thread.rangeStartLine(isOldSide: isOldSide),
                     isOldSide: isOldSide,
                     isResolved: thread.isResolved,
                     isOutdated: thread.isOutdated,

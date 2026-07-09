@@ -179,6 +179,89 @@ struct GitLabCLIProviderTests {
         #expect(threads.first?.comments.first?.id == "100")
     }
 
+    @Test func discussionsJSONPreservesLineRangeMetadata() throws {
+        let threads = try GitLabCLIProvider.parseDiscussions(
+            """
+            [
+              {
+                "id": "discussion-1",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 100,
+                    "body": "This needs a guard.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_100",
+                    "author": { "username": "reviewer" },
+                    "position": {
+                      "new_path": "Sources/App.swift",
+                      "old_path": "Sources/App.swift",
+                      "new_line": 26,
+                      "old_line": null,
+                      "line_range": {
+                        "start": {
+                          "type": "new",
+                          "new_line": 24,
+                          "old_line": null
+                        },
+                        "end": {
+                          "type": "new",
+                          "new_line": 26,
+                          "old_line": null
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "discussion-2",
+                "resolved": false,
+                "notes": [
+                  {
+                    "id": 101,
+                    "body": "This deleted range needs a guard.",
+                    "system": false,
+                    "web_url": "https://gitlab.example.com/group/proj/-/merge_requests/7#note_101",
+                    "author": { "username": "reviewer" },
+                    "position": {
+                      "new_path": "Sources/App.swift",
+                      "old_path": "Sources/App.swift",
+                      "new_line": null,
+                      "old_line": 14,
+                      "line_range": {
+                        "start": {
+                          "type": "old",
+                          "new_line": null,
+                          "old_line": 12
+                        },
+                        "end": {
+                          "type": "old",
+                          "new_line": null,
+                          "old_line": 14
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+            """,
+            requestURL: URL(string: "https://gitlab.example.com/group/proj/-/merge_requests/7")!
+        )
+
+        #expect(threads.map(\.id) == ["discussion-1", "discussion-2"])
+        #expect(threads[0].line == 26)
+        #expect(threads[0].startLine == 24)
+        #expect(threads[0].originalLine == nil)
+        #expect(threads[0].originalStartLine == nil)
+        #expect(threads[1].line == nil)
+        #expect(threads[1].startLine == nil)
+        #expect(threads[1].originalLine == 14)
+        #expect(threads[1].originalStartLine == 12)
+        #expect(threads[1].diffSide == "LEFT")
+    }
+
     @Test func discussionsJSONIgnoresMalformedPositionMetadata() throws {
         let threads = try GitLabCLIProvider.parseDiscussions(
             """
