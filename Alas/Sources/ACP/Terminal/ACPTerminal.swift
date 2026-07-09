@@ -97,21 +97,7 @@ final class ACPTerminal: ObservableObject {
         process.standardInput = FileHandle.nullDevice
 
         let weakSelf = WeakBox(self)
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let chunk = handle.availableData
-            if chunk.isEmpty {
-                // Empty chunk = EOF on the read end (every writer fd
-                // closed). Signal the exit path; further callbacks
-                // won't fire after this.
-                Task { @MainActor in
-                    weakSelf.value?.signalEOF()
-                }
-                return
-            }
-            Task { @MainActor in
-                weakSelf.value?.appendChunk(chunk)
-            }
-        }
+        installReadabilityHandler()
         process.terminationHandler = { proc in
             // Mark the root as exited synchronously here so any kill()
             // call that races ahead of the @MainActor handleExit Task
@@ -391,6 +377,24 @@ final class ACPTerminal: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private func installReadabilityHandler() {
+        guard let pipe, exitStatus == nil, !sawEOF else { return }
+        let weakSelf = WeakBox(self)
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            handle.readabilityHandler = nil
+            let chunk = handle.availableData
+            Task { @MainActor in
+                guard let terminal = weakSelf.value else { return }
+                if chunk.isEmpty {
+                    terminal.signalEOF()
+                    return
+                }
+                terminal.appendChunk(chunk)
+                terminal.installReadabilityHandler()
+            }
+        }
+    }
 
     private func appendChunk(_ chunk: Data) {
         buffer.append(chunk)
