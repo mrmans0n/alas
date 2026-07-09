@@ -1,6 +1,6 @@
 # Draft Commit Diff Re-render Live-lock Fix — Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **REQUIRED SUB-SKILL:** Use the executing-plans skill to implement this plan task-by-task.
 
 **Goal:** Stop the main-thread live-lock (beachball) that occurs when a Draft Commit tab shows a large staged diff while an agent/build continuously writes files in the worktree.
 
@@ -10,7 +10,7 @@
 
 **Root cause evidence:** `/private/tmp/claude-502/-Users-nacho-lopez/47539476-4410-47be-acfe-323077aa0bd3/scratchpad/alas_sample.txt` — 5s sample fully inside one `GraphHost.flushTransactions()`, dominated by `PlatformViewChild.updateValue` → `AppKitPlatformViewHost.updateNestedHosts`/`coreUpdateEnvironment`, `DiffPaneView.body`, `DiffDisplayRow` copy/equality churn, plus `DraftCommitTabView.sessionWithActions` frames. Trigger chain: `WorktreeWatcher` (≤2s cadence under agent writes) → `RightPaneState.refresh()` unconditional `self.changes = entries` → `DraftCommitTabView.body` (reads `rps.changes`) → new `sessionWithActions` closures → non-equatable subtree fully re-diffed (seconds per pass) → transactions queue faster than they drain.
 
-**Stale-closure risk accepted (documented):** with the Equatable gate, closures captured by an older body generation stay installed while `==` reports equal. All such closures either read view state through `@State`/`@Observable` storage (always fresh) or capture immutable per-file values (paths, ids) that are covered by the content comparison. The only visible effect: hunk-header button enabled-state derived from `busy` may lag for the duration of a git mutation, and those handlers already `guard !busy`.
+**Stale-closure risk, resolved during review:** with the Equatable gate, a closure captured by an older body generation stays installed while `==` reports equal — safe as long as the closure only reads live state through `@State`/`@Observable` storage or captures immutable per-file values the content comparison already covers. Further review passes on the PR found several places where that assumption didn't hold: `stagedMutationActions.isHunkUnstageEnabled`'s `busy`-derived result, `contextProvider` identity, the three display-setting `@Binding`s, and `draftCommentActions`'s per-item availability and agent-target list are all closure *outputs* that can change independent of the properties being compared. Each was fixed by capturing the relevant output as plain `Equatable` data at construction time instead of relying on the closure or binding to reflect the current render.
 
 ---
 
