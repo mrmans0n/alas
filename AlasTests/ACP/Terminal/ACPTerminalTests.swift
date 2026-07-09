@@ -313,4 +313,41 @@ struct ACPTerminalTests {
         #expect(snap.truncated == true)
         #expect(snap.text.count <= 2048)
     }
+
+    @Test("firehose output does not queue unbounded main actor chunks")
+    func firehoseOutputBackpressuresMainActor() async throws {
+        let baseline = physicalFootprint()
+        let t = try ACPTerminal(
+            id: "tfirehose",
+            command: "/usr/bin/yes",
+            args: ["x"],
+            env: [:],
+            cwd: "/tmp",
+            outputByteLimit: 2048
+        )
+
+        let sampledFootprint = Task.detached {
+            try? await Task.sleep(for: .milliseconds(500))
+            return physicalFootprint()
+        }
+        Thread.sleep(forTimeInterval: 0.75)
+        let highWater = await sampledFootprint.value
+        let footprintGrowth = highWater >= baseline ? highWater - baseline : 0
+
+        t.release()
+        _ = await t.waitForExit()
+        #expect(t.buffer.count <= ACPTerminal.internalBufferCap)
+        #expect(footprintGrowth < 32 * 1024 * 1024)
+    }
+}
+
+private func physicalFootprint() -> UInt64 {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) { pointer in
+        pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { rebound in
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), rebound, &count)
+        }
+    }
+    return result == KERN_SUCCESS ? info.phys_footprint : 0
 }
