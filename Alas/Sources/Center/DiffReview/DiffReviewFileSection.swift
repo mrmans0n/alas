@@ -878,7 +878,30 @@ struct DiffReviewFileSection: View {
     }
 }
 
-extension DiffReviewFileSection: Equatable {
+/// Wraps `DiffReviewFileSection` for `.equatable()`, with `layoutMode`,
+/// `wrapLines`, and `showWhitespace` captured as plain values rather than
+/// compared as live `@Binding`s.
+///
+/// `DiffReviewFileSection` itself deliberately does NOT conform to
+/// `Equatable`: comparing a `@Binding`'s `wrappedValue` inside `==` doesn't
+/// work for render-equality — the previously-rendered struct and a
+/// freshly-constructed one both read through to the SAME live external
+/// storage, so `lhs.layoutMode == rhs.layoutMode` always reports the
+/// CURRENT (post-change) value on both sides regardless of what actually
+/// changed between renders. Concretely: toggling split/stacked layout,
+/// line wrap, or whitespace display would silently do nothing, because the
+/// gate would report "unchanged" even though the setting changed. Plain
+/// snapshots, captured once by the caller at construction time (not read
+/// through a binding), are what actually distinguish "before" from
+/// "after".
+struct EquatableDiffReviewFileSection: View, Equatable {
+    let section: DiffReviewFileSection
+    let layoutMode: DiffLayoutMode
+    let wrapLines: Bool
+    let showWhitespace: Bool
+
+    var body: some View { section }
+
     /// Render-relevant equality so SwiftUI can skip this subtree — which hosts
     /// one `NSViewRepresentable` per diff segment — when a parent body storm
     /// (watcher refresh, keystroke, unrelated observable write) did not change
@@ -888,27 +911,27 @@ extension DiffReviewFileSection: Equatable {
     /// `@Observable` storage or capture per-file constants that the content
     /// comparison already covers. `@State` / `@StateObject` / `@Environment`
     /// dependencies are tracked by SwiftUI independently of this comparison.
-    static func == (lhs: DiffReviewFileSection, rhs: DiffReviewFileSection) -> Bool {
-        lhs.file.hasSameRenderableContent(as: rhs.file)
-            && lhs.inlineFeedback == rhs.inlineFeedback
-            && lhs.focusedFeedbackID == rhs.focusedFeedbackID
-            && lhs.inlineFeedbackScrollTargetID == rhs.inlineFeedbackScrollTargetID
-            && lhs.draftComments == rhs.draftComments
-            && lhs.focusedDraftCommentID == rhs.focusedDraftCommentID
-            && lhs.layoutMode == rhs.layoutMode
+    static func == (lhs: EquatableDiffReviewFileSection, rhs: EquatableDiffReviewFileSection) -> Bool {
+        lhs.layoutMode == rhs.layoutMode
             && lhs.wrapLines == rhs.wrapLines
             && lhs.showWhitespace == rhs.showWhitespace
-            && lhs.codeFontFamily == rhs.codeFontFamily
-            && lhs.codeFontSize == rhs.codeFontSize
-            && lhs.showsSourceBadge == rhs.showsSourceBadge
-            && DiffPaneLSPContext.rendersEqual(lhs.lspContext, rhs.lspContext)
-            && lhs.allowsDraftCommentCreation == rhs.allowsDraftCommentCreation
-            && lhs.reviewFeedbackTarget == rhs.reviewFeedbackTarget
-            && lhs.threads == rhs.threads
-            && lhs.annotations == rhs.annotations
-            && lhs.canReply == rhs.canReply
-            && lhs.canResolve == rhs.canResolve
-            && lhs.canAddToReview == rhs.canAddToReview
+            && lhs.section.file.hasSameRenderableContent(as: rhs.section.file)
+            && lhs.section.inlineFeedback == rhs.section.inlineFeedback
+            && lhs.section.focusedFeedbackID == rhs.section.focusedFeedbackID
+            && lhs.section.inlineFeedbackScrollTargetID == rhs.section.inlineFeedbackScrollTargetID
+            && lhs.section.draftComments == rhs.section.draftComments
+            && lhs.section.focusedDraftCommentID == rhs.section.focusedDraftCommentID
+            && lhs.section.codeFontFamily == rhs.section.codeFontFamily
+            && lhs.section.codeFontSize == rhs.section.codeFontSize
+            && lhs.section.showsSourceBadge == rhs.section.showsSourceBadge
+            && DiffPaneLSPContext.rendersEqual(lhs.section.lspContext, rhs.section.lspContext)
+            && lhs.section.allowsDraftCommentCreation == rhs.section.allowsDraftCommentCreation
+            && lhs.section.reviewFeedbackTarget == rhs.section.reviewFeedbackTarget
+            && lhs.section.threads == rhs.section.threads
+            && lhs.section.annotations == rhs.section.annotations
+            && lhs.section.canReply == rhs.section.canReply
+            && lhs.section.canResolve == rhs.section.canResolve
+            && lhs.section.canAddToReview == rhs.section.canAddToReview
     }
 }
 

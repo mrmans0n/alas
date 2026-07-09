@@ -96,6 +96,47 @@ struct DiffReviewFileSectionEqualityTests {
         ))
     }
 
+    @Test func layoutModeChangeThroughASharedBindingIsDetected() {
+        // Regression coverage for a live-binding comparison bug: comparing
+        // `section.layoutMode` directly (a `@Binding`) can't distinguish
+        // "before" from "after" when both sides are bound to the SAME
+        // external storage, because a Binding's `wrappedValue` always reads
+        // the CURRENT value regardless of which struct instance reads it.
+        // `.constant(_:)` bindings (used by the `section` helper above)
+        // don't reproduce this — each `.constant` is its own frozen storage
+        // — so this test uses a real shared, mutable source instead.
+        final class Box { var layoutMode: DiffLayoutMode = .split }
+        let box = Box()
+        let sharedBinding = Binding<DiffLayoutMode>(
+            get: { box.layoutMode },
+            set: { box.layoutMode = $0 }
+        )
+        let file = fileModel(path: "a.swift")
+
+        func snapshot() -> EquatableDiffReviewFileSection {
+            EquatableDiffReviewFileSection(
+                section: DiffReviewFileSection(
+                    file: file,
+                    layoutMode: sharedBinding,
+                    wrapLines: .constant(false),
+                    showWhitespace: .constant(false),
+                    codeFontFamily: "SF Mono",
+                    codeFontSize: 12,
+                    showsSourceBadge: false
+                ),
+                layoutMode: box.layoutMode,
+                wrapLines: false,
+                showWhitespace: false
+            )
+        }
+
+        let before = snapshot()
+        box.layoutMode = .stacked
+        let after = snapshot()
+
+        #expect(before != after)
+    }
+
     @Test func lspContextRendersEqualIgnoresOpenTargetClosure() {
         #expect(DiffPaneLSPContext.rendersEqual(nil, nil))
 
@@ -137,28 +178,33 @@ private func section(
     canReply: Bool = false,
     canResolve: Bool = false,
     canAddToReview: Bool = false
-) -> DiffReviewFileSection {
-    DiffReviewFileSection(
-        file: file,
-        inlineFeedback: inlineFeedback,
-        focusedFeedbackID: focusedFeedbackID,
-        inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID,
-        draftComments: draftComments,
-        focusedDraftCommentID: focusedDraftCommentID,
-        layoutMode: .constant(layoutMode),
-        wrapLines: .constant(wrapLines),
-        showWhitespace: .constant(showWhitespace),
-        codeFontFamily: codeFontFamily,
-        codeFontSize: codeFontSize,
-        showsSourceBadge: showsSourceBadge,
-        onSelectInlineFeedback: onSelectInlineFeedback,
-        allowsDraftCommentCreation: allowsDraftCommentCreation,
-        reviewFeedbackTarget: reviewFeedbackTarget,
-        threads: threads,
-        annotations: annotations,
-        canReply: canReply,
-        canResolve: canResolve,
-        canAddToReview: canAddToReview
+) -> EquatableDiffReviewFileSection {
+    EquatableDiffReviewFileSection(
+        section: DiffReviewFileSection(
+            file: file,
+            inlineFeedback: inlineFeedback,
+            focusedFeedbackID: focusedFeedbackID,
+            inlineFeedbackScrollTargetID: inlineFeedbackScrollTargetID,
+            draftComments: draftComments,
+            focusedDraftCommentID: focusedDraftCommentID,
+            layoutMode: .constant(layoutMode),
+            wrapLines: .constant(wrapLines),
+            showWhitespace: .constant(showWhitespace),
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            showsSourceBadge: showsSourceBadge,
+            onSelectInlineFeedback: onSelectInlineFeedback,
+            allowsDraftCommentCreation: allowsDraftCommentCreation,
+            reviewFeedbackTarget: reviewFeedbackTarget,
+            threads: threads,
+            annotations: annotations,
+            canReply: canReply,
+            canResolve: canResolve,
+            canAddToReview: canAddToReview
+        ),
+        layoutMode: layoutMode,
+        wrapLines: wrapLines,
+        showWhitespace: showWhitespace
     )
 }
 
