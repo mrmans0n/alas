@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.20] - 2026-07-09
+
+### ✨ Features
+
+- Highlight active diff comment ranges (#654).
+
+### 🐛 Fixes
+
+- Restore Codex ACP sessions more reliably (#653).
+- Auto-focus the diff pane comment composer (#652).
+- Apply backpressure to terminal pipe reads (#656).
+- Stop draft-commit diff live-lock beachballs (#655).
+
 ## [0.8.19] - 2026-07-08
 
 ### 🐛 Fixes
