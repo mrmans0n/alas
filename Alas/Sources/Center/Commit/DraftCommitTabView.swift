@@ -19,6 +19,7 @@ struct DraftCommitTabView: View {
     @State private var generation: Task<Void, Never>? = nil
 
     @State private var stagedSession: DiffReviewLoadedSession?
+    @State private var sessionWithActions: DiffReviewLoadedSession?
     @State private var selectedFileID: DiffReviewFileID?
     @State private var loadingSession = false
     @State private var railCollapsed = false
@@ -64,10 +65,13 @@ struct DraftCommitTabView: View {
         appState.rightPaneStore.activeState(worktreeId: worktreeId)?.currentHeadSHA ?? ""
     }
 
-    // Computed property that overlays mutation actions onto the loaded session.
-    // Reads `busy` fresh on each render so closures always see current value.
-    private var sessionWithActions: DiffReviewLoadedSession? {
-        guard let session = stagedSession else { return nil }
+    // Overlays mutation actions onto a loaded session. Built once per load
+    // (not per render): rebuilding on every body evaluation created fresh
+    // closures each time, which made the whole review subtree incomparable
+    // for SwiftUI and re-diffed hundreds of platform views on every
+    // watcher-driven refresh. The closures read `busy` through @State
+    // storage, so they always see the current value without recreation.
+    private func overlayingActions(on session: DiffReviewLoadedSession) -> DiffReviewLoadedSession {
         let filesWithActions = session.files.map { model in
             var m = model
             m.stagedMutationActions = DiffReviewStagedMutationActions(
@@ -84,6 +88,17 @@ struct DraftCommitTabView: View {
             return m
         }
         return DiffReviewLoadedSession(files: filesWithActions, summary: session.summary)
+    }
+
+    private func publishLoadedSession(_ session: DiffReviewLoadedSession) {
+        // Same visible content: keep the existing instances so the
+        // equality-gated file sections hit the O(1) same-storage fast path
+        // and nothing downstream re-renders.
+        if let existing = stagedSession, existing.hasSameRenderableContent(as: session) {
+            return
+        }
+        stagedSession = session
+        sessionWithActions = overlayingActions(on: session)
     }
 
     var body: some View {
@@ -313,13 +328,14 @@ struct DraftCommitTabView: View {
         do {
             let session = try await StagedDiffLoader().load(worktreePath: worktreePath)
             guard !Task.isCancelled, stagedKey == token else { return }
-            stagedSession = session
+            publishLoadedSession(session)
             synchronizeSelection(with: session)
         } catch is CancellationError {
             // ignore
         } catch {
             guard stagedKey == token else { return }
             stagedSession = nil
+            sessionWithActions = nil
             self.error = (error as NSError).localizedDescription
         }
     }
