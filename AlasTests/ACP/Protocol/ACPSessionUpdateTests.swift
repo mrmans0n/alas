@@ -186,6 +186,67 @@ struct ACPSessionUpdateTests {
         } else { Issue.record("expected sessionConfigOptionsUpdate") }
     }
 
+    @Test("decodes available_commands_update with argument hint")
+    func availableCommandsHint() throws {
+        let json = """
+        {
+          "jsonrpc": "2.0",
+          "method": "session/update",
+          "params": {
+            "sessionId": "s1",
+            "update": {
+              "sessionUpdate": "available_commands_update",
+              "availableCommands": [
+                { "name": "review", "description": "Review a PR",
+                  "input": { "hint": "<pr-number>" } },
+                { "name": "init", "description": "Initialize" }
+              ]
+            }
+          }
+        }
+        """
+        let env = try JSONDecoder().decode(
+            JSONRPCEnvelope<ACPSessionUpdateParams>.self, from: Data(json.utf8))
+        guard case .availableCommandsUpdate(let cmds) = env.params!.update else {
+            Issue.record("expected availableCommandsUpdate")
+            return
+        }
+        #expect(cmds.count == 2)
+        #expect(cmds[0].command == "/review")
+        #expect(cmds[0].hint == "<pr-number>")
+        #expect(cmds[1].command == "/init")
+        #expect(cmds[1].hint == nil)
+    }
+
+    @Test("tolerates malformed command input without dropping the update")
+    func availableCommandsMalformedInput() throws {
+        let json = """
+        {
+          "jsonrpc": "2.0",
+          "method": "session/update",
+          "params": {
+            "sessionId": "s1",
+            "update": {
+              "sessionUpdate": "available_commands_update",
+              "availableCommands": [
+                { "name": "a", "description": "A", "input": {} },
+                { "name": "b", "description": "B", "input": "nope" },
+                { "name": "c", "description": "C" }
+              ]
+            }
+          }
+        }
+        """
+        let env = try JSONDecoder().decode(
+            JSONRPCEnvelope<ACPSessionUpdateParams>.self, from: Data(json.utf8))
+        guard case .availableCommandsUpdate(let cmds) = env.params!.update else {
+            Issue.record("expected availableCommandsUpdate")
+            return
+        }
+        #expect(cmds.count == 3)
+        #expect(cmds.allSatisfy { $0.hint == nil })
+    }
+
     private func decode(_ name: String) throws -> JSONRPCEnvelope<ACPSessionUpdateParams> {
         let bundle = Bundle(for: ACPSessionUpdateFixtureMarker.self)
         let url = try #require(bundle.url(forResource: name, withExtension: "json"))

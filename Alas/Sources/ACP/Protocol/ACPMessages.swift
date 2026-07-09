@@ -562,6 +562,13 @@ struct ACPModeInfo: Codable, Equatable, Identifiable, Hashable {
 struct ACPPromptSuggestion: Codable, Equatable, Hashable {
     let command: String
     let description: String?
+    let hint: String?
+
+    init(command: String, description: String?, hint: String? = nil) {
+        self.command = command
+        self.description = description
+        self.hint = hint
+    }
 }
 
 struct ACPSessionNewResult: Codable, Equatable {
