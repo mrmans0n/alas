@@ -69,9 +69,12 @@ struct DraftCommitTabView: View {
     // (not per render): rebuilding on every body evaluation created fresh
     // closures each time, which made the whole review subtree incomparable
     // for SwiftUI and re-diffed hundreds of platform views on every
-    // watcher-driven refresh. The closures read `busy` through @State
-    // storage, so they always see the current value without recreation.
+    // watcher-driven refresh. `unstageEnabledBase` is captured as plain data
+    // (not just read live inside the closure) so the equality-gated
+    // DiffReviewFileSection can detect a `busy` flip even when the session's
+    // content is otherwise unchanged — see `refreshActionsOverlay`.
     private func overlayingActions(on session: DiffReviewLoadedSession) -> DiffReviewLoadedSession {
+        let unstageEnabledBase = !busy
         let filesWithActions = session.files.map { model in
             var m = model
             m.stagedMutationActions = DiffReviewStagedMutationActions(
@@ -82,8 +85,9 @@ struct DraftCommitTabView: View {
                     unstageHunk(path: model.summary.path, hunk: hunk)
                 },
                 isHunkUnstageEnabled: { hunk in
-                    !busy && model.summary.gitStatus == "M" && !hunk.lines.isEmpty
-                }
+                    unstageEnabledBase && model.summary.gitStatus == "M" && !hunk.lines.isEmpty
+                },
+                unstageEnabledBase: unstageEnabledBase
             )
             return m
         }
@@ -99,6 +103,15 @@ struct DraftCommitTabView: View {
         }
         stagedSession = session
         sessionWithActions = overlayingActions(on: session)
+    }
+
+    // `busy` isn't part of `stagedKey`, so it never triggers a session
+    // reload — but it does change what `isHunkUnstageEnabled` should
+    // return. Rebuild just the (cheap, no-I/O) action overlay so that
+    // change is visible to the equality-gated file sections.
+    private func refreshActionsOverlay() {
+        guard let stagedSession else { return }
+        sessionWithActions = overlayingActions(on: stagedSession)
     }
 
     var body: some View {
@@ -155,6 +168,7 @@ struct DraftCommitTabView: View {
             }
         }
         .onChange(of: selectedFileID) { _, new in persist(selectedPath: new?.path) }
+        .onChange(of: busy) { _, _ in refreshActionsOverlay() }
         .task(id: stagedKey) { await loadStagedSession() }
     }
 

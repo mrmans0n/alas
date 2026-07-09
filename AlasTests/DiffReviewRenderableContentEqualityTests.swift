@@ -59,6 +59,16 @@ struct DiffReviewRenderableContentEqualityTests {
         #expect(!lhs.hasSameRenderableContent(as: rhs))
     }
 
+    @Test func unstageEnabledBaseMismatchIsNotEqual() {
+        // A `busy` flip doesn't change any other file content, but it does
+        // change whether "Drop from commit" should render as enabled — the
+        // equality check must catch it so the button doesn't go stale.
+        let lhs = fileModel(path: "a.swift", withActions: true, unstageEnabledBase: true)
+        let rhs = fileModel(path: "a.swift", withActions: true, unstageEnabledBase: false)
+
+        #expect(!lhs.hasSameRenderableContent(as: rhs))
+    }
+
     @Test func differentDisplayModelIsNotEqual() {
         let lhs = fileModel(path: "a.swift", lineText: "let a = 1")
         let rhs = fileModel(path: "a.swift", lineText: "let a = 2")
@@ -101,7 +111,8 @@ private func fileModel(
     lineText: String = "let a = 1",
     openFile: (() -> Void)? = nil,
     contextProvider: DiffReviewContextProvider? = nil,
-    withActions: Bool = false
+    withActions: Bool = false,
+    unstageEnabledBase: Bool = true
 ) -> DiffReviewFileSectionModel {
     let line = DiffDisplayLine(
         id: "\(path):new:1",
@@ -147,7 +158,12 @@ private func fileModel(
         openFile: openFile,
         contextProvider: contextProvider,
         stagedMutationActions: withActions
-            ? DiffReviewStagedMutationActions(unstageFile: {}, unstageHunk: { _ in }, isHunkUnstageEnabled: { _ in true })
+            ? DiffReviewStagedMutationActions(
+                unstageFile: {},
+                unstageHunk: { _ in },
+                isHunkUnstageEnabled: { _ in true },
+                unstageEnabledBase: unstageEnabledBase
+            )
             : nil
     )
 }

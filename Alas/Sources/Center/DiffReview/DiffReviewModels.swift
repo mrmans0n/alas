@@ -178,6 +178,12 @@ struct DiffReviewStagedMutationActions {
     var unstageFile: (() -> Void)? = nil
     var unstageHunk: ((ParsedDiff.Hunk) -> Void)? = nil
     var isHunkUnstageEnabled: ((ParsedDiff.Hunk) -> Bool)? = nil
+    /// The busy-derived component of what `isHunkUnstageEnabled` returns,
+    /// captured as plain data. The closure itself can't participate in
+    /// render equality, so without this, toggling `busy` wouldn't change
+    /// `renderablePresence` and the equality-gated `DiffReviewFileSection`
+    /// could leave "Drop from commit" stuck showing a stale enabled state.
+    var unstageEnabledBase: Bool = true
 }
 
 struct DiffReviewFileSectionModel: Identifiable {
@@ -287,18 +293,21 @@ struct DiffReviewLoadedSession {
 }
 
 extension DiffReviewStagedMutationActions {
-    /// Closure identity is not comparable; which actions exist is what
-    /// determines the rendered buttons.
-    var renderablePresence: (Bool, Bool, Bool) {
-        (unstageFile != nil, unstageHunk != nil, isHunkUnstageEnabled != nil)
+    /// Closure identity is not comparable; which actions exist plus the
+    /// captured `unstageEnabledBase` snapshot is what determines the
+    /// rendered buttons and their enabled state.
+    var renderableSignature: (Bool, Bool, Bool, Bool) {
+        (unstageFile != nil, unstageHunk != nil, isHunkUnstageEnabled != nil, unstageEnabledBase)
     }
 }
 
 extension DiffReviewFileSectionModel {
     /// True when this model renders identically to `other`. Ignores closure
-    /// identity for `openFile` and mutation action bodies (presence is what
-    /// determines the rendered buttons) — but `contextProvider` is compared
-    /// by `id`, not just presence: `DiffReviewFileSection` keys its own
+    /// identity for `openFile` and mutation action bodies — `stagedMutationActions`
+    /// is compared via `renderableSignature` (presence plus the captured
+    /// `unstageEnabledBase` snapshot, since that drives whether "Drop from
+    /// commit" renders as enabled). `contextProvider` is compared by `id`,
+    /// not just presence: `DiffReviewFileSection` keys its own
     /// stale-load-rejection and reset logic off that id (see
     /// `contextStateSignature`), so treating two different providers as
     /// equal would let a swapped-in file keep serving a previous provider's
@@ -310,8 +319,8 @@ extension DiffReviewFileSectionModel {
             && placeholderMessage == other.placeholderMessage
             && (openFile == nil) == (other.openFile == nil)
             && contextProvider?.id == other.contextProvider?.id
-            && (stagedMutationActions?.renderablePresence ?? (false, false, false))
-                == (other.stagedMutationActions?.renderablePresence ?? (false, false, false))
+            && (stagedMutationActions?.renderableSignature ?? (false, false, false, true))
+                == (other.stagedMutationActions?.renderableSignature ?? (false, false, false, true))
     }
 }
 
