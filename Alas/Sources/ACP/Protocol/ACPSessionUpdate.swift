@@ -66,12 +66,13 @@ enum ACPSessionUpdate: Codable, Equatable {
             self = .sessionConfigOptionsUpdate(
                 try c.decode([ACPConfigOption].self, forKey: .configOptions))
         case "available_commands_update":
-            // Wire format: `{ availableCommands: [{ name, description, input }] }`.
-            // We don't surface `input` (argument hints) in v1.
+            // Wire format:
+            // `{ availableCommands: [{ name, description, input: { hint } }] }`.
             let raw = (try? c.decode([ACPAvailableCommand].self, forKey: .availableCommands)) ?? []
             self = .availableCommandsUpdate(raw.map {
                 let cmd = $0.name.hasPrefix("/") ? $0.name : "/" + $0.name
-                return ACPPromptSuggestion(command: cmd, description: $0.description)
+                return ACPPromptSuggestion(
+                    command: cmd, description: $0.description, hint: $0.input?.hint)
             })
         case "usage_update":
             self = .usageUpdate(try ACPUsageInfo(from: decoder))
@@ -88,6 +89,15 @@ enum ACPSessionUpdate: Codable, Equatable {
     private struct ACPAvailableCommand: Codable {
         let name: String
         let description: String?
+        let input: Input?
+        struct Input: Codable { let hint: String }
+        enum CodingKeys: String, CodingKey { case name, description, input }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            description = try? c.decodeIfPresent(String.self, forKey: .description)
+            input = try? c.decodeIfPresent(Input.self, forKey: .input)
+        }
     }
 
     func encode(to encoder: Encoder) throws {
