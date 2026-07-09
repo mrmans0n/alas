@@ -810,15 +810,19 @@ struct DiffTabView: View {
 
     private var reviewDraftComposer: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextEditor(text: $pendingDraftBody)
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("fg"))
-                .frame(minHeight: 64, maxHeight: 90)
-                .background(theme.color("bg-2"))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
-                .focused($draftComposerFocused)
-                .accessibilityIdentifier("diff-review-draft-composer")
+            ReviewDraftComposerTextEditor(
+                text: $pendingDraftBody,
+                theme: theme,
+                isFocused: $draftComposerFocused,
+                onSave: savePendingDraft,
+                onCancel: clearPendingDraft
+            )
+            .frame(minHeight: 64, maxHeight: 90)
+            .background(theme.color("bg-2"))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.color("line"), lineWidth: 0.5))
+            .onAppear { draftComposerFocused = true }
+            .accessibilityIdentifier("diff-review-draft-composer")
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
                 Button("Cancel") { clearPendingDraft() }

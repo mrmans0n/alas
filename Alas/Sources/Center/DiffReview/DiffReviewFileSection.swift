@@ -792,7 +792,7 @@ enum ReviewDraftComposerKeyboardAction: Equatable {
     }
 }
 
-private struct ReviewDraftComposerTextEditor: NSViewRepresentable {
+struct ReviewDraftComposerTextEditor: NSViewRepresentable {
     @Binding var text: String
     let theme: Theme
     let isFocused: FocusState<Bool>.Binding
