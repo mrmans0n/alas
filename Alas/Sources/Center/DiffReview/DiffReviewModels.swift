@@ -286,6 +286,38 @@ struct DiffReviewLoadedSession {
     let summary: DiffReviewSessionModel
 }
 
+extension DiffReviewStagedMutationActions {
+    /// Closure identity is not comparable; which actions exist is what
+    /// determines the rendered buttons.
+    var renderablePresence: (Bool, Bool, Bool) {
+        (unstageFile != nil, unstageHunk != nil, isHunkUnstageEnabled != nil)
+    }
+}
+
+extension DiffReviewFileSectionModel {
+    /// True when this model renders identically to `other`. Ignores closure
+    /// identity (`openFile`, `contextProvider.snapshot`, mutation action
+    /// bodies) — only content and action presence are compared, so freshly
+    /// rebuilt models with equivalent content still count as unchanged.
+    func hasSameRenderableContent(as other: DiffReviewFileSectionModel) -> Bool {
+        summary == other.summary
+            && parsedDiff == other.parsedDiff
+            && displayModel == other.displayModel
+            && placeholderMessage == other.placeholderMessage
+            && (openFile == nil) == (other.openFile == nil)
+            && (contextProvider == nil) == (other.contextProvider == nil)
+            && (stagedMutationActions?.renderablePresence ?? (false, false, false))
+                == (other.stagedMutationActions?.renderablePresence ?? (false, false, false))
+    }
+}
+
+extension DiffReviewLoadedSession {
+    func hasSameRenderableContent(as other: DiffReviewLoadedSession) -> Bool {
+        guard summary == other.summary, files.count == other.files.count else { return false }
+        return zip(files, other.files).allSatisfy { $0.hasSameRenderableContent(as: $1) }
+    }
+}
+
 struct DiffReviewFileTreeNode: Codable, Equatable, Identifiable {
     enum Kind: String, Codable {
         case directory
