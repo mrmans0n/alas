@@ -612,7 +612,7 @@ struct ACPSessionNewResult: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        sessionId = try c.decode(String.self, forKey: .sessionId)
+        sessionId = (try? c.decode(String.self, forKey: .sessionId)) ?? ""
 
         // ACP v1 nests these as `models: { availableModels, currentModelId }`
         // and `modes: { availableModes, currentModeId }`. Older drafts used
@@ -635,6 +635,18 @@ struct ACPSessionNewResult: Codable, Equatable {
 
         promptSuggestions = (try? c.decode([ACPPromptSuggestion].self, forKey: .promptSuggestions)) ?? []
         configOptions = (try? c.decode([ACPConfigOption].self, forKey: .configOptions)) ?? []
+    }
+
+    func withSessionId(_ sessionId: String) -> ACPSessionNewResult {
+        ACPSessionNewResult(
+            sessionId: sessionId,
+            availableModels: availableModels,
+            availableModes: availableModes,
+            currentModel: currentModel,
+            currentMode: currentMode,
+            promptSuggestions: promptSuggestions,
+            configOptions: configOptions
+        )
     }
 }
 

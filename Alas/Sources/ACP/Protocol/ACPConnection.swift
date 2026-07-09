@@ -34,7 +34,14 @@ final class ACPConnection: @unchecked Sendable {
         let req = ACPRequest(method: "session/new",
                              params: ACPSessionNewParams(cwd: cwd, mcpServers: []))
         let resp = try await client.send(req)
-        return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        guard !result.sessionId.isEmpty else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [],
+                debugDescription: "session/new response is missing sessionId"
+            ))
+        }
+        return result
     }
 
     func authenticate(methodId: String) async throws {
@@ -48,7 +55,8 @@ final class ACPConnection: @unchecked Sendable {
         let req = ACPRequest(method: "session/load",
                              params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: []))
         let resp = try await client.send(req)
-        return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
     }
 
     func cancel(sessionId: String) async throws {
