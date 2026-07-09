@@ -126,7 +126,9 @@ struct DiffReviewFileSectionEqualityTests {
                 ),
                 layoutMode: box.layoutMode,
                 wrapLines: false,
-                showWhitespace: false
+                showWhitespace: false,
+                draftCommentAvailability: [],
+                inlineFeedbackAvailability: []
             )
         }
 
@@ -135,6 +137,44 @@ struct DiffReviewFileSectionEqualityTests {
         let after = snapshot()
 
         #expect(before != after)
+    }
+
+    @Test func draftCommentAvailabilityChangeIsDetectedEvenWhenCommentsAreUnchanged() {
+        // The comment list itself can stay identical while what's available
+        // for it changes (e.g. an agent send-target becomes available).
+        // ReviewDraftCommentCard renders its action row from that
+        // availability, so a change there must not compare equal.
+        let file = fileModel(path: "a.swift")
+        let base = section(file: file, draftCommentAvailability: [.none])
+        let changed = section(
+            file: file,
+            draftCommentAvailability: [ReviewDraftCommentActionAvailability(
+                canEdit: true,
+                canDelete: false,
+                canResolve: false,
+                canDismiss: false,
+                canCopyPrompt: false,
+                canShowSendToAgent: false,
+                canSendToAgent: false
+            )]
+        )
+
+        #expect(base != changed)
+    }
+
+    @Test func inlineFeedbackAvailabilityChangeIsDetectedEvenWhenFeedbackIsUnchanged() {
+        let file = fileModel(path: "a.swift")
+        let base = section(file: file, inlineFeedbackAvailability: [.none])
+        let changed = section(
+            file: file,
+            inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability(
+                canOpenProvider: true,
+                canCopyContext: false,
+                canSendToAgent: false
+            )]
+        )
+
+        #expect(base != changed)
     }
 
     @Test func lspContextRendersEqualIgnoresOpenTargetClosure() {
@@ -177,7 +217,9 @@ private func section(
     annotations: [DiffInlineAnnotation] = [],
     canReply: Bool = false,
     canResolve: Bool = false,
-    canAddToReview: Bool = false
+    canAddToReview: Bool = false,
+    draftCommentAvailability: [ReviewDraftCommentActionAvailability] = [],
+    inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability] = []
 ) -> EquatableDiffReviewFileSection {
     EquatableDiffReviewFileSection(
         section: DiffReviewFileSection(
@@ -204,7 +246,9 @@ private func section(
         ),
         layoutMode: layoutMode,
         wrapLines: wrapLines,
-        showWhitespace: showWhitespace
+        showWhitespace: showWhitespace,
+        draftCommentAvailability: draftCommentAvailability,
+        inlineFeedbackAvailability: inlineFeedbackAvailability
     )
 }
 

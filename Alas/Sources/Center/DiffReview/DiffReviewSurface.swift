@@ -343,7 +343,9 @@ struct DiffReviewSurface: View {
             ),
             layoutMode: layoutMode,
             wrapLines: wrapLines,
-            showWhitespace: showWhitespace
+            showWhitespace: showWhitespace,
+            draftCommentAvailability: draftComments.map(draftCommentActions.availability),
+            inlineFeedbackAvailability: inlineFeedback.map { inlineFeedbackActions.availability($0, file.summary) }
         )
         .equatable()
     }

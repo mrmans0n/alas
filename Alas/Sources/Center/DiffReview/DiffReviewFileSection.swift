@@ -880,7 +880,8 @@ struct DiffReviewFileSection: View {
 
 /// Wraps `DiffReviewFileSection` for `.equatable()`, with `layoutMode`,
 /// `wrapLines`, and `showWhitespace` captured as plain values rather than
-/// compared as live `@Binding`s.
+/// compared as live `@Binding`s, plus per-item action-availability
+/// snapshots for draft comments and inline feedback.
 ///
 /// `DiffReviewFileSection` itself deliberately does NOT conform to
 /// `Equatable`: comparing a `@Binding`'s `wrappedValue` inside `==` doesn't
@@ -894,11 +895,21 @@ struct DiffReviewFileSection: View {
 /// snapshots, captured once by the caller at construction time (not read
 /// through a binding), are what actually distinguish "before" from
 /// "after".
+///
+/// The same problem applies to `draftCommentActions.availability` and
+/// `inlineFeedbackActions.availability`: the comment/feedback lists they're
+/// applied to can stay unchanged while what's available for them changes
+/// (e.g. an agent send-target becomes available), and `ReviewDraftCommentCard`
+/// / `DiffReviewInlineFeedbackCard` render their action rows from that
+/// result. The closures aren't comparable, so the caller evaluates them
+/// once per item and passes the plain `Equatable` results instead.
 struct EquatableDiffReviewFileSection: View, Equatable {
     let section: DiffReviewFileSection
     let layoutMode: DiffLayoutMode
     let wrapLines: Bool
     let showWhitespace: Bool
+    let draftCommentAvailability: [ReviewDraftCommentActionAvailability]
+    let inlineFeedbackAvailability: [DiffReviewInlineFeedbackActionAvailability]
 
     var body: some View { section }
 
@@ -915,6 +926,8 @@ struct EquatableDiffReviewFileSection: View, Equatable {
         lhs.layoutMode == rhs.layoutMode
             && lhs.wrapLines == rhs.wrapLines
             && lhs.showWhitespace == rhs.showWhitespace
+            && lhs.draftCommentAvailability == rhs.draftCommentAvailability
+            && lhs.inlineFeedbackAvailability == rhs.inlineFeedbackAvailability
             && lhs.section.file.hasSameRenderableContent(as: rhs.section.file)
             && lhs.section.inlineFeedback == rhs.section.inlineFeedback
             && lhs.section.focusedFeedbackID == rhs.section.focusedFeedbackID
