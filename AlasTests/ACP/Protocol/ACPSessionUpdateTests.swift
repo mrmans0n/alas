@@ -208,7 +208,8 @@ struct ACPSessionUpdateTests {
         let env = try JSONDecoder().decode(
             JSONRPCEnvelope<ACPSessionUpdateParams>.self, from: Data(json.utf8))
         guard case .availableCommandsUpdate(let cmds) = env.params!.update else {
-            Issue.record("expected availableCommandsUpdate"); return
+            Issue.record("expected availableCommandsUpdate")
+            return
         }
         #expect(cmds.count == 2)
         #expect(cmds[0].command == "/review")
@@ -239,7 +240,8 @@ struct ACPSessionUpdateTests {
         let env = try JSONDecoder().decode(
             JSONRPCEnvelope<ACPSessionUpdateParams>.self, from: Data(json.utf8))
         guard case .availableCommandsUpdate(let cmds) = env.params!.update else {
-            Issue.record("expected availableCommandsUpdate"); return
+            Issue.record("expected availableCommandsUpdate")
+            return
         }
         #expect(cmds.count == 3)
         #expect(cmds.allSatisfy { $0.hint == nil })
