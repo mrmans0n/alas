@@ -25,6 +25,45 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-restored")
     }
 
+    @Test("Codex-style load response without session id restores normally")
+    func codexStyleLoadResponseWithoutSessionIdRestoresNormally() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        try store.upsertSession(row(remoteSessionId: "remote-old"))
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        client.script(method: "session/load") { _ in
+            Data("""
+            {
+              "models": {
+                "currentModelId": "gpt-5",
+                "availableModels": []
+              },
+              "modes": {
+                "currentModeId": "default",
+                "availableModes": []
+              },
+              "configOptions": []
+            }
+            """.utf8)
+        }
+        client.script(method: "session/new") { _ in
+            Issue.record("session/new should not be called when session/load succeeds without a sessionId")
+            return Data("{}".utf8)
+        }
+        let manager = manager(store: store, client: client)
+
+        let session = try #require(manager.placeholderSession(id: "local"))
+        await manager.hydrateIfNeeded(id: "local")
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/load"])
+        #expect(session.remoteSessionId == "remote-old")
+        #expect(session.currentModel == "gpt-5")
+        #expect(session.currentMode == "default")
+        #expect(session.contextRestoreWarning == nil)
+        #expect(try store.loadSession(id: "local")?.remoteSessionId == "remote-old")
+    }
+
     @Test("replayed load history is ignored when a session is already hydrated")
     func replayedLoadHistoryIgnoredWhenHydrated() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
