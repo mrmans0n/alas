@@ -42,6 +42,65 @@ struct DiffReviewLineAnchor: Equatable, Hashable, Sendable {
     }
 }
 
+struct DiffReviewCommentHighlight: Equatable, Hashable, Sendable {
+    let path: String
+    let side: DiffReviewInlineFeedbackSide
+    let lineRange: ClosedRange<Int>
+
+    init(path: String, side: DiffReviewInlineFeedbackSide, lineRange: ClosedRange<Int>) {
+        self.path = path
+        self.side = side
+        self.lineRange = lineRange
+    }
+
+    init(path: String, side: DiffReviewInlineFeedbackSide, line: Int, endLine: Int? = nil) {
+        self.init(path: path, side: side, lineRange: min(line, endLine ?? line)...max(line, endLine ?? line))
+    }
+
+    func highlightedRowRange(in lines: [DiffPaneTextDocumentBuilder.LineMetadata]) -> ClosedRange<Int>? {
+        let matchingRows = lines.indices.filter { index in
+            matchesVisibleSourceLine(lines[index].sourceLine)
+        }
+        guard let first = matchingRows.first, let last = matchingRows.last else { return nil }
+        return first...last
+    }
+
+    func matchesVisibleSourceLine(_ sourceLine: DiffDisplayLine?) -> Bool {
+        guard let sourceLine,
+              sourceLine.anchor.filePath == path,
+              let lineNumber = sourceLine.highlightLineNumber(for: side),
+              lineRange.contains(lineNumber)
+        else {
+            return false
+        }
+        return side.matches(sourceLine.anchor.side)
+    }
+}
+
+extension DiffReviewInlineFeedbackSide {
+    func matches(_ lineSide: DiffLineSide) -> Bool {
+        switch (self, lineSide) {
+        case (.old, .old), (.new, .new), (.unknown, _), (.old, .paired), (.new, .paired):
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private extension DiffDisplayLine {
+    func highlightLineNumber(for side: DiffReviewInlineFeedbackSide) -> Int? {
+        switch side {
+        case .old:
+            return anchor.oldLine
+        case .new:
+            return anchor.newLine
+        case .unknown:
+            return lineNumber ?? anchor.newLine ?? anchor.oldLine
+        }
+    }
+}
+
 struct DiffPaneTextDocumentView: NSViewRepresentable {
     let group: DiffDisplayGroup
     let expandedCollapsedRowIDs: Set<String>
@@ -53,6 +112,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     let codeFontSize: CGFloat
     let theme: Theme
     let lspContext: DiffPaneLSPContext?
+    let activeCommentHighlight: DiffReviewCommentHighlight?
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
@@ -68,6 +128,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         codeFontSize: CGFloat,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
+        activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
@@ -82,6 +143,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
         self.codeFontSize = codeFontSize
         self.theme = theme
         self.lspContext = lspContext
+        self.activeCommentHighlight = activeCommentHighlight
         self.allowsReviewLineSelection = allowsReviewLineSelection
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
@@ -102,6 +164,7 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme,
             lspContext: lspContext,
+            activeCommentHighlight: activeCommentHighlight,
             allowsReviewLineSelection: allowsReviewLineSelection,
             onReviewLineSelected: onReviewLineSelected,
             onContextExpansion: onContextExpansion
@@ -119,6 +182,7 @@ struct DiffPaneSegmentView: NSViewRepresentable {
     let codeFontSize: CGFloat
     let theme: Theme
     let lspContext: DiffPaneLSPContext?
+    var activeCommentHighlight: DiffReviewCommentHighlight? = nil
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     let onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
@@ -137,6 +201,7 @@ struct DiffPaneSegmentView: NSViewRepresentable {
             font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
             theme: theme,
             lspContext: lspContext,
+            activeCommentHighlight: activeCommentHighlight,
             allowsReviewLineSelection: allowsReviewLineSelection,
             onReviewLineSelected: onReviewLineSelected,
             onContextExpansion: onContextExpansion
@@ -187,6 +252,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
         font: NSFont,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
+        activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
@@ -200,6 +266,9 @@ final class DiffPaneTextDocumentContainerView: NSView {
         oldPane.onContextExpansion = onContextExpansion
         newPane.onContextExpansion = onContextExpansion
         stackedPane.onContextExpansion = onContextExpansion
+        oldPane.activeCommentHighlight = activeCommentHighlight
+        newPane.activeCommentHighlight = activeCommentHighlight
+        stackedPane.activeCommentHighlight = activeCommentHighlight
 
         let signature = UpdateSignature(
             group: group,
@@ -369,6 +438,7 @@ final class DiffPaneTextDocumentContainerView: NSView {
         font: NSFont,
         theme: Theme,
         lspContext: DiffPaneLSPContext?,
+        activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
@@ -382,6 +452,9 @@ final class DiffPaneTextDocumentContainerView: NSView {
         oldPane.onContextExpansion = onContextExpansion
         newPane.onContextExpansion = onContextExpansion
         stackedPane.onContextExpansion = onContextExpansion
+        oldPane.activeCommentHighlight = activeCommentHighlight
+        newPane.activeCommentHighlight = activeCommentHighlight
+        stackedPane.activeCommentHighlight = activeCommentHighlight
 
         let signature = RowsUpdateSignature(
             rows: rows,
@@ -518,6 +591,12 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
     private var theme: Theme?
+    var activeCommentHighlight: DiffReviewCommentHighlight? {
+        didSet {
+            textView.activeCommentHighlight = activeCommentHighlight
+            (verticalRulerView as? DiffPaneLineNumberRulerView)?.activeCommentHighlight = activeCommentHighlight
+        }
+    }
     var allowsReviewLineSelection: Bool = true {
         didSet {
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.allowsReviewLineSelection = allowsReviewLineSelection
@@ -627,6 +706,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         textView.lineTones = lineTones
         textView.contextExpansionHandler = onContextExpansion
         textView.theme = theme
+        textView.activeCommentHighlight = activeCommentHighlight
         textView.lspContext = lspContext
         textView.allowedLSPSide = allowedLSPSide
         textView.updateLSPController()
@@ -640,6 +720,7 @@ final class DiffPaneTextScrollView: NSScrollView {
                 contentTopInset: textView.textContainerInset.height,
                 theme: theme,
                 expansionKeys: expansionKeys,
+                activeCommentHighlight: activeCommentHighlight,
                 onContextExpansion: onContextExpansion
             )
         }
@@ -851,6 +932,25 @@ final class DiffPaneCodeTextView: NSTextView {
         nil
     }
 
+    static func commentHighlightRect(
+        rowRects: [NSRect],
+        rowRange: ClosedRange<Int>,
+        visibleMinY: CGFloat,
+        contentWidth: CGFloat
+    ) -> NSRect {
+        let rows = rowRange.compactMap { index in
+            rowRects.indices.contains(index) ? rowRects[index] : nil
+        }
+        guard let first = rows.first else { return .zero }
+        let union = rows.dropFirst().reduce(first) { $0.union($1) }
+        return NSRect(
+            x: 4,
+            y: union.minY - visibleMinY,
+            width: max(contentWidth - 8, 1),
+            height: union.height
+        )
+    }
+
     private var ownedTextStorage: NSTextStorage?
     private var customTrackingArea: NSTrackingArea?
     private var lspController: DiffPaneLSPController?
@@ -869,7 +969,13 @@ final class DiffPaneCodeTextView: NSTextView {
         }
     }
     var lineMetadata: [DiffPaneTextDocumentBuilder.LineMetadata] = [] {
-        didSet { invalidateDiffRowGeometry() }
+        didSet {
+            invalidateDiffRowGeometry()
+            needsDisplay = true
+        }
+    }
+    var activeCommentHighlight: DiffReviewCommentHighlight? {
+        didSet { needsDisplay = true }
     }
     var hoverHandler: ((NSPoint) -> Void)?
     var commandClickHandler: ((NSPoint) -> Void)?
@@ -1323,6 +1429,28 @@ final class DiffPaneCodeTextView: NSTextView {
                 drawExpandableContextPill(row: index, in: rowRect, theme: theme)
             }
         }
+        drawActiveCommentHighlight(in: dirtyRect, rowRects: rowRects, theme: theme)
+    }
+
+    private func drawActiveCommentHighlight(in dirtyRect: NSRect, rowRects: [NSRect], theme: Theme) {
+        guard let rowRange = activeCommentHighlight?.highlightedRowRange(in: lineMetadata) else { return }
+        let rect = Self.commentHighlightRect(
+            rowRects: rowRects,
+            rowRange: rowRange,
+            visibleMinY: bounds.minY,
+            contentWidth: bounds.width
+        )
+        guard rect != .zero, rect.intersects(dirtyRect) else { return }
+
+        let accent = NSColor(theme.color("accent"))
+        accent.withAlphaComponent(0.12).setFill()
+        let fillPath = NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4)
+        fillPath.fill()
+
+        accent.withAlphaComponent(0.82).setStroke()
+        let strokePath = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4)
+        strokePath.lineWidth = 1
+        strokePath.stroke()
     }
 
     private func paragraphRanges(lineCount: Int) -> [NSRange] {
@@ -1495,6 +1623,9 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var activeCommentHighlight: DiffReviewCommentHighlight? {
+        didSet { needsDisplay = true }
+    }
     private var contentTopInset: CGFloat = 6
     private var boundsObserver: NSObjectProtocol?
     private var selectionStartRow: Int?
@@ -1524,6 +1655,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         contentTopInset: CGFloat,
         theme: Theme,
         expansionKeys: [DiffContextExpansionKey?],
+        activeCommentHighlight: DiffReviewCommentHighlight?,
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void
     ) {
         self.labels = labels
@@ -1532,6 +1664,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         self.contentTopInset = contentTopInset
         self.theme = theme
         self.expansionKeys = expansionKeys
+        self.activeCommentHighlight = activeCommentHighlight
         self.onContextExpansion = onContextExpansion
         updateThickness()
         needsDisplay = true
@@ -1638,6 +1771,15 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let rowRects = diffRowRects()
         guard !rowRects.isEmpty else { return }
 
+        for index in visibleRowIndices(in: visible) {
+            let sourceRowRect = rowRects[index]
+            let y = sourceRowRect.minY - visible.minY
+            let rowRect = NSRect(x: 0, y: y, width: ruleThickness, height: sourceRowRect.height)
+            drawRowBackground(index: index, rowRect: rowRect, theme: theme)
+        }
+
+        drawActiveCommentHighlight(visibleRect: visible, rowRects: rowRects, theme: theme)
+
         let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
         let labelRects = labelDrawRects()
         for index in visibleRowIndices(in: visible) {
@@ -1645,7 +1787,6 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             let sourceRowRect = rowRects[index]
             let y = sourceRowRect.minY - visible.minY
             let rowRect = NSRect(x: 0, y: y, width: ruleThickness, height: sourceRowRect.height)
-            drawRowBackground(index: index, rowRect: rowRect, theme: theme)
             guard !label.isEmpty else { continue }
             let sourceLabelRect = labelRects.indices.contains(index)
                 ? labelRects[index]
@@ -1761,6 +1902,26 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             y: max(0, union.minY - visibleMinY),
             width: max(ruleThickness - 8, 1),
             height: union.height
+        )
+    }
+
+    static func activeCommentHighlightRect(
+        rowRects: [NSRect],
+        rowRange: ClosedRange<Int>,
+        visibleMinY: CGFloat,
+        ruleThickness: CGFloat
+    ) -> NSRect {
+        let rows = rowRange.compactMap { index in
+            rowRects.indices.contains(index) ? rowRects[index] : nil
+        }
+        guard let first = rows.first else { return .zero }
+        let union = rows.dropFirst().reduce(first) { $0.union($1) }
+        let clippedMinY = max(visibleMinY, union.minY)
+        return NSRect(
+            x: 0,
+            y: max(0, clippedMinY - visibleMinY),
+            width: ruleThickness,
+            height: max(0, union.maxY - clippedMinY)
         )
     }
 
@@ -1919,6 +2080,23 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         let path = NSBezierPath(roundedRect: outlineRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 5, yRadius: 5)
         path.lineWidth = 1.5
         path.stroke()
+    }
+
+    private func drawActiveCommentHighlight(visibleRect: NSRect, rowRects: [NSRect], theme: Theme) {
+        guard let textView = scrollView?.documentView as? DiffPaneCodeTextView,
+              let rowRange = activeCommentHighlight?.highlightedRowRange(in: textView.lineMetadata)
+        else { return }
+        let highlightRect = Self.activeCommentHighlightRect(
+            rowRects: rowRects,
+            rowRange: rowRange,
+            visibleMinY: visibleRect.minY,
+            ruleThickness: ruleThickness
+        )
+        guard highlightRect != .zero else { return }
+
+        let accent = NSColor(theme.color("accent"))
+        accent.withAlphaComponent(0.18).setFill()
+        highlightRect.fill()
     }
 
     static func changeRailRect(in rowRect: NSRect, tone: DiffPaneLineTone) -> NSRect? {

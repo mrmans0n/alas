@@ -115,6 +115,7 @@ struct DiffPaneView: View {
     var showsToolbar: Bool = true
     var verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll
     var lspContext: DiffPaneLSPContext? = nil
+    var activeCommentHighlight: DiffReviewCommentHighlight? = nil
     var allowsReviewLineSelection: Bool = true
     var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
@@ -133,6 +134,7 @@ struct DiffPaneView: View {
 
     @Environment(\.theme) private var theme
     @State private var expandedCollapsedRowIDs: Set<String> = []
+    @State private var activeThreadID: String?
 
     init(
         model: DiffDisplayModel,
@@ -145,6 +147,7 @@ struct DiffPaneView: View {
         showsToolbar: Bool = true,
         verticalScrollMode: DiffPaneVerticalScrollMode = .internalScroll,
         lspContext: DiffPaneLSPContext? = nil,
+        activeCommentHighlight: DiffReviewCommentHighlight? = nil,
         allowsReviewLineSelection: Bool = true,
         onReviewLineSelected: @escaping (DiffReviewLineAnchor) -> Void = { _ in },
         onContextExpansion: @escaping (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in },
@@ -171,6 +174,7 @@ struct DiffPaneView: View {
         self.showsToolbar = showsToolbar
         self.verticalScrollMode = verticalScrollMode
         self.lspContext = lspContext
+        self.activeCommentHighlight = activeCommentHighlight
         self.allowsReviewLineSelection = allowsReviewLineSelection
         self.onReviewLineSelected = onReviewLineSelected
         self.onContextExpansion = onContextExpansion
@@ -327,8 +331,8 @@ struct DiffPaneView: View {
         let hunkThreads = threads.filter { t in
             visibleRows.contains {
                 t.isOldSide
-                    ? $0.old?.anchor.oldLine == t.newLine
-                    : $0.new?.anchor.newLine == t.newLine
+                    ? t.lineRange.contains($0.old?.anchor.oldLine ?? -1)
+                    : t.lineRange.contains($0.new?.anchor.newLine ?? -1)
             }
         }
         let hunkAnnotations = annotations.filter { a in
@@ -355,6 +359,7 @@ struct DiffPaneView: View {
                         codeFontSize: codeFontSize,
                         theme: theme,
                         lspContext: lspContext,
+                        activeCommentHighlight: activeHighlight(for: segment.rows),
                         allowsReviewLineSelection: allowsReviewLineSelection,
                         onReviewLineSelected: onReviewLineSelected,
                         onContextExpansion: onContextExpansion
@@ -371,7 +376,10 @@ struct DiffPaneView: View {
                         onDelete: { comment in onDelete(t, comment) },
                         canReply: canReply && t.viewerCanReply,
                         canResolve: canResolve && (t.viewerCanResolve || t.viewerCanUnresolve),
-                        canAddToReview: canAddToReview
+                        canAddToReview: canAddToReview,
+                        onActiveChange: { active in
+                            activeThreadID = active ? t.id : (activeThreadID == t.id ? nil : activeThreadID)
+                        }
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
                 case .annotation(let a):
@@ -389,6 +397,71 @@ struct DiffPaneView: View {
         .padding(.bottom, 10)
     }
 
+    private func activeHighlight(for rows: [DiffDisplayRow]) -> DiffReviewCommentHighlight? {
+        DiffPaneActiveHighlightResolver.activeHighlight(
+            parentHighlight: activeCommentHighlight,
+            threads: threads,
+            activeThreadID: activeThreadID,
+            rows: rows
+        )
+    }
+}
+
+enum DiffPaneActiveHighlightResolver {
+    static func activeHighlight(
+        parentHighlight: DiffReviewCommentHighlight?,
+        threads: [DiffInlineCommentThread],
+        activeThreadID: String?,
+        rows: [DiffDisplayRow]
+    ) -> DiffReviewCommentHighlight? {
+        if let threadHighlight = activeThreadHighlight(
+            threads: threads,
+            activeThreadID: activeThreadID,
+            rows: rows
+        ) {
+            return threadHighlight
+        }
+
+        if let parentHighlight,
+           rowsContainHighlight(parentHighlight, rows: rows) {
+            return parentHighlight
+        }
+
+        return nil
+    }
+
+    private static func activeThreadHighlight(
+        threads: [DiffInlineCommentThread],
+        activeThreadID: String?,
+        rows: [DiffDisplayRow]
+    ) -> DiffReviewCommentHighlight? {
+        guard let activeThread = threads.first(where: { $0.id == activeThreadID }),
+              rows.contains(where: { row in
+                  activeThread.isOldSide
+                      ? activeThread.lineRange.contains(row.old?.anchor.oldLine ?? -1)
+                      : activeThread.lineRange.contains(row.new?.anchor.newLine ?? -1)
+              })
+        else { return nil }
+
+        return DiffReviewCommentHighlight(
+            path: activeThread.filePath,
+            side: activeThread.isOldSide ? .old : .new,
+            lineRange: activeThread.lineRange
+        )
+    }
+
+    private static func rowsContainHighlight(_ highlight: DiffReviewCommentHighlight, rows: [DiffDisplayRow]) -> Bool {
+        rows.contains { row in
+            rowContainsHighlight(highlight, row: row)
+        }
+    }
+
+    private static func rowContainsHighlight(_ highlight: DiffReviewCommentHighlight, row: DiffDisplayRow) -> Bool {
+        highlight.matchesVisibleSourceLine(row.old) || highlight.matchesVisibleSourceLine(row.new)
+    }
+}
+
+extension DiffPaneView {
     private func hunkHeader(_ group: DiffDisplayGroup) -> some View {
         let actions = hunkActions(group.sourceHunk)
         return HStack(spacing: 8) {

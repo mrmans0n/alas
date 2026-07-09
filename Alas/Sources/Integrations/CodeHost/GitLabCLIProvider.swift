@@ -500,6 +500,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             line: thread.line,
             startLine: thread.startLine,
             originalLine: thread.originalLine,
+            originalStartLine: thread.originalStartLine,
             diffHunk: thread.diffHunk,
             diffSide: thread.diffSide,
             isResolved: true,
@@ -540,6 +541,7 @@ struct GitLabCLIProvider: CodeHostProvider {
             line: thread.line,
             startLine: thread.startLine,
             originalLine: thread.originalLine,
+            originalStartLine: thread.originalStartLine,
             diffHunk: thread.diffHunk,
             diffSide: thread.diffSide,
             isResolved: false,
@@ -1204,8 +1206,9 @@ struct GitLabCLIProvider: CodeHostProvider {
                 id: discussion.id,
                 path: position?.newPath ?? position?.oldPath,
                 line: position?.newLine,
-                startLine: nil,
+                startLine: position?.newLine == nil ? nil : position?.lineRange?.start.newLine,
                 originalLine: position?.oldLine,
+                originalStartLine: isOldSide ? position?.lineRange?.start.oldLine : nil,
                 diffHunk: nil,
                 diffSide: isOldSide ? "LEFT" : nil,
                 isResolved: discussion.isResolved,
@@ -2078,10 +2081,26 @@ private struct GitLabNotePosition: Decodable {
     let oldPath: String?
     let newLine: Int?
     let oldLine: Int?
+    let lineRange: GitLabNoteLineRange?
 
     private enum CodingKeys: String, CodingKey {
         case newPath = "new_path"
         case oldPath = "old_path"
+        case newLine = "new_line"
+        case oldLine = "old_line"
+        case lineRange = "line_range"
+    }
+}
+
+private struct GitLabNoteLineRange: Decodable {
+    let start: GitLabNoteLineRangePoint
+}
+
+private struct GitLabNoteLineRangePoint: Decodable {
+    let newLine: Int?
+    let oldLine: Int?
+
+    private enum CodingKeys: String, CodingKey {
         case newLine = "new_line"
         case oldLine = "old_line"
     }

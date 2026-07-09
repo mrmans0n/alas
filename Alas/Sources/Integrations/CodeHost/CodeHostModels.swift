@@ -280,6 +280,7 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     let line: Int?
     let startLine: Int?
     let originalLine: Int?
+    let originalStartLine: Int?
     let diffHunk: String?
     let diffSide: String?
     let isResolved: Bool
@@ -297,6 +298,7 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
         line: Int?,
         startLine: Int?,
         originalLine: Int?,
+        originalStartLine: Int? = nil,
         diffHunk: String?,
         diffSide: String? = nil,
         isResolved: Bool,
@@ -313,6 +315,7 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
         self.line = line
         self.startLine = startLine
         self.originalLine = originalLine
+        self.originalStartLine = originalStartLine
         self.diffHunk = diffHunk
         self.diffSide = diffSide
         self.isResolved = isResolved
@@ -334,10 +337,15 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
 
     var isActionable: Bool { !isResolved && !isOutdated }
 
+    func rangeStartLine(isOldSide: Bool) -> Int? {
+        isOldSide ? originalStartLine : startLine
+    }
+
     func addingReply(_ comment: ReviewComment) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            originalLine: originalLine, originalStartLine: originalStartLine,
+            diffHunk: diffHunk, diffSide: diffSide,
             isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments + [comment],
             viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
@@ -348,7 +356,8 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     func withResolved(_ resolved: Bool) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            originalLine: originalLine, originalStartLine: originalStartLine,
+            diffHunk: diffHunk, diffSide: diffSide,
             isResolved: resolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments,
             viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
@@ -359,7 +368,8 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     func replacingComment(id commentID: String, with replacement: ReviewComment) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            originalLine: originalLine, originalStartLine: originalStartLine,
+            diffHunk: diffHunk, diffSide: diffSide,
             isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments.map { $0.id == commentID ? replacement : $0 },
             viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,
@@ -370,7 +380,8 @@ struct ReviewThread: Identifiable, Equatable, Sendable {
     func removingComment(id commentID: String) -> ReviewThread {
         ReviewThread(
             id: id, path: path, line: line, startLine: startLine,
-            originalLine: originalLine, diffHunk: diffHunk, diffSide: diffSide,
+            originalLine: originalLine, originalStartLine: originalStartLine,
+            diffHunk: diffHunk, diffSide: diffSide,
             isResolved: isResolved, isOutdated: isOutdated, isFileLevel: isFileLevel,
             comments: comments.filter { $0.id != commentID },
             viewerCanResolve: viewerCanResolve, viewerCanUnresolve: viewerCanUnresolve,

@@ -77,6 +77,7 @@ struct GitHubCLIProvider: CodeHostProvider {
               line
               startLine
               originalLine
+              originalStartLine
               subjectType
               diffSide
               viewerCanResolve
@@ -1541,6 +1542,7 @@ struct GitHubCLIProvider: CodeHostProvider {
                 line: node.line,
                 startLine: node.startLine,
                 originalLine: node.originalLine,
+                originalStartLine: node.originalStartLine,
                 diffHunk: node.comments.nodes.first?.diffHunk,
                 diffSide: node.diffSide,
                 isResolved: node.isResolved,
@@ -1598,6 +1600,7 @@ struct GitHubCLIProvider: CodeHostProvider {
             line: thread.line,
             startLine: thread.startLine,
             originalLine: thread.originalLine,
+            originalStartLine: thread.originalStartLine,
             diffHunk: thread.diffHunk,
             diffSide: thread.diffSide,
             isResolved: mutated.isResolved,
@@ -2094,6 +2097,7 @@ private struct ReviewThreadNode: Decodable {
     let line: Int?
     let startLine: Int?
     let originalLine: Int?
+    let originalStartLine: Int?
     let subjectType: String?
     let diffSide: String?
     let viewerCanResolve: Bool?
@@ -2110,6 +2114,7 @@ private struct ReviewThreadNode: Decodable {
         self.line = try? container.decode(Int.self, forKey: .line)
         self.startLine = try? container.decode(Int.self, forKey: .startLine)
         self.originalLine = try? container.decode(Int.self, forKey: .originalLine)
+        self.originalStartLine = try? container.decode(Int.self, forKey: .originalStartLine)
         self.subjectType = try? container.decode(String.self, forKey: .subjectType)
         self.diffSide = try? container.decode(String.self, forKey: .diffSide)
         self.viewerCanResolve = try? container.decode(Bool.self, forKey: .viewerCanResolve)
@@ -2126,6 +2131,7 @@ private struct ReviewThreadNode: Decodable {
         case line
         case startLine
         case originalLine
+        case originalStartLine
         case subjectType
         case diffSide
         case viewerCanResolve

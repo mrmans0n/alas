@@ -1589,6 +1589,7 @@ struct GitHubCLIProviderTests {
         #expect(thread.path == "Sources/Foo.swift")
         #expect(thread.line == 42)
         #expect(thread.originalLine == 40)
+        #expect(thread.originalStartLine == 38)
         #expect(thread.diffHunk == "@@ -40,3 +40,3 @@")
         #expect(thread.viewerCanResolve == true)
         #expect(thread.comments.first?.id == "c1")
@@ -2267,7 +2268,7 @@ struct GitHubCLIProviderTests {
           {
             "id": "thread-1", "isResolved": false, "isOutdated": false,
             "path": "Sources/Foo.swift", "line": 42, "startLine": null,
-            "originalLine": 40,
+            "originalLine": 40, "originalStartLine": 38,
             "subjectType": "LINE", "viewerCanResolve": true, "viewerCanReply": true,
             "comments": { "nodes": [
               { "id": "c1", "body": "rename this",

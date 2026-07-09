@@ -53,11 +53,12 @@ struct DiffInlineCommentModelTests {
         )
     }
 
-    private func makeThread(id: String, newLine: Int) -> DiffInlineCommentThread {
+    private func makeThread(id: String, newLine: Int, startLine: Int? = nil) -> DiffInlineCommentThread {
         DiffInlineCommentThread(
             id: id,
             filePath: "Sources/App.swift",
             newLine: newLine,
+            startLine: startLine,
             isResolved: false,
             isOutdated: false,
             comments: [
@@ -113,6 +114,42 @@ struct DiffInlineCommentModelTests {
         if case .rows(let seg) = blocks[2] {
             #expect(seg.rows.count == 1)
             #expect(seg.rows[0].id == "r2")
+        } else {
+            Issue.record("Block 2 should be .rows")
+        }
+    }
+
+    @Test func threadLineRangeNormalizesStartAndEndLines() {
+        #expect(makeThread(id: "single", newLine: 20).lineRange == 20...20)
+        #expect(makeThread(id: "multi", newLine: 20, startLine: 18).lineRange == 18...20)
+        #expect(makeThread(id: "reversed", newLine: 18, startLine: 20).lineRange == 18...20)
+    }
+
+    @Test func multilineThreadStillAnchorsAfterEndRow() {
+        let rows = [
+            makeRow(id: "r0", new: makeNewLine(newLine: 18, rowIndex: 0)),
+            makeRow(id: "r1", new: makeNewLine(newLine: 19, rowIndex: 1)),
+            makeRow(id: "r2", new: makeNewLine(newLine: 20, rowIndex: 2)),
+            makeRow(id: "r3", new: makeNewLine(newLine: 21, rowIndex: 3)),
+        ]
+        let thread = makeThread(id: "range", newLine: 20, startLine: 18)
+
+        let blocks = DiffInlineCommentLayout.blocks(visibleRows: rows, threads: [thread])
+
+        #expect(blocks.count == 3)
+        if case .rows(let seg) = blocks[0] {
+            #expect(seg.rows.map(\.id) == ["r0", "r1", "r2"])
+        } else {
+            Issue.record("Block 0 should be .rows")
+        }
+        if case .thread(let t) = blocks[1] {
+            #expect(t.id == "range")
+            #expect(t.lineRange == 18...20)
+        } else {
+            Issue.record("Block 1 should be .thread")
+        }
+        if case .rows(let seg) = blocks[2] {
+            #expect(seg.rows.map(\.id) == ["r3"])
         } else {
             Issue.record("Block 2 should be .rows")
         }

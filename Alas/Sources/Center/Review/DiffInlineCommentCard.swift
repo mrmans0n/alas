@@ -11,12 +11,15 @@ struct DiffInlineCommentCard: View {
     var canResolve: Bool = true
     var onStageReply: (String) -> Void = { _ in }
     var canAddToReview: Bool = false
+    var onActiveChange: (Bool) -> Void = { _ in }
 
     @State private var isExpanded: Bool
     @State private var isComposerOpen = false
     @State private var replyDraft = ""
     @State private var editingCommentID: String? = nil
     @State private var editDraft = ""
+    @State private var isHovered = false
+    @FocusState private var isCardFocused: Bool
 
     init(
         thread: DiffInlineCommentThread,
@@ -28,7 +31,8 @@ struct DiffInlineCommentCard: View {
         onDelete: @escaping (DiffInlineComment) -> Void = { _ in },
         canReply: Bool = true,
         canResolve: Bool = true,
-        canAddToReview: Bool = false
+        canAddToReview: Bool = false,
+        onActiveChange: @escaping (Bool) -> Void = { _ in }
     ) {
         self.thread = thread
         self.onReply = onReply
@@ -40,16 +44,32 @@ struct DiffInlineCommentCard: View {
         self.canReply = canReply
         self.canResolve = canResolve
         self.canAddToReview = canAddToReview
+        self.onActiveChange = onActiveChange
         // Smart default: expanded when unresolved and not outdated
         _isExpanded = State(initialValue: !thread.isResolved && !thread.isOutdated)
     }
 
     var body: some View {
-        if isExpanded {
-            expandedView
-        } else {
-            collapsedPill
+        Group {
+            if isExpanded {
+                expandedView
+            } else {
+                collapsedPill
+            }
         }
+        .focusable(true)
+        .focused($isCardFocused)
+        .onHover { hovering in
+            isHovered = hovering
+            onActiveChange(Self.isActive(isHovered: hovering, isFocused: isCardFocused))
+        }
+        .onChange(of: isCardFocused) { _, isFocused in
+            onActiveChange(Self.isActive(isHovered: isHovered, isFocused: isFocused))
+        }
+    }
+
+    static func isActive(isHovered: Bool, isFocused: Bool) -> Bool {
+        isHovered || isFocused
     }
 
     // MARK: - Collapsed pill

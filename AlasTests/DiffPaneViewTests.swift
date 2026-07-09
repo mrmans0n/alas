@@ -832,6 +832,140 @@ let second = true
         #expect(outline == NSRect(x: 4, y: 0, width: 34, height: 58))
     }
 
+    @Test func activeCommentGutterHighlightFillsFullGutterRows() {
+        let rowRects = [
+            NSRect(x: 0, y: 8, width: 42, height: 18),
+            NSRect(x: 0, y: 26, width: 42, height: 22),
+            NSRect(x: 0, y: 48, width: 42, height: 18),
+        ]
+
+        let rect = DiffPaneLineNumberRulerView.activeCommentHighlightRect(
+            rowRects: rowRects,
+            rowRange: 1...2,
+            visibleMinY: 10,
+            ruleThickness: 42
+        )
+
+        #expect(rect == NSRect(x: 0, y: 16, width: 42, height: 40))
+    }
+
+    @Test func activeCommentGutterHighlightClipsRowsScrolledPastTop() {
+        let rowRects = [
+            NSRect(x: 0, y: 8, width: 42, height: 18),
+            NSRect(x: 0, y: 26, width: 42, height: 22),
+        ]
+
+        let rect = DiffPaneLineNumberRulerView.activeCommentHighlightRect(
+            rowRects: rowRects,
+            rowRange: 0...1,
+            visibleMinY: 20,
+            ruleThickness: 42
+        )
+
+        #expect(rect == NSRect(x: 0, y: 0, width: 42, height: 28))
+    }
+
+    @Test func activeCommentHighlightMatchesRowsBySideAndLineRange() {
+        let lines = [
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 0, length: 1),
+                sourceLine: diffLine(id: "new-10", side: .new, newLine: 10, text: "a")
+            ),
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 2, length: 1),
+                sourceLine: diffLine(id: "old-11", side: .old, oldLine: 11, text: "b")
+            ),
+            DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: 4, length: 1),
+                sourceLine: diffLine(id: "new-12", side: .new, newLine: 12, text: "c")
+            ),
+        ]
+        let highlight = DiffReviewCommentHighlight(path: "Sources/App.swift", side: .new, lineRange: 10...12)
+
+        #expect(highlight.highlightedRowRange(in: lines) == 0...2)
+    }
+
+    @Test func activeCommentHighlightMatchesPairedRowsByRequestedSideLineNumber() {
+        let line = DiffDisplayLine(
+            id: "paired-10-12",
+            anchor: DiffLineAnchor(
+                filePath: "Sources/App.swift",
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: .paired,
+                oldLine: 10,
+                newLine: 12
+            ),
+            text: "let value = 1",
+            lineNumber: 12,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+
+        #expect(DiffReviewCommentHighlight(path: "Sources/App.swift", side: .old, line: 10).matchesVisibleSourceLine(line))
+        #expect(DiffReviewCommentHighlight(path: "Sources/App.swift", side: .new, line: 12).matchesVisibleSourceLine(line))
+        #expect(!DiffReviewCommentHighlight(path: "Sources/App.swift", side: .old, line: 12).matchesVisibleSourceLine(line))
+    }
+
+    @Test func activeCommentHighlightMatchesOnlyVisibleSourceLines() {
+        let highlight = DiffReviewCommentHighlight(path: "Sources/App.swift", side: .new, lineRange: 10...12)
+
+        #expect(highlight.matchesVisibleSourceLine(diffLine(id: "new-10", side: .new, newLine: 10, text: "a")))
+        #expect(!highlight.matchesVisibleSourceLine(nil))
+        #expect(!highlight.matchesVisibleSourceLine(diffLine(id: "old-10", side: .old, oldLine: 10, text: "b")))
+    }
+
+    @Test func activeThreadHighlightWinsOverParentHighlightInSameRows() {
+        let rows = [
+            DiffDisplayRow(
+                id: "row-10",
+                kind: .context,
+                old: diffLine(id: "old-8", side: .old, oldLine: 8, text: "let value = 1"),
+                new: diffLine(id: "new-10", side: .new, newLine: 10, text: "let value = 1"),
+                collapsedLineCount: 0
+            ),
+        ]
+        let parentHighlight = DiffReviewCommentHighlight(path: "Sources/App.swift", side: .old, line: 8)
+        let thread = DiffInlineCommentThread(
+            id: "thread-10",
+            filePath: "Sources/App.swift",
+            newLine: 10,
+            isResolved: false,
+            isOutdated: false,
+            comments: []
+        )
+
+        let highlight = DiffPaneActiveHighlightResolver.activeHighlight(
+            parentHighlight: parentHighlight,
+            threads: [thread],
+            activeThreadID: thread.id,
+            rows: rows
+        )
+
+        #expect(highlight == DiffReviewCommentHighlight(path: "Sources/App.swift", side: .new, line: 10))
+    }
+
+    @Test func activeCommentHighlightRectSpansMatchedRows() {
+        let rowRects = [
+            NSRect(x: 0, y: 8, width: 300, height: 18),
+            NSRect(x: 0, y: 26, width: 300, height: 22),
+            NSRect(x: 0, y: 48, width: 300, height: 18),
+        ]
+
+        let rect = DiffPaneCodeTextView.commentHighlightRect(
+            rowRects: rowRects,
+            rowRange: 1...2,
+            visibleMinY: 10,
+            contentWidth: 300
+        )
+
+        #expect(rect == NSRect(x: 4, y: 16, width: 292, height: 40))
+    }
+
     @Test func diffTextScrollPanesUseLeadingClipViewsAndStartScrolledLeft() throws {
         var layout = DiffLayoutMode.split
         var wrap = false

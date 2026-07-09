@@ -340,4 +340,27 @@ struct ReviewThreadModelTests {
         #expect(make(resolved: false, outdated: true).isActionable == false)
         #expect(make(resolved: false, outdated: false).isActionable == true)
     }
+
+    @Test func rangeStartLineUsesOriginalStartForOldSideThreads() {
+        let thread = ReviewThread(
+            id: "t",
+            path: "Sources/Foo.swift",
+            line: nil,
+            startLine: 12,
+            originalLine: 40,
+            originalStartLine: 38,
+            diffHunk: nil,
+            diffSide: "LEFT",
+            isResolved: false,
+            isOutdated: false,
+            isFileLevel: false,
+            comments: [],
+            viewerCanResolve: true,
+            viewerCanReply: true,
+            url: nil
+        )
+
+        #expect(thread.rangeStartLine(isOldSide: true) == 38)
+        #expect(thread.rangeStartLine(isOldSide: false) == 12)
+    }
 }

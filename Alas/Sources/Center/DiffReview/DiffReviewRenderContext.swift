@@ -703,6 +703,7 @@ private struct ThreadSignature: Hashable {
     let id: String
     let filePath: String
     let newLine: Int
+    let startLine: Int?
     let isOldSide: Bool
     let isResolved: Bool
     let isOutdated: Bool
@@ -715,6 +716,7 @@ private struct ThreadSignature: Hashable {
         id = thread.id
         filePath = thread.filePath
         newLine = thread.newLine
+        startLine = thread.startLine
         isOldSide = thread.isOldSide
         isResolved = thread.isResolved
         isOutdated = thread.isOutdated

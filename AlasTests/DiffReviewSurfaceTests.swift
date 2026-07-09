@@ -910,6 +910,53 @@ struct DiffReviewSurfaceTests {
             threads: [],
             annotations: []
         )
+        let singleLineThread = DiffInlineCommentThread(
+            id: "thread",
+            filePath: model.filePath,
+            newLine: 2,
+            startLine: nil,
+            isResolved: false,
+            isOutdated: false,
+            comments: []
+        )
+        let multiLineThread = DiffInlineCommentThread(
+            id: singleLineThread.id,
+            filePath: singleLineThread.filePath,
+            newLine: singleLineThread.newLine,
+            startLine: 1,
+            isResolved: singleLineThread.isResolved,
+            isOutdated: singleLineThread.isOutdated,
+            comments: singleLineThread.comments,
+            viewerCanReply: singleLineThread.viewerCanReply,
+            viewerCanResolve: singleLineThread.viewerCanResolve,
+            viewerCanUnresolve: singleLineThread.viewerCanUnresolve
+        )
+        let singleLineThreadKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [singleLineThread],
+            annotations: []
+        )
+        let multiLineThreadKey = DiffReviewRenderContextKey(
+            fileID: fileID,
+            displayModel: model,
+            contextSnapshot: nil,
+            contextProviderAvailable: false,
+            contextExpansion: DiffContextExpansionState(),
+            inlineFeedback: [],
+            draftComments: [],
+            pendingDraftAnchor: nil,
+            canCreateDraftComment: true,
+            threads: [multiLineThread],
+            annotations: []
+        )
 
         #expect(baseKey == equalKey)
         #expect(baseKey != draftKey)
@@ -917,6 +964,7 @@ struct DiffReviewSurfaceTests {
         #expect(feedbackKey != feedbackURLKey)
         #expect(draftKey != draftSelectionKey)
         #expect(draftKey != draftCreatedAtKey)
+        #expect(singleLineThreadKey != multiLineThreadKey)
     }
 
     @Test func renderContextKeyChangesWhenExpandedContextTextChangesWithSameLineCount() {
@@ -1749,6 +1797,44 @@ struct DiffReviewSurfaceTests {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
         controller.view.layoutSubtreeIfNeeded()
         #expect(accessibilityLabel(in: controller.view, containing: "Copied prompt") != nil)
+    }
+
+    @Test func activeCommentResolverPrefersHoveredCardsBeforeFocusedFallbacks() {
+        let inlineOverDraft = DiffReviewActiveCommentIDs(
+            hoveredDraftCommentID: nil,
+            focusedDraftCommentID: "focused-draft",
+            hoveredInlineFeedbackID: "hovered-inline",
+            focusedFeedbackID: nil,
+            activeThreadID: nil
+        )
+        #expect(inlineOverDraft.orderedCandidates == [
+            .inlineFeedback("hovered-inline"),
+            .draft("focused-draft"),
+        ])
+
+        let threadOverDraft = DiffReviewActiveCommentIDs(
+            hoveredDraftCommentID: nil,
+            focusedDraftCommentID: "focused-draft",
+            hoveredInlineFeedbackID: nil,
+            focusedFeedbackID: nil,
+            activeThreadID: "active-thread"
+        )
+        #expect(threadOverDraft.orderedCandidates == [
+            .thread("active-thread"),
+            .draft("focused-draft"),
+        ])
+    }
+
+    @Test func commentCardsReportHoverOnlyForHoverPriority() {
+        #expect(ReviewDraftCommentCard.reportsHover(isHovered: true, isFocused: false))
+        #expect(ReviewDraftCommentCard.reportsHover(isHovered: true, isFocused: true))
+        #expect(!ReviewDraftCommentCard.reportsHover(isHovered: false, isFocused: true))
+        #expect(!ReviewDraftCommentCard.reportsHover(isHovered: false, isFocused: false))
+
+        #expect(DiffReviewInlineFeedbackCard.reportsHover(isHovered: true, isFocused: false))
+        #expect(DiffReviewInlineFeedbackCard.reportsHover(isHovered: true, isFocused: true))
+        #expect(!DiffReviewInlineFeedbackCard.reportsHover(isHovered: false, isFocused: true))
+        #expect(!DiffReviewInlineFeedbackCard.reportsHover(isHovered: false, isFocused: false))
     }
 
     @Test func fileSectionDraftCommentCardDoesNotFireDisabledSendAction() {
