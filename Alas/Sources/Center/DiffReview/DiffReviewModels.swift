@@ -296,16 +296,20 @@ extension DiffReviewStagedMutationActions {
 
 extension DiffReviewFileSectionModel {
     /// True when this model renders identically to `other`. Ignores closure
-    /// identity (`openFile`, `contextProvider.snapshot`, mutation action
-    /// bodies) — only content and action presence are compared, so freshly
-    /// rebuilt models with equivalent content still count as unchanged.
+    /// identity for `openFile` and mutation action bodies (presence is what
+    /// determines the rendered buttons) — but `contextProvider` is compared
+    /// by `id`, not just presence: `DiffReviewFileSection` keys its own
+    /// stale-load-rejection and reset logic off that id (see
+    /// `contextStateSignature`), so treating two different providers as
+    /// equal would let a swapped-in file keep serving a previous provider's
+    /// in-flight/expanded context.
     func hasSameRenderableContent(as other: DiffReviewFileSectionModel) -> Bool {
         summary == other.summary
             && parsedDiff == other.parsedDiff
             && displayModel == other.displayModel
             && placeholderMessage == other.placeholderMessage
             && (openFile == nil) == (other.openFile == nil)
-            && (contextProvider == nil) == (other.contextProvider == nil)
+            && contextProvider?.id == other.contextProvider?.id
             && (stagedMutationActions?.renderablePresence ?? (false, false, false))
                 == (other.stagedMutationActions?.renderablePresence ?? (false, false, false))
     }

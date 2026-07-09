@@ -10,11 +10,23 @@ struct DiffReviewRenderableContentEqualityTests {
         #expect(lhs.hasSameRenderableContent(as: rhs))
     }
 
-    @Test func differentContextProviderIdentityStillEqualWhenBothPresent() {
+    @Test func sameContextProviderIdentityIsEqual() {
+        let provider = DiffReviewContextProvider { .init(old: .unavailable, new: .unavailable) }
+        let lhs = fileModel(path: "a.swift", contextProvider: provider)
+        let rhs = fileModel(path: "a.swift", contextProvider: provider)
+
+        #expect(lhs.hasSameRenderableContent(as: rhs))
+    }
+
+    @Test func differentContextProviderIdentityIsNotEqual() {
+        // Different provider instances are never equal, even with identical
+        // content: DiffReviewFileSection keys stale-load rejection off
+        // contextProvider.id, so treating these as unchanged would let a
+        // swapped-in file keep serving a previous provider's context.
         let lhs = fileModel(path: "a.swift", contextProvider: DiffReviewContextProvider { .init(old: .unavailable, new: .unavailable) })
         let rhs = fileModel(path: "a.swift", contextProvider: DiffReviewContextProvider { .init(old: .unavailable, new: .unavailable) })
 
-        #expect(lhs.hasSameRenderableContent(as: rhs))
+        #expect(!lhs.hasSameRenderableContent(as: rhs))
     }
 
     @Test func contextProviderPresenceMismatchIsNotEqual() {
