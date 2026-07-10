@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Combine
 
@@ -41,21 +42,26 @@ final class ACPTerminal: ObservableObject {
     /// for an unrelated process, and `isRunning` polls by pid. Used by
     /// `kill()` to decide whether it's still safe to signal the root.
     nonisolated(unsafe) private var rootHasExited: Bool = false
-    /// `(pid, command)` pairs accumulated by the periodic tracker
+    /// `(pid, start time)` pairs accumulated by the periodic tracker
     /// while the root is alive. Needed because `terminationHandler`
     /// runs after the kernel has already reaped the root and
     /// reparented its children to init — a fresh ppid walk from the
     /// root pid would then return nothing, so a later `kill()` could
     /// never reach a backgrounded child that holds the pipe open.
-    /// The command name lets us re-verify the PID still belongs to
-    /// our terminal before signaling it late (PID reuse is rare on
+    /// The process start time lets us re-verify the PID still belongs
+    /// to our terminal before signaling it late (PID reuse is rare on
     /// macOS over a few-second window but not impossible).
     private var orphanedDescendants: Set<DescendantKey> = []
     private var descendantTracker: Task<Void, Never>?
 
-    struct DescendantKey: Hashable {
+    struct DescendantKey: Hashable, Sendable {
         let pid: pid_t
-        let command: String
+        let startedAt: ProcessStartTime
+    }
+
+    struct ProcessStartTime: Hashable, Sendable {
+        let seconds: Int64
+        let microseconds: Int64
     }
 
     init(id: String,
@@ -149,21 +155,45 @@ final class ACPTerminal: ObservableObject {
         // timeout fired still needs to reach orphan descendants we
         // captured in the tracker. signalTargets handles the stale-
         // rootPid risk via `rootHasExited` and stale-descendant risk
-        // via per-PID command-name validation.
+        // via per-PID start-time validation.
         guard pid > 0 else { return }
-        let rootAlive = !rootHasExited
         // Union of: live ppid walk (works while root is alive) +
         // tracker-accumulated snapshot (catches descendants spawned
         // while the root was still alive but reparented after exit).
-        var initial = Set(Self.collectDescendants(of: pid))
-        for d in orphanedDescendants { initial.insert(d) }
-        signalTargets(rootPid: pid, rootAlive: rootAlive, descendants: initial, signal: SIGTERM)
-        Task { @MainActor in
+        let cached = orphanedDescendants
+        let preKillDescendants = Set(Self.collectChildDescendants(of: pid))
+        // Cheap root/process-group signal stays synchronous so a
+        // just-about-to-exit root cannot reparent uncached children
+        // before any cleanup signal is sent.
+        let rootAliveAtKill = !rootHasExited
+        if rootAliveAtKill {
+            _ = Darwin.kill(-pid, SIGTERM)
+            _ = Darwin.kill(pid, SIGTERM)
+        }
+        let strongSelf = StrongBox(self)
+        Task.detached(priority: .utility) {
+            var initial = preKillDescendants
+            initial.formUnion(Self.collectDescendants(of: pid))
+            if rootAliveAtKill {
+                initial.formUnion(Self.collectGroupMembers(of: pid))
+            }
+            initial.formUnion(cached)
+            let termRootAlive = await MainActor.run {
+                !strongSelf.value.rootHasExited
+            }
+            Self.signalTargets(rootPid: pid, rootAlive: termRootAlive,
+                               descendants: initial, signal: SIGTERM)
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             var union = initial
-            for d in Self.collectDescendants(of: pid) { union.insert(d) }
-            for d in self.orphanedDescendants { union.insert(d) }
-            self.signalTargets(rootPid: pid, rootAlive: !self.rootHasExited,
+            union.formUnion(Self.collectDescendants(of: pid))
+            let latestCached = await MainActor.run {
+                strongSelf.value.orphanedDescendants
+            }
+            union.formUnion(latestCached)
+            let killRootAlive = await MainActor.run {
+                !strongSelf.value.rootHasExited
+            }
+            Self.signalTargets(rootPid: pid, rootAlive: killRootAlive,
                                descendants: union, signal: SIGKILL)
         }
     }
@@ -171,10 +201,10 @@ final class ACPTerminal: ObservableObject {
     /// Sends `signal` to root + descendants when the root is still
     /// alive, or only to descendants when it has already exited. In
     /// the root-exited path, per-PID identity is re-checked via the
-    /// captured command name so we don't signal an unrelated process
+    /// captured start time so we don't signal an unrelated process
     /// that the OS has reused a descendant PID for.
-    private func signalTargets(rootPid: pid_t, rootAlive: Bool,
-                               descendants: Set<DescendantKey>, signal: Int32)
+    nonisolated private static func signalTargets(rootPid: pid_t, rootAlive: Bool,
+                                                  descendants: Set<DescendantKey>, signal: Int32)
     {
         if rootAlive {
             // Root is alive → process group signal reaches the whole
@@ -183,7 +213,7 @@ final class ACPTerminal: ObservableObject {
             _ = Darwin.kill(rootPid, signal)
             for d in descendants { _ = Darwin.kill(d.pid, signal) }
         } else {
-            for d in descendants where Self.pidStillMatches(d) {
+            for d in Self.currentlyMatching(descendants) {
                 _ = Darwin.kill(d.pid, signal)
             }
         }
@@ -191,28 +221,39 @@ final class ACPTerminal: ObservableObject {
 
     private func startDescendantTracker() {
         guard let process else { return }
-        descendantTracker = Task { @MainActor [weak self] in
+        let rootPid = process.processIdentifier
+        let weakSelf = WeakBox(self)
+        descendantTracker = Task.detached(priority: .utility) {
             // Walk the live process tree every second while the root is
             // alive, accumulating every descendant we observe. The last
             // pre-exit snapshot is what `kill()` relies on after
             // terminationHandler runs (children are reparented to init
             // by then and unfindable via a ppid walk from the root).
             while !Task.isCancelled {
-                guard let self else { return }
-                self.refreshOrphanSet()
-                if !process.isRunning { return }
+                let shouldStop = await MainActor.run {
+                    weakSelf.value?.rootHasExited ?? true
+                }
+                if shouldStop { return }
+                let live = Set(Self.collectDescendants(of: rootPid))
+                let cached = await MainActor.run {
+                    weakSelf.value?.orphanedDescendants ?? []
+                }
+                let retained = Self.currentlyMatching(cached)
+                await MainActor.run {
+                    guard let terminal = weakSelf.value else { return }
+                    terminal.mergeOrphanSet(cached: cached, retained: retained, live: live)
+                }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }
 
-    private func refreshOrphanSet() {
-        guard let process else { return }
-        let pid = process.processIdentifier
-        guard pid > 0 else { return }
-        for d in Self.collectDescendants(of: pid) {
-            orphanedDescendants.insert(d)
-        }
+    private func mergeOrphanSet(cached: Set<DescendantKey>,
+                                retained: Set<DescendantKey>,
+                                live: Set<DescendantKey>)
+    {
+        orphanedDescendants.subtract(cached.subtracting(retained))
+        orphanedDescendants.formUnion(live)
     }
 
     /// Sends `signal` to the root pid, its process group, and every
@@ -223,66 +264,146 @@ final class ACPTerminal: ObservableObject {
     /// Per-pid kills are no-ops for already-dead/unrelated PIDs.
 
     nonisolated private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
-        // `comm=` is the executable name (no header). It's stable
-        // across reads of the same process and changes when the PID is
-        // reused, so it's a cheap identity marker for late validation.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,ppid=,comm=", "-ax"]
+        proc.arguments = ["-o", "pid=,ppid=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
+        let data: Data
         do {
             try proc.run()
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
         } catch {
             return []
         }
-        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) else { return [] }
-        var childrenOf: [pid_t: [(pid: pid_t, command: String)]] = [:]
+        guard let s = String(data: data, encoding: .utf8) else { return [] }
+        var childrenOf: [pid_t: [pid_t]] = [:]
         for line in s.split(separator: "\n") {
-            // pid, ppid, then command (which may contain spaces).
             let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 2,
+            let parts = trimmed.split(separator: " ", maxSplits: 1,
                                       omittingEmptySubsequences: true)
-            guard parts.count >= 3,
+            guard parts.count >= 2,
                   let pid = pid_t(parts[0]),
                   let ppid = pid_t(parts[1]) else { continue }
-            childrenOf[ppid, default: []].append((pid, String(parts[2])))
+            childrenOf[ppid, default: []].append(pid)
         }
         var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let p = queue.popLast() {
             for c in childrenOf[p] ?? [] {
-                out.append(DescendantKey(pid: c.pid, command: c.command))
-                queue.append(c.pid)
+                if let startedAt = processStartTime(of: c) {
+                    out.append(DescendantKey(pid: c, startedAt: startedAt))
+                }
+                queue.append(c)
             }
         }
         return out
     }
 
-    /// Returns true when the current command for `pid` matches the
-    /// command captured when we recorded it. Used to skip stale cached
-    /// PIDs whose original process has exited and whose PID may have
-    /// been reused for an unrelated process.
-    nonisolated private static func pidStillMatches(_ key: DescendantKey) -> Bool {
+    /// Lightweight pre-kill fallback snapshot. Unlike `collectDescendants`,
+    /// this uses libproc's ppid index instead of spawning `/bin/ps -ax`, so
+    /// `kill()` can capture children before signaling a fast-exiting root
+    /// without doing a full process-table scan on the main actor.
+    nonisolated private static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
+        var out: [DescendantKey] = []
+        var queue: [pid_t] = [root]
+        while let parent = queue.popLast() {
+            for child in childPids(of: parent) {
+                if let startedAt = processStartTime(of: child) {
+                    out.append(DescendantKey(pid: child, startedAt: startedAt))
+                }
+                queue.append(child)
+            }
+        }
+        return out
+    }
+
+    nonisolated private static func childPids(of parent: pid_t) -> [pid_t] {
+        var capacity = 16
+        while capacity <= 4096 {
+            var pids = [pid_t](repeating: 0, count: capacity)
+            let pidCount = pids.withUnsafeMutableBufferPointer { buffer in
+                proc_listchildpids(parent, buffer.baseAddress,
+                                   Int32(capacity * MemoryLayout<pid_t>.stride))
+            }
+            guard pidCount > 0 else { return [] }
+            let count = min(capacity, Int(pidCount))
+            if count < capacity {
+                return Array(pids.prefix(count)).filter { $0 > 0 }
+            }
+            capacity *= 2
+        }
+        return []
+    }
+
+    /// Captures members of the root's process group after the cheap
+    /// synchronous group signal. This catches a TERM-trapping child
+    /// even if the root exits before a descendant ppid walk runs; the
+    /// returned PIDs are still validated by start time before late
+    /// cleanup signals are delivered.
+    nonisolated private static func collectGroupMembers(of pgid: pid_t) -> [DescendantKey] {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-p", "\(key.pid)", "-o", "comm="]
+        proc.arguments = ["-o", "pid=,pgid=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
+        let data: Data
         do {
             try proc.run()
+            data = pipe.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
         } catch {
-            return false
+            return []
         }
-        guard let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(),
-                             encoding: .utf8) else { return false }
-        let current = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !current.isEmpty && current == key.command
+        guard let s = String(data: data, encoding: .utf8) else { return [] }
+        var out: [DescendantKey] = []
+        for line in s.split(separator: "\n") {
+            let trimmed = line.drop(while: { $0 == " " })
+            let parts = trimmed.split(separator: " ", maxSplits: 1,
+                                      omittingEmptySubsequences: true)
+            guard parts.count >= 2,
+                  let pid = pid_t(parts[0]),
+                  let currentPgid = pid_t(parts[1]),
+                  pid != pgid,
+                  currentPgid == pgid,
+                  let startedAt = processStartTime(of: pid) else { continue }
+            out.append(DescendantKey(pid: pid, startedAt: startedAt))
+        }
+        return out
+    }
+
+    /// Returns the subset of cached descendant identities that still
+    /// match the current process table. Used to skip stale cached PIDs
+    /// whose original process has exited and whose PID may have been
+    /// reused for an unrelated process.
+    nonisolated private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
+        guard !keys.isEmpty else { return [] }
+        var current: Set<DescendantKey> = []
+        for key in keys {
+            guard processStartTime(of: key.pid) == key.startedAt else { continue }
+            current.insert(key)
+        }
+        return current
+    }
+
+    /// Kernel process birth time, used as the stable half of cached
+    /// descendant identity. Unlike `ps lstart`, this is raw timeval
+    /// data rather than a locale/timezone-formatted, second-precision
+    /// wall-clock string.
+    nonisolated private static func processStartTime(of pid: pid_t) -> ProcessStartTime? {
+        var info = proc_bsdinfo()
+        let size = MemoryLayout<proc_bsdinfo>.stride
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: UInt8.self, capacity: size) { rebound in
+                proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, rebound, Int32(size))
+            }
+        }
+        guard result == Int32(size) else { return nil }
+        return ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
+                                microseconds: Int64(info.pbi_start_tvusec))
     }
 
     /// Marks the terminal as released. Per the ACP spec the id can no
@@ -494,5 +615,12 @@ final class ACPTerminal: ObservableObject {
 /// the terminal briefly.
 private final class WeakBox<T: AnyObject>: @unchecked Sendable {
     weak var value: T?
+    init(_ value: T) { self.value = value }
+}
+
+/// Strong indirection for detached cleanup tasks that must preserve
+/// terminal state until their bounded signal escalation finishes.
+private final class StrongBox<T: AnyObject>: @unchecked Sendable {
+    let value: T
     init(_ value: T) { self.value = value }
 }
