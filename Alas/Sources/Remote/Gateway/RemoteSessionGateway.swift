@@ -26,6 +26,7 @@ final class RemoteSessionGateway {
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
     private var lastQuestionReq: [String: Int] = [:]
+    private var lastElicitationReq: [String: String] = [:]
     private static let coalesceNanos: UInt64 = 80_000_000  // ~80ms
 
     init(provider: RemoteSessionsProvider, send: @escaping (RemoteServerMessage) -> Void) {
@@ -71,10 +72,18 @@ final class RemoteSessionGateway {
             coalesce[id] = nil
             lastPermissionReq[id] = nil
             lastQuestionReq[id] = nil
+            lastElicitationReq[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
+        case .elicitationResponse(let id, let requestId, let action, let content):
+            applyElicitationResponse(
+                sessionId: id,
+                requestId: requestId,
+                action: action,
+                content: content
+            )
         case .takeOver(let id):
             provider.takeOver(for: id)
             // Takeover seizes the writer lease synchronously but mostly mutates
@@ -245,6 +254,7 @@ final class RemoteSessionGateway {
         coalesce.removeAll()
         lastPermissionReq.removeAll()
         lastQuestionReq.removeAll()
+        lastElicitationReq.removeAll()
     }
 
     // MARK: snapshot / delta
@@ -257,6 +267,7 @@ final class RemoteSessionGateway {
                                  messages: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
+        emitPendingElicitationIfAny(id: id, session: session)
     }
 
     private func observe(id: String, session: ACPSession) {
@@ -314,6 +325,7 @@ final class RemoteSessionGateway {
                               upserts: wire))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
+        emitPendingElicitationIfAny(id: id, session: session)
     }
 
     private func wireMessages(id: String, session: ACPSession) -> [RemoteWireMessage] {
@@ -357,10 +369,7 @@ final class RemoteSessionGateway {
     }
 
     private func emitPendingQuestionIfAny(id: String, session: ACPSession) {
-        // Only when the session is actually awaiting input (see the permission
-        // note above) and there's something answerable.
-        if session.transcript.streamingState == .awaitingInput,
-           let pending = session.transcript.pendingQuestion,
+        if let pending = Self.queuedQuestion(in: session),
            !pending.params.questions.isEmpty {
             let rid = Self.requestIdInt(pending.id)
             lastQuestionReq[id] = rid
@@ -377,6 +386,63 @@ final class RemoteSessionGateway {
             send(.questionRequest(sessionId: id, payload: payload))
         } else if let rid = lastQuestionReq.removeValue(forKey: id) {
             send(.questionResolved(sessionId: id, requestId: rid))
+        }
+    }
+
+    private func emitPendingElicitationIfAny(id: String, session: ACPSession) {
+        if let pending = session.transcript.pendingUserInputs.first,
+           case .elicitation = pending.source {
+            let requestId = pending.id.uuidString
+            guard lastElicitationReq[id] != requestId else { return }
+            lastElicitationReq[id] = requestId
+            let mode: String
+            let elicitationId: String?
+            let url: String?
+            switch pending.mode {
+            case .form:
+                mode = "form"
+                elicitationId = nil
+                url = nil
+            case .url(let request):
+                mode = "url"
+                elicitationId = request.elicitationId
+                url = request.url.absoluteString
+            }
+            let fields = pending.fields.map { field in
+                RemoteElicitationField(
+                    key: field.key,
+                    type: field.schema.type,
+                    title: field.label,
+                    description: field.schema.description,
+                    required: field.required,
+                    minLength: field.schema.minLength,
+                    maxLength: field.schema.maxLength,
+                    minimum: field.schema.minimum,
+                    maximum: field.schema.maximum,
+                    minItems: field.schema.minItems,
+                    maxItems: field.schema.maxItems,
+                    format: field.schema.format,
+                    pattern: field.schema.pattern,
+                    options: field.schema.options.map {
+                        .init(value: $0.const, title: $0.title, description: $0.description)
+                    },
+                    defaultValue: Self.remoteDefault(field.schema.defaultValue)
+                )
+            }
+            send(.elicitationRequest(
+                sessionId: id,
+                payload: .init(
+                    requestId: requestId,
+                    title: pending.title,
+                    message: pending.message,
+                    mode: mode,
+                    fields: fields,
+                    elicitationId: elicitationId,
+                    url: url
+                )
+            ))
+        } else if let requestId = lastElicitationReq.removeValue(forKey: id) {
+            send(.elicitationResolved(sessionId: id, requestId: requestId))
         }
     }
 
@@ -414,7 +480,7 @@ final class RemoteSessionGateway {
 
     private func applyQuestionAnswer(sessionId: String, requestId: Int, answers: [RemoteQuestionAnswer]) {
         guard let session = provider.session(for: sessionId),
-              let pending = session.transcript.pendingQuestion,
+              let pending = Self.queuedQuestion(in: session),
               Self.requestIdInt(pending.id) == requestId          // first-wins guard
         else { return }
         // Require a non-empty selection for every question and order each by the
@@ -434,9 +500,148 @@ final class RemoteSessionGateway {
             guard !ordered.isEmpty else { return }
             acpAnswers.append(ACPQuestionAnswer(questionId: question.id, selectedOptionIds: ordered))
         }
-        provider.answerQuestion(for: sessionId, .init(outcome: .answered(answers: acpAnswers)))
+        provider.answerQuestion(
+            for: sessionId,
+            requestId: pending.id,
+            .init(outcome: .answered(answers: acpAnswers))
+        )
         lastQuestionReq[sessionId] = nil
         send(.questionResolved(sessionId: sessionId, requestId: requestId))
+    }
+
+    private static func queuedQuestion(in session: ACPSession) -> ACPSession.PendingQuestion? {
+        guard let head = session.transcript.pendingUserInputs.first else {
+            return session.transcript.pendingQuestion
+        }
+        guard case .cursor(let id, let params) = head.source else { return nil }
+        return .init(id: id, params: params)
+    }
+
+    private func applyElicitationResponse(
+        sessionId: String,
+        requestId: String,
+        action: String,
+        content: [String: ACPElicitationValue]?
+    ) {
+        guard let token = UUID(uuidString: requestId),
+              let session = provider.session(for: sessionId),
+              let pending = session.transcript.pendingUserInputs.first,
+              pending.id == token,
+              case .elicitation = pending.source
+        else { return }
+
+        let resolvedAction: ACPUserInputAction
+        switch action {
+        case "accept":
+            let content = content ?? [:]
+            guard Self.remoteContent(content, satisfies: pending) else { return }
+            resolvedAction = .submit(content)
+        case "decline":
+            resolvedAction = .decline
+        case "cancel":
+            resolvedAction = .cancel
+        default:
+            return
+        }
+        provider.respondToUserInput(for: sessionId, token: token, action: resolvedAction)
+        lastElicitationReq[sessionId] = nil
+        send(.elicitationResolved(sessionId: sessionId, requestId: requestId))
+    }
+
+    private static func remoteContent(
+        _ content: [String: ACPElicitationValue],
+        satisfies request: ACPUserInputRequest
+    ) -> Bool {
+        if case .url = request.mode { return content.isEmpty }
+        let fields = Dictionary(uniqueKeysWithValues: request.fields.map { ($0.key, $0) })
+        guard content.keys.allSatisfy({ fields[$0] != nil }) else { return false }
+        for field in request.fields where field.required {
+            guard content[field.key] != nil else { return false }
+        }
+        for (key, value) in content {
+            guard let field = fields[key] else { return false }
+            switch (field.schema.type, value) {
+            case ("string", .string(let string)):
+                guard validRemoteString(string, for: field) else { return false }
+            case ("number", .number(let number)):
+                guard validRemoteNumber(number, for: field) else { return false }
+            case ("number", .integer(let integer)):
+                guard validRemoteNumber(Double(integer), for: field) else { return false }
+            case ("integer", .integer(let integer)):
+                guard validRemoteNumber(Double(integer), for: field) else { return false }
+            case ("boolean", .boolean):
+                continue
+            case ("array", .strings(let selected)):
+                let allowed = Set(field.schema.options.map(\.const))
+                guard selected.allSatisfy(allowed.contains),
+                      field.schema.minItems.map({ selected.count >= $0 }) != false,
+                      field.schema.maxItems.map({ selected.count <= $0 }) != false
+                else { return false }
+            default:
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func validRemoteString(_ value: String, for field: ACPUserInputField) -> Bool {
+        guard field.schema.minLength.map({ value.count >= $0 }) != false,
+              field.schema.maxLength.map({ value.count <= $0 }) != false
+        else { return false }
+        if !field.schema.options.isEmpty,
+           !field.schema.options.contains(where: { $0.const == value }) {
+            return false
+        }
+        if let pattern = field.schema.pattern,
+           let regex = try? NSRegularExpression(pattern: pattern),
+           regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)) == nil {
+            return false
+        }
+        switch field.schema.format {
+        case "email":
+            let parts = value.split(separator: "@", omittingEmptySubsequences: false)
+            return parts.count == 2 && parts[1].contains(".")
+        case "uri":
+            return URL(string: value)?.scheme != nil
+        case "date":
+            return remoteDateFormatter.date(from: value) != nil
+        case "date-time":
+            let fractionalFormatter = ISO8601DateFormatter()
+            fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return fractionalFormatter.date(from: value) != nil
+                || ISO8601DateFormatter().date(from: value) != nil
+        default:
+            return true
+        }
+    }
+
+    private static func validRemoteNumber(_ value: Double, for field: ACPUserInputField) -> Bool {
+        value.isFinite
+            && field.schema.minimum.map({ value >= $0 }) != false
+            && field.schema.maximum.map({ value <= $0 }) != false
+    }
+
+    private static let remoteDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        return formatter
+    }()
+
+    private static func remoteDefault(_ value: AnyCodable?) -> ACPElicitationValue? {
+        guard let raw = value?.value else { return nil }
+        if let value = raw as? Bool { return .boolean(value) }
+        if let value = raw as? Int { return .integer(value) }
+        if let value = raw as? Double { return .number(value) }
+        if let value = raw as? String { return .string(value) }
+        if let value = raw as? [String] { return .strings(value) }
+        if let value = raw as? [AnyCodable] {
+            return .strings(value.compactMap { $0.value as? String })
+        }
+        return nil
     }
 
     // MARK: serialization helpers

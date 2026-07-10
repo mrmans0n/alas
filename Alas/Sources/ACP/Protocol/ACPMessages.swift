@@ -59,6 +59,7 @@ struct ACPClientCapabilities: Codable, Equatable {
     let terminal: Bool
     let auth: ACPAuthCapabilities
     let session: ACPSessionCapabilities
+    let elicitation: ACPElicitationCapabilities?
     let meta: ACPClientCapabilitiesMeta
 
     init(
@@ -66,17 +67,19 @@ struct ACPClientCapabilities: Codable, Equatable {
         terminal: Bool,
         auth: ACPAuthCapabilities = .init(terminal: true),
         session: ACPSessionCapabilities = .booleanConfigOptions,
+        elicitation: ACPElicitationCapabilities? = .full,
         meta: ACPClientCapabilitiesMeta = .terminalAuth
     ) {
         self.fs = fs
         self.terminal = terminal
         self.auth = auth
         self.session = session
+        self.elicitation = elicitation
         self.meta = meta
     }
 
     enum CodingKeys: String, CodingKey {
-        case fs, terminal, auth, session
+        case fs, terminal, auth, session, elicitation
         case meta = "_meta"
     }
 
@@ -88,6 +91,7 @@ struct ACPClientCapabilities: Codable, Equatable {
             ?? .init(terminal: false)
         session = try c.decodeIfPresent(ACPSessionCapabilities.self, forKey: .session)
             ?? .init(configOptions: .init(boolean: nil))
+        elicitation = try c.decodeIfPresent(ACPElicitationCapabilities.self, forKey: .elicitation)
         meta = try c.decodeIfPresent(ACPClientCapabilitiesMeta.self, forKey: .meta)
             ?? .init(terminalAuth: false)
     }

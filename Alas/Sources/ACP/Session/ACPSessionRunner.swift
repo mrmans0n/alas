@@ -30,6 +30,7 @@ final class ACPSessionRunner {
     /// contents for an open dirty buffer, falling back to disk when the
     /// closure returns `nil`. Lets the agent see what the user sees.
     private let onLiveBufferRead: ((String) -> String?)?
+    private let onUserCancel: (() -> Void)?
     /// Called when the runner forces transcript tail-follow before recording
     /// a user prompt, so manager-owned scroll memory stays in sync with the
     /// runtime session state.
@@ -46,11 +47,8 @@ final class ACPSessionRunner {
     private let onSessionTitleUpdated: ((String) -> Void)?
     private var updatesTask: Task<Void, Never>?
     private var permissionsTask: Task<Void, Never>?
-    private var questionsTask: Task<Void, Never>?
     private var filesTask: Task<Void, Never>?
     private var terminalsTask: Task<Void, Never>?
-    private var pendingQuestionContinuation: CheckedContinuation<ACPQuestionResponse, Never>?
-    private var pendingQuestionPreviousStreamingState: ACPSession.StreamingState?
     private var seq: Int64 = 0
     private var steerUndoExpiryTask: Task<Void, Never>?
     /// Monotonic prompt counter + active/cancelled bookkeeping (inherited
@@ -91,6 +89,7 @@ final class ACPSessionRunner {
          suppressingLoadReplay: Bool = false,
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
+         onUserCancel: (() -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
          onSessionTitleUpdated: ((String) -> Void)? = nil,
@@ -115,6 +114,7 @@ final class ACPSessionRunner {
         }
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
+        self.onUserCancel = onUserCancel
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.persistedMessageCount = (try? store.messageCount(sessionId: sessionId)) ?? 0
         self.seq = Int64(persistedMessageCount)
@@ -204,16 +204,6 @@ final class ACPSessionRunner {
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(scopeKey: scopeKey, options: params.options, params: params)
                 self.connection.client.respondToPermission(id: id, response: response)
-            }
-        }
-
-        questionsTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            for await request in self.connection.client.questionRequests {
-                let response = await self.awaitQuestionResponse(request)
-                if Task.isCancelled { return }
-                self.connection.client.respondToQuestion(id: request.id, response: response)
-                self.flushQueueIfIdle()
             }
         }
 
@@ -337,10 +327,8 @@ final class ACPSessionRunner {
         flushStreamingPersistOnStop()
         updatesTask?.cancel()
         permissionsTask?.cancel()
-        questionsTask?.cancel()
         filesTask?.cancel()
         terminalsTask?.cancel()
-        resolvePendingQuestion(.init(outcome: .cancelled), restorePreviousState: false)
         // A detach/takeover can land while a permission prompt is parked.
         // userCancel() already resolves it; stop() must too, or the policy's
         // continuation is stranded when we tear the connection down.
@@ -351,35 +339,6 @@ final class ACPSessionRunner {
         // active `npm test`/`sleep`/server outlives the agent.
         session.terminalHost.killAll()
         onPersist?()
-    }
-
-    private func awaitQuestionResponse(_ request: ACPQuestionRequest) async -> ACPQuestionResponse {
-        pendingQuestionPreviousStreamingState = session.transcript.streamingState
-        session.transcript.streamingState = .awaitingInput
-        session.transcript.pendingQuestion = .init(id: request.id, params: request.params)
-        return await withCheckedContinuation { continuation in
-            pendingQuestionContinuation = continuation
-        }
-    }
-
-    func answerQuestion(_ response: ACPQuestionResponse) {
-        resolvePendingQuestion(response)
-    }
-
-    private func resolvePendingQuestion(
-        _ response: ACPQuestionResponse,
-        restorePreviousState: Bool = true
-    ) {
-        guard let continuation = pendingQuestionContinuation else { return }
-        pendingQuestionContinuation = nil
-        session.transcript.pendingQuestion = nil
-        if session.transcript.streamingState == .awaitingInput {
-            session.transcript.streamingState = restorePreviousState
-                ? pendingQuestionPreviousStreamingState ?? .idle
-                : .idle
-        }
-        pendingQuestionPreviousStreamingState = nil
-        continuation.resume(returning: response)
     }
 
     private func handleTerminalRequest(_ req: ACPTerminalRequest) {
@@ -673,6 +632,7 @@ final class ACPSessionRunner {
         // it only affects this runner's own sendNow catch path and has no
         // cross-instance side effects.
         guard holdsLeaseForWrite() else { return }
+        onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
         await MainActor.run {
@@ -686,7 +646,6 @@ final class ACPSessionRunner {
                 }
             }
             policy.userCancelled()
-            resolvePendingQuestion(.init(outcome: .cancelled))
             let changedIndices = session.cancelInFlightToolCalls()
             session.terminalHost.killAll()
             if holdsLeaseForWrite() {
@@ -897,6 +856,7 @@ extension ACPSessionRunner {
             state: session.transcript.streamingState,
             queueEmpty: session.queue.isEmpty,
             blocksEmpty: blocks.isEmpty,
+            hasPendingInput: !session.transcript.pendingUserInputs.isEmpty,
             inFlightSteer: steerInProgress)
         switch route {
         case .noOp:
@@ -944,6 +904,7 @@ extension ACPSessionRunner {
               session.agentState == .ready,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
+              session.transcript.pendingUserInputs.isEmpty,
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil

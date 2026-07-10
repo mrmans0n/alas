@@ -147,3 +147,37 @@ struct RemoteQuestionAnswer: Codable, Equatable, Sendable {
     let questionId: String
     let selectedOptionIds: [String]
 }
+
+struct RemoteElicitationOption: Codable, Equatable, Sendable {
+    let value: String
+    let title: String?
+    let description: String?
+}
+
+struct RemoteElicitationField: Codable, Equatable, Sendable {
+    let key: String
+    let type: String
+    let title: String
+    let description: String?
+    let required: Bool
+    let minLength: Int?
+    let maxLength: Int?
+    let minimum: Double?
+    let maximum: Double?
+    let minItems: Int?
+    let maxItems: Int?
+    let format: String?
+    let pattern: String?
+    let options: [RemoteElicitationOption]
+    let defaultValue: ACPElicitationValue?
+}
+
+struct RemoteElicitationPayload: Codable, Equatable, Sendable {
+    let requestId: String
+    let title: String?
+    let message: String
+    let mode: String
+    let fields: [RemoteElicitationField]
+    let elicitationId: String?
+    let url: String?
+}

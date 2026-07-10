@@ -69,6 +69,50 @@ struct ACPStdioQuestionDispatchTests {
         #expect(answers.first?["selectedOptionIds"] as? [String] == ["cursor"])
     }
 
+    @Test("elicitation create and completion frames are dispatched")
+    func dispatchesElicitationFrames() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":8,"method":"elicitation/create","params":{
+          "requestId":1,"mode":"form","message":"Name", "requestedSchema":{
+            "type":"object","properties":{"name":{"type":"string"}},"required":["name"]
+          }
+        }}
+        """#.utf8))
+
+        var requests = client.elicitationRequests.makeAsyncIterator()
+        let request = await requests.next()
+        #expect(request?.id == .number(8))
+        #expect(request?.params.requestedSchema?.properties["name"]?.type == "string")
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"elicitation/complete","params":{"elicitationId":"auth-1"}}
+        """#.utf8))
+        var completions = client.elicitationCompletions.makeAsyncIterator()
+        #expect(await completions.next() == .init(elicitationId: "auth-1"))
+    }
+
+    @Test("elicitation responses use the standardized action shape")
+    func sendsElicitationResponse() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+
+        client.respondToElicitation(
+            id: .number(8),
+            result: .success(.accept(["name": .string("Alas")]))
+        )
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        let object = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        let result = try #require(object["result"] as? [String: Any])
+        #expect(result["action"] as? String == "accept")
+        #expect((result["content"] as? [String: Any])?["name"] as? String == "Alas")
+    }
+
     private func waitUntil(
         timeout: Duration = .seconds(1),
         _ predicate: @escaping @Sendable () -> Bool

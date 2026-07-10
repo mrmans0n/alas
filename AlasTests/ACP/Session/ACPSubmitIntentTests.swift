@@ -40,6 +40,27 @@ struct ACPSubmitRouteTests {
         #expect(r == .enqueue)
     }
 
+    @Test("pending user input makes an otherwise idle session busy")
+    func pendingInputIsBusy() {
+        let auto = ACPSubmitRoute.resolve(
+            intent: .auto,
+            state: .idle,
+            queueEmpty: true,
+            blocksEmpty: false,
+            hasPendingInput: true
+        )
+        #expect(auto == .enqueue)
+
+        let steer = ACPSubmitRoute.resolve(
+            intent: .steer,
+            state: .idle,
+            queueEmpty: true,
+            blocksEmpty: false,
+            hasPendingInput: true
+        )
+        #expect(steer == .steer)
+    }
+
     @Test(".steer + busy → steer")
     func steerWhileBusy() {
         let r = ACPSubmitRoute.resolve(intent: .steer, state: .streaming, queueEmpty: false, blocksEmpty: false)

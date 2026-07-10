@@ -22,6 +22,7 @@ enum ACPSubmitRoute: Equatable {
                         state: ACPSession.StreamingState,
                         queueEmpty: Bool,
                         blocksEmpty: Bool,
+                        hasPendingInput: Bool = false,
                         inFlightSteer: Bool = false) -> ACPSubmitRoute
     {
         if blocksEmpty { return .noOp }
@@ -32,11 +33,12 @@ enum ACPSubmitRoute: Equatable {
         // whatever the user typed during it drains afterwards instead of
         // racing the redirect.
         if inFlightSteer { return .enqueue }
+        let canSendNow = state == .idle && queueEmpty && !hasPendingInput
         switch intent {
         case .auto:
-            return (state == .idle && queueEmpty) ? .sendNow : .enqueue
+            return canSendNow ? .sendNow : .enqueue
         case .steer:
-            return (state == .idle && queueEmpty) ? .sendNow : .steer
+            return canSendNow ? .sendNow : .steer
         }
     }
 }

@@ -10,7 +10,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var createResults: [String: RemoteCreateSessionResult] = [:]
     var sessions: [String: ACPSession] = [:]
     var policies: [String: ACPPermissionPolicy] = [:]
-    var lastQuestionResponse: (id: String, response: ACPQuestionResponse)?
+    var lastQuestionResponse: (id: String, requestId: JSONRPCID, response: ACPQuestionResponse)?
+    var lastUserInputResponse: (id: String, token: UUID, action: ACPUserInputAction)?
     var writers: Set<String> = []
     var tookOver: [String] = []
     var prompts: [(id: String, text: String)] = []
@@ -69,8 +70,11 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     func session(for id: String) -> ACPSession? { sessions[id] }
     func permissionPolicy(for id: String) -> ACPPermissionPolicy? { policies[id] }
     func hydrateIfNeeded(id: String) async {}
-    func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
-        lastQuestionResponse = (id, response)
+    func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse) {
+        lastQuestionResponse = (id, requestId, response)
+    }
+    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {
+        lastUserInputResponse = (id, token, action)
     }
 
     func fullToolCallContent(sessionId: String, toolCallId: String) -> String? {
@@ -507,7 +511,6 @@ struct RemoteSessionGatewayTests {
         let provider = FakeSessionsProvider()
         let s = try makeSessionWithAgentText("x")
         provider.sessions["s1"] = s
-        s.transcript.streamingState = .awaitingInput   // gateway only surfaces prompts when actually awaiting
         s.transcript.pendingQuestion = .init(id: .number(0), params: .stub())
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
@@ -543,6 +546,7 @@ struct RemoteSessionGatewayTests {
             answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])]))
         let last = try #require(provider.lastQuestionResponse, "expected answerQuestion call")
         #expect(last.id == "s1")
+        #expect(last.requestId == .number(0))
         #expect(last.response == .init(outcome: .answered(answers: [
             ACPQuestionAnswer(questionId: "q1", selectedOptionIds: ["o1"])
         ])))
@@ -597,6 +601,172 @@ struct RemoteSessionGatewayTests {
             requestId: 0,
             answers: [RemoteQuestionAnswer(questionId: "q1", selectedOptionIds: ["bogus"])]))
         #expect(provider.lastQuestionResponse == nil)
+    }
+
+    @Test func subscribeEmitsStandardElicitationAndAcceptRoutesByOpaqueToken() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"""
+            {"sessionId":"remote","mode":"form","message":"Pick", "requestedSchema":{
+              "properties":{"strategy":{"type":"string","enum":["safe","fast"]}},
+              "required":["strategy"]
+            }}
+            """#.utf8)
+        )
+        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(4), params: params)))
+        session.transcript.pendingUserInputs = [pending]
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: "s1"))
+        let payload = try #require(sent.compactMap { message -> RemoteElicitationPayload? in
+            if case .elicitationRequest(_, let payload) = message { return payload }
+            return nil
+        }.first)
+        #expect(payload.requestId == pending.id.uuidString)
+        #expect(payload.fields.first?.options.map(\.value) == ["safe", "fast"])
+
+        session.transcript.messages.append(.agent(id: UUID(), StreamingText("still waiting")))
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(sent.filter {
+            if case .elicitationRequest = $0 { return true }
+            return false
+        }.count == 1)
+
+        await gateway.handle(.elicitationResponse(
+            sessionId: "s1",
+            requestId: payload.requestId,
+            action: "accept",
+            content: ["strategy": .string("safe")]
+        ))
+        let response = try #require(provider.lastUserInputResponse)
+        #expect(response.id == "s1")
+        #expect(response.token == pending.id)
+        #expect(response.action == .submit(["strategy": .string("safe")]))
+    }
+
+    @Test func remoteInputSurfaceDoesNotSkipPastSharedQueueHead() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        let cursorParams = ACPQuestionRequestParams.stub(title: "First")
+        let cursor = ACPUserInputRequest.cursor(.init(id: .number(1), params: cursorParams))
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"""
+            {"sessionId":"remote","mode":"form","message":"Second", "requestedSchema":{"properties":{}}}
+            """#.utf8)
+        )
+        let elicitation = try #require(ACPUserInputRequest.elicitation(.init(id: .number(2), params: params)))
+        session.transcript.pendingUserInputs = [cursor, elicitation]
+        session.transcript.pendingQuestion = .init(id: .number(1), params: cursorParams)
+        var sent: [RemoteServerMessage] = []
+        let gateway = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gateway.handle(.subscribe(sessionId: "s1"))
+
+        #expect(sent.contains {
+            if case .questionRequest = $0 { return true }
+            return false
+        })
+        #expect(!sent.contains {
+            if case .elicitationRequest = $0 { return true }
+            return false
+        })
+    }
+
+    @Test func elicitationResponseMustSatisfySchemaConstraints() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"""
+            {"sessionId":"remote","mode":"form","message":"Configure", "requestedSchema":{
+              "properties":{
+                "name":{"type":"string","minLength":3,"pattern":"^[a-z]+$"},
+                "count":{"type":"integer","minimum":1,"maximum":4},
+                "tags":{"type":"array","items":{"type":"string","enum":["one","two"]},"minItems":1}
+              },
+              "required":["name","count","tags"]
+            }}
+            """#.utf8)
+        )
+        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(4), params: params)))
+        session.transcript.pendingUserInputs = [pending]
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.elicitationResponse(
+            sessionId: "s1",
+            requestId: pending.id.uuidString,
+            action: "accept",
+            content: [
+                "name": .string("A"),
+                "count": .integer(8),
+                "tags": .strings(["unknown"]),
+            ]
+        ))
+
+        #expect(provider.lastUserInputResponse == nil)
+    }
+
+    @Test func integralWireValueIsValidForNumberElicitation() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"""
+            {"sessionId":"remote","mode":"form","message":"Configure", "requestedSchema":{
+              "properties":{"ratio":{"type":"number","minimum":0,"maximum":2}},
+              "required":["ratio"]
+            }}
+            """#.utf8)
+        )
+        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(5), params: params)))
+        session.transcript.pendingUserInputs = [pending]
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.elicitationResponse(
+            sessionId: "s1",
+            requestId: pending.id.uuidString,
+            action: "accept",
+            content: ["ratio": .integer(1)]
+        ))
+
+        #expect(provider.lastUserInputResponse?.action == .submit(["ratio": .integer(1)]))
+    }
+
+    @Test func fractionalSecondsAreValidForDateTimeElicitation() async throws {
+        let provider = FakeSessionsProvider()
+        let session = try makeSessionWithAgentText("x")
+        provider.sessions["s1"] = session
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"""
+            {"sessionId":"remote","mode":"form","message":"Schedule", "requestedSchema":{
+              "properties":{"startsAt":{"type":"string","format":"date-time"}},
+              "required":["startsAt"]
+            }}
+            """#.utf8)
+        )
+        let pending = try #require(ACPUserInputRequest.elicitation(.init(id: .number(6), params: params)))
+        session.transcript.pendingUserInputs = [pending]
+        let gateway = RemoteSessionGateway(provider: provider) { _ in }
+
+        await gateway.handle(.elicitationResponse(
+            sessionId: "s1",
+            requestId: pending.id.uuidString,
+            action: "accept",
+            content: ["startsAt": .string("2026-07-10T14:30:00.000Z")]
+        ))
+
+        #expect(provider.lastUserInputResponse?.action == .submit([
+            "startsAt": .string("2026-07-10T14:30:00.000Z"),
+        ]))
     }
 
     @Test func transcriptMutationEmitsCoalescedDelta() async throws {

@@ -143,6 +143,7 @@ private struct ACPSessionView: View {
         guard session.transcript.streamingState == .streaming || session.transcript.streamingState == .sending
               || session.transcript.streamingState == .awaitingPermission
               || session.transcript.streamingState == .awaitingInput
+              || !session.transcript.pendingUserInputs.isEmpty
         else { return }
         Task {
             if let runner = manager.runners[sessionId] {
@@ -176,6 +177,12 @@ private struct ACPSessionView: View {
 
     private var isFirstRunConnecting: Bool {
         firstRunConnectingPhase != nil
+    }
+
+    private var showsPreSessionUserInput: Bool {
+        (isFirstRunConnecting || isConnecting)
+            && (!session.transcript.pendingUserInputs.isEmpty
+                || !session.transcript.urlElicitationWaits.isEmpty)
     }
 
     private var isNewEmptySession: Bool {
@@ -246,7 +253,10 @@ private struct ACPSessionView: View {
 
     private func chatSurface(contentMaxWidth: CGFloat) -> some View {
         ZStack(alignment: .bottom) {
-            if let phase = firstRunConnectingPhase {
+            if showsPreSessionUserInput {
+                messageList(contentMaxWidth: contentMaxWidth)
+                    .transition(.opacity)
+            } else if let phase = firstRunConnectingPhase {
                 introStateAndComposer(contentMaxWidth: contentMaxWidth) {
                     ACPFirstRunConnectingView(
                         agentDisplayName: state.agent(id: session.agentId)?.displayName ?? session.agentId,
@@ -317,8 +327,17 @@ private struct ACPSessionView: View {
             policy: manager.runners[sessionId]?.policy,
             trustedImageRoot: worktree.path,
             scopeKey: scopeKey(for: session.transcript.pendingPermission),
-            onQuestionResponse: { response in
-                manager.runners[sessionId]?.answerQuestion(response)
+            onUserInputResponse: { token, action in
+                manager.respondToUserInput(for: sessionId, token: token, action: action)
+            },
+            onOpenElicitationURL: { token in
+                await manager.openElicitationURL(for: sessionId, token: token)
+            },
+            onDismissElicitationURLWait: { elicitationId in
+                manager.dismissElicitationURLWait(
+                    for: sessionId,
+                    elicitationId: elicitationId
+                )
             },
             onQueueEdit: isMirror ? { _ in } : { item in
                 // Pull the queued prompt back into the composer for editing,

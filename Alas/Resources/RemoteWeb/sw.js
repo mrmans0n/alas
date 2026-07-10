@@ -1,9 +1,9 @@
-const CACHE_NAME = "alas-remote-shell-v26";
+const CACHE_NAME = "alas-remote-shell-v35";
 const SHELL_ASSETS = [
   "/",
   "/index.html",
-  "/style.css?v=35",
-  "/app.js?v=48",
+  "/style.css?v=36",
+  "/app.js?v=57",
   "/marked.min.js?v=28",
   "/purify.min.js?v=28",
   "/manifest.webmanifest",
