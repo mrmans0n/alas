@@ -4089,9 +4089,20 @@ extension AppState: RemoteSessionsProvider {
         }
     }
 
-    func answerQuestion(for id: String, _ response: ACPQuestionResponse) {
+    func answerQuestion(
+        for id: String,
+        requestId: JSONRPCID,
+        _ response: ACPQuestionResponse
+    ) {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.answerQuestion(for: id, response)
+            mgr.answerQuestion(for: id, requestId: requestId, response)
+            return
+        }
+    }
+
+    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {
+        for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
+            mgr.respondToUserInput(for: id, token: token, action: action)
             return
         }
     }

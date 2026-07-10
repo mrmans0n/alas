@@ -217,3 +217,11 @@ button.create-row.is-selected { border-color: var(--accent); background: color-m
 .option-btn.is-selected { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 18%, transparent); }
 .btn-submit { background: var(--accent); color: var(--bg-0); font-weight: 600; }
 .btn-submit:disabled { background: var(--bg-3); color: var(--fg-faint); cursor: not-allowed; opacity: .7; }
+.elicitation-card { max-height: min(84vh, 720px); overflow-y: auto; }
+.elicitation-message { margin: 0 0 14px; color: var(--fg-muted); font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
+.elicitation-field { margin-bottom: 15px; }
+.elicitation-label { display: block; margin-bottom: 6px; color: var(--fg); font-size: 14px; font-weight: 600; }
+.elicitation-description { margin: -2px 0 7px; color: var(--fg-dim); font-size: 12px; line-height: 1.35; white-space: pre-wrap; }
+.elicitation-input { box-sizing: border-box; width: 100%; padding: 11px 12px; border: 1px solid var(--bg-4); border-radius: 9px; background: var(--bg-0); color: var(--fg); font: inherit; font-size: 16px; }
+.elicitation-check { display: flex; align-items: center; gap: 9px; color: var(--fg); font-size: 14px; }
+.elicitation-url { padding: 10px 11px; border: 1px solid var(--bg-4); border-radius: 8px; background: var(--bg-0); color: var(--fg-muted); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; user-select: text; }

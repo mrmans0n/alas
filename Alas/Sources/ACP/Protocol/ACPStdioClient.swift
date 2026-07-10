@@ -5,6 +5,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let questionsCont: AsyncStream<ACPQuestionRequest>.Continuation
+    private let elicitationsCont: AsyncStream<ACPElicitationRequest>.Continuation
+    private let elicitationCompletionsCont: AsyncStream<ACPElicitationCompleteParams>.Continuation
     private let filesCont: AsyncStream<ACPFileRequest>.Continuation
     private let terminalsCont: AsyncStream<ACPTerminalRequest>.Continuation
     private let stderrCont: AsyncStream<Data>.Continuation
@@ -17,6 +19,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     }
     let permissionRequests: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>
     let questionRequests: AsyncStream<ACPQuestionRequest>
+    let elicitationRequests: AsyncStream<ACPElicitationRequest>
+    let elicitationCompletions: AsyncStream<ACPElicitationCompleteParams>
     let fileRequests: AsyncStream<ACPFileRequest>
     let terminalRequests: AsyncStream<ACPTerminalRequest>
     let incomingStderr: AsyncStream<Data>
@@ -53,6 +57,14 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         self.questionRequests = AsyncStream { qC = $0 }
         self.questionsCont = qC
 
+        var elC: AsyncStream<ACPElicitationRequest>.Continuation!
+        self.elicitationRequests = AsyncStream { elC = $0 }
+        self.elicitationsCont = elC
+
+        var ecC: AsyncStream<ACPElicitationCompleteParams>.Continuation!
+        self.elicitationCompletions = AsyncStream { ecC = $0 }
+        self.elicitationCompletionsCont = ecC
+
         var fC: AsyncStream<ACPFileRequest>.Continuation!
         self.fileRequests = AsyncStream { fC = $0 }
         self.filesCont = fC
@@ -82,6 +94,14 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var qC: AsyncStream<ACPQuestionRequest>.Continuation!
         self.questionRequests = AsyncStream { qC = $0 }
         self.questionsCont = qC
+
+        var elC: AsyncStream<ACPElicitationRequest>.Continuation!
+        self.elicitationRequests = AsyncStream { elC = $0 }
+        self.elicitationsCont = elC
+
+        var ecC: AsyncStream<ACPElicitationCompleteParams>.Continuation!
+        self.elicitationCompletions = AsyncStream { ecC = $0 }
+        self.elicitationCompletionsCont = ecC
 
         var fC: AsyncStream<ACPFileRequest>.Continuation!
         self.fileRequests = AsyncStream { fC = $0 }
@@ -122,6 +142,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             updatesCont.finish()
             permsCont.finish()
             questionsCont.finish()
+            elicitationsCont.finish()
+            elicitationCompletionsCont.finish()
             filesCont.finish()
             terminalsCont.finish()
             stderrCont.finish()
@@ -168,6 +190,20 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         case "cursor/ask_question":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPQuestionRequestParams>.self, from: data),
                let id = env.id, let p = env.params { questionsCont.yield(.init(id: id, params: p)) }
+        case "elicitation/create":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPElicitationRequestParams>.self,
+                from: data
+            ), let id = env.id, let p = env.params {
+                elicitationsCont.yield(.init(id: id, params: p))
+            }
+        case "elicitation/complete":
+            if let env = try? JSONDecoder().decode(
+                JSONRPCEnvelope<ACPElicitationCompleteParams>.self,
+                from: data
+            ), let p = env.params {
+                elicitationCompletionsCont.yield(p)
+            }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),
                let id = env.id, let p = env.params { filesCont.yield(.read(id: id, params: p)) }
@@ -281,6 +317,23 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    func respondToElicitation(
+        id: JSONRPCID,
+        result: Result<ACPElicitationResponse, JSONRPCError>
+    ) {
+        Task { [weak self] in
+            guard let self else { return }
+            switch result {
+            case .success(let response):
+                do {
+                    try self.respond(id: id, body: JSONEncoder().encode(response))
+                } catch {}
+            case .failure(let error):
+                self.respondFile(id: id, result: .failure(error))
+            }
+        }
+    }
+
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
         Task { [weak self] in
             guard let self else { return }
@@ -293,6 +346,12 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             guard let self else { return }
             self.respondFile(id: id, result: result)
         }
+    }
+
+    func hasPendingOutboundRequest(id: JSONRPCID) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return pending[id] != nil
     }
 
     private func respond(id: JSONRPCID, body: Data) throws {

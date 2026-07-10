@@ -48,11 +48,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=48"#))
-        #expect(html.contains(#"/style.css?v=35"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v26";"#))
-        #expect(sw.contains(#""/app.js?v=48""#))
-        #expect(sw.contains(#""/style.css?v=35""#))
+        #expect(html.contains(#"/app.js?v=57"#))
+        #expect(html.contains(#"/style.css?v=36"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v35";"#))
+        #expect(sw.contains(#""/app.js?v=57""#))
+        #expect(sw.contains(#""/style.css?v=36""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -65,11 +65,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=48"#))
-        #expect(html.contains(#"/style.css?v=35"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v26";"#))
-        #expect(sw.contains(#""/app.js?v=48""#))
-        #expect(sw.contains(#""/style.css?v=35""#))
+        #expect(html.contains(#"/app.js?v=57"#))
+        #expect(html.contains(#"/style.css?v=36"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v35";"#))
+        #expect(sw.contains(#""/app.js?v=57""#))
+        #expect(sw.contains(#""/style.css?v=36""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -110,8 +110,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-state-active"))
         #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=48"))
-        #expect(html.contains("/style.css?v=35"))
+        #expect(html.contains("/app.js?v=57"))
+        #expect(html.contains("/style.css?v=36"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -136,8 +136,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=48""#))
-        #expect(sw.contains(#""/style.css?v=35""#))
+        #expect(sw.contains(#""/app.js?v=57""#))
+        #expect(sw.contains(#""/style.css?v=36""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -188,6 +188,7 @@ struct RemoteWebAssetTests {
         #expect(js.contains("function clearSessionSheetsForOpen()"))
         #expect(js.contains("hidePermission();"))
         #expect(js.contains("hideQuestion();"))
+        #expect(js.contains("hideElicitation();"))
         #expect(js.contains("hideConfig();"))
         #expect(js.contains("hideRenameSheet();"))
         #expect(js.contains("hideCreateSheet(true);"))
@@ -205,8 +206,10 @@ struct RemoteWebAssetTests {
         #expect(js.contains("requestCreateLists();"))
         #expect(js.contains(#"case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload);"#))
         #expect(js.contains(#"case "questionRequest": handlePromptRequest("question", msg.sessionId, msg.payload);"#))
+        #expect(js.contains(#"case "elicitationRequest": handlePromptRequest("elicitation", msg.sessionId, msg.payload);"#))
         #expect(js.contains(#"clearDeferredCreatePrompt("permission", msg.sessionId);"#))
         #expect(js.contains(#"clearDeferredCreatePrompt("question", msg.sessionId);"#))
+        #expect(js.contains(#"clearDeferredCreatePrompt("elicitation", msg.sessionId);"#))
     }
 
     @Test func remoteWebRefreshesCreateSelectionsFromServerLists() throws {
@@ -219,6 +222,41 @@ struct RemoteWebAssetTests {
         #expect(js.contains("!!createState.selectedWorktreeId && !!createState.selectedAgentId"))
         #expect(js.contains("worktrees: [],"))
         #expect(js.contains("agents: [],"))
+    }
+
+    @Test func remoteElicitationSerializerPreservesRequiredAndOptionalSemantics() throws {
+        let js = try asset("app.js")
+
+        #expect(js.contains("const hasDefault = field.defaultValue !== null && field.defaultValue !== undefined;"))
+        #expect(js.components(separatedBy: "if (!field.required && !state.touched) continue;").count == 3)
+        #expect(js.contains("function elicitationRequiredValueIsMissing(field, value)"))
+        #expect(js.contains(#"["date", "date-time", "email", "uri"].includes(field.format)"#))
+        #expect(js.contains("if (field.minLength && field.minLength > 0) return true;"))
+        #expect(js.contains("return !new RegExp(field.pattern).test(value);"))
+        #expect(js.contains("return showElicitationError(`Enter a value for ${field.title}.`);"))
+        #expect(js.contains(#"!field.required && (field.type === "number" || field.type === "integer") && input.value.trim() === """#))
+        #expect(js.contains(#"!field.required && field.type === "string" && input.value === """#))
+        #expect(js.contains("if (!Number.isInteger(value)) return showElicitationError(`Enter a whole number for ${field.title}.`);"))
+        #expect(!js.contains("Number.parseInt(input.value, 10)"))
+        #expect(js.contains(#"field.format === "email" ? "email""#))
+        #expect(js.contains(#"field.format === "uri" ? "url""#))
+        #expect(js.contains("function elicitationFormatIsValid(field, value)"))
+        #expect(!js.contains("input.pattern = field.pattern;"))
+        #expect(js.contains("if (!new RegExp(field.pattern).test(value)) return false;"))
+        #expect(js.contains("function elicitationDateTimeLocalValue(raw)"))
+        #expect(js.contains(#"if (field.format === "date-time") input.step = "0.001";"#))
+        #expect(js.contains("date.getMilliseconds()"))
+        #expect(js.contains(#"!["string", "number", "integer", "boolean", "array"].includes(field.type)"#))
+        #expect(js.contains("elicitationInputs.set(field.key, { field, unsupported: true });"))
+        #expect(js.contains("if (field.required) return showElicitationError(`Cannot submit the unsupported field ${field.title}.`);"))
+
+        let formSend = try #require(js.range(of: #"send({ type: "elicitationResponse", sessionId, requestId: payload.requestId, action: "accept", content });"#))
+        let validationHelper = try #require(js.range(of: "function elicitationRequiredValueIsMissing"))
+        #expect(!js[formSend.upperBound..<validationHelper.lowerBound].contains("hideElicitation();"))
+
+        let urlAccept = try #require(js.range(of: #"send({ type: "elicitationResponse", sessionId, requestId: payload.requestId, action: "accept" });"#))
+        let urlNavigation = try #require(js.range(of: "opened.location.replace(payload.url);"))
+        #expect(urlAccept.lowerBound < urlNavigation.lowerBound)
     }
 
     @Test func remoteWebCompactsHeaderOnNarrowScreens() throws {

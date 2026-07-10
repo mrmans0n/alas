@@ -262,6 +262,50 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(msg) == msg)
     }
 
+    @Test func elicitationMessagesRoundTrip() throws {
+        let payload = RemoteElicitationPayload(
+            requestId: UUID().uuidString,
+            title: "Configure",
+            message: "Choose a strategy",
+            mode: "form",
+            fields: [
+                .init(
+                    key: "strategy",
+                    type: "string",
+                    title: "Strategy",
+                    description: nil,
+                    required: true,
+                    minLength: nil,
+                    maxLength: nil,
+                    minimum: nil,
+                    maximum: nil,
+                    minItems: nil,
+                    maxItems: nil,
+                    format: nil,
+                    pattern: nil,
+                    options: [.init(value: "safe", title: "Safe", description: nil)],
+                    defaultValue: .string("safe")
+                )
+            ],
+            elicitationId: nil,
+            url: nil
+        )
+        let request = RemoteServerMessage.elicitationRequest(sessionId: "s1", payload: payload)
+        #expect(try roundTrip(request) == request)
+        #expect(try roundTrip(RemoteServerMessage.elicitationResolved(
+            sessionId: "s1",
+            requestId: payload.requestId
+        )) == .elicitationResolved(sessionId: "s1", requestId: payload.requestId))
+
+        let response = RemoteClientMessage.elicitationResponse(
+            sessionId: "s1",
+            requestId: payload.requestId,
+            action: "accept",
+            content: ["strategy": .string("safe")]
+        )
+        #expect(try roundTrip(response) == response)
+    }
+
     @Test func clientMessageDecodesSendPrompt() throws {
         let json = #"{"type":"sendPrompt","sessionId":"s1","text":"hello"}"#.data(using: .utf8)!
         let msg = try JSONDecoder().decode(RemoteClientMessage.self, from: json)

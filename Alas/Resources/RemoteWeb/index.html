@@ -11,7 +11,7 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-180.png" />
   <title>Alas Remote</title>
-  <link rel="stylesheet" href="/style.css?v=35" />
+  <link rel="stylesheet" href="/style.css?v=36" />
 </head>
 <body>
   <header id="bar">
@@ -63,6 +63,17 @@
       <div id="question-body"></div>
       <button id="question-submit" class="btn-submit" disabled>Submit</button>
       <button id="question-close" class="sheet-close">Close</button>
+    </div>
+  </div>
+  <div id="elicitation" class="sheet hidden">
+    <div class="sheet-card elicitation-card">
+      <p id="elicitation-title" class="sheet-title"></p>
+      <p id="elicitation-message" class="elicitation-message"></p>
+      <div id="elicitation-body"></div>
+      <p id="elicitation-error" class="sheet-error hidden"></p>
+      <button id="elicitation-submit" class="btn-submit">Submit</button>
+      <button id="elicitation-decline" class="sheet-close">Decline</button>
+      <button id="elicitation-cancel" class="sheet-close">Cancel</button>
     </div>
   </div>
   <div id="cfg" class="sheet hidden">
@@ -120,7 +131,7 @@
   </div>
   <script src="/marked.min.js?v=28"></script>
   <script src="/purify.min.js?v=28"></script>
-  <script src="/app.js?v=48"></script>
+  <script src="/app.js?v=57"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

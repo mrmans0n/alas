@@ -31,6 +31,7 @@ final class ACPSessionManager: ObservableObject {
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
+    private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     #if DEBUG
     /// Number of attached runners. Public-but-namespaced read accessor for
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
@@ -45,8 +46,29 @@ final class ACPSessionManager: ObservableObject {
     func permissionPolicy(for id: ACPSession.ID) -> ACPPermissionPolicy? { runners[id]?.policy }
 
     /// Answers a pending question for a session that currently has an attached runner.
-    func answerQuestion(for id: ACPSession.ID, _ response: ACPQuestionResponse) {
-        runners[id]?.answerQuestion(response)
+    func answerQuestion(
+        for id: ACPSession.ID,
+        requestId: JSONRPCID,
+        _ response: ACPQuestionResponse
+    ) {
+        elicitationCoordinators[id]?.respondToCursor(id: requestId, response: response)
+    }
+
+    func respondToUserInput(
+        for id: ACPSession.ID,
+        token: UUID,
+        action: ACPUserInputAction
+    ) {
+        elicitationCoordinators[id]?.respond(to: token, action: action)
+    }
+
+    @discardableResult
+    func openElicitationURL(for id: ACPSession.ID, token: UUID) async -> Bool {
+        await elicitationCoordinators[id]?.openURL(for: token) == true
+    }
+
+    func dismissElicitationURLWait(for id: ACPSession.ID, elicitationId: String) {
+        elicitationCoordinators[id]?.dismissURLWait(elicitationId: elicitationId)
     }
 
     /// Lightweight summaries for the remote sessions list.
@@ -1217,6 +1239,7 @@ extension ACPSessionManager {
             runner.stop()
             await runner.connection.shutdown()
         }
+        elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         if let session = sessions[sessionId] {
             session.agentState = .idle
             session.transcript.streamingState = .idle
@@ -1464,6 +1487,7 @@ extension ACPSessionManager {
             stale.stop()
         }
         runners[sessionId] = nil
+        elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         // Clear stale failure UI from the prior attempt while we spawn fresh.
         // If this attempt also fails, the catch branches below will repopulate
         // `lastError` with the new reason.
@@ -1508,6 +1532,24 @@ extension ACPSessionManager {
             }
         }
         var startedRunner: ACPSessionRunner?
+        let elicitationCoordinator = ACPElicitationCoordinator(
+            session: session,
+            client: connection.client,
+            onInputResolved: { [weak self] in
+                self?.runners[sessionId]?.flushQueueIfIdle()
+            }
+        )
+        elicitationCoordinators[sessionId] = elicitationCoordinator
+        elicitationCoordinator.start()
+        var keepElicitationCoordinator = false
+        defer {
+            if !keepElicitationCoordinator {
+                elicitationCoordinator.stop()
+                if elicitationCoordinators[sessionId] === elicitationCoordinator {
+                    elicitationCoordinators[sessionId] = nil
+                }
+            }
+        }
         do {
             if firstRunAttach {
                 session.firstRunConnectingPhase = .initializing
@@ -1546,6 +1588,9 @@ extension ACPSessionManager {
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
                                           onDirtyCheck: onDirtyCheck,
                                           onLiveBufferRead: onLiveBufferRead,
+                                          onUserCancel: { [weak elicitationCoordinator] in
+                                              elicitationCoordinator?.cancelPendingInputs()
+                                          },
                                           onAuthRequired: { [weak self] runner, _ in
                                               await self?.handleAuthRequiredRunner(
                                                 runner,
@@ -1732,6 +1777,7 @@ extension ACPSessionManager {
             persistSessionRemoteId(session)
             startRunnerIfNeeded()
             runners[sessionId] = runner
+            keepElicitationCoordinator = true
             attachSucceeded = true
             session.agentState = .ready
             if shouldHoldQueueForRecovery {
@@ -1944,6 +1990,7 @@ extension ACPSessionManager {
         }
         runner.stop()
         runners[sessionId] = nil
+        elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         await runner.connection.shutdown()
     }
 
@@ -1980,6 +2027,7 @@ extension ACPSessionManager {
             runner.stop()
             await runner.connection.shutdown()
         }
+        elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
         releaseWriterLease(sessionId: sessionId)

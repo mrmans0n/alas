@@ -174,6 +174,8 @@ function handle(msg) {
     case "permissionResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("permission", msg.sessionId); hidePermission(); } break;
     case "questionRequest": handlePromptRequest("question", msg.sessionId, msg.payload); break;
     case "questionResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("question", msg.sessionId); dismissedQuestion = null; hideQuestion(); } break;
+    case "elicitationRequest": handlePromptRequest("elicitation", msg.sessionId, msg.payload); break;
+    case "elicitationResolved": if (msg.sessionId === currentSession) { clearDeferredCreatePrompt("elicitation", msg.sessionId); hideElicitation(); } break;
     case "sessionConfig": if (msg.sessionId === currentSession) { sessionConfig = msg; renderConfigAffordances(); } break;
     case "sessionRenamed": applySessionRenamed(msg.sessionId, msg.title); break;
     case "worktreeList":
@@ -296,6 +298,7 @@ function openSession(id) {
 function clearSessionSheetsForOpen() {
   hidePermission();
   hideQuestion();
+  hideElicitation();
   hideConfig();
   hideRenameSheet();
   hideCreateSheet(true);
@@ -305,7 +308,7 @@ function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
   sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances();
-  hidePermission(); hideQuestion(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
+  hidePermission(); hideQuestion(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
   $("drivebar").classList.add("hidden");
@@ -329,8 +332,10 @@ function handlePromptRequest(kind, sessionId, payload) {
 function showPromptRequest(kind, sessionId, payload) {
   if (kind === "permission") {
     showPermission(sessionId, payload);
-  } else {
+  } else if (kind === "question") {
     showQuestion(sessionId, payload);
+  } else {
+    showElicitation(sessionId, payload);
   }
 }
 
@@ -1700,6 +1705,228 @@ function dismissQuestion() {
   if (questionState) dismissedQuestion = { sessionId: questionState.sessionId, requestId: questionState.requestId };   // keep this exact prompt dismissed across re-sends
   hideQuestion();
 }
+
+// --- Standard ACP elicitation sheet ---
+let elicitationState = null;
+let elicitationInputs = new Map();
+
+function showElicitation(sessionId, payload) {
+  elicitationState = { sessionId, payload };
+  elicitationInputs = new Map();
+  $("elicitation-title").textContent = payload.title || (payload.mode === "url" ? "Continue in browser" : "Input requested");
+  $("elicitation-message").textContent = payload.message || "";
+  $("elicitation-error").classList.add("hidden");
+  const body = $("elicitation-body");
+  body.innerHTML = "";
+
+  if (payload.mode === "url") {
+    const host = safeURLHost(payload.url);
+    if (host) body.appendChild(el("p", "elicitation-label", host));
+    body.appendChild(el("div", "elicitation-url", payload.url || ""));
+    $("elicitation-submit").textContent = "Open Browser";
+  } else {
+    (payload.fields || []).forEach(field => body.appendChild(renderElicitationField(field)));
+    $("elicitation-submit").textContent = "Submit";
+  }
+  $("elicitation").classList.remove("hidden");
+}
+
+function renderElicitationField(field) {
+  const block = el("div", "elicitation-field");
+  block.appendChild(el("label", "elicitation-label", field.title + (field.required ? " · Required" : "")));
+  if (field.description) block.appendChild(el("p", "elicitation-description", field.description));
+
+  if (!["string", "number", "integer", "boolean", "array"].includes(field.type)) {
+    elicitationInputs.set(field.key, { field, unsupported: true });
+    block.appendChild(el("p", "elicitation-description", "This field type is not supported."));
+    return block;
+  }
+
+  if ((field.type === "string" && field.options.length > 0) || field.type === "array") {
+    const hasDefault = field.defaultValue !== null && field.defaultValue !== undefined;
+    const selected = new Set(Array.isArray(field.defaultValue) ? field.defaultValue : (typeof field.defaultValue === "string" ? [field.defaultValue] : []));
+    elicitationInputs.set(field.key, { field, selected, touched: hasDefault });
+    field.options.forEach(option => {
+      const button = el("button", "option-btn", option.title || option.value);
+      if (selected.has(option.value)) button.classList.add("is-selected");
+      button.onclick = () => {
+        const multiple = field.type === "array";
+        if (!multiple) {
+          selected.clear();
+          block.querySelectorAll(".option-btn").forEach(item => item.classList.remove("is-selected"));
+        }
+        if (multiple && selected.has(option.value)) {
+          selected.delete(option.value);
+          button.classList.remove("is-selected");
+        } else if (!field.maxItems || selected.size < field.maxItems) {
+          selected.add(option.value);
+          button.classList.add("is-selected");
+        }
+        elicitationInputs.get(field.key).touched = true;
+      };
+      block.appendChild(button);
+    });
+    return block;
+  }
+
+  if (field.type === "boolean") {
+    const label = el("label", "elicitation-check");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = field.defaultValue === true;
+    const state = { field, input, touched: field.defaultValue !== null && field.defaultValue !== undefined };
+    input.onchange = () => { state.touched = true; };
+    elicitationInputs.set(field.key, state);
+    label.append(input, document.createTextNode(field.title));
+    block.appendChild(label);
+    return block;
+  }
+
+  const input = document.createElement("input");
+  input.className = "elicitation-input";
+  input.type = field.format === "date" ? "date"
+    : (field.format === "date-time" ? "datetime-local"
+      : (field.format === "email" ? "email"
+        : (field.format === "uri" ? "url"
+          : ((field.type === "number" || field.type === "integer") ? "number" : "text"))));
+  if (field.type === "integer") input.step = "1";
+  if (field.format === "date-time") input.step = "0.001";
+  if (field.minimum !== null && field.minimum !== undefined) input.min = String(field.minimum);
+  if (field.maximum !== null && field.maximum !== undefined) input.max = String(field.maximum);
+  if (field.minLength !== null && field.minLength !== undefined) input.minLength = field.minLength;
+  if (field.maxLength !== null && field.maxLength !== undefined) input.maxLength = field.maxLength;
+  if (field.defaultValue !== null && field.defaultValue !== undefined) {
+    input.value = field.format === "date-time"
+      ? elicitationDateTimeLocalValue(field.defaultValue)
+      : String(field.defaultValue);
+  }
+  const state = { field, input, touched: input.value.length > 0 };
+  input.oninput = () => { state.touched = true; };
+  elicitationInputs.set(field.key, state);
+  block.appendChild(input);
+  return block;
+}
+
+function submitElicitation() {
+  if (!elicitationState) return;
+  const { sessionId, payload } = elicitationState;
+  if (payload.mode === "url") {
+    const opened = window.open("about:blank", "_blank");
+    if (!opened) {
+      showElicitationError("The browser blocked this URL. Allow pop-ups and try again.");
+      return;
+    }
+    opened.opener = null;
+    send({ type: "elicitationResponse", sessionId, requestId: payload.requestId, action: "accept" });
+    opened.location.replace(payload.url);
+    hideElicitation();
+    return;
+  }
+
+  const content = {};
+  for (const [key, state] of elicitationInputs) {
+    const field = state.field;
+    if (state.unsupported) {
+      if (field.required) return showElicitationError(`Cannot submit the unsupported field ${field.title}.`);
+      continue;
+    }
+    if (state.selected) {
+      if (!field.required && !state.touched) continue;
+      if (field.required && state.selected.size === 0) return showElicitationError(`Choose a value for ${field.title}.`);
+      if (field.minItems && state.selected.size < field.minItems) return showElicitationError(`Choose at least ${field.minItems} values for ${field.title}.`);
+      if (field.type === "array") content[key] = Array.from(state.selected);
+      else if (state.selected.size > 0) content[key] = Array.from(state.selected)[0];
+      continue;
+    }
+    const input = state.input;
+    if (!input.checkValidity()) return showElicitationError(`Check the value for ${field.title}.`);
+    if (!field.required && !state.touched) continue;
+    if (elicitationRequiredValueIsMissing(field, input.value)) {
+      return showElicitationError(`Enter a value for ${field.title}.`);
+    }
+    if (!field.required && (field.type === "number" || field.type === "integer") && input.value.trim() === "") {
+      continue;
+    }
+    if (!field.required && field.type === "string" && input.value === "") {
+      continue;
+    }
+    if (!elicitationFormatIsValid(field, input.value)) {
+      return showElicitationError(`Check the value for ${field.title}.`);
+    }
+    if (field.type === "boolean") content[key] = input.checked;
+    else if (field.type === "number") content[key] = Number(input.value);
+    else if (field.type === "integer") {
+      const value = Number(input.value);
+      if (!Number.isInteger(value)) return showElicitationError(`Enter a whole number for ${field.title}.`);
+      content[key] = value;
+    }
+    else if (field.format === "date-time" && input.value) content[key] = new Date(input.value).toISOString();
+    else content[key] = input.value;
+  }
+  send({ type: "elicitationResponse", sessionId, requestId: payload.requestId, action: "accept", content });
+}
+
+function elicitationRequiredValueIsMissing(field, value) {
+  if (!field.required || value !== "") return false;
+  if (field.type === "number" || field.type === "integer") return true;
+  if (["date", "date-time", "email", "uri"].includes(field.format)) return true;
+  if (field.minLength && field.minLength > 0) return true;
+  if (field.pattern) {
+    try { return !new RegExp(field.pattern).test(value); } catch { return false; }
+  }
+  return false;
+}
+
+function elicitationFormatIsValid(field, value) {
+  if (field.pattern) {
+    try {
+      if (!new RegExp(field.pattern).test(value)) return false;
+    } catch {}
+  }
+  if (field.format === "email") {
+    const parts = value.split("@");
+    return parts.length === 2 && parts[0].length > 0 && parts[1].includes(".");
+  }
+  if (field.format === "uri") {
+    try { return new URL(value).protocol.length > 0; } catch { return false; }
+  }
+  return true;
+}
+
+function elicitationDateTimeLocalValue(raw) {
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = value => String(value).padStart(2, "0");
+  const base = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    + `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return date.getMilliseconds() === 0
+    ? base
+    : `${base}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+}
+
+function resolveElicitation(action) {
+  if (!elicitationState) return;
+  const { sessionId, payload } = elicitationState;
+  send({ type: "elicitationResponse", sessionId, requestId: payload.requestId, action });
+  hideElicitation();
+}
+
+function showElicitationError(message) {
+  const error = $("elicitation-error");
+  error.textContent = message;
+  error.classList.remove("hidden");
+}
+
+function safeURLHost(raw) {
+  try { return new URL(raw).host; } catch { return ""; }
+}
+
+function hideElicitation() {
+  $("elicitation").classList.add("hidden");
+  elicitationState = null;
+  elicitationInputs = new Map();
+}
+
 function renderDriveBar(streamingState) {
   // Keep the whole bar hidden until the first snapshot tells us the real
   // canDrive — otherwise the take-over banner flashes while opening a session
@@ -1887,8 +2114,12 @@ $("question-submit").onclick = submitQuestion;
 // question stays closed even if the server keeps re-sending it.
 $("question-close").onclick = dismissQuestion;
 $("perm-close").onclick = hidePermission;
+$("elicitation-submit").onclick = submitElicitation;
+$("elicitation-decline").onclick = () => resolveElicitation("decline");
+$("elicitation-cancel").onclick = () => resolveElicitation("cancel");
 $("question").onclick = (e) => { if (e.target.id === "question") dismissQuestion(); };
 $("permission").onclick = (e) => { if (e.target.id === "permission") hidePermission(); };
+$("elicitation").onclick = (e) => { if (e.target.id === "elicitation") resolveElicitation("cancel"); };
 
 $("back").onclick = showSessions;
 $("gate-retry").onclick = retryConnection;

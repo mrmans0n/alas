@@ -59,6 +59,29 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" } == false)
     }
 
+    @Test("pending user input queues new prompts until the input resolves")
+    func pendingInputBlocksAndThenDrains() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        let params = ACPQuestionRequestParams.stub()
+        session.transcript.pendingUserInputs = [
+            ACPUserInputRequest.cursor(.init(id: .number(1), params: params))
+        ]
+
+        runner.send(blocks: [.text("after input")], intent: .auto)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(session.queue.count == 1)
+        #expect(!mock.sent.contains { $0.method == "session/prompt" })
+
+        session.transcript.pendingUserInputs.removeAll()
+        runner.flushQueueIfIdle()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(session.queue.isEmpty)
+        #expect(mock.sent.contains { $0.method == "session/prompt" })
+    }
+
     @Test("empty blocks → noOp; nothing queued, no RPC, no state change")
     func emptyNoOp() async throws {
         let (runner, mock, session, _) = try mkRunner()

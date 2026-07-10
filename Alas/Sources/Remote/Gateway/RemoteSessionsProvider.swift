@@ -11,7 +11,8 @@ protocol RemoteSessionsProvider: AnyObject {
     func session(for id: String) -> ACPSession?
     func permissionPolicy(for id: String) -> ACPPermissionPolicy?
     func hydrateIfNeeded(id: String) async
-    func answerQuestion(for id: String, _ response: ACPQuestionResponse)
+    func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse)
+    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
     func fullToolCallContent(sessionId: String, toolCallId: String) -> String?
     func isWriter(for id: String) -> Bool
     func takeOver(for id: String)
@@ -30,4 +31,8 @@ protocol RemoteSessionsProvider: AnyObject {
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.
     func sessionConfig(for id: String) -> RemoteSessionConfig?
+}
+
+extension RemoteSessionsProvider {
+    func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction) {}
 }

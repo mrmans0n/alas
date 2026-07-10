@@ -52,6 +52,10 @@ protocol ACPClient: AnyObject {
     /// per emitted request.
     var questionRequests: AsyncStream<ACPQuestionRequest> { get }
 
+    /// Standard ACP elicitation requests and URL completion notifications.
+    var elicitationRequests: AsyncStream<ACPElicitationRequest> { get }
+    var elicitationCompletions: AsyncStream<ACPElicitationCompleteParams> { get }
+
     /// Filesystem requests (`fs/read_text_file`, `fs/write_text_file`).
     var fileRequests: AsyncStream<ACPFileRequest> { get }
 
@@ -61,10 +65,32 @@ protocol ACPClient: AnyObject {
 
     func respondToPermission(id: JSONRPCID, response: ACPPermissionResponse)
     func respondToQuestion(id: JSONRPCID, response: ACPQuestionResponse)
+    func respondToElicitation(
+        id: JSONRPCID,
+        result: Result<ACPElicitationResponse, JSONRPCError>
+    )
     func respondToFileRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
     func respondToTerminalRequest(id: JSONRPCID, result: Result<Data, JSONRPCError>)
+    func hasPendingOutboundRequest(id: JSONRPCID) -> Bool
 
     func shutdown() async
+}
+
+extension ACPClient {
+    var elicitationRequests: AsyncStream<ACPElicitationRequest> {
+        AsyncStream { $0.finish() }
+    }
+
+    var elicitationCompletions: AsyncStream<ACPElicitationCompleteParams> {
+        AsyncStream { $0.finish() }
+    }
+
+    func respondToElicitation(
+        id: JSONRPCID,
+        result: Result<ACPElicitationResponse, JSONRPCError>
+    ) {}
+
+    func hasPendingOutboundRequest(id: JSONRPCID) -> Bool { true }
 }
 
 enum ACPFileRequest {
