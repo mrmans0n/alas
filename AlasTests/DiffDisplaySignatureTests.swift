@@ -134,4 +134,16 @@ struct DiffDisplaySignatureTests {
         }
         #expect(key(a) != key(b))
     }
+
+    @Test func diffTabRenderContextKeyDiffersWhenModelTextChanges() {
+        var changed = sampleLines()
+        changed[0] = .init(kind: .context, text: "old/new 4 EDITED", oldNumber: 4, newNumber: 4)
+        let a = model(lines: sampleLines())
+        let b = model(lines: changed)
+
+        #expect(
+            DiffTabRenderContextKey(model: a, comments: [], pendingDraftAnchor: nil)
+                != DiffTabRenderContextKey(model: b, comments: [], pendingDraftAnchor: nil)
+        )
+    }
 }
