@@ -35,6 +35,6 @@ import Foundation
             .appendingPathComponent("recover-clean-\(UUID()).sqlite")
         _ = try ACPSessionStore(path: url.path)
         let store = try ACPSessionStore(path: url.path)   // second open, no crash
-        #expect(try store.currentSchemaVersion() == 7)
+        #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
     }
 }

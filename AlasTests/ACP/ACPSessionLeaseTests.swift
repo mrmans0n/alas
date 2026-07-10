@@ -9,10 +9,10 @@ import Foundation
         return try ACPSessionStore(path: url.path)
     }
 
-    @Test("schema reaches version 7")
-    func schemaV7() throws {
+    @Test("schema includes leases and session origins")
+    func schemaIncludesLeasesAndOrigins() throws {
         let store = try tempStore()
-        #expect(try store.currentSchemaVersion() == 7)
+        #expect(try store.currentSchemaVersion() == 8)
     }
 
     @Test("session_leases table exists and is empty")

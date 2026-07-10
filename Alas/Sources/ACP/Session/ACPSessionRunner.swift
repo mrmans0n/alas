@@ -519,6 +519,9 @@ final class ACPSessionRunner {
         try? store.upsertSession(.init(
             id: row.id, agentId: row.agentId, title: session.title,
             titleSource: session.titleSource,
+            remoteSessionId: row.remoteSessionId,
+            origin: row.origin,
+            contextRecoveryPending: row.contextRecoveryPending,
             currentModel: session.currentModel, currentMode: session.currentMode,
             autoRun: session.autoRunEnabled,
             createdAt: row.createdAt, updatedAt: now,

@@ -1,0 +1,144 @@
+import Foundation
+import Testing
+@testable import Alas
+
+@MainActor
+@Suite("ACPSessionManager remote restore")
+struct ACPSessionManagerRemoteRestoreTests {
+    @Test("Alas-owned sessions use resume when advertised")
+    func localSessionUsesResume() async throws {
+        let (manager, store, client, session) = try fixture(origin: .alasCreated)
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method).contains("session/resume"))
+        #expect(!client.sent.map(\.method).contains("session/load"))
+        #expect(!client.sent.map(\.method).contains("session/new"))
+        #expect(session.agentState == .ready)
+        #expect(try store.loadSession(id: session.id)?.remoteSessionId == "remote-id")
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("imported sessions prefer strict load so history can replay")
+    func importedSessionUsesLoad() async throws {
+        let (manager, store, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: true)
+        scriptSessionResult(client, method: "session/load", sessionId: "remote-id")
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method).contains("session/load"))
+        #expect(!client.sent.map(\.method).contains("session/resume"))
+        #expect(session.agentState == .ready)
+        await manager.detach(sessionId: session.id)
+        #expect(try store.loadSession(id: session.id)?.origin == .agentImported)
+    }
+
+    @Test("resume-only imports stay connected and disclose unavailable local history")
+    func importedSessionUsesResumeWithDisclosure() async throws {
+        let (manager, _, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: false, canResume: true)
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(session.agentState == .ready)
+        #expect(session.contextRestoreWarning?.canSendTranscript == false)
+        #expect(session.contextRestoreWarning?.message.contains("remain in the agent") == true)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("failed imports never fall back to a new unrelated session")
+    func failedImportDoesNotCreateSession() async throws {
+        let (manager, _, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: true, canResume: false)
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method).contains("session/load"))
+        #expect(!client.sent.map(\.method).contains("session/new"))
+        if case .failed = session.agentState {
+            // Expected.
+        } else {
+            Issue.record("Imported session should remain failed when its remote load fails")
+        }
+        #expect(session.remoteSessionId == "remote-id")
+    }
+
+    @Test("imports without load or resume fail without issuing a lifecycle request")
+    func unsupportedImportDoesNotCreateSession() async throws {
+        let (manager, _, client, session) = try fixture(origin: .agentImported)
+        scriptInitialize(client, canLoad: false, canResume: false)
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method) == ["initialize"])
+        #expect(!client.sent.map(\.method).contains("session/new"))
+        if case .failed = session.agentState {
+            // Expected.
+        } else {
+            Issue.record("Unsupported imported session should surface a failed state")
+        }
+    }
+
+    private func fixture(
+        origin: ACPSessionOrigin
+    ) throws -> (ACPSessionManager, ACPSessionStore, ACPMockClient, ACPSession) {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-remote-restore-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(
+            id: "local-id",
+            agentId: "claude",
+            title: "Session",
+            titleSource: .generated,
+            remoteSessionId: "remote-id",
+            origin: origin,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 1,
+            lastOpenedAt: 1,
+            archived: false
+        ))
+        let client = ACPMockClient()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _ in ACPConnection(client: client) }
+        )
+        let session = try #require(manager.placeholderSession(id: "local-id"))
+        return (manager, store, client, session)
+    }
+
+    private func scriptInitialize(_ client: ACPMockClient, canLoad: Bool, canResume: Bool) {
+        client.script(method: "initialize") { _ in
+            try JSONEncoder().encode(ACPInitializeResult(
+                protocolVersion: 1,
+                agentCapabilities: .init(
+                    loadSession: canLoad,
+                    sessionCapabilities: .init(resume: canResume ? .init() : nil)
+                ),
+                authMethods: []
+            ))
+        }
+    }
+
+    private func scriptSessionResult(_ client: ACPMockClient, method: String, sessionId: String) {
+        client.script(method: method) { _ in
+            try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: sessionId,
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+    }
+}

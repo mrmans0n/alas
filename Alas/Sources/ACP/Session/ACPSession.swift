@@ -43,6 +43,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     @Published var title: String
     @Published var titleSource: ACPSessionTitleSource
+    let origin: ACPSessionOrigin
     @Published var availableModels: [ACPModelInfo] = []
     @Published var availableModes: [ACPModeInfo] = []
     @Published var availableConfigOptions: [ACPConfigOption] = []
@@ -244,6 +245,7 @@ final class ACPSession: ObservableObject, Identifiable {
 
     init(id: ID, agentId: String, worktreeId: String, title: String,
          titleSource: ACPSessionTitleSource = .placeholder,
+         origin: ACPSessionOrigin = .alasCreated,
          createdAt: Date = Date(),
          hydrationState: HydrationState = .ready,
          restoredFromPersistence: Bool = false) {
@@ -252,6 +254,7 @@ final class ACPSession: ObservableObject, Identifiable {
         self.worktreeId = worktreeId
         self.title = title
         self.titleSource = titleSource
+        self.origin = origin
         self.createdAt = createdAt
         self.hydrationState = hydrationState
         self.restoredFromPersistence = restoredFromPersistence

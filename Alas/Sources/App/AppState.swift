@@ -3627,6 +3627,31 @@ final class AppState {
         tabs.append(acpSession: state, to: worktree.id)
     }
 
+    @discardableResult
+    func openDiscoveredACPSession(
+        _ discovered: ACPDiscoveredSession,
+        capabilities: ACPSessionDiscoveryCapabilities
+    ) -> Bool {
+        guard let worktreeId = selectedWorktreeId,
+              let worktree = worktree(withId: worktreeId),
+              let manager = acpManager(for: worktree)
+        else { return false }
+
+        if let localSessionId = discovered.localSessionId {
+            openExistingACPSession(sessionId: localSessionId)
+            return true
+        }
+        guard capabilities.canOpenRemoteSession,
+              let row = manager.materializeDiscoveredSession(
+                discovered,
+                autoRunDefault: config.harness.acpAutoRunByDefault
+              )
+        else { return false }
+
+        openExistingACPSession(sessionId: row.id)
+        return true
+    }
+
     /// Open a diff tab for the given worktree-relative path and comparison mode.
     /// Reuses an existing matching diff tab for the same path if one is already open.
     func openDiffTab(

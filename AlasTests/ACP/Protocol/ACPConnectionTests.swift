@@ -84,6 +84,48 @@ struct ACPConnectionTests {
         #expect(params.mcpServers.isEmpty)
     }
 
+    @Test("resumeSession sends session/resume and preserves the requested id for an empty result")
+    func resumeSessionRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        let conn = ACPConnection(client: mock)
+        let result = try await conn.resumeSession(cwd: "/tmp/wt", sessionId: "remote-old")
+
+        #expect(result.sessionId == "remote-old")
+        let req = try #require(mock.sent.last)
+        #expect(req.method == "session/resume")
+        let params = try #require(req.params as? ACPSessionResumeParams)
+        #expect(params.cwd == "/tmp/wt")
+        #expect(params.sessionId == "remote-old")
+    }
+
+    @Test("listSessions sends cwd and opaque cursor and decodes a page")
+    func listSessionsRPC() async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "session/list") { _ in
+            try JSONEncoder().encode(ACPSessionListResult(
+                sessions: [.init(
+                    sessionId: "remote-1",
+                    cwd: "/tmp/wt",
+                    title: "Fix tests",
+                    updatedAt: "2026-07-10T10:00:00Z"
+                )],
+                nextCursor: "page-2"
+            ))
+        }
+
+        let conn = ACPConnection(client: mock)
+        let result = try await conn.listSessions(cwd: "/tmp/wt", cursor: "page-1")
+
+        #expect(result.sessions.map(\.sessionId) == ["remote-1"])
+        #expect(result.nextCursor == "page-2")
+        let req = try #require(mock.sent.last)
+        let params = try #require(req.params as? ACPSessionListParams)
+        #expect(params.cwd == "/tmp/wt")
+        #expect(params.cursor == "page-1")
+    }
+
     @Test("authenticate sends method id")
     func authenticateRPC() async throws {
         let mock = ACPMockClient()

@@ -197,6 +197,44 @@ struct ACPInitializeResult: Codable, Equatable {
 
     struct ACPAgentCapabilities: Codable, Equatable {
         let promptCapabilities: ACPPromptCapabilities?
+        let loadSession: Bool
+        let sessionCapabilities: ACPAgentSessionCapabilities
+
+        init(
+            promptCapabilities: ACPPromptCapabilities? = nil,
+            loadSession: Bool = false,
+            sessionCapabilities: ACPAgentSessionCapabilities = .init()
+        ) {
+            self.promptCapabilities = promptCapabilities
+            self.loadSession = loadSession
+            self.sessionCapabilities = sessionCapabilities
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            promptCapabilities = try c.decodeIfPresent(ACPPromptCapabilities.self, forKey: .promptCapabilities)
+            loadSession = try c.decodeIfPresent(Bool.self, forKey: .loadSession) ?? false
+            sessionCapabilities = try c.decodeIfPresent(
+                ACPAgentSessionCapabilities.self,
+                forKey: .sessionCapabilities
+            ) ?? .init()
+        }
+    }
+
+    struct ACPAgentSessionCapabilities: Codable, Equatable {
+        let list: EmptyObject?
+        let resume: EmptyObject?
+        let fork: EmptyObject?
+
+        init(list: EmptyObject? = nil, resume: EmptyObject? = nil, fork: EmptyObject? = nil) {
+            self.list = list
+            self.resume = resume
+            self.fork = fork
+        }
+
+        var supportsList: Bool { list != nil }
+        var supportsResume: Bool { resume != nil }
+        var supportsFork: Bool { fork != nil }
     }
     struct ACPPromptCapabilities: Codable, Equatable {
         let image: Bool
@@ -686,6 +724,50 @@ struct ACPSessionLoadParams: Codable, Equatable {
     let sessionId: String
     let mcpServers: [ACPSessionNewParams.ACPMCPServer]
 }
+
+// MARK: - session/list + session/resume + session/fork
+
+struct ACPSessionListParams: Codable, Equatable {
+    let cwd: String?
+    let cursor: String?
+}
+
+struct ACPSessionListResult: Codable, Equatable {
+    let sessions: [ACPAgentSessionInfo]
+    let nextCursor: String?
+
+    init(sessions: [ACPAgentSessionInfo], nextCursor: String? = nil) {
+        self.sessions = sessions
+        self.nextCursor = nextCursor
+    }
+}
+
+struct ACPAgentSessionInfo: Codable, Equatable, Identifiable {
+    var id: String { sessionId }
+
+    let sessionId: String
+    let cwd: String
+    let title: String?
+    let updatedAt: String?
+    let additionalDirectories: [String]?
+
+    init(
+        sessionId: String,
+        cwd: String,
+        title: String? = nil,
+        updatedAt: String? = nil,
+        additionalDirectories: [String]? = nil
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.title = title
+        self.updatedAt = updatedAt
+        self.additionalDirectories = additionalDirectories
+    }
+}
+
+typealias ACPSessionResumeParams = ACPSessionLoadParams
+typealias ACPSessionForkParams = ACPSessionLoadParams
 
 // MARK: - session/cancel
 
