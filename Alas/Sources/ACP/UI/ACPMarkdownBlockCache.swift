@@ -14,7 +14,11 @@ final class ACPMarkdownBlockCache {
     private(set) var stableBlocks: [ACPMarkdownText.Block] = []
     private(set) var tailUnparsed: String = ""
     private var stablePrefixLength: Int = 0
+    private var tailUnparsedLength: Int = 0
     private var lastFullText: String = ""
+    private var lastFullUTF8Length: Int = 0
+    private var lastRevision: UInt64?
+    private var lastSourceID: ObjectIdentifier?
     private var promotionScanner = PromotionScanner()
 
     #if DEBUG
@@ -29,17 +33,46 @@ final class ACPMarkdownBlockCache {
     }
     #endif
 
-    func update(with full: String) {
+    func update(
+        with full: String,
+        knownAppendedSuffix: String? = nil,
+        revision: UInt64? = nil,
+        sourceID: ObjectIdentifier? = nil
+    ) {
+        let fullUTF8Length = full.utf8.count
+        if let revision, lastRevision == revision {
+            if let sourceID, lastSourceID == sourceID, lastFullUTF8Length == fullUTF8Length {
+                return
+            }
+            if sourceID == nil, lastFullText == full {
+                return
+            }
+        }
+        defer {
+            lastRevision = revision
+            lastSourceID = sourceID
+        }
+
+        if let suffix = knownAppendedSuffix,
+           lastRevision != nil,
+           lastSourceID == sourceID,
+           fullUTF8Length == lastFullUTF8Length + suffix.utf8.count {
+            appendStreamingSuffix(suffix, full: full, fullUTF8Length: fullUTF8Length)
+            return
+        }
+
         // Detect non-extending updates and reset.
         let extendsPreviousFullText = full.hasPrefix(lastFullText)
         if !extendsPreviousFullText {
             stableBlocks = []
             stablePrefixLength = 0
+            tailUnparsedLength = 0
             promotionScanner.reset()
         }
-        let previousTailLength = tailUnparsed.count
+        let previousTailLength = tailUnparsedLength
         lastFullText = full
-        tailUnparsed = String(full.dropFirst(stablePrefixLength))
+        lastFullUTF8Length = fullUTF8Length
+        replaceTailFromFull(full)
         if extendsPreviousFullText {
             let appended = tailUnparsed.dropFirst(previousTailLength)
             scanPromotionTail(String(appended), startingAt: previousTailLength)
@@ -48,6 +81,29 @@ final class ACPMarkdownBlockCache {
             scanPromotionTail(tailUnparsed, startingAt: 0)
         }
         promoteIfPossible()
+    }
+
+    private func appendStreamingSuffix(_ suffix: String, full: String, fullUTF8Length: Int) {
+        lastFullText = full
+        lastFullUTF8Length = fullUTF8Length
+        let previousTailLength = tailUnparsedLength
+        tailUnparsed.append(suffix)
+        tailUnparsedLength = tailUnparsed.count
+        let actualTailGrowth = tailUnparsedLength - previousTailLength
+        guard actualTailGrowth == suffix.count else {
+            replaceTailFromFull(full)
+            promotionScanner.reset()
+            scanPromotionTail(tailUnparsed, startingAt: 0)
+            promoteIfPossible()
+            return
+        }
+        scanPromotionTail(suffix, startingAt: previousTailLength)
+        promoteIfPossible()
+    }
+
+    private func replaceTailFromFull(_ full: String) {
+        tailUnparsed = String(full.dropFirst(stablePrefixLength))
+        tailUnparsedLength = tailUnparsed.count
     }
 
     /// Walk tailUnparsed; find the latest blank line outside fenced code
@@ -62,6 +118,7 @@ final class ACPMarkdownBlockCache {
         stableBlocks.append(contentsOf: newBlocks)
         stablePrefixLength += promoted.count
         tailUnparsed = String(tailUnparsed.dropFirst(safeEnd))
+        tailUnparsedLength -= safeEnd
         promotionScanner.reset()
         scanPromotionTail(tailUnparsed, startingAt: 0)
     }

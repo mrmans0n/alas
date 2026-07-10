@@ -8,12 +8,24 @@ import Combine
 /// state no longer invalidate the message list.
 @MainActor
 final class ACPTranscript: ObservableObject {
-    @Published var messages: [ACPMessage] = []
+    @Published var messages: [ACPMessage] = [] {
+        didSet {
+            refreshPlanCaches()
+        }
+    }
     @Published var streamingState: ACPSession.StreamingState = .idle
     @Published var pendingPermission: ACPSession.PendingPermission?
     @Published var pendingQuestion: ACPSession.PendingQuestion?
     @Published var pendingUserInputs: [ACPUserInputRequest] = []
     @Published var urlElicitationWaits: [ACPURLElicitationWait] = []
+    /// Items of the plan emitted for the current turn. Updated when the
+    /// transcript array changes so high-frequency streaming ticks do not scan
+    /// the full message list from `ACPSessionView` / plan UI bodies.
+    @Published private(set) var currentPlan: [ACPMessage.PlanItem]?
+    /// The most recent non-empty plan emitted in this session, ignoring turn
+    /// boundaries. Sidebar-only signal that intentionally survives the gap
+    /// between a new user prompt and the next `.plan` arrival.
+    @Published private(set) var latestPlan: [ACPMessage.PlanItem]?
     /// Tick incremented on every streaming chunk that mutates an existing
     /// agent/thought buffer. The buffer itself publishes (so the row's
     /// inner Text re-renders), but the transcript array doesn't change —
@@ -49,6 +61,17 @@ final class ACPTranscript: ObservableObject {
     // MARK: - Per-message markdown caches
 
     private var markdownCaches: [String: ACPMarkdownBlockCache] = [:]
+    private var stableIdCache: [ACPMessage.StableIdentityKey: String] = [:]
+
+    func stableId(for message: ACPMessage) -> String {
+        let key = message.stableIdentityKey
+        if let cached = stableIdCache[key] {
+            return cached
+        }
+        let stableId = ACPMessage.stableId(for: key)
+        stableIdCache[key] = stableId
+        return stableId
+    }
 
     func markdownCache(forMessage id: String) -> ACPMarkdownBlockCache {
         if let c = markdownCaches[id] { return c }
@@ -75,42 +98,29 @@ final class ACPTranscript: ObservableObject {
         markdownCaches.removeAll()
     }
 
-    /// Items of the plan emitted for the current turn — the latest `.plan`
-    /// message that comes after the latest `.user` prompt. Returns nil
-    /// when no plan has arrived for this turn yet, even if an older turn
-    /// left a plan behind. The toolbar pill renders the *current* turn's
-    /// work, not stale progress from a previous prompt.
-    /// (See also `latestPlan`, which is turn-stable and treats an empty plan as nil.)
-    var currentPlan: [ACPMessage.PlanItem]? {
+    private func refreshPlanCaches() {
+        var newCurrentPlan: [ACPMessage.PlanItem]?
         for m in messages.reversed() {
-            if case .user = m { return nil }
-            if case .plan(_, let items) = m { return items }
-        }
-        return nil
-    }
-
-    /// The most recent plan emitted in this session, ignoring turn
-    /// boundaries. Unlike `currentPlan`, this survives the gap between
-    /// a fresh user prompt and the next `.plan` arrival — so the sidebar
-    /// can stay visible across turns per spec §6 ("stays until the next
-    /// plan or session reset").
-    ///
-    /// Returns nil when no plan message has ever arrived, or when the
-    /// most recent plan is empty. Note: unlike `currentPlan`, which returns an empty array for an empty current-turn plan, `latestPlan` normalises empty to nil — the sidebar uses this to decide whether to render at all.
-    ///
-    /// **Sidebar-only intent.** The toolbar pill deliberately keeps reading
-    /// `currentPlan` so it reflects the *active* turn — a per-turn signal
-    /// matches the pill's "what's the agent doing right now" framing. The
-    /// turn-stable semantics here exist only because the sidebar wants the
-    /// previous plan to linger across the brief gap when a new user prompt
-    /// has landed but the next `.plan` hasn't yet arrived.
-    var latestPlan: [ACPMessage.PlanItem]? {
-        for m in messages.reversed() {
+            if case .user = m { break }
             if case .plan(_, let items) = m {
-                return items.isEmpty ? nil : items
+                newCurrentPlan = items
+                break
             }
         }
-        return nil
+
+        var newLatestPlan: [ACPMessage.PlanItem]?
+        for m in messages.reversed() {
+            if case .plan(_, let items) = m {
+                newLatestPlan = items.isEmpty ? nil : items
+                break
+            }
+        }
+        if currentPlan != newCurrentPlan {
+            currentPlan = newCurrentPlan
+        }
+        if latestPlan != newLatestPlan {
+            latestPlan = newLatestPlan
+        }
     }
 
     // MARK: - Render window helpers

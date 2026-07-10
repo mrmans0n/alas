@@ -14,7 +14,7 @@ struct ACPToolCallCard: View {
     /// in `expandedContent` and rendered in place of the truncated copy.
     /// Optional — when nil (or when the lookup returns nil) the card falls
     /// back to the in-memory `toolCall.content`.
-    var loadFullContent: (() -> String?)? = nil
+    var loadFullContent: ((String) -> String?)? = nil
     @State private var expanded = false
     @State private var expandedContent: String? = nil
     @Environment(\.theme) private var theme
@@ -28,7 +28,7 @@ struct ACPToolCallCard: View {
                     // First expand of an off-window truncated card: page the
                     // full content back in from SQLite via the host-provided
                     // loader. Subsequent toggles reuse the cached string.
-                    expandedContent = loadFullContent?()
+                    expandedContent = loadFullContent?(toolCall.toolCallId)
                 }
             } label: {
                 HStack(spacing: 8) {

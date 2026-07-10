@@ -15,11 +15,25 @@ import SwiftUI
 /// wrapper only reveals the button and positions it into the reserved right
 /// lane via an offset.
 struct ACPMessageGutter<Content: View>: View {
-    /// Produces the raw Markdown copied by "Copy message". A closure (not a
-    /// stored `String`) so streaming agent text is read at click time rather
-    /// than captured stale at view-build time. Matches
-    /// `ACPTranscriptMarkdown.messageBody` for this message.
-    let markdown: () -> String
+    enum CopySource {
+        case text(String)
+        case streaming(StreamingText)
+
+        @MainActor
+        var markdown: String {
+            switch self {
+            case .text(let text):
+                text
+            case .streaming(let text):
+                text.value
+            }
+        }
+    }
+
+    /// Produces the raw Markdown copied by "Copy message". Streaming rows keep
+    /// a reference to the live buffer so copy reads the latest text without a
+    /// per-row closure recreated on every list evaluation.
+    let copySource: CopySource
     @ViewBuilder var content: Content
 
     @StateObject private var hover = ACPDelayedHoverVisibility()
@@ -60,7 +74,7 @@ struct ACPMessageGutter<Content: View>: View {
     private var dotsMenu: some View {
         Menu {
             Button("Copy message") {
-                let text = markdown()
+                let text = copySource.markdown
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
             }

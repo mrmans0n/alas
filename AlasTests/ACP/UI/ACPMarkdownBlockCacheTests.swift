@@ -87,4 +87,69 @@ struct ACPMarkdownBlockCacheTests {
 
         #expect(cache.promotionScanCharacterCountForTests == afterInitial + 1)
     }
+
+    @Test("streaming hint scans suffix once per revision")
+    func streamingHintScansSuffixOncePerRevision() async {
+        let cache = ACPMarkdownBlockCache()
+        final class Source {}
+        let source = Source()
+        let sourceID = ObjectIdentifier(source)
+        let first = String(repeating: "a", count: 10_000)
+        cache.update(with: first, revision: 0, sourceID: sourceID)
+        let afterInitial = cache.promotionScanCharacterCountForTests
+
+        let second = first + "b"
+        cache.update(with: second, knownAppendedSuffix: "b", revision: 1, sourceID: sourceID)
+        cache.update(with: second, knownAppendedSuffix: "b", revision: 1, sourceID: sourceID)
+
+        #expect(cache.promotionScanCharacterCountForTests == afterInitial + 1)
+    }
+
+    @Test("same revision from a replacement source reparses new text")
+    func repeatedRevisionFromReplacementSourceReparses() async {
+        final class Source {}
+        let cache = ACPMarkdownBlockCache()
+        let oldSource = Source()
+        let newSource = Source()
+        cache.update(with: "old", revision: 0, sourceID: ObjectIdentifier(oldSource))
+
+        cache.update(with: "new", revision: 0, sourceID: ObjectIdentifier(newSource))
+
+        let cached = cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed)
+        #expect(cached == ACPMarkdownText.parse("new"))
+    }
+
+    @Test("streaming hint keeps tail length valid when suffix joins previous grapheme")
+    func streamingHintHandlesCombiningMarkSuffix() async {
+        let cache = ACPMarkdownBlockCache()
+        final class Source {}
+        let sourceID = ObjectIdentifier(Source())
+        cache.update(with: "e", revision: 0, sourceID: sourceID)
+        cache.update(with: "e\u{0301}", knownAppendedSuffix: "\u{0301}", revision: 1, sourceID: sourceID)
+
+        cache.update(with: "e\u{0301}\n\nnext", knownAppendedSuffix: "\n\nnext", revision: 2, sourceID: sourceID)
+
+        let cached = cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed)
+        let direct = ACPMarkdownText.parse("e\u{0301}\n\nnext")
+        #expect(cached == direct)
+    }
+
+    @Test("streaming hint handles joining suffix that contains promotion boundary")
+    func streamingHintHandlesCombiningMarkSuffixWithBoundary() async {
+        let cache = ACPMarkdownBlockCache()
+        final class Source {}
+        let sourceID = ObjectIdentifier(Source())
+        cache.update(with: "e", revision: 0, sourceID: sourceID)
+
+        cache.update(
+            with: "e\u{0301}\n\nnext",
+            knownAppendedSuffix: "\u{0301}\n\nnext",
+            revision: 1,
+            sourceID: sourceID
+        )
+
+        let cached = cache.stableBlocks + ACPMarkdownText.parse(cache.tailUnparsed)
+        let direct = ACPMarkdownText.parse("e\u{0301}\n\nnext")
+        #expect(cached == direct)
+    }
 }

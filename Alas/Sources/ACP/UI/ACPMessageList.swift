@@ -59,12 +59,12 @@ struct ACPMessageList: View {
     /// reset to `max(0, count - tailWindow)` after hydration); the
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
-    private var visibleRows: [(index: Int, message: ACPMessage)] {
+    private var visibleRows: [(index: Int, stableId: String, message: ACPMessage)] {
         let head = min(transcript.visibleHead, transcript.messages.count)
         return (head..<transcript.messages.count).compactMap { index in
             let message = transcript.messages[index]
             if case .plan = message { return nil }
-            return (index, message)
+            return (index, transcript.stableId(for: message), message)
         }
     }
 
@@ -87,23 +87,25 @@ struct ACPMessageList: View {
         if let last = transcript.messages.last {
             hasher.combine(last.kind)
             switch last {
-            case .agent(_, _, let buf), .thought(_, _, let buf):
-                hasher.combine(buf.value.count)
-            case .systemNotice(_, let t):
-                hasher.combine(t.count)
+            case .agent, .thought, .systemNotice, .user:
+                hasher.combine(last.contentUTF8Length)
             case .toolCall(let tc):
                 hasher.combine(tc.status)
-                hasher.combine(tc.content.count)
+                hasher.combine(last.contentUTF8Length)
             case .fileEdit(_, let e):
                 hasher.combine(e.added)
                 hasher.combine(e.removed)
             case .plan:
                 break
-            case .user(_, _, let t, _):
-                hasher.combine(t.count)
             }
         }
         return hasher.finalize()
+    }
+
+    private var openTranscriptURLAction: OpenURLAction {
+        OpenURLAction { url in
+            onOpenTranscriptLink(url) ? .handled : .systemAction
+        }
     }
 
     var body: some View {
@@ -126,12 +128,9 @@ struct ACPMessageList: View {
                                 .padding(.bottom, 4)
                                 .background(topPaginationSentinel)
                         }
-                        ForEach(visibleRows, id: \.message.stableId) { item in
-                            row(for: item.message)
-                                .environment(\.openURL, OpenURLAction { url in
-                                    onOpenTranscriptLink(url) ? .handled : .systemAction
-                                })
-                                .background(rowFrameReporter(id: item.message.stableId))
+                        ForEach(visibleRows, id: \.stableId) { item in
+                            row(for: item.message, stableId: item.stableId)
+                                .background(rowFrameReporter(id: item.stableId))
                         }
                         if transcript.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
@@ -205,6 +204,7 @@ struct ACPMessageList: View {
                     .padding(.horizontal, 28 + ACPMessageGutterLayout.laneWidth)
                     .padding(.top, 24)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .environment(\.openURL, openTranscriptURLAction)
                     .modifier(ACPScrollTargetLayoutTracking())
                 }
                 .coordinateSpace(.named(scrollSpaceName))
@@ -483,7 +483,7 @@ struct ACPMessageList: View {
 
     private var visibleMessageLookup: VisibleMessageLookup {
         Self.visibleMessageLookup(rows: visibleRows.map { row in
-            (index: row.index, stableId: row.message.stableId)
+            (index: row.index, stableId: row.stableId)
         })
     }
 
@@ -787,10 +787,10 @@ struct ACPMessageList: View {
     }
 
     @ViewBuilder
-    private func row(for m: ACPMessage) -> some View {
+    private func row(for m: ACPMessage, stableId: String) -> some View {
         switch m {
         case .user(_, _, let text, let attachments):
-            ACPMessageGutter(markdown: { text }) {
+            ACPMessageGutter(copySource: .text(text)) {
                 UserMessageRow(
                     text: text,
                     attachments: attachments,
@@ -799,9 +799,9 @@ struct ACPMessageList: View {
                 )
             }
         case .agent(_, _, let buf):
-            ACPMessageGutter(markdown: { buf.value }) {
+            ACPMessageGutter(copySource: .streaming(buf)) {
                 AgentMessageRow(
-                    messageId: Self.markdownCacheMessageId(for: m),
+                    messageId: stableId,
                     transcript: transcript,
                     buffer: buf,
                     typography: typography
@@ -813,12 +813,10 @@ struct ACPMessageList: View {
             ACPToolCallCard(
                 toolCall: tc,
                 trustedImageRoot: trustedImageRoot,
-                loadFullContent: tc.isContentTruncated
-                    ? { [tcid = tc.toolCallId] in onLoadFullToolCallContent(tcid) }
-                    : nil)
+                loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil)
                 .environment(\.acpTerminalHost, session.terminalHost)
         case .fileEdit(_, let edit):
-            ACPFileEditCard(edit: edit, onOpenDiff: { onOpenDiff(edit.path) })
+            ACPFileEditCard(edit: edit, onOpenDiff: onOpenDiff)
         case .plan:
             EmptyView()
         case .systemNotice(_, let text):
@@ -1238,6 +1236,9 @@ private struct AgentMessageRow: View {
         ACPMarkdownText(
             raw: buffer.value,
             cache: transcript.markdownCache(forMessage: messageId),
+            knownAppendedSuffix: buffer.lastAppendedSuffix,
+            updateRevision: buffer.revision,
+            updateSourceID: ObjectIdentifier(buffer),
             typography: typography
         )
             .frame(maxWidth: .infinity, alignment: .leading)

@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ACPFileEditCard: View {
     let edit: ACPMessage.FileEdit
-    let onOpenDiff: () -> Void
+    let onOpenDiff: (String) -> Void
     @Environment(\.theme) private var theme
     @State private var expanded = false
 
@@ -65,7 +65,9 @@ struct ACPFileEditCard: View {
             }
             .buttonStyle(.plain)
 
-            Button("Open diff", action: onOpenDiff)
+            Button("Open diff") {
+                onOpenDiff(edit.path)
+            }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(theme.color("accent"))
@@ -89,7 +91,7 @@ private struct _InlineDiffPanel: View {
     let oldText: String?
     let newText: String
     let relativePath: String
-    let onShowAll: () -> Void
+    let onShowAll: (String) -> Void
     @Environment(\.theme) private var theme
     @State private var diff: ParsedDiff?
     @State private var loading = true
@@ -111,7 +113,7 @@ private struct _InlineDiffPanel: View {
                     diff: diff,
                     relativePath: relativePath,
                     maxLines: 15,
-                    onShowAll: onShowAll
+                    onShowAll: { onShowAll(relativePath) }
                 )
             } else {
                 Text("No changes")
