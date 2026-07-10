@@ -260,22 +260,37 @@ final class ACPSessionRunner {
                         // without this an adapter could request any
                         // absolute path (e.g. `~/.ssh/config`) and
                         // exfiltrate it without a permission prompt.
+                        // Cheap pure string work, safe on-main.
                         let target = try writer.resolveInsideWorktree(path: params.path)
                         // Prefer the live editor buffer when the file
                         // is open and dirty so the agent sees what the
                         // user sees (avoids "agent reads stale disk,
                         // then writes a replacement that clobbers
-                        // unsaved edits").
-                        let full: String
-                        if let live = self.onLiveBufferRead?(target.path) {
-                            full = live
-                        } else {
-                            let data = try Data(contentsOf: target)
-                            full = String(data: data, encoding: .utf8) ?? ""
+                        // unsaved edits"). This lookup reads editor
+                        // state, so it MUST stay on the main actor; only
+                        // the resulting snapshot crosses the hop below.
+                        let live = self.onLiveBufferRead?(target.path)
+                        // Disk read + slice + encode run off-main.
+                        let outcome = await Self.serveRead(
+                            target: target, liveBuffer: live,
+                            line: params.line, limit: params.limit
+                        )
+                        // A detach/takeover can cancel this task during the
+                        // off-main read. `return` (not `break`) so we exit the
+                        // whole `filesTask` loop — a bare `break` only leaves
+                        // the `switch` and would let a buffered next request
+                        // (e.g. an outside-worktree read that persists a notice)
+                        // run on a runner that no longer owns the session.
+                        if Task.isCancelled { return }
+                        switch outcome {
+                        case .success(let body):
+                            self.connection.client.respondToFileRequest(id: id, result: .success(body))
+                        case .failure(let message):
+                            self.connection.client.respondToFileRequest(
+                                id: id,
+                                result: .failure(.init(code: -32000, message: message, data: nil))
+                            )
                         }
-                        let sliced = Self.sliceLines(full, line: params.line, limit: params.limit)
-                        let body = try JSONEncoder().encode(ACPFsReadResult(content: sliced))
-                        self.connection.client.respondToFileRequest(id: id, result: .success(body))
                     } catch ACPFileWriter.Error.outsideWorktree(let p) {
                         self.appendAndPersistSystemNotice("Blocked read outside worktree: \(p)")
                         self.connection.client.respondToFileRequest(
@@ -298,6 +313,16 @@ final class ACPSessionRunner {
                     // of a takeover ping, and runner.stop() calls
                     // terminalHost.killAll(), so in-flight terminal commands
                     // are already gated by that path.
+                    //
+                    // Unlike the read path, the write stays fully on the main
+                    // actor. An in-app editor save also runs on the main actor,
+                    // so a synchronous write here cannot run in parallel with —
+                    // and silently clobber — a concurrent save of the same file,
+                    // and the lease check / dirty gate stay atomic with the
+                    // replacement. Hopping the write off-main safely requires
+                    // serializing agent writes against editor saves; that is
+                    // deferred to a follow-up. The unbounded-read hot path
+                    // (`serveRead`) carries the bulk of the main-thread win.
                     guard self.holdsLeaseForWrite() else {
                         self.connection.client.respondToFileRequest(
                             id: id,
@@ -610,7 +635,7 @@ final class ACPSessionRunner {
     /// agents fetch bounded slices of large files instead of always
     /// receiving the whole content (and avoids dumping huge files into
     /// the agent's context window).
-    static func sliceLines(_ full: String, line: Int?, limit: Int?) -> String {
+    nonisolated static func sliceLines(_ full: String, line: Int?, limit: Int?) -> String {
         if line == nil, limit == nil { return full }
         let lines = full.split(separator: "\n", omittingEmptySubsequences: false)
         let startLine = max(1, line ?? 1)
@@ -622,6 +647,44 @@ final class ACPSessionRunner {
             endIdx = lines.count
         }
         return lines[startIdx ..< endIdx].joined(separator: "\n")
+    }
+
+    /// Sendable outcome of an off-main agent `fs/read_text_file`. Kept minimal
+    /// (only value types) so it can cross back to the main actor without an
+    /// `@unchecked Sendable` escape hatch.
+    enum FileReadOutcome: Sendable {
+        case success(Data)
+        case failure(message: String)
+    }
+
+    /// Reads a file from disk (or uses a caller-supplied live-buffer snapshot),
+    /// slices it, and JSON-encodes the `fs/read_text_file` response body.
+    ///
+    /// `nonisolated async` so the disk read + string slicing + encoding run on
+    /// the cooperative pool instead of the main actor — agents read files
+    /// constantly and a large lockfile/asset would otherwise block the UI. The
+    /// live-buffer lookup itself stays on the main actor at the call site; only
+    /// its already-materialized `String` snapshot is passed in here.
+    nonisolated static func serveRead(
+        target: URL,
+        liveBuffer: String?,
+        line: Int?,
+        limit: Int?
+    ) async -> FileReadOutcome {
+        do {
+            let full: String
+            if let liveBuffer {
+                full = liveBuffer
+            } else {
+                let data = try Data(contentsOf: target)
+                full = String(data: data, encoding: .utf8) ?? ""
+            }
+            let sliced = sliceLines(full, line: line, limit: limit)
+            let body = try JSONEncoder().encode(ACPFsReadResult(content: sliced))
+            return .success(body)
+        } catch {
+            return .failure(message: error.localizedDescription)
+        }
     }
 
     /// Called from every "user interrupted" code path (Esc, composer Stop
