@@ -147,6 +147,11 @@ struct DiffReviewFileSection: View {
             resetContextState()
         }
         .onChange(of: contextStateSignature) { _, _ in
+            // Re-arm the render budget when the same file reloads with new
+            // content (structuralHash changes) under an unchanged file.id.
+            // Context expansion does not alter this signature, so an opened
+            // large diff stays open while the reviewer expands context.
+            showFullDiffOverride = false
             resetContextState()
         }
         .onChange(of: pendingDraftAnchor) { _, anchor in
