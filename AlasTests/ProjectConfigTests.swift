@@ -23,6 +23,7 @@ struct ProjectConfigTests {
         #expect(file.projects.count == 1)
         #expect(file.projects[0].hiddenWorktreePaths == [])
         #expect(file.projects[0].startupScripts == .defaults)
+        #expect(file.projects[0].mcpServers == [])
     }
 
     @Test func roundTripPreservesHiddenPaths() throws {
@@ -64,6 +65,22 @@ struct ProjectConfigTests {
         #expect(scripts.sessionOpenScript == "mise install")
         #expect(scripts.worktreeCreateMode == .overrideGlobal)
         #expect(scripts.worktreeCreateScript == "pnpm install")
+    }
+
+    @Test func roundTripPreservesMCPServers() throws {
+        let project = ProjectConfig(
+            id: "abc", name: "alpha", path: "/tmp/alpha",
+            color: "#5fb7c4", addedAt: Date(timeIntervalSince1970: 0),
+            mcpServers: [.stdio(name: "filesystem", command: "npx")]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .secondsSince1970
+        let data = try encoder.encode(ProjectsFile(projects: [project]))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let decoded = try decoder.decode(ProjectsFile.self, from: data)
+
+        #expect(decoded.projects[0].mcpServers == project.mcpServers)
     }
 
     @Test func decodingOlderProjectWithHiddenPathsButNoStartupScripts() throws {
