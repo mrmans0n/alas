@@ -60,6 +60,27 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         #expect(t.markdownCacheCountForTests == after)
     }
 
+    @Test("resetWindowToTail drops caches outside the tail window")
+    func resetWindowToTailDropsOutsideTail() {
+        let t = ACPTranscript()
+        for i in 0..<50 { t.messages.append(.systemNotice(id: UUID(), text: "\(i)")) }
+        let ids = t.messages.map(\.stableId)
+        for id in ids {
+            t.markdownCache(forMessage: id).update(with: id)
+        }
+
+        t.resetWindowToTail()
+
+        #expect(t.visibleHead == 20)
+        #expect(t.markdownCacheCountForTests == ACPTranscript.tailWindow)
+        for id in ids[0..<20] {
+            #expect(!t.hasMarkdownCacheForTests(messageId: id))
+        }
+        for id in ids[20..<50] {
+            #expect(t.hasMarkdownCacheForTests(messageId: id))
+        }
+    }
+
     @Test("resetMarkdownCaches empties the cache map")
     func resetClears() {
         let t = ACPTranscript()

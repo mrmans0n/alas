@@ -40,7 +40,7 @@ struct ACPMessageList: View {
     @State private var restoredRememberedAnchor: String?
     @State private var pendingTailScrollTask: Task<Void, Never>?
 
-    /// Height of an invisible spacer at the tail of the VStack. The
+    /// Height of an invisible spacer at the tail of the transcript stack. The
     /// composer pill plus its outer padding occupies roughly this much
     /// vertical space, so by scrolling THAT element to the viewport
     /// bottom we guarantee the streaming caret / last message sits
@@ -112,7 +112,7 @@ struct ACPMessageList: View {
         ScrollViewReader { proxy in
             GeometryReader { viewport in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
+                    LazyVStack(alignment: .leading, spacing: 18) {
                         switch Self.topPaginationIndicator(
                             visibleHead: transcript.visibleHead,
                             isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
@@ -251,6 +251,7 @@ struct ACPMessageList: View {
                 }
                 .onChange(of: scrollSignature) { _, _ in
                     if session.followsTranscriptTail {
+                        transcript.resetWindowToTail()
                         scheduleTailScroll(
                             proxy: proxy,
                             animated: Self.shouldAnimateTailScroll(
@@ -290,6 +291,7 @@ struct ACPMessageList: View {
 
     private func restoreTailIfNeeded(proxy: ScrollViewProxy, animated: Bool) {
         guard session.followsTranscriptTail else { return }
+        transcript.resetWindowToTail()
         scrollToTail(proxy: proxy, animated: animated)
     }
 
@@ -406,6 +408,7 @@ struct ACPMessageList: View {
         guard session.followsTranscriptTail != follows else { return }
         session.followsTranscriptTail = follows
         if follows {
+            transcript.resetWindowToTail()
             onRememberScrollAnchor(nil, nil, true)
             latestRememberedScrollAnchorIndex = nil
         } else {
