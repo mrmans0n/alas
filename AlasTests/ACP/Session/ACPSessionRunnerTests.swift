@@ -1584,6 +1584,57 @@ struct ACPSessionRunnerTests {
         #expect(ACPSessionRunner.sliceLines(full, line: 4, limit: 99) == "four\nfive")
     }
 
+    @Test("serveRead reads from disk and slices the requested range")
+    func serveReadFromDisk() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("read.txt")
+        try "one\ntwo\nthree\nfour".write(to: file, atomically: true, encoding: .utf8)
+
+        let outcome = await ACPSessionRunner.serveRead(
+            target: file, liveBuffer: nil, line: 2, limit: 2
+        )
+        guard case .success(let body) = outcome else {
+            Issue.record("expected success outcome")
+            return
+        }
+        let decoded = try JSONDecoder().decode(ACPFsReadResult.self, from: body)
+        #expect(decoded.content == "two\nthree")
+    }
+
+    @Test("serveRead prefers the live buffer snapshot over disk")
+    func serveReadPrefersLiveBuffer() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sr-\(UUID())")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("read.txt")
+        try "stale\ndisk".write(to: file, atomically: true, encoding: .utf8)
+
+        let outcome = await ACPSessionRunner.serveRead(
+            target: file, liveBuffer: "fresh\nbuffer", line: nil, limit: nil
+        )
+        guard case .success(let body) = outcome else {
+            Issue.record("expected success outcome")
+            return
+        }
+        let decoded = try JSONDecoder().decode(ACPFsReadResult.self, from: body)
+        #expect(decoded.content == "fresh\nbuffer")
+    }
+
+    @Test("serveRead returns a failure message for a missing file")
+    func serveReadMissingFile() async {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("does-not-exist-\(UUID()).txt")
+        let outcome = await ACPSessionRunner.serveRead(
+            target: missing, liveBuffer: nil, line: nil, limit: nil
+        )
+        guard case .failure = outcome else {
+            Issue.record("expected failure outcome for missing file")
+            return
+        }
+    }
+
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil
     ) throws -> (ACPSessionRunner, ACPMockClient) {
