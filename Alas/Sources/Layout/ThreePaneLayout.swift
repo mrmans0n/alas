@@ -40,25 +40,23 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                     sidebar()
                         .frame(width: CGFloat(sizing.sidebarWidth))
                         .frame(maxHeight: .infinity)
-                    DragHandle(axis: .horizontal) { delta in
+                    DragHandle(axis: .horizontal, onDrag: { delta in
                         sidebarWidth = DragHandle.clamp(
                             value: sidebarWidth + Double(delta),
                             min: sidebarMin, max: sidebarMax
                         )
-                        onWidthsChanged()
-                    }
+                    }, onEnded: onWidthsChanged)
                 }
                 center()
                     .frame(width: CGFloat(sizing.centerWidth))
                     .frame(maxHeight: .infinity)
                 if sizing.rightVisible {
-                    DragHandle(axis: .horizontal) { delta in
+                    DragHandle(axis: .horizontal, onDrag: { delta in
                         rightWidth = DragHandle.clamp(
                             value: rightWidth - Double(delta),
                             min: rightMin, max: rightMax
                         )
-                        onWidthsChanged()
-                    }
+                    }, onEnded: onWidthsChanged)
                     right()
                         .frame(width: CGFloat(sizing.rightWidth))
                         .frame(maxHeight: .infinity)
