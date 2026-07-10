@@ -1584,15 +1584,37 @@ extension ACPSessionManager {
                 }
                 switch restoreOperation {
                 case .resume:
-                    result = try await connection.resumeSession(cwd: worktreePath, sessionId: remoteId)
-                    if !pendingRecovery {
-                        session.contextRecoveryStatus = nil
-                    }
-                    if session.origin != .alasCreated, !session.hasConversationTranscript {
-                        restoreWarning = .init(
-                            message: "Earlier messages remain in the agent and are not available in Alas.",
-                            canSendTranscript: false
-                        )
+                    do {
+                        result = try await connection.resumeSession(cwd: worktreePath, sessionId: remoteId)
+                        if !pendingRecovery {
+                            session.contextRecoveryStatus = nil
+                        }
+                        if session.origin != .alasCreated, !session.hasConversationTranscript {
+                            restoreWarning = .init(
+                                message: "Earlier messages remain in the agent and are not available in Alas.",
+                                canSendTranscript: false
+                            )
+                        }
+                    } catch {
+                        guard session.origin == .alasCreated,
+                              ACPAuthFailure.message(from: error) == nil
+                        else { throw error }
+                        result = try await connection.newSession(cwd: worktreePath)
+                        if session.hasConversationTranscript {
+                            shouldHoldQueueForRecovery = true
+                            if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                                persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                            }
+                        }
+                        if hasRestorableContext {
+                            restoreWarning = .init(
+                                message: "Agent context could not be restored.",
+                                canSendTranscript: session.hasConversationTranscript
+                            )
+                        }
+                        if session.hasConversationTranscript {
+                            session.contextRecoveryStatus = .sendingTranscript
+                        }
                     }
                 case .loadStrict:
                     do {

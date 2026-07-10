@@ -22,6 +22,34 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("Alas-owned sessions recover locally when resume fails")
+    func localSessionResumeFailureRecoversWithNewSession() async throws {
+        let (manager, store, client, session) = try fixture(
+            origin: .alasCreated,
+            localMessage: .user(id: UUID(), text: "persisted context", attachments: [])
+        )
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.script(method: "session/resume") { _ in
+            throw JSONRPCError(code: -32000, message: "session expired", data: nil)
+        }
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        client.script(method: "session/prompt") { _ in Data("null".utf8) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await waitUntil {
+            client.sent.map(\.method).contains("session/prompt")
+                && session.contextRecoveryStatus == .restored
+        }
+
+        #expect(client.sent.map(\.method) == ["initialize", "session/resume", "session/new", "session/prompt"])
+        #expect(session.agentState == .ready)
+        #expect(session.remoteSessionId == "remote-new")
+        #expect(try store.loadSession(id: session.id)?.remoteSessionId == "remote-new")
+        #expect(try store.loadSession(id: session.id)?.contextRecoveryPending == false)
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("imported sessions prefer strict load so history can replay")
     func importedSessionUsesLoad() async throws {
         let (manager, store, client, session) = try fixture(origin: .agentImported)
@@ -201,6 +229,20 @@ struct ACPSessionManagerRemoteRestoreTests {
                 currentMode: nil,
                 promptSuggestions: []
             ))
+        }
+    }
+
+    private func waitUntil(
+        timeoutNanos: UInt64 = 500_000_000,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let start = DispatchTime.now().uptimeNanoseconds
+        while !condition() {
+            if DispatchTime.now().uptimeNanoseconds - start >= timeoutNanos {
+                Issue.record("Timed out waiting for condition")
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
         }
     }
 }
