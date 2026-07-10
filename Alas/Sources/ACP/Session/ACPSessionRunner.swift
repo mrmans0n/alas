@@ -77,6 +77,14 @@ final class ACPSessionRunner {
     private var streamingLeaseLost = false
     private var streamingPersistTask: Task<Void, Never>?
     private let streamingPersistDebounceNanos: UInt64
+    private struct PendingIncomingUpdate {
+        let params: ACPSessionUpdateParams
+        let receivedWhileHoldingLease: Bool
+    }
+
+    private var pendingIncomingUpdates: [PendingIncomingUpdate] = []
+    private var incomingUpdateFlushTask: Task<Void, Never>?
+    private let incomingUpdateCoalesceNanos: UInt64
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
     private var observedUpdateCount = 0
@@ -111,6 +119,7 @@ final class ACPSessionRunner {
          onSessionTitleUpdated: ((String) -> Void)? = nil,
          onResumeTranscriptTail: (() -> Void)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
+         incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
          ownerInstanceId: String? = nil)
     {
         self.session = session
@@ -124,6 +133,7 @@ final class ACPSessionRunner {
         self.onPersist = onPersist
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.streamingPersistDebounceNanos = streamingPersistDebounceNanos
+        self.incomingUpdateCoalesceNanos = incomingUpdateCoalesceNanos
         self.suppressingLoadReplay = suppressingLoadReplay
         if suppressingLoadReplay {
             session.beginSuppressedReplaySideEffects()
@@ -153,66 +163,7 @@ final class ACPSessionRunner {
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
-                await MainActor.run {
-                    self.observedUpdateCount += 1
-                    self.appliedUpdateCount += 1
-                    let preAppliedSessionInfoDirty: Set<Int>?
-                    if case .sessionInfoUpdate(let info) = u.update {
-                        self.flushStreamingPersist()
-                        preAppliedSessionInfoDirty = self.session.apply(u.update)
-                        self.applySessionInfoTitle(info)
-                    } else {
-                        preAppliedSessionInfoDirty = nil
-                    }
-                    if self.suppressingLoadReplay {
-                        let dirty = preAppliedSessionInfoDirty
-                            ?? self.session.applySuppressedReplaySideEffects(u.update)
-                        self.persistIndices(dirty)
-                        if let target = self.loadReplaySuppressionTarget,
-                           self.observedUpdateCount >= target {
-                            self.suppressingLoadReplay = false
-                            self.session.endSuppressedReplaySideEffects()
-                            // Disallow streaming boundary crossings until the next prompt
-                            // starts. Any agentMessageChunk that would cross a completed-
-                            // output boundary in this window is a late replay slip — the
-                            // session-level flag prevents it from creating a duplicate
-                            // bubble without blocking in-progress continuation updates.
-                            self.session.allowsStreamingBoundaryCrossing = false
-                        }
-                        return
-                    }
-                    if let dirty = preAppliedSessionInfoDirty {
-                        self.persistIndices(dirty)
-                    } else {
-                        let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
-                        if shouldBatchStreamingPersist {
-                            // Detect a cross-process takeover BEFORE this chunk
-                            // mutates the transcript. If the lease has moved,
-                            // freeze the buffered rows' pre-chunk state (our
-                            // last output produced under the lease) so the
-                            // stand-down flush persists that — not this chunk,
-                            // which belongs to a session another instance now
-                            // owns. The lease read is a single-row WAL SELECT;
-                            // the expensive encode/blob-read work stays off the
-                            // per-chunk path.
-                            if !self.streamingLeaseLost, !self.holdsLeaseForWrite() {
-                                self.freezeStreamingPersistSnapshots()
-                                self.streamingLeaseLost = true
-                            }
-                            let dirty = self.session.apply(u.update)
-                            if !self.streamingLeaseLost {
-                                self.scheduleStreamingPersist(dirty)
-                            }
-                        } else {
-                            let dirty = self.session.apply(u.update)
-                            self.flushStreamingPersist()
-                            self.persistIndices(dirty)
-                        }
-                    }
-                    if self.applyPendingCompletedOutputBoundaryIfReady() {
-                        self.flushQueueIfIdle()
-                    }
-                }
+                await self.enqueueIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
             // that's the intentional detach path (tab close, worktree
@@ -220,6 +171,7 @@ final class ACPSessionRunner {
             // an "Agent disconnected" notice in that case; only flag
             // the unexpected stream-end.
             if Task.isCancelled { return }
+            await self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
@@ -233,6 +185,7 @@ final class ACPSessionRunner {
         permissionsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await (id, params) in self.connection.client.permissionRequests {
+                self.flushPendingIncomingUpdates()
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(scopeKey: scopeKey, options: params.options, params: params)
                 self.connection.client.respondToPermission(id: id, response: response)
@@ -253,6 +206,7 @@ final class ACPSessionRunner {
                 worktreeRoot: URL(fileURLWithPath: self.worktreePath)
             )
             for await req in self.connection.client.fileRequests {
+                self.flushPendingIncomingUpdates()
                 switch req {
                 case .read(let id, let params):
                     do {
@@ -370,18 +324,196 @@ final class ACPSessionRunner {
         }
     }
 
+    private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
+        let receivedWhileHoldingLease = holdsLeaseForWrite()
+        if receivedWhileHoldingLease {
+            capturePersistedBasesForIncomingUpdate(update.update)
+        }
+        pendingIncomingUpdates.append(.init(
+            params: update,
+            receivedWhileHoldingLease: receivedWhileHoldingLease
+        ))
+        guard incomingUpdateFlushTask == nil else { return }
+        incomingUpdateFlushTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(nanoseconds: self.incomingUpdateCoalesceNanos)
+            guard !Task.isCancelled else { return }
+            self.flushPendingIncomingUpdates()
+        }
+    }
+
+    private func capturePersistedBasesForIncomingUpdate(_ update: ACPSessionUpdate) {
+        for i in persistedCandidateIndices(for: update)
+        where i >= 0 && i < persistedMessageCount && lastPersistedPayloads[i] == nil {
+            if let base = try? store.loadMessagePayload(id: "msg-\(sessionId)-\(i)") {
+                lastPersistedPayloads[i] = base
+            }
+        }
+    }
+
+    private func persistedCandidateIndices(for update: ACPSessionUpdate) -> Set<Int> {
+        let messages = session.transcript.messages
+        switch update {
+        case .agentMessageChunk(let chunk):
+            if let messageId = chunk.messageId,
+               let index = messages.firstIndex(where: { message in
+                   if case .agent(_, let id, _) = message {
+                       return id == messageId
+                   }
+                   return false
+               }) {
+                return [index]
+            }
+            return messages.indices.reversed().first { index in
+                if case .agent = messages[index] {
+                    return true
+                }
+                return false
+            }.map { [$0] } ?? []
+        case .agentThoughtChunk(let chunk):
+            if let messageId = chunk.messageId,
+               let index = messages.firstIndex(where: { message in
+                   if case .thought(_, let id, _) = message {
+                       return id == messageId
+                   }
+                   return false
+               }) {
+                return [index]
+            }
+            return messages.indices.reversed().first { index in
+                if case .thought = messages[index] {
+                    return true
+                }
+                return false
+            }.map { [$0] } ?? []
+        case .toolCallUpdate(let update):
+            return messages.firstIndex { message in
+                if case .toolCall(let toolCall) = message {
+                    return toolCall.toolCallId == update.toolCallId
+                }
+                return false
+            }.map { [$0] } ?? []
+        case .toolCall, .userMessageChunk, .plan, .availableModelsUpdate,
+             .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
+             .sessionConfigOptionsUpdate, .availableCommandsUpdate,
+             .usageUpdate, .unknown:
+            return []
+        }
+    }
+
+    private func flushPendingIncomingUpdates(
+        flushQueueWhenBoundaryReady: Bool = true,
+        treatBufferedUpdatesAsPromptOwned: Bool = false
+    ) {
+        incomingUpdateFlushTask?.cancel()
+        incomingUpdateFlushTask = nil
+        guard !pendingIncomingUpdates.isEmpty else { return }
+        let updates = pendingIncomingUpdates
+        pendingIncomingUpdates.removeAll(keepingCapacity: true)
+        for update in updates {
+            applyIncomingUpdate(
+                update.params,
+                bufferedUpdateReceivedWhileHoldingLease: update.receivedWhileHoldingLease,
+                flushQueueWhenBoundaryReady: flushQueueWhenBoundaryReady,
+                treatBufferedUpdatesAsPromptOwned: treatBufferedUpdatesAsPromptOwned
+            )
+        }
+    }
+
+    private func applyIncomingUpdate(
+        _ params: ACPSessionUpdateParams,
+        bufferedUpdateReceivedWhileHoldingLease: Bool = true,
+        flushQueueWhenBoundaryReady: Bool = true,
+        treatBufferedUpdatesAsPromptOwned: Bool = false
+    ) {
+        observedUpdateCount += 1
+        appliedUpdateCount += 1
+        let preAppliedSessionInfoDirty: Set<Int>?
+        if case .sessionInfoUpdate(let info) = params.update {
+            flushStreamingPersist()
+            preAppliedSessionInfoDirty = session.apply(params.update)
+            applySessionInfoTitle(info)
+        } else {
+            preAppliedSessionInfoDirty = nil
+        }
+        if suppressingLoadReplay {
+            let dirty = preAppliedSessionInfoDirty
+                ?? session.applySuppressedReplaySideEffects(params.update)
+            persistIndices(dirty)
+            if let target = loadReplaySuppressionTarget,
+               observedUpdateCount >= target {
+                finishLoadReplaySuppression()
+            }
+            return
+        }
+        if let dirty = preAppliedSessionInfoDirty {
+            persistIndices(dirty)
+        } else {
+            let isPromptCompletionDrainUpdate = pendingCompletedOutputBoundaryUpdateCount
+                .map { appliedUpdateCount <= $0 } ?? false
+            let isPromptOwnedBufferedUpdate = bufferedUpdateReceivedWhileHoldingLease
+                && (activePromptID != nil || isPromptCompletionDrainUpdate || treatBufferedUpdatesAsPromptOwned)
+            let shouldBatchStreamingPersist = shouldBatchStreamingPersist(
+                for: params.update,
+                isPromptOwnedBufferedUpdate: isPromptOwnedBufferedUpdate,
+                hasUnderLeaseBufferedStreamingWrites: !pendingStreamingPersistIndices.isEmpty
+            )
+            if shouldBatchStreamingPersist {
+                // Detect a cross-process takeover BEFORE this chunk mutates
+                // the transcript. If the lease has moved, freeze the buffered
+                // rows' pre-chunk state so stand-down persists that snapshot,
+                // not chunks that belong to the new session owner. Buffered
+                // chunks received while the lease was still held are different:
+                // they remain owned by this stream even if the coalesced apply
+                // happens after activePromptID cleared.
+                let holdsLease = holdsLeaseForWrite()
+                if !isPromptOwnedBufferedUpdate, !streamingLeaseLost, !holdsLease {
+                    freezeStreamingPersistSnapshots()
+                    streamingLeaseLost = true
+                }
+                let dirty = session.apply(params.update)
+                if !streamingLeaseLost {
+                    scheduleStreamingPersist(dirty, mayCapturePersistedBases: holdsLease)
+                }
+            } else {
+                let dirty = session.apply(params.update)
+                flushStreamingPersist()
+                persistIndices(dirty)
+            }
+        }
+        if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
+            flushQueueIfIdle()
+        }
+    }
+
     func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
         guard suppressingLoadReplay else { return }
         loadReplaySuppressionTarget = target
+        flushPendingIncomingUpdates()
         if observedUpdateCount >= target {
-            suppressingLoadReplay = false
-            session.endSuppressedReplaySideEffects()
+            finishLoadReplaySuppression()
+        }
+    }
+
+    private func finishLoadReplaySuppression() {
+        suppressingLoadReplay = false
+        session.endSuppressedReplaySideEffects()
+        // Disallow streaming boundary crossings until the next prompt starts.
+        // If the prompt already started while a delayed replay flush was still
+        // pending, keep its live-stream boundary setting intact.
+        if activePromptID == nil {
             session.allowsStreamingBoundaryCrossing = false
         }
     }
 
     func stop() {
+        flushPendingIncomingUpdates(
+            flushQueueWhenBoundaryReady: false,
+            treatBufferedUpdatesAsPromptOwned: true
+        )
         flushStreamingPersistOnStop()
+        incomingUpdateFlushTask?.cancel()
+        incomingUpdateFlushTask = nil
         updatesTask?.cancel()
         permissionsTask?.cancel()
         filesTask?.cancel()
@@ -693,6 +825,7 @@ final class ACPSessionRunner {
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
     func userCancel() async {
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         // Capture the prompt + queue head the user INTENDED to stop
         // BEFORE awaiting `connection.cancel`. Without this snapshot, a
         // natural completion of the in-flight prompt during the cancel
@@ -1056,6 +1189,7 @@ extension ACPSessionRunner {
         recordUserPrompt: Bool = true,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         let snapshot = session.queue.filter { $0.status == .pending }
         session.queue.removeAll()
         if !snapshot.isEmpty {
@@ -1147,6 +1281,7 @@ extension ACPSessionRunner {
         recordUserPrompt: Bool = true,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
+        flushPendingIncomingUpdates()
         let promptID = nextPromptID
         nextPromptID += 1
         // Register ownership SYNCHRONOUSLY, before the Task spawn. Without
@@ -1298,6 +1433,7 @@ extension ACPSessionRunner {
         _ prompt: String,
         onCompleted: (@MainActor (_ delivered: Bool) -> Void)? = nil
     ) {
+        flushPendingIncomingUpdates()
         let promptID = nextPromptID
         nextPromptID += 1
         activePromptID = promptID
@@ -1443,8 +1579,15 @@ extension ACPSessionRunner {
         return (try? store.loadLease(sessionId: sessionId))?.ownerInstance == ownerInstanceId
     }
 
-    private func shouldBatchStreamingPersist(for update: ACPSessionUpdate) -> Bool {
-        guard activePromptID != nil else { return false }
+    private func shouldBatchStreamingPersist(
+        for update: ACPSessionUpdate,
+        isPromptOwnedBufferedUpdate: Bool,
+        hasUnderLeaseBufferedStreamingWrites: Bool
+    ) -> Bool {
+        guard activePromptID != nil
+            || isPromptOwnedBufferedUpdate
+            || hasUnderLeaseBufferedStreamingWrites
+        else { return false }
         switch session.transcript.streamingState {
         case .sending, .streaming:
             break
@@ -1462,7 +1605,7 @@ extension ACPSessionRunner {
         }
     }
 
-    private func scheduleStreamingPersist(_ indices: Set<Int>) {
+    private func scheduleStreamingPersist(_ indices: Set<Int>, mayCapturePersistedBases: Bool = true) {
         guard !indices.isEmpty else { return }
         // Per-chunk work is intentionally cheap: record the dirty indices and
         // arm the debounce. Encoding the (growing) message and reading its
@@ -1478,9 +1621,11 @@ extension ACPSessionRunner {
         // it would silently drop a legitimate under-lease update. This reads at
         // most once per such row, never on the hot streaming-tail path (a new
         // trailing row is not yet persisted, so it is written, not read).
-        for i in indices where i < persistedMessageCount && lastPersistedPayloads[i] == nil {
-            if let base = try? store.loadMessagePayload(id: "msg-\(sessionId)-\(i)") {
-                lastPersistedPayloads[i] = base
+        if mayCapturePersistedBases {
+            for i in indices where i < persistedMessageCount && lastPersistedPayloads[i] == nil {
+                if let base = try? store.loadMessagePayload(id: "msg-\(sessionId)-\(i)") {
+                    lastPersistedPayloads[i] = base
+                }
             }
         }
         pendingStreamingPersistIndices.formUnion(indices)
