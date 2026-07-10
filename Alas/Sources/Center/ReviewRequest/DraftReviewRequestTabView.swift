@@ -708,7 +708,10 @@ struct DraftReviewRequestTabView: View {
                     return
                 }
                 persist(createdURL: url)
-                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+                await appState.rightPaneStore.refresh(
+                    worktreeId: worktreeId,
+                    forceReviewLoopRemote: true
+                )
             } catch {
                 self.error = (error as NSError).localizedDescription
             }

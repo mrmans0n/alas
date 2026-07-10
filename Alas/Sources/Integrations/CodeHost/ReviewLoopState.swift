@@ -129,6 +129,58 @@ final class ReviewLoopState {
         }
     }
 
+    func finishLocalRefresh(
+        _ attempt: ReviewLoopRefreshAttempt,
+        preservingRemoteWith local: ReviewLoopLocalState
+    ) {
+        guard isCurrentRefresh(attempt.generation) else { return }
+
+        let current = snapshot
+        let local = Self.preservingHeadRemote(in: local, from: current?.local)
+        snapshot = ReviewLoopSnapshot(
+            local: local,
+            remote: current?.remote,
+            reviewRequest: current?.reviewRequest,
+            providerAvailable: current?.providerAvailable ?? false,
+            providerAuthenticated: current?.providerAuthenticated ?? false,
+            providerCapabilities: current?.providerCapabilities ?? .readOnly,
+            errorMessage: current?.errorMessage
+        )
+        isRefreshing = false
+    }
+
+    private static func preservingHeadRemote(
+        in local: ReviewLoopLocalState,
+        from current: ReviewLoopLocalState?
+    ) -> ReviewLoopLocalState {
+        guard let current,
+              local.headRemoteName == nil,
+              local.headRemoteOwner == nil,
+              local.branchName == current.branchName,
+              local.headSHA == current.headSHA,
+              local.baseBranch == current.baseBranch,
+              (current.headRemoteName != nil || current.headRemoteOwner != nil)
+        else {
+            return local
+        }
+
+        return ReviewLoopLocalState(
+            branchName: local.branchName,
+            headSHA: local.headSHA,
+            baseBranch: local.baseBranch,
+            hasWorkingTreeChanges: local.hasWorkingTreeChanges,
+            hasStagedChanges: local.hasStagedChanges,
+            aheadCommitCount: local.aheadCommitCount,
+            hasUpstream: local.hasUpstream,
+            upstreamRemoteName: local.upstreamRemoteName,
+            upstreamBranchName: local.upstreamBranchName,
+            headRemoteName: current.headRemoteName,
+            headRemoteOwner: current.headRemoteOwner,
+            upstreamAheadCommitCount: local.upstreamAheadCommitCount,
+            needsPush: local.needsPush
+        )
+    }
+
     func refresh(local: ReviewLoopLocalState, remotes: [GitRemote]) async {
         let attempt = beginLocalRefresh(local: local)
         await refresh(attempt, remotes: remotes)
