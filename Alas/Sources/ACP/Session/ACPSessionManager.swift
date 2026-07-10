@@ -1521,9 +1521,11 @@ extension ACPSessionManager {
             let restoreOperation = ACPSessionRestorePolicy.operation(
                 origin: session.origin,
                 canLoad: initialized.loadSession,
-                canResume: initialized.sessionCapabilities.supportsResume
+                canResume: initialized.sessionCapabilities.supportsResume,
+                hasLocalTranscript: session.hasConversationTranscript
             )
-            let shouldSuppressLoadReplay = restoreOperation == .loadWithRecovery
+            let shouldSuppressLoadReplay = (restoreOperation == .loadWithRecovery
+                || restoreOperation == .loadStrict)
                 && !freshlyCreated
                 && session.hydrationState == .ready
                 && session.hasConversationTranscript
@@ -1593,7 +1595,17 @@ extension ACPSessionManager {
                         )
                     }
                 case .loadStrict:
-                    result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                    do {
+                        result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                    } catch {
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                        throw error
+                    }
                     if !pendingRecovery {
                         session.contextRecoveryStatus = nil
                     }

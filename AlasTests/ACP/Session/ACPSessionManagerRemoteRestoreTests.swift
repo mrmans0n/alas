@@ -11,6 +11,7 @@ struct ACPSessionManagerRemoteRestoreTests {
         scriptInitialize(client, canLoad: true, canResume: true)
         client.script(method: "session/resume") { _ in Data("{}".utf8) }
 
+        await manager.hydrateIfNeeded(id: session.id)
         await manager.attach(to: session.id, freshlyCreated: false)
 
         #expect(client.sent.map(\.method).contains("session/resume"))
@@ -34,6 +35,56 @@ struct ACPSessionManagerRemoteRestoreTests {
         #expect(session.agentState == .ready)
         await manager.detach(sessionId: session.id)
         #expect(try store.loadSession(id: session.id)?.origin == .agentImported)
+    }
+
+    @Test("imported sessions resume after their history has been persisted locally")
+    func importedSessionWithLocalHistoryUsesResume() async throws {
+        let (manager, store, client, session) = try fixture(
+            origin: .agentImported,
+            localMessage: .agent(id: UUID(), StreamingText("persisted history"))
+        )
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.script(method: "session/resume") { _ in Data("{}".utf8) }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(client.sent.map(\.method).contains("session/resume"))
+        #expect(!client.sent.map(\.method).contains("session/load"))
+        #expect(try store.messageCount(sessionId: session.id) == 1)
+        await manager.detach(sessionId: session.id)
+    }
+
+    @Test("load-only imports suppress replay after history has been persisted locally")
+    func loadOnlyImportSuppressesPersistedHistoryReplay() async throws {
+        let (manager, store, client, session) = try fixture(
+            origin: .agentImported,
+            localMessage: .agent(id: UUID(), StreamingText("persisted history"))
+        )
+        scriptInitialize(client, canLoad: true, canResume: false)
+        client.scriptAsync(method: "session/load") { _ in
+            client.emit(.init(
+                sessionId: "remote-id",
+                update: .agentMessageChunk(.text("persisted history"))
+            ))
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "remote-id",
+                availableModels: [],
+                availableModes: [],
+                currentModel: nil,
+                currentMode: nil,
+                promptSuggestions: []
+            ))
+        }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method).contains("session/load"))
+        #expect(try store.messageCount(sessionId: session.id) == 1)
+        #expect(session.transcript.messages.count == 1)
+        await manager.detach(sessionId: session.id)
     }
 
     @Test("resume-only imports stay connected and disclose unavailable local history")
@@ -84,7 +135,8 @@ struct ACPSessionManagerRemoteRestoreTests {
     }
 
     private func fixture(
-        origin: ACPSessionOrigin
+        origin: ACPSessionOrigin,
+        localMessage: ACPMessage? = nil
     ) throws -> (ACPSessionManager, ACPSessionStore, ACPMockClient, ACPSession) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-remote-restore-\(UUID().uuidString).sqlite")
@@ -104,6 +156,16 @@ struct ACPSessionManagerRemoteRestoreTests {
             lastOpenedAt: 1,
             archived: false
         ))
+        if let localMessage {
+            try store.appendMessage(
+                sessionId: "local-id",
+                id: "message-0",
+                kind: localMessage.kind,
+                seq: 0,
+                payload: ACPMessageCodec.encode(localMessage),
+                createdAt: 1
+            )
+        }
         let client = ACPMockClient()
         let manager = ACPSessionManager(
             worktreeId: "wt",

@@ -35,12 +35,14 @@ enum ACPSessionRestorePolicy {
     static func operation(
         origin: ACPSessionOrigin,
         canLoad: Bool,
-        canResume: Bool
+        canResume: Bool,
+        hasLocalTranscript: Bool = false
     ) -> ACPSessionRestoreOperation {
         switch origin {
         case .alasCreated:
             return canResume ? .resume : .loadWithRecovery
         case .agentImported, .agentForked:
+            if hasLocalTranscript, canResume { return .resume }
             if canLoad { return .loadStrict }
             if canResume { return .resume }
             return .unavailable

@@ -16,6 +16,12 @@ struct ACPSessionDiscoveryTests {
             origin: .agentImported, canLoad: true, canResume: true
         ) == .loadStrict)
         #expect(ACPSessionRestorePolicy.operation(
+            origin: .agentImported,
+            canLoad: true,
+            canResume: true,
+            hasLocalTranscript: true
+        ) == .resume)
+        #expect(ACPSessionRestorePolicy.operation(
             origin: .agentForked, canLoad: false, canResume: true
         ) == .resume)
         #expect(ACPSessionRestorePolicy.operation(
