@@ -1358,6 +1358,68 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "new writer")
     }
 
+    @Test("stop persists buffered streamed chunks while the lease is still held")
+    func stopPersistsBufferedStreamingChunksWhileLeaseHeld() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        // A debounce long enough that no periodic flush fires: the only write
+        // must come from stop()'s stand-down flush, which — since the lease is
+        // still held — persists the live transcript rather than per-chunk
+        // snapshots. This is the path the per-chunk-encode removal reworked.
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        // A chunk beyond the mock's initial two — it must be included in the
+        // stand-down flush, proving stop() reads the live transcript and does
+        // not rely on a snapshot captured per chunk.
+        mock.emitAgentChunk(" and more")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Nothing persisted yet: the debounce has not fired.
+        let rowsBeforeStop = try store.loadMessages(sessionId: sid)
+        #expect(!rowsBeforeStop.contains { $0.kind == "agent" })
+
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
+        guard case .agent(_, _, let text) = decoded else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "hello world and more")
+    }
+
     @Test("in-place plan update persists to disk even when plan is not the trailing message")
     func planUpdatePersistsWhenNotTrailingMessage() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")

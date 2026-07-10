@@ -67,6 +67,16 @@ final class ACPSessionRunner {
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
     private var pendingStreamingPersistIndices: Set<Int> = []
     private var pendingStreamingPersistSnapshots: [Int: StreamingPersistSnapshot] = [:]
+    /// The exact payload bytes this runner last wrote for each message row.
+    /// Used as the compare-and-swap base when a takeover forces a stand-down
+    /// flush, so the CAS never reads the (potentially growing) payload blob
+    /// from SQLite on the streaming path.
+    private var lastPersistedPayloads: [Int: Data] = [:]
+    /// Set once a cross-process takeover is detected mid-stream. While true,
+    /// streamed chunks are no longer buffered for persistence and the
+    /// stand-down flush writes the frozen snapshots via compare-and-swap
+    /// instead of the (now-diverging) live transcript.
+    private var streamingLeaseLost = false
     private var streamingPersistTask: Task<Void, Never>?
     private let streamingPersistDebounceNanos: UInt64
     private var suppressingLoadReplay: Bool
@@ -78,6 +88,12 @@ final class ACPSessionRunner {
     /// restored snapshot ahead of the steer's replacement prompt. Once
     /// the redirect is in flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+
+    /// How many trailing rows to retain in `lastPersistedPayloads`. Only the
+    /// actively-streamed tail is ever re-persisted, so older rows can be
+    /// dropped; a pruned row that is somehow touched again falls back to a
+    /// one-time SQLite read in `freezeStreamingPersistSnapshots`.
+    private static let lastPersistedPayloadsWindow = 256
 
     private struct StreamingPersistSnapshot {
         let kind: String
@@ -169,10 +185,26 @@ final class ACPSessionRunner {
                         self.persistIndices(dirty)
                     } else {
                         let shouldBatchStreamingPersist = self.shouldBatchStreamingPersist(for: u.update)
-                        let dirty = self.session.apply(u.update)
                         if shouldBatchStreamingPersist {
-                            self.scheduleStreamingPersist(dirty)
+                            // Detect a cross-process takeover BEFORE this chunk
+                            // mutates the transcript. If the lease has moved,
+                            // freeze the buffered rows' pre-chunk state (our
+                            // last output produced under the lease) so the
+                            // stand-down flush persists that — not this chunk,
+                            // which belongs to a session another instance now
+                            // owns. The lease read is a single-row WAL SELECT;
+                            // the expensive encode/blob-read work stays off the
+                            // per-chunk path.
+                            if !self.streamingLeaseLost, !self.holdsLeaseForWrite() {
+                                self.freezeStreamingPersistSnapshots()
+                                self.streamingLeaseLost = true
+                            }
+                            let dirty = self.session.apply(u.update)
+                            if !self.streamingLeaseLost {
+                                self.scheduleStreamingPersist(dirty)
+                            }
                         } else {
+                            let dirty = self.session.apply(u.update)
                             self.flushStreamingPersist()
                             self.persistIndices(dirty)
                         }
@@ -692,6 +724,7 @@ final class ACPSessionRunner {
                     if let payload = try? ACPMessageCodec.encode(m) {
                         let id = "msg-\(sessionId)-\(i)"
                         try? store.updateMessagePayload(id: id, payload: payload)
+                        lastPersistedPayloads[i] = payload
                     }
                 }
             }
@@ -1152,6 +1185,7 @@ extension ACPSessionRunner {
                         self.persistQueue()
                     }
                 }
+                self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
                 return true
             }
@@ -1251,6 +1285,7 @@ extension ACPSessionRunner {
                     return false
                 }
                 self.session.allowsStreamingBoundaryCrossing = true
+                self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
                 return true
             }
@@ -1402,7 +1437,10 @@ extension ACPSessionRunner {
 
     private func scheduleStreamingPersist(_ indices: Set<Int>) {
         guard !indices.isEmpty else { return }
-        snapshotStreamingPersistPayloads(for: indices)
+        // Per-chunk work is intentionally cheap: record the dirty indices and
+        // arm the debounce. Encoding the (growing) message and reading its
+        // stored payload happen once per debounce window in the flush, not
+        // once per streamed chunk.
         pendingStreamingPersistIndices.formUnion(indices)
         guard streamingPersistTask == nil else { return }
         streamingPersistTask = Task { @MainActor [weak self] in
@@ -1417,41 +1455,84 @@ extension ACPSessionRunner {
         flushStreamingPersist(requiresLease: true)
     }
 
+    /// Clear streaming-persist buffer state carried over from a prior stream.
+    /// A taken-over stream leaves frozen snapshots and a set latch behind; if
+    /// this runner later reacquires the lease and sends a fresh prompt, those
+    /// stale rows must not resurrect.
+    private func resetStreamingPersistBuffer() {
+        guard streamingLeaseLost else { return }
+        streamingLeaseLost = false
+        pendingStreamingPersistIndices.removeAll()
+        pendingStreamingPersistSnapshots.removeAll()
+    }
+
+    /// Bound the compare-and-swap base cache to the recent tail so it can't
+    /// grow without limit over a long session.
+    private func trimLastPersistedPayloads() {
+        let keepFrom = persistedMessageCount - Self.lastPersistedPayloadsWindow
+        guard keepFrom > 0, lastPersistedPayloads.count > Self.lastPersistedPayloadsWindow else { return }
+        lastPersistedPayloads = lastPersistedPayloads.filter { $0.key >= keepFrom }
+    }
+
     private func flushStreamingPersistOnStop() {
         // During takeover, the lease row may already point at the new owner
-        // by the time stand-down stops this runner. The pending rows here are
-        // snapshots captured while this runner still held the lease; flush
-        // them once so the debounce buffer is not the only copy.
+        // by the time stand-down stops this runner. Flush once so the debounce
+        // buffer is not the only copy of the tail chunks.
         flushStreamingPersist(requiresLease: false)
     }
 
+    /// Flush the buffered streaming rows.
+    ///
+    /// - If a takeover was already detected mid-stream, only the frozen
+    ///   snapshots are safe to write, and only via compare-and-swap.
+    /// - Otherwise the live transcript is authoritative: try a lease-gated
+    ///   write. If that reveals the lease has since moved, freeze the buffered
+    ///   rows so a later stand-down can CAS-write them; when this *is* the
+    ///   stand-down flush (`requiresLease == false`), CAS-write them now.
     private func flushStreamingPersist(requiresLease: Bool) {
         streamingPersistTask?.cancel()
         streamingPersistTask = nil
-        guard !pendingStreamingPersistIndices.isEmpty else { return }
-        if !requiresLease {
+        if streamingLeaseLost {
             persistStreamingPersistSnapshots()
             return
         }
+        guard !pendingStreamingPersistIndices.isEmpty else { return }
         let indices = pendingStreamingPersistIndices
-        if persistIndices(indices, requiresLease: requiresLease) {
+        if persistIndices(indices, requiresLease: true) {
             pendingStreamingPersistIndices.subtract(indices)
-            for i in indices {
-                pendingStreamingPersistSnapshots.removeValue(forKey: i)
-            }
+            return
+        }
+        // The lease moved between the last chunk and this flush. Freeze the
+        // buffered rows' current state — every chunk so far arrived while we
+        // held the lease — for the stand-down CAS write.
+        freezeStreamingPersistSnapshots()
+        streamingLeaseLost = true
+        if !requiresLease {
+            persistStreamingPersistSnapshots()
         }
     }
 
-    private func snapshotStreamingPersistPayloads(for indices: Set<Int>) {
-        guard holdsLeaseForWrite() else { return }
+    /// Encode the buffered streaming rows from the live transcript into
+    /// compare-and-swap snapshots. Called exactly once, at the moment a
+    /// takeover is detected, so the payloads capture the last transcript
+    /// state produced while we still held the lease.
+    private func freezeStreamingPersistSnapshots() {
         let messages = session.transcript.messages
-        for i in indices {
+        for i in pendingStreamingPersistIndices {
             guard i >= 0, i < messages.count else { continue }
             let message = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
-            let id = "msg-\(sessionId)-\(i)"
-            let basePayload = i < persistedMessageCount ? try? store.loadMessagePayload(id: id) : nil
-            if i < persistedMessageCount, basePayload == nil { continue }
+            let basePayload: Data?
+            if i < persistedMessageCount {
+                // Prefer our in-memory record of the row we last wrote; only
+                // fall back to a one-time SQLite read for a row persisted by a
+                // previous session load that this runner never rewrote.
+                let id = "msg-\(sessionId)-\(i)"
+                guard let base = lastPersistedPayloads[i] ?? (try? store.loadMessagePayload(id: id)) else { continue }
+                basePayload = base
+            } else {
+                basePayload = nil
+            }
             pendingStreamingPersistSnapshots[i] = .init(kind: message.kind, payload: payload, basePayload: basePayload)
         }
     }
@@ -1481,9 +1562,11 @@ extension ACPSessionRunner {
                     continue
                 }
             }
+            lastPersistedPayloads[i] = snapshot.payload
             pendingStreamingPersistIndices.remove(i)
             pendingStreamingPersistSnapshots.removeValue(forKey: i)
         }
+        trimLastPersistedPayloads()
         onPersist?()
     }
 
@@ -1508,18 +1591,22 @@ extension ACPSessionRunner {
             let id = "msg-\(sessionId)-\(i)"
             if i < persistedMessageCount {
                 try? store.updateMessagePayload(id: id, payload: payload)
+                lastPersistedPayloads[i] = payload
             } else {
                 do {
                     try store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
                                             seq: Int64(i), payload: payload, createdAt: now)
                     persistedMessageCount = max(persistedMessageCount, i + 1)
+                    lastPersistedPayloads[i] = payload
                 } catch {
                     if (try? store.updateMessageRow(id: id, kind: m.kind, seq: Int64(i), payload: payload)) == true {
                         persistedMessageCount = max(persistedMessageCount, i + 1)
+                        lastPersistedPayloads[i] = payload
                     }
                 }
             }
         }
+        trimLastPersistedPayloads()
         onPersist?()
         return true
     }
@@ -1574,18 +1661,22 @@ extension ACPSessionRunner {
             let id = "msg-\(sessionId)-\(i)"
             if i < persistedMessageCount {
                 try? store.updateMessagePayload(id: id, payload: payload)
+                lastPersistedPayloads[i] = payload
             } else {
                 do {
                     try store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
                                             seq: Int64(i), payload: payload, createdAt: now)
                     persistedMessageCount = max(persistedMessageCount, i + 1)
+                    lastPersistedPayloads[i] = payload
                 } catch {
                     if (try? store.updateMessageRow(id: id, kind: m.kind, seq: Int64(i), payload: payload)) == true {
                         persistedMessageCount = max(persistedMessageCount, i + 1)
+                        lastPersistedPayloads[i] = payload
                     }
                 }
             }
         }
+        trimLastPersistedPayloads()
         onPersist?()
     }
 }
