@@ -930,6 +930,7 @@ final class ACPSessionManager: ObservableObject {
                 throw ACPSessionDiscoveryError.listingUnsupported
             }
             return ACPSessionDiscoveryHandle(
+                worktreeId: worktreeId,
                 agentId: agentId,
                 cwd: worktreePath,
                 store: store,
@@ -952,6 +953,9 @@ final class ACPSessionManager: ObservableObject {
         autoRunDefault: Bool = false,
         origin: ACPSessionOrigin = .agentImported
     ) -> ACPSessionRow? {
+        let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
+        let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+        guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
         if let existing = try? store.loadSession(
             agentId: discovered.agentId,
             remoteSessionId: discovered.remoteSessionId

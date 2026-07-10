@@ -71,6 +71,7 @@ struct ACPSessionDiscoveryTests {
         await model.start(manager: manager, agentId: "claude")
         #expect(model.phase == .ready)
         #expect(model.sessions.map(\.remoteSessionId) == ["remote-1"])
+        #expect(model.sessions.first?.worktreeId == "wt")
         #expect(model.sessions.first?.title == "Local title")
         #expect(model.sessions.first?.localSessionId == "local-1")
         #expect(model.canLoadMore)
@@ -113,6 +114,7 @@ struct ACPSessionDiscoveryTests {
         let store = try temporaryStore()
         let manager = manager(store: store, client: ACPMockClient())
         let discovered = ACPDiscoveredSession(
+            worktreeId: "wt",
             agentId: "claude",
             remoteSessionId: "remote-extra-roots",
             cwd: "/tmp/wt",
@@ -124,6 +126,26 @@ struct ACPSessionDiscoveryTests {
 
         #expect(manager.materializeDiscoveredSession(discovered) == nil)
         #expect(try store.loadSession(agentId: "claude", remoteSessionId: "remote-extra-roots") == nil)
+    }
+
+    @MainActor
+    @Test("materialization rejects discovery from another worktree")
+    func materializationRejectsAnotherWorktree() throws {
+        let store = try temporaryStore()
+        let manager = manager(store: store, client: ACPMockClient())
+        let discovered = ACPDiscoveredSession(
+            worktreeId: "other-worktree",
+            agentId: "claude",
+            remoteSessionId: "remote-other-worktree",
+            cwd: "/tmp/wt",
+            title: "Wrong scope",
+            updatedAt: nil,
+            additionalDirectories: [],
+            localSessionId: nil
+        )
+
+        #expect(manager.materializeDiscoveredSession(discovered) == nil)
+        #expect(try store.loadSession(agentId: "claude", remoteSessionId: "remote-other-worktree") == nil)
     }
 
     private func temporaryStore() throws -> ACPSessionStore {

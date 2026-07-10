@@ -12,6 +12,7 @@ struct ACPSessionDiscoveryCapabilities: Equatable {
 struct ACPDiscoveredSession: Identifiable, Equatable {
     var id: String { remoteSessionId }
 
+    let worktreeId: String
     let agentId: String
     let remoteSessionId: String
     let cwd: String
@@ -78,6 +79,7 @@ enum ACPSessionAttachError: LocalizedError, Equatable {
 @MainActor
 final class ACPSessionDiscoveryHandle {
     let capabilities: ACPSessionDiscoveryCapabilities
+    private let worktreeId: String
     private let agentId: String
     private let cwd: String
     private let store: ACPSessionStore
@@ -87,12 +89,14 @@ final class ACPSessionDiscoveryHandle {
     private var closed = false
 
     init(
+        worktreeId: String,
         agentId: String,
         cwd: String,
         store: ACPSessionStore,
         connection: ACPConnection,
         capabilities: ACPSessionDiscoveryCapabilities
     ) {
+        self.worktreeId = worktreeId
         self.agentId = agentId
         self.cwd = cwd
         self.store = store
@@ -120,6 +124,7 @@ final class ACPSessionDiscoveryHandle {
                 "Agent session"
             }
             return ACPDiscoveredSession(
+                worktreeId: worktreeId,
                 agentId: agentId,
                 remoteSessionId: info.sessionId,
                 cwd: info.cwd,

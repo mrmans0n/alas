@@ -3632,11 +3632,11 @@ final class AppState {
         _ discovered: ACPDiscoveredSession,
         capabilities: ACPSessionDiscoveryCapabilities
     ) -> Bool {
-        guard let worktreeId = selectedWorktreeId,
-              let worktree = worktree(withId: worktreeId),
-              let manager = acpManager(for: worktree)
+        guard let resolved = projectAndWorktree(withWorktreeId: discovered.worktreeId),
+              let manager = acpManager(for: resolved.worktree)
         else { return false }
 
+        focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
         if let localSessionId = discovered.localSessionId {
             openExistingACPSession(sessionId: localSessionId)
             return true
