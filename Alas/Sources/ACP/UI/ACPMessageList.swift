@@ -275,9 +275,9 @@ struct ACPMessageList: View {
                 .onChange(of: transcript.visibleHead) { _, _ in
                     restoreRememberedAnchorIfNeeded(proxy: proxy)
                 }
-                .onPreferenceChange(ACPRowFramesPreferenceKey.self) { frames in
+                .modifier(ACPRowFramePreferenceTracking { frames in
                     handleRowFramePreference(frames, proxy: proxy)
-                }
+                })
             }
         }
         .background(
@@ -472,7 +472,22 @@ struct ACPMessageList: View {
         restoredRememberedAnchor = anchor
     }
 
+    @ViewBuilder
     private func rowFrameReporter(id: String) -> some View {
+        if #available(macOS 15, *) {
+            if Self.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: true) {
+                legacyRowFrameReporter(id: id)
+            } else {
+                EmptyView()
+            }
+        } else if Self.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: false) {
+            legacyRowFrameReporter(id: id)
+        } else {
+            EmptyView()
+        }
+    }
+
+    private func legacyRowFrameReporter(id: String) -> some View {
         GeometryReader { rowGeometry in
             Color.clear.preference(
                 key: ACPRowFramesPreferenceKey.self,
@@ -592,6 +607,12 @@ struct ACPMessageList: View {
         visibleMessageIds: Set<String>
     ) -> String? {
         ids.first { visibleMessageIds.contains($0) }
+    }
+
+    nonisolated static func shouldUseLegacyRowFramePreferences(
+        isModernScrollTrackingAvailable: Bool
+    ) -> Bool {
+        !isModernScrollTrackingAvailable
     }
 
     struct VisibleMessageLookup {
@@ -848,6 +869,25 @@ private struct ACPRowFramesPreferenceKey: PreferenceKey {
     static let defaultValue: [String: CGRect] = [:]
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct ACPRowFramePreferenceTracking: ViewModifier {
+    let onFrames: ([String: CGRect]) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            if ACPMessageList.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: true) {
+                content.onPreferenceChange(ACPRowFramesPreferenceKey.self, perform: onFrames)
+            } else {
+                content
+            }
+        } else if ACPMessageList.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: false) {
+            content.onPreferenceChange(ACPRowFramesPreferenceKey.self, perform: onFrames)
+        } else {
+            content
+        }
     }
 }
 
