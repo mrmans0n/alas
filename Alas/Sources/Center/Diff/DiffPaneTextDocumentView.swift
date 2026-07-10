@@ -154,6 +154,10 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: DiffPaneTextDocumentContainerView, context: Context) {
+        let visibleRows = DiffPaneRowProjection.visibleRows(
+            in: group,
+            expandedCollapsedRowIDs: expandedCollapsedRowIDs
+        )
         nsView.update(
             group: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs,
@@ -166,7 +170,9 @@ struct DiffPaneTextDocumentView: NSViewRepresentable {
             lspContext: lspContext,
             activeCommentHighlight: activeCommentHighlight,
             allowsReviewLineSelection: allowsReviewLineSelection,
-            onReviewLineSelected: onReviewLineSelected,
+            onReviewLineSelected: { anchor in
+                onReviewLineSelected(ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(anchor, in: visibleRows))
+            },
             onContextExpansion: onContextExpansion
         )
     }
@@ -203,7 +209,9 @@ struct DiffPaneSegmentView: NSViewRepresentable {
             lspContext: lspContext,
             activeCommentHighlight: activeCommentHighlight,
             allowsReviewLineSelection: allowsReviewLineSelection,
-            onReviewLineSelected: onReviewLineSelected,
+            onReviewLineSelected: { anchor in
+                onReviewLineSelected(ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(anchor, in: rows))
+            },
             onContextExpansion: onContextExpansion
         )
     }

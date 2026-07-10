@@ -1367,15 +1367,15 @@ struct DiffReviewSurfaceTests {
         let firstRow = DiffDisplayRow(
             id: "row-1",
             kind: .context,
-            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "one"),
-            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "two"),
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "one", rowIndex: 0),
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "two", rowIndex: 0),
             collapsedLineCount: 0
         )
         let secondRow = DiffDisplayRow(
             id: "row-2",
             kind: .context,
-            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two"),
-            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three"),
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two", rowIndex: 1),
+            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three", rowIndex: 1),
             collapsedLineCount: 0
         )
         let group = DiffDisplayGroup(
@@ -1394,6 +1394,123 @@ struct DiffReviewSurfaceTests {
         )
 
         #expect(segments.items.flatMap(\.draftComments).map(\.id) == ["draft-shifted"])
+    }
+
+    @Test func pendingUnknownDraftComposerDoesNotDuplicateAcrossShiftedContextRows() {
+        let firstRow = DiffDisplayRow(
+            id: "row-1",
+            kind: .context,
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "one", rowIndex: 0),
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "two", rowIndex: 0),
+            collapsedLineCount: 0
+        )
+        let secondRow = DiffDisplayRow(
+            id: "row-2",
+            kind: .context,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two", rowIndex: 1),
+            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three", rowIndex: 1),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,2 +2,2 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [firstRow, secondRow]
+        )
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 2,
+            rowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .unknown, line: 2, isChange: false),
+            ],
+            selectedText: "two"
+        )
+
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: ReviewDraftCommentPlacement.position([], in: [group]),
+            pendingAnchor: pendingAnchor
+        )
+
+        #expect(segments.items.filter(\.showsComposer).count == 1)
+        #expect(segments.items.filter(\.showsComposer).first?.rows.map(\.id) == ["row-1", "row-2"])
+    }
+
+    @Test func sourceIndexedPendingAnchorMapsSegmentLocalRowsToDisplayRows() {
+        let row = DiffDisplayRow(
+            id: "row-2",
+            kind: .context,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two", rowIndex: 1),
+            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three", rowIndex: 1),
+            collapsedLineCount: 0
+        )
+        let localAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 2,
+            rowIndex: 0,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .unknown, line: 2, isChange: false),
+            ],
+            selectedText: "two"
+        )
+
+        let sourceAnchor = ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(localAnchor, in: [row])
+
+        #expect(sourceAnchor.rowIndex == 1)
+        #expect(sourceAnchor.endRowIndex == 1)
+    }
+
+    @Test func pendingUnknownDraftComposerUsesSourceRowAfterExistingDraftSegment() {
+        let firstRow = DiffDisplayRow(
+            id: "row-1",
+            kind: .context,
+            old: diffLine(id: "old-1", side: .old, oldLine: 1, text: "one", rowIndex: 0),
+            new: diffLine(id: "new-2", side: .new, newLine: 2, text: "two", rowIndex: 0),
+            collapsedLineCount: 0
+        )
+        let secondRow = DiffDisplayRow(
+            id: "row-2",
+            kind: .context,
+            old: diffLine(id: "old-2", side: .old, oldLine: 2, text: "two", rowIndex: 1),
+            new: diffLine(id: "new-3", side: .new, newLine: 3, text: "three", rowIndex: 1),
+            collapsedLineCount: 0
+        )
+        let group = DiffDisplayGroup(
+            id: "group",
+            header: "@@ -1,2 +2,2 @@",
+            sourceHunk: parsedDiff().hunks[0],
+            rows: [firstRow, secondRow]
+        )
+        let localAnchor = DiffReviewLineAnchor(
+            path: "A.swift",
+            side: .unknown,
+            line: 2,
+            rowIndex: 0,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .unknown, line: 2, isChange: false),
+            ],
+            selectedText: "two"
+        )
+        let sourceAnchor = ReviewDraftCommentRowSegmentation.sourceIndexedAnchor(localAnchor, in: [secondRow])
+        let placement = ReviewDraftCommentPlacement.position(
+            [draftComment(id: "draft-shifted", path: "A.swift", side: .unknown, startLine: 2)],
+            in: [group]
+        )
+
+        let segments = ReviewDraftCommentRowSegmentation.segments(
+            for: group,
+            placement: placement,
+            pendingAnchor: sourceAnchor
+        )
+
+        #expect(segments.items.map(\.rows).map { $0.map(\.id) } == [["row-1"], ["row-2"]])
+        #expect(segments.items[0].draftComments.map(\.id) == ["draft-shifted"])
+        #expect(segments.items[0].showsComposer == false)
+        #expect(segments.items[1].draftComments.isEmpty)
+        #expect(segments.items[1].showsComposer)
     }
 
     @Test func localDraftCommentsWithUnknownSideDoNotDuplicateAcrossMatchingHunks() {
@@ -3218,14 +3335,15 @@ struct DiffReviewSurfaceTests {
         oldLine: Int? = nil,
         newLine: Int? = nil,
         text: String,
-        kind: ParsedDiff.Hunk.Line.Kind = .context
+        kind: ParsedDiff.Hunk.Line.Kind = .context,
+        rowIndex: Int = 0
     ) -> DiffDisplayLine {
         DiffDisplayLine(
             id: id,
             anchor: DiffLineAnchor(
                 filePath: "A.swift",
                 hunkIndex: 0,
-                rowIndex: 0,
+                rowIndex: rowIndex,
                 side: side,
                 oldLine: oldLine,
                 newLine: newLine
