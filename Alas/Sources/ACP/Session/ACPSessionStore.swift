@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 7
+    static let targetSchemaVersion = 8
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -32,6 +32,7 @@ final class ACPSessionStore {
         if current < 5 { try migrate_to_v5() }
         if current < 6 { try migrate_to_v6() }
         if current < 7 { try migrate_to_v7() }
+        if current < 8 { try migrate_to_v8() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -163,6 +164,15 @@ final class ACPSessionStore {
         )
         """)
     }
+
+    private func migrate_to_v8() throws {
+        try db.exec("ALTER TABLE sessions ADD COLUMN origin TEXT NOT NULL DEFAULT 'alasCreated'")
+        try db.exec("""
+        CREATE INDEX IF NOT EXISTS sessions_agent_remote_idx
+        ON sessions(agent_id, remote_session_id)
+        WHERE remote_session_id IS NOT NULL
+        """)
+    }
 }
 
 struct ACPSessionLease: Equatable {
@@ -173,12 +183,19 @@ struct ACPSessionLease: Equatable {
     let status: String   // "idle" | "busy"
 }
 
+enum ACPSessionOrigin: String, Codable, Equatable {
+    case alasCreated
+    case agentImported
+    case agentForked
+}
+
 struct ACPSessionRow: Equatable {
     let id: String
     let agentId: String
     var title: String
     var titleSource: ACPSessionTitleSource = .placeholder
     var remoteSessionId: String? = nil
+    var origin: ACPSessionOrigin = .alasCreated
     var contextRecoveryPending: Bool = false
     var currentModel: String?
     var currentMode: String?
@@ -201,13 +218,14 @@ struct ACPStoredMessage: Equatable {
 extension ACPSessionStore {
     func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
-        INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, context_recovery_pending,
+        INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
                               current_model, current_mode, auto_run, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
             remote_session_id = COALESCE(excluded.remote_session_id, sessions.remote_session_id),
+            origin = excluded.origin,
             context_recovery_pending = sessions.context_recovery_pending,
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
@@ -216,7 +234,8 @@ extension ACPSessionStore {
             last_opened_at = excluded.last_opened_at,
             archived = excluded.archived
         """, bindings: [
-            s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.contextRecoveryPending ? 1 : 0,
+            s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
+            s.contextRecoveryPending ? 1 : 0,
             s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
             preserveTitle ? 1 : 0,
@@ -226,6 +245,16 @@ extension ACPSessionStore {
 
     func loadSession(id: String) throws -> ACPSessionRow? {
         let rows = try db.query("SELECT * FROM sessions WHERE id = ?", bindings: [id])
+        return rows.first.map(Self.rowToSession)
+    }
+
+    func loadSession(agentId: String, remoteSessionId: String) throws -> ACPSessionRow? {
+        let rows = try db.query("""
+        SELECT * FROM sessions
+        WHERE agent_id = ? AND remote_session_id = ? AND archived = 0
+        ORDER BY last_opened_at DESC
+        LIMIT 1
+        """, bindings: [agentId, remoteSessionId])
         return rows.first.map(Self.rowToSession)
     }
 
@@ -400,6 +429,7 @@ extension ACPSessionStore {
             title: r["title"] as? String ?? "",
             titleSource: ACPSessionTitleSource(rawValue: rawSource) ?? .placeholder,
             remoteSessionId: r["remote_session_id"] as? String,
+            origin: ACPSessionOrigin(rawValue: r["origin"] as? String ?? "") ?? .alasCreated,
             contextRecoveryPending: ((r["context_recovery_pending"] as? Int64) ?? 0) != 0,
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,

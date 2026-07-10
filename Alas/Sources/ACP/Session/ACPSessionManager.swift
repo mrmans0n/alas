@@ -248,7 +248,8 @@ final class ACPSessionManager: ObservableObject {
         try? store.upsertSession(row)
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
-            title: row.title, titleSource: .placeholder, hydrationState: .ready)
+            title: row.title, titleSource: .placeholder, origin: row.origin,
+            hydrationState: .ready)
         session.autoRunEnabled = autoRunDefault
         sessions[id] = session
         refreshRecent()
@@ -267,7 +268,8 @@ final class ACPSessionManager: ObservableObject {
         guard let row = try? store.loadSession(id: id) else { return nil }
         let session = ACPSession(
             id: row.id, agentId: row.agentId, worktreeId: worktreeId,
-            title: row.title, titleSource: row.titleSource, hydrationState: .loading,
+            title: row.title, titleSource: row.titleSource, origin: row.origin,
+            hydrationState: .loading,
             restoredFromPersistence: true)
         session.remoteSessionId = row.remoteSessionId
         if let memory = transcriptScrollMemory[id] {
@@ -366,6 +368,7 @@ final class ACPSessionManager: ObservableObject {
             id: row.id, agentId: row.agentId, title: row.title,
             titleSource: row.titleSource,
             remoteSessionId: row.remoteSessionId,
+            origin: row.origin,
             contextRecoveryPending: row.contextRecoveryPending,
             currentModel: row.currentModel, currentMode: row.currentMode,
             autoRun: row.autoRun,
@@ -703,6 +706,9 @@ final class ACPSessionManager: ObservableObject {
         try? store.upsertSession(.init(
             id: row.id, agentId: row.agentId, title: s.title,
             titleSource: s.titleSource,
+            remoteSessionId: row.remoteSessionId,
+            origin: row.origin,
+            contextRecoveryPending: row.contextRecoveryPending,
             currentModel: s.currentModel, currentMode: s.currentMode,
             autoRun: s.autoRunEnabled,
             createdAt: row.createdAt, updatedAt: now,
@@ -719,6 +725,7 @@ final class ACPSessionManager: ObservableObject {
             title: row.title,
             titleSource: row.titleSource,
             remoteSessionId: s.remoteSessionId,
+            origin: row.origin,
             contextRecoveryPending: row.contextRecoveryPending,
             currentModel: row.currentModel,
             currentMode: row.currentMode,
@@ -905,6 +912,83 @@ final class ACPSessionManager: ObservableObject {
 
     func refreshRecent() {
         recent = (try? store.recentSessions()) ?? []
+    }
+
+    func makeSessionDiscoveryHandle(agentId: String) async throws -> ACPSessionDiscoveryHandle {
+        guard let spec = ACPLaunchCatalog.spec(for: agentId) else {
+            throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
+        }
+        let setup = await setupEvaluator(spec)
+        guard case .ready = setup else {
+            throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
+        }
+
+        let connection = try connectionFactory(await resolvedLaunchSpec(for: spec))
+        do {
+            let initialized = try await connection.initialize()
+            guard initialized.sessionCapabilities.supportsList else {
+                throw ACPSessionDiscoveryError.listingUnsupported
+            }
+            return ACPSessionDiscoveryHandle(
+                worktreeId: worktreeId,
+                agentId: agentId,
+                cwd: worktreePath,
+                store: store,
+                connection: connection,
+                capabilities: .init(
+                    canLoad: initialized.loadSession,
+                    canResume: initialized.sessionCapabilities.supportsResume,
+                    canFork: initialized.sessionCapabilities.supportsFork
+                )
+            )
+        } catch {
+            await connection.shutdown()
+            throw error
+        }
+    }
+
+    @discardableResult
+    func materializeDiscoveredSession(
+        _ discovered: ACPDiscoveredSession,
+        autoRunDefault: Bool = false,
+        origin: ACPSessionOrigin = .agentImported
+    ) -> ACPSessionRow? {
+        let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
+        let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
+        guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
+        if let existing = try? store.loadSession(
+            agentId: discovered.agentId,
+            remoteSessionId: discovered.remoteSessionId
+        ) {
+            return existing
+        }
+        guard discovered.isCompatibleWithAlas else { return nil }
+
+        let now = Int64(Date().timeIntervalSince1970)
+        let remoteUpdatedAt = discovered.updatedAt.map { Int64($0.timeIntervalSince1970) } ?? now
+        let title = discovered.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let row = ACPSessionRow(
+            id: UUID().uuidString,
+            agentId: discovered.agentId,
+            title: title.isEmpty ? "Agent session" : title,
+            titleSource: title.isEmpty ? .placeholder : .generated,
+            remoteSessionId: discovered.remoteSessionId,
+            origin: origin,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: autoRunDefault,
+            createdAt: remoteUpdatedAt,
+            updatedAt: remoteUpdatedAt,
+            lastOpenedAt: now,
+            archived: false
+        )
+        do {
+            try store.upsertSession(row)
+            refreshRecent()
+            return row
+        } catch {
+            return nil
+        }
     }
 
     /// Loads the full persisted `content` for a tool call. Used by the
@@ -1438,7 +1522,15 @@ extension ACPSessionManager {
                     return
                 }
             }
-            let shouldSuppressLoadReplay = !freshlyCreated
+            let restoreOperation = ACPSessionRestorePolicy.operation(
+                origin: session.origin,
+                canLoad: initialized.loadSession,
+                canResume: initialized.sessionCapabilities.supportsResume,
+                hasLocalTranscript: session.hasConversationTranscript
+            )
+            let shouldSuppressLoadReplay = (restoreOperation == .loadWithRecovery
+                || restoreOperation == .loadStrict)
+                && !freshlyCreated
                 && session.hydrationState == .ready
                 && session.hasConversationTranscript
                 && !(session.remoteSessionId ?? "").isEmpty
@@ -1494,40 +1586,93 @@ extension ACPSessionManager {
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
                 }
-                do {
-                    result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
-                    runner.finishSuppressingLoadReplay(
-                        throughYieldedUpdateCount: connection.client.yieldedUpdateCount
-                    )
+                switch restoreOperation {
+                case .resume:
+                    do {
+                        result = try await connection.resumeSession(cwd: worktreePath, sessionId: remoteId)
+                        if !pendingRecovery {
+                            session.contextRecoveryStatus = nil
+                        }
+                        if session.origin != .alasCreated, !session.hasConversationTranscript {
+                            restoreWarning = .init(
+                                message: "Earlier messages remain in the agent and are not available in Alas.",
+                                canSendTranscript: false
+                            )
+                        }
+                    } catch {
+                        guard session.origin == .alasCreated,
+                              ACPAuthFailure.message(from: error) == nil
+                        else { throw error }
+                        result = try await connection.newSession(cwd: worktreePath)
+                        if session.hasConversationTranscript {
+                            shouldHoldQueueForRecovery = true
+                            if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                                persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                            }
+                        }
+                        if hasRestorableContext {
+                            restoreWarning = .init(
+                                message: "Agent context could not be restored.",
+                                canSendTranscript: session.hasConversationTranscript
+                            )
+                        }
+                        if session.hasConversationTranscript {
+                            session.contextRecoveryStatus = .sendingTranscript
+                        }
+                    }
+                case .loadStrict:
+                    do {
+                        result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                    } catch {
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                        throw error
+                    }
                     if !pendingRecovery {
                         session.contextRecoveryStatus = nil
                     }
-                } catch {
-                    runner.finishSuppressingLoadReplay(
-                        throughYieldedUpdateCount: connection.client.yieldedUpdateCount
-                    )
-                    if ACPAuthFailure.message(from: error) != nil {
-                        throw error
-                    }
-                    result = try await connection.newSession(cwd: worktreePath)
-                    if session.hasConversationTranscript {
-                        shouldHoldQueueForRecovery = true
-                        // Guard the store write: if another instance took over
-                        // while we were awaiting loadSession/newSession, do not
-                        // persist recovery state to a session we no longer own.
-                        if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
-                            persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                case .loadWithRecovery:
+                    do {
+                        result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                        if !pendingRecovery {
+                            session.contextRecoveryStatus = nil
+                        }
+                    } catch {
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
+                        if ACPAuthFailure.message(from: error) != nil {
+                            throw error
+                        }
+                        result = try await connection.newSession(cwd: worktreePath)
+                        if session.hasConversationTranscript {
+                            shouldHoldQueueForRecovery = true
+                            // Guard the store write: if another instance took over
+                            // while we were awaiting loadSession/newSession, do not
+                            // persist recovery state to a session we no longer own.
+                            if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                                persistContextRecoveryPending(sessionId: sessionId, pending: true)
+                            }
+                        }
+                        if hasRestorableContext {
+                            restoreWarning = .init(
+                                message: "Agent context could not be restored.",
+                                canSendTranscript: session.hasConversationTranscript
+                            )
+                        }
+                        if session.hasConversationTranscript {
+                            session.contextRecoveryStatus = .sendingTranscript
                         }
                     }
-                    if hasRestorableContext {
-                        restoreWarning = .init(
-                            message: "Agent context could not be restored.",
-                            canSendTranscript: session.hasConversationTranscript
-                        )
-                    }
-                    if session.hasConversationTranscript {
-                        session.contextRecoveryStatus = .sendingTranscript
-                    }
+                case .unavailable:
+                    throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
                 result = try await connection.newSession(cwd: worktreePath)
@@ -1614,8 +1759,8 @@ extension ACPSessionManager {
             stderrTask.cancel()
             let tail = stderrBuffer.tail()
             let authReason = ACPAuthFailure.message(from: error)
-            let baseMessage = authReason ?? error.localizedDescription
-            let base = "ACP initialize/new failed: \(baseMessage)"
+            let baseMessage = authReason ?? (error as? JSONRPCError)?.message ?? error.localizedDescription
+            let base = "ACP session attach failed: \(baseMessage)"
             let full = tail.isEmpty ? base : base + "\nstderr: " + tail
             session.lastError = full
             session.contextRecoveryStatus = nil

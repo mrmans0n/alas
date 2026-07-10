@@ -5,41 +5,56 @@ struct AgentLauncherDialog: View {
     let selectedWorktree: () -> Worktree?
     @Environment(\.theme) private var theme
     @FocusState private var inputFocused: Bool
+    @State private var chatAgent: AgentDefinition?
+    @State private var discoveryModel: ACPSessionDiscoveryModel?
+    @State private var selectedSessionIndex = 0
+    @State private var loadingMore = false
 
     var body: some View {
-        if appState.isAgentLauncherOpen {
-            ZStack {
-                Color.black.opacity(0.42)
-                    .ignoresSafeArea()
-                    .onTapGesture { close() }
+        Group {
+            if appState.isAgentLauncherOpen {
+                ZStack {
+                    Color.black.opacity(0.42)
+                        .ignoresSafeArea()
+                        .onTapGesture { close() }
 
-                VStack(spacing: 0) {
-                    inputRow
-                    modePicker
-                    Divider().background(theme.color("line"))
-                    rowList
-                    footer
+                    VStack(spacing: 0) {
+                        inputRow
+                        if chatAgent == nil {
+                            modePicker
+                        }
+                        Divider().background(theme.color("line"))
+                        rowList
+                        footer
+                    }
+                    .frame(width: 460)
+                    .frame(maxHeight: 420)
+                    .background(theme.color("bg-1").opacity(0.92))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
+                    .padding(.top, 70)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .onTapGesture { }
+                    .onKeyPress { press in handleKey(press) }
                 }
-                .frame(width: 460)
-                .frame(maxHeight: 420)
-                .background(theme.color("bg-1").opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                .padding(.top, 70)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .onTapGesture { }
-                .onKeyPress { press in handleKey(press) }
+                .transition(.opacity.combined(with: .offset(y: -6)))
+                .onAppear {
+                    requestInputFocus()
+                }
+                .onChange(of: appState.agentLauncher.query) {
+                    selectedSessionIndex = 0
+                }
             }
-            .transition(.opacity.combined(with: .offset(y: -6)))
-            .onAppear {
+        }
+        .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
+            if isOpen {
                 requestInputFocus()
-            }
-            .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
-                if isOpen { requestInputFocus() }
+            } else {
+                resetSessionBrowser()
             }
         }
     }
@@ -50,7 +65,19 @@ struct AgentLauncherDialog: View {
 
     private var inputRow: some View {
         HStack(spacing: 8) {
-            Icon(name: "sparkle", size: 12, color: theme.color("fg-faint"))
+            if let chatAgent {
+                Button {
+                    backToAgents()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .help("Back to agents")
+                AgentLogoView(agent: chatAgent).frame(width: 16, height: 16)
+            } else {
+                Icon(name: "sparkle", size: 12, color: theme.color("fg-faint"))
+            }
             TextField(placeholder, text: Bindable(appState.agentLauncher).query)
                 .textFieldStyle(.plain)
                 .focused($inputFocused)
@@ -84,7 +111,9 @@ struct AgentLauncherDialog: View {
     private var placeholder: String {
         switch appState.agentLauncher.mode {
         case .terminal: return "Launch agent in terminal…"
-        case .acp:      return "Launch ACP chat session…"
+        case .acp:
+            if let chatAgent { return "Search \(chatAgent.displayName) sessions…" }
+            return "Launch ACP chat session…"
         }
     }
 
@@ -144,7 +173,16 @@ struct AgentLauncherDialog: View {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
     private var rowList: some View {
+        if let chatAgent {
+            sessionRowList(agent: chatAgent)
+        } else {
+            agentRowList
+        }
+    }
+
+    private var agentRowList: some View {
         let agents = rows
         return ScrollViewReader { proxy in
             ScrollView {
@@ -175,6 +213,121 @@ struct AgentLauncherDialog: View {
         }
     }
 
+    private func sessionRowList(agent: AgentDefinition) -> some View {
+        let discovered = filteredDiscoveredSessions
+        let capabilities = discoveryModel?.capabilities
+        return ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                AgentSessionLauncherRow(
+                    title: "New chat",
+                    detail: "Start a new \(agent.displayName) session",
+                    systemImage: "plus",
+                    isSelected: selectedSessionIndex == 0,
+                    isEnabled: true,
+                    onTap: launchNewChat
+                )
+
+                sessionDiscoveryState(agent: agent, discovered: discovered, capabilities: capabilities)
+            }
+            .padding(.vertical, 4)
+        }
+        .frame(minHeight: 180, maxHeight: 320)
+    }
+
+    @ViewBuilder
+    private func sessionDiscoveryState(
+        agent: AgentDefinition,
+        discovered: [ACPDiscoveredSession],
+        capabilities: ACPSessionDiscoveryCapabilities?
+    ) -> some View {
+        switch discoveryModel?.phase ?? .idle {
+        case .idle, .loading:
+            launcherStatusRow("Loading agent sessions…", progress: true)
+        case .unsupported:
+            launcherStatusRow("This agent does not expose session history.")
+        case .failed(let message):
+            HStack(spacing: 8) {
+                Text(message).lineLimit(2)
+                Spacer()
+                Button("Retry") { startDiscovery(for: agent) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color("accent"))
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(theme.color("fg-faint"))
+            .padding(.horizontal, 14)
+            .frame(minHeight: 38)
+        case .ready:
+            if discovered.isEmpty {
+                launcherStatusRow("No agent sessions for this worktree.")
+            } else {
+                ForEach(Array(discovered.enumerated()), id: \.element.id) { index, item in
+                    let canOpen = item.isAlreadyInAlas
+                        || (capabilities?.canOpenRemoteSession == true && item.isCompatibleWithAlas)
+                    AgentSessionLauncherRow(
+                        title: item.title,
+                        detail: sessionDetail(item, canOpen: canOpen),
+                        systemImage: item.isAlreadyInAlas ? "checkmark.circle" : "clock",
+                        isSelected: selectedSessionIndex == index + 1,
+                        isEnabled: canOpen,
+                        onTap: { openDiscoveredSession(item) }
+                    )
+                    .onHover { hovering in
+                        if hovering { selectedSessionIndex = index + 1 }
+                    }
+                }
+            }
+            if discoveryModel?.canLoadMore == true {
+                Button {
+                    loadMoreSessions()
+                } label: {
+                    HStack(spacing: 7) {
+                        if loadingMore { ProgressView().controlSize(.small) }
+                        Text(loadingMore ? "Loading…" : "Load more")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(theme.color("accent"))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .frame(height: 32)
+                }
+                .buttonStyle(.plain)
+                .disabled(loadingMore)
+            }
+            if let paginationError = discoveryModel?.paginationError {
+                launcherStatusRow(paginationError)
+            }
+        }
+    }
+
+    private func launcherStatusRow(_ text: String, progress: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            if progress { ProgressView().controlSize(.small) }
+            Text(text)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(theme.color("fg-faint"))
+        .padding(.horizontal, 14)
+        .frame(minHeight: 38)
+    }
+
+    private var filteredDiscoveredSessions: [ACPDiscoveredSession] {
+        guard let sessions = discoveryModel?.sessions else { return [] }
+        let query = appState.agentLauncher.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return sessions }
+        return sessions.filter { $0.title.localizedCaseInsensitiveContains(query) }
+    }
+
+    private func sessionDetail(_ session: ACPDiscoveredSession, canOpen: Bool) -> String {
+        if session.isAlreadyInAlas { return "Already in Alas" }
+        if !session.isCompatibleWithAlas { return "Uses unsupported additional folders" }
+        if !canOpen { return "Browsing only" }
+        if let updatedAt = session.updatedAt {
+            return updatedAt.formatted(.relative(presentation: .named))
+        }
+        return "Agent history"
+    }
+
     private var emptyState: some View {
         VStack(spacing: 4) {
             Text(emptyTitle)
@@ -200,9 +353,9 @@ struct AgentLauncherDialog: View {
     private var footer: some View {
         HStack(spacing: 12) {
             label("↑↓ navigate")
-            label("↵ launch")
-            label("⇥ swap mode")
-            label("esc close")
+            label(chatAgent == nil ? "↵ select" : "↵ open")
+            if chatAgent == nil { label("⇥ swap mode") }
+            label(chatAgent == nil ? "esc close" : "esc back")
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -221,6 +374,9 @@ struct AgentLauncherDialog: View {
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        if chatAgent != nil {
+            return handleSessionKey(press)
+        }
         switch press.key {
         case .escape:
             close()
@@ -241,6 +397,32 @@ struct AgentLauncherDialog: View {
         }
     }
 
+    private func handleSessionKey(_ press: KeyPress) -> KeyPress.Result {
+        switch press.key {
+        case .escape, .leftArrow:
+            backToAgents()
+            return .handled
+        case .upArrow:
+            selectedSessionIndex = max(0, selectedSessionIndex - 1)
+            return .handled
+        case .downArrow:
+            selectedSessionIndex = min(filteredDiscoveredSessions.count, selectedSessionIndex + 1)
+            return .handled
+        case .return:
+            if selectedSessionIndex == 0 {
+                launchNewChat()
+            } else {
+                let index = selectedSessionIndex - 1
+                if filteredDiscoveredSessions.indices.contains(index) {
+                    openDiscoveredSession(filteredDiscoveredSessions[index])
+                }
+            }
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
     private func launch(_ agent: AgentDefinition) {
         switch appState.agentLauncher.mode {
         case .terminal:
@@ -248,14 +430,81 @@ struct AgentLauncherDialog: View {
             return }
             _ = try? appState.openAgentTerminalTab(for: worktree, agentId: agent.id)
         case .acp:
-            appState.openNewACPSession(agentID: agent.id)
+            beginSessionBrowser(for: agent)
+            return
         }
         close()
     }
 
+    private func beginSessionBrowser(for agent: AgentDefinition) {
+        guard let worktree = selectedWorktree(),
+              appState.acpManager(for: worktree) != nil
+        else {
+            appState.openNewACPSession(agentID: agent.id)
+            close()
+            return
+        }
+        chatAgent = agent
+        appState.agentLauncher.query = ""
+        selectedSessionIndex = 0
+        startDiscovery(for: agent)
+        requestInputFocus()
+    }
+
+    private func startDiscovery(for agent: AgentDefinition) {
+        guard let worktree = selectedWorktree(),
+              let manager = appState.acpManager(for: worktree)
+        else { return }
+        let prior = discoveryModel
+        let model = ACPSessionDiscoveryModel()
+        discoveryModel = model
+        Task {
+            await prior?.stop()
+            await model.start(manager: manager, agentId: agent.id)
+        }
+    }
+
+    private func loadMoreSessions() {
+        guard let discoveryModel, !loadingMore else { return }
+        loadingMore = true
+        Task {
+            defer { loadingMore = false }
+            try? await discoveryModel.loadMore()
+        }
+    }
+
+    private func launchNewChat() {
+        guard let chatAgent else { return }
+        appState.openNewACPSession(agentID: chatAgent.id)
+        close()
+    }
+
+    private func openDiscoveredSession(_ session: ACPDiscoveredSession) {
+        guard let capabilities = discoveryModel?.capabilities,
+              appState.openDiscoveredACPSession(session, capabilities: capabilities)
+        else { return }
+        close()
+    }
+
+    private func backToAgents() {
+        resetSessionBrowser()
+        appState.agentLauncher.query = ""
+        requestInputFocus()
+    }
+
     private func close() {
+        resetSessionBrowser()
         appState.agentLauncher.reset()
         appState.isAgentLauncherOpen = false
+    }
+
+    private func resetSessionBrowser() {
+        let prior = discoveryModel
+        discoveryModel = nil
+        chatAgent = nil
+        selectedSessionIndex = 0
+        loadingMore = false
+        Task { await prior?.stop() }
     }
 
     private func requestInputFocus() {
@@ -266,6 +515,44 @@ struct AgentLauncherDialog: View {
                 inputFocused = true
             }
         }
+    }
+}
+
+private struct AgentSessionLauncherRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let isSelected: Bool
+    let isEnabled: Bool
+    let onTap: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isEnabled ? theme.color("fg-muted") : theme.color("fg-faint"))
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(isEnabled ? theme.color("fg") : theme.color("fg-faint"))
+                        .lineLimit(1)
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .background(isSelected ? theme.color("bg-3") : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
     }
 }
 

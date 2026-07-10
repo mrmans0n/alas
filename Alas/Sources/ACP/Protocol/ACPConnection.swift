@@ -3,6 +3,8 @@ import Foundation
 struct ACPInitializeOutcome: Equatable {
     let promptCapabilities: ACPInitializeResult.ACPPromptCapabilities
     let authMethods: [ACPInitializeResult.ACPAuthMethod]
+    let loadSession: Bool
+    let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -26,7 +28,9 @@ final class ACPConnection: @unchecked Sendable {
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         return ACPInitializeOutcome(
             promptCapabilities: result.agentCapabilities?.promptCapabilities ?? .init(),
-            authMethods: result.authMethods
+            authMethods: result.authMethods,
+            loadSession: result.agentCapabilities?.loadSession ?? false,
+            sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init()
         )
     }
 
@@ -57,6 +61,34 @@ final class ACPConnection: @unchecked Sendable {
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
         return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
+    }
+
+    func resumeSession(cwd: String, sessionId: String) async throws -> ACPSessionNewResult {
+        let req = ACPRequest(
+            method: "session/resume",
+            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: [])
+        )
+        let resp = try await client.send(req)
+        let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
+    }
+
+    func listSessions(cwd: String?, cursor: String? = nil) async throws -> ACPSessionListResult {
+        let req = ACPRequest(
+            method: "session/list",
+            params: ACPSessionListParams(cwd: cwd, cursor: cursor)
+        )
+        let resp = try await client.send(req)
+        return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body)
+    }
+
+    func forkSession(cwd: String, sessionId: String) async throws -> ACPSessionNewResult {
+        let req = ACPRequest(
+            method: "session/fork",
+            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: [])
+        )
+        let resp = try await client.send(req)
+        return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
     }
 
     func cancel(sessionId: String) async throws {

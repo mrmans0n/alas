@@ -146,6 +146,32 @@ struct ACPInitializeTests {
         #expect(result.agentCapabilities?.promptCapabilities?.embeddedContext == true)
     }
 
+    @Test("decodes agent session lifecycle capabilities with conservative defaults")
+    func decodeSessionLifecycleCapabilities() throws {
+        let supported = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "loadSession": true,
+            "sessionCapabilities": { "list": {}, "resume": {}, "fork": {} }
+          }
+        }
+        """.utf8))
+
+        #expect(supported.agentCapabilities?.loadSession == true)
+        #expect(supported.agentCapabilities?.sessionCapabilities.supportsList == true)
+        #expect(supported.agentCapabilities?.sessionCapabilities.supportsResume == true)
+        #expect(supported.agentCapabilities?.sessionCapabilities.supportsFork == true)
+
+        let omitted = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": {} }
+        """.utf8))
+        #expect(omitted.agentCapabilities?.loadSession == false)
+        #expect(omitted.agentCapabilities?.sessionCapabilities.supportsList == false)
+        #expect(omitted.agentCapabilities?.sessionCapabilities.supportsResume == false)
+        #expect(omitted.agentCapabilities?.sessionCapabilities.supportsFork == false)
+    }
+
     @Test("decodes terminal auth method metadata")
     func decodesTerminalAuthMethod() throws {
         let data = Data("""
