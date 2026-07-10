@@ -1263,6 +1263,218 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "new writer")
     }
 
+    @Test("takeover flush skips a dirtied row this runner never persisted")
+    func takeoverFlushSkipsRowWithoutCachedBase() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        // A tool row persisted by a *previous* session load: it counts toward
+        // persistedMessageCount, but this runner never wrote it, so it has no
+        // entry in lastPersistedPayloads.
+        let tool = ACPMessage.toolCall(.init(
+            toolCallId: "tool-x", title: "Run", kind: "execute",
+            status: "in_progress", content: "base"))
+        try store.appendMessage(
+            sessionId: sid, id: "msg-\(sid)-0", kind: "tool_call",
+            seq: 0, payload: try ACPMessageCodec.encode(tool), createdAt: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.replaceTranscriptMessages([tool])
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        // Dirty the pre-existing tool row mid-stream: it enters the persist
+        // buffer without a CAS base captured while we held the lease.
+        mock.emitToolCallUpdate(.init(
+            toolCallId: "tool-x",
+            status: "completed",
+            content: [.content(.text("mine"))]))
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Takeover, then the new owner rewrites that same row.
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let newOwnerPayload = try ACPMessageCodec.encode(.toolCall(.init(
+            toolCallId: "tool-x", title: "Run", kind: "execute",
+            status: "completed", content: "new owner")))
+        try store.updateMessagePayload(id: "msg-\(sid)-0", payload: newOwnerPayload)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        // Without a base captured under our lease, reading the row now would
+        // pick up the new owner's payload and let the CAS clobber it — so the
+        // row must be skipped entirely.
+        let rows = try store.loadMessages(sessionId: sid)
+        let toolRow = try #require(rows.first(where: { $0.id == "msg-\(sid)-0" }))
+        guard case .toolCall(let persisted) =
+                try ACPMessageCodec.decode(kind: toolRow.kind, payload: toolRow.payload) else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == "new owner")
+    }
+
+    @Test("takeover flush persists an under-lease update to a loaded row the new owner left alone")
+    func takeoverFlushPersistsUnderLeaseUpdateToLoadedRow() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        // A tool row persisted by a previous session load — no cache entry.
+        let tool = ACPMessage.toolCall(.init(
+            toolCallId: "tool-x", title: "Run", kind: "execute",
+            status: "in_progress", content: "base"))
+        try store.appendMessage(
+            sessionId: sid, id: "msg-\(sid)-0", kind: "tool_call",
+            seq: 0, payload: try ACPMessageCodec.encode(tool), createdAt: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.replaceTranscriptMessages([tool])
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        // Update the loaded row while we still hold the lease. The CAS base is
+        // captured now, against the on-disk "base" payload.
+        mock.emitToolCallUpdate(.init(
+            toolCallId: "tool-x",
+            status: "completed",
+            content: [.content(.text("mine"))]))
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Takeover, but the new owner never touches this row.
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        // The row still matches the base we captured under the lease, so the
+        // CAS succeeds and our under-lease update is not silently dropped.
+        let rows = try store.loadMessages(sessionId: sid)
+        let toolRow = try #require(rows.first(where: { $0.id == "msg-\(sid)-0" }))
+        guard case .toolCall(let persisted) =
+                try ACPMessageCodec.decode(kind: toolRow.kind, payload: toolRow.payload) else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == "mine")
+        #expect(persisted.status == "completed")
+    }
+
+    @Test("stop persists buffered streamed chunks while the lease is still held")
+    func stopPersistsBufferedStreamingChunksWhileLeaseHeld() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        // A debounce long enough that no periodic flush fires: the only write
+        // must come from stop()'s stand-down flush, which — since the lease is
+        // still held — persists the live transcript rather than per-chunk
+        // snapshots. This is the path the per-chunk-encode removal reworked.
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        // A chunk beyond the mock's initial two — it must be included in the
+        // stand-down flush, proving stop() reads the live transcript and does
+        // not rely on a snapshot captured per chunk.
+        mock.emitAgentChunk(" and more")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Nothing persisted yet: the debounce has not fired.
+        let rowsBeforeStop = try store.loadMessages(sessionId: sid)
+        #expect(!rowsBeforeStop.contains { $0.kind == "agent" })
+
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
+        guard case .agent(_, _, let text) = decoded else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "hello world and more")
+    }
+
     @Test("in-place plan update persists to disk even when plan is not the trailing message")
     func planUpdatePersistsWhenNotTrailingMessage() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
