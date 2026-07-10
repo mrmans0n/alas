@@ -12,7 +12,7 @@ final class RightPaneState {
     let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
     var stashes: [GitStash] = []
-    var stashesExpanded: Bool = true
+    var stashesExpanded: Bool = false
     var expandedStashRefs: Set<String> = []
     var stashFilesByRef: [String: [GitStashFile]] = [:]
     var loadingStashRefs: Set<String> = []
