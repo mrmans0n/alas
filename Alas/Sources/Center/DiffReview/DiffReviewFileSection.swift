@@ -460,12 +460,34 @@ struct DiffReviewFileSection: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 18)
         .background(theme.color("bg-1"))
+        .background(renderBudgetScrollAnchors)
         .background(
             DiffReviewAccessibilityMarker(
                 identifier: "diff-review-render-budget-\(file.id.rawValue)",
                 label: "Large diff hidden for performance"
             )
         )
+    }
+
+    /// Zero-size anchors carrying the same target IDs the rendered comment views
+    /// would, so the summary-rail / comment-selection scroll flow resolves a
+    /// target even while the diff body is deferred. Scrolling lands on the
+    /// placeholder (with its "N comments hidden" hint) instead of silently
+    /// no-oping; the reviewer can then choose "Show full diff".
+    private var renderBudgetScrollAnchors: some View {
+        VStack(spacing: 0) {
+            ForEach(draftComments, id: \.id) { comment in
+                Color.clear
+                    .frame(height: 0)
+                    .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
+            }
+            ForEach(inlineFeedback, id: \.id) { item in
+                Color.clear
+                    .frame(height: 0)
+                    .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
+            }
+        }
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
