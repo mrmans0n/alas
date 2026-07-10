@@ -6,6 +6,22 @@ private struct PendingContextExpansion {
     let mode: DiffContextExpansionMode
 }
 
+/// O(1) signal that clears a pending draft when the file's structural layout
+/// changes. `structuralHash` is `nil` while the display model is still a
+/// placeholder. Backed by the digest precomputed on `DiffDisplayModel`.
+struct DiffReviewDraftCommentDisplaySignature: Equatable {
+    let fileID: String
+    let structuralHash: Int?
+}
+
+/// O(1) signal that resets loaded context state when the file, its context
+/// provider, or its structural layout changes.
+struct DiffReviewContextStateSignature: Equatable {
+    let fileID: String
+    let providerID: String
+    let structuralHash: Int?
+}
+
 enum DiffReviewActiveCommentCandidate: Equatable {
     case draft(String)
     case inlineFeedback(String)
@@ -77,7 +93,7 @@ struct DiffReviewFileSection: View {
     @State private var contextExpansion = DiffContextExpansionState()
     @State private var contextLoadTask: Task<Void, Never>?
     @State private var contextLoadFileID: DiffReviewFileID?
-    @State private var contextLoadSignature: String?
+    @State private var contextLoadSignature: DiffReviewContextStateSignature?
     @State private var contextLoadGeneration = 0
     @State private var contextLoadError: String?
     @State private var pendingContextExpansions: [PendingContextExpansion] = []
@@ -732,31 +748,26 @@ struct DiffReviewFileSection: View {
         return Set(groups.flatMap(ReviewDraftCommentPlacement.allRowKeys))
     }
 
-    private var displayGroupSignature: String {
-        let groupSignature = file.displayModel?.groups.map { group in
-            let rowSignature = group.rows.map { row in
-                [
-                    row.id,
-                    row.old?.lineNumber.map { "o\($0)" } ?? "o-",
-                    row.new?.lineNumber.map { "n\($0)" } ?? "n-",
-                    "\(row.collapsedRows.count)",
-                ].joined(separator: ":")
-            }.joined(separator: ",")
-            return "\(group.id)[\(rowSignature)]"
-        }.joined(separator: "|") ?? "placeholder"
-        return groupSignature
+    /// Coarse structural fingerprint of the current display model, read in O(1)
+    /// from the digest precomputed at model-build time. `.onChange` re-evaluates
+    /// its value on every body pass, so this must never walk the rows.
+    private var displayStructuralHash: Int? {
+        file.displayModel?.structuralHash
     }
 
-    private var draftCommentDisplaySignature: String {
-        "\(file.id.rawValue)|\(displayGroupSignature)"
+    private var draftCommentDisplaySignature: DiffReviewDraftCommentDisplaySignature {
+        DiffReviewDraftCommentDisplaySignature(
+            fileID: file.id.rawValue,
+            structuralHash: displayStructuralHash
+        )
     }
 
-    private var contextStateSignature: String {
-        [
-            file.id.rawValue,
-            file.contextProvider?.id.uuidString ?? "no-context-provider",
-            displayGroupSignature,
-        ].joined(separator: "|")
+    private var contextStateSignature: DiffReviewContextStateSignature {
+        DiffReviewContextStateSignature(
+            fileID: file.id.rawValue,
+            providerID: file.contextProvider?.id.uuidString ?? "no-context-provider",
+            structuralHash: displayStructuralHash
+        )
     }
 
     private func loadContextAndExpand(_ key: DiffContextExpansionKey, mode: DiffContextExpansionMode) {

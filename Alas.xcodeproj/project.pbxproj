@@ -683,6 +683,7 @@
 		9A3EB3ACA3AB366431C904EB /* WorktreeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C4E238E48247A6CDD5565D2 /* WorktreeService.swift */; };
 		9AB33F6B645EBA3F92A4E40F /* ACPSessionUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1F34E025D235A5CECCE36E /* ACPSessionUpdate.swift */; };
 		9AC7E08307DA010181E2DE58 /* ACPFirstRunConnectingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B4BB6C10F3718F7D0A50BAE /* ACPFirstRunConnectingPolicy.swift */; };
+		9B00878F781FADB428684B2D /* DiffDisplaySignatureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 283613E170E25F69521F64ED /* DiffDisplaySignatureTests.swift */; };
 		9B2B055195430A5A40BC7659 /* TreeSitterJSON in Frameworks */ = {isa = PBXBuildFile; productRef = 5130D28B6980AF12D2256A6D /* TreeSitterJSON */; };
 		9B51DB62236B865AB86AA0F1 /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = 1F70A188A5F7992AC8C8717E /* TreeSitterTypeScript */; };
 		9B6940D68B098D1F1305324B /* GitTypesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 271F79A165CAA8617C1EAA4E /* GitTypesTests.swift */; };
@@ -1329,6 +1330,7 @@
 		27A92711BC1D9A78D8A80561 /* GitTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitTypes.swift; sourceTree = "<group>"; };
 		27E7E4823B42BBA6EA7610DB /* CommitFilesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitFilesListView.swift; sourceTree = "<group>"; };
 		27EEC16C786CE9430C1AC174 /* DiffReviewFileSectionEqualityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewFileSectionEqualityTests.swift; sourceTree = "<group>"; };
+		283613E170E25F69521F64ED /* DiffDisplaySignatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffDisplaySignatureTests.swift; sourceTree = "<group>"; };
 		28777B087266D8AE174BA233 /* SpaceEmojiPickerSelectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceEmojiPickerSelectionTests.swift; sourceTree = "<group>"; };
 		292B5DA9EC17ED07588C48FD /* OpenCodeInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenCodeInstallerTests.swift; sourceTree = "<group>"; };
 		29313DDC46A0CCA2FA42CDE9 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
@@ -2528,6 +2530,7 @@
 				40497B428C9395535DF6C146 /* DialogChromeLayoutTests.swift */,
 				2B9CB2A64E9E16A2DE3A6272 /* DiffContextExpansionTests.swift */,
 				6181842BEA798CB8606F222B /* DiffDisplayModelBuilderTests.swift */,
+				283613E170E25F69521F64ED /* DiffDisplaySignatureTests.swift */,
 				729DDA22CA94FA0DC8810057 /* DiffInlineCommentModelTests.swift */,
 				61D4F5B30CE2AA0220A3E45C /* DiffInlineHighlighterTests.swift */,
 				2BFCE07604D55558B13FC33B /* DiffOpenFileAvailabilityTests.swift */,
@@ -5382,6 +5385,7 @@
 				E3217588485CC96AB05AA5B9 /* DialogChromeLayoutTests.swift in Sources */,
 				9DDA9F2462746F06A652973A /* DiffContextExpansionTests.swift in Sources */,
 				899FB89D155619CF846C6BDC /* DiffDisplayModelBuilderTests.swift in Sources */,
+				9B00878F781FADB428684B2D /* DiffDisplaySignatureTests.swift in Sources */,
 				FD5B6E7F566A9D0BACD19267 /* DiffInlineCommentModelTests.swift in Sources */,
 				172298A09BC94456A27EFCB7 /* DiffInlineHighlighterTests.swift in Sources */,
 				9927E3934D3CAA9055EF5E44 /* DiffOpenFileAvailabilityTests.swift in Sources */,

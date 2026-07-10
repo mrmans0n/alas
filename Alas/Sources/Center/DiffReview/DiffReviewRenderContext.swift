@@ -3,7 +3,7 @@ import Foundation
 
 struct DiffReviewRenderContextKey: Hashable {
     private let fileID: String
-    private let displayModel: DisplayModelSignature
+    private let displayContentHash: Int
     private let providerAvailable: Bool
     private let contextExpansion: ContextExpansionStateSignature
     private let inlineFeedback: [InlineFeedbackSignature]
@@ -27,7 +27,7 @@ struct DiffReviewRenderContextKey: Hashable {
         annotations: [DiffInlineAnnotation]
     ) {
         self.fileID = fileID.rawValue
-        self.displayModel = DisplayModelSignature(filePath: displayModel.filePath, groups: displayModel.groups)
+        self.displayContentHash = displayModel.contentHash
         self.providerAvailable = contextProviderAvailable
         self.contextExpansion = ContextExpansionStateSignature(
             groups: displayModel.groups,
@@ -212,84 +212,6 @@ final class DiffReviewRenderContextCache: ObservableObject {
     }
 }
 
-private struct DisplayModelSignature: Hashable {
-    let filePath: String
-    let groups: [GroupSignature]
-
-    init(filePath: String, groups: [DiffDisplayGroup]) {
-        self.filePath = filePath
-        self.groups = groups.map(GroupSignature.init)
-    }
-}
-
-private struct GroupSignature: Hashable {
-    let id: String
-    let header: String
-    let rows: [RowSignature]
-
-    init(_ group: DiffDisplayGroup) {
-        id = group.id
-        header = group.header
-        rows = group.rows.map(RowSignature.init)
-    }
-}
-
-private struct RowSignature: Hashable {
-    let id: String
-    let kind: String
-    let old: LineSignature?
-    let new: LineSignature?
-    let collapsedLineCount: Int
-    let collapsedRows: [RowSignature]
-    let contextExpansion: ContextExpansionSignature?
-
-    init(_ row: DiffDisplayRow) {
-        id = row.id
-        kind = String(describing: row.kind)
-        old = row.old.map(LineSignature.init)
-        new = row.new.map(LineSignature.init)
-        collapsedLineCount = row.collapsedLineCount
-        collapsedRows = row.collapsedRows.map(RowSignature.init)
-        contextExpansion = row.contextExpansion.map(ContextExpansionSignature.init)
-    }
-}
-
-private struct LineSignature: Hashable {
-    let id: String
-    let side: Int
-    let oldLine: Int?
-    let newLine: Int?
-    let textHash: Int
-    let lineNumber: Int?
-    let kind: String
-    let inlineSpansHash: Int
-    let noTrailingNewline: Bool
-
-    init(_ line: DiffDisplayLine) {
-        id = line.id
-        side = line.anchor.side.rawValue
-        oldLine = line.anchor.oldLine
-        newLine = line.anchor.newLine
-        textHash = line.text.hashValue
-        lineNumber = line.lineNumber
-        kind = String(describing: line.kind)
-        inlineSpansHash = line.inlineSpans.hashValue
-        noTrailingNewline = line.noTrailingNewline
-    }
-}
-
-private struct ContextExpansionSignature: Hashable {
-    let groupID: String
-    let boundary: String
-    let remainingLineCount: Int
-
-    init(_ expansion: DiffContextExpansionRow) {
-        groupID = expansion.key.groupID
-        boundary = expansion.boundary.rawValue
-        remainingLineCount = expansion.remainingLineCount
-    }
-}
-
 private struct ContextExpansionStateSignature: Hashable {
     let snapshot: SnapshotSignature
     let boundaries: [BoundarySignature]
@@ -420,12 +342,12 @@ private struct BoundaryRange {
 
         let previous = groupIndex > 0 ? groups[groupIndex - 1] : nil
         let next = groupIndex + 1 < groups.count ? groups[groupIndex + 1] : nil
-        let currentOld = Self.hunkSideExtent(in: group, side: .old)
-        let currentNew = Self.hunkSideExtent(in: group, side: .new)
-        let previousOld = previous.map { Self.hunkSideExtent(in: $0, side: .old) }
-        let previousNew = previous.map { Self.hunkSideExtent(in: $0, side: .new) }
-        let nextOld = next.map { Self.hunkSideExtent(in: $0, side: .old) }
-        let nextNew = next.map { Self.hunkSideExtent(in: $0, side: .new) }
+        let currentOld = group.oldSideExtent
+        let currentNew = group.newSideExtent
+        let previousOld = previous?.oldSideExtent
+        let previousNew = previous?.newSideExtent
+        let nextOld = next?.oldSideExtent
+        let nextNew = next?.newSideExtent
 
         switch boundary {
         case .above:
@@ -512,23 +434,6 @@ private struct BoundaryRange {
         return clampedEnd - clampedStart + 1
     }
 
-    private static func hunkSideExtent(in group: DiffDisplayGroup, side: DiffLineSide) -> HunkSideExtent {
-        let start = side == .old ? group.sourceHunk.oldStart : group.sourceHunk.newStart
-        let count = group.sourceHunk.lines.reduce(0) { partial, line in
-            partial + (lineConsumes(line, side: side) ? 1 : 0)
-        }
-        return HunkSideExtent(start: start, count: count)
-    }
-
-    private static func lineConsumes(_ line: ParsedDiff.Hunk.Line, side: DiffLineSide) -> Bool {
-        switch (line.kind, side) {
-        case (.context, .old), (.context, .new), (.delete, .old), (.add, .new):
-            return true
-        case (_, .paired), (.add, .old), (.delete, .new):
-            return false
-        }
-    }
-
     private static func lineNumber(
         start: Int?,
         count: Int,
@@ -547,19 +452,6 @@ private struct BoundaryRange {
             guard offset < count else { return nil }
             return start + offset
         }
-    }
-}
-
-private struct HunkSideExtent {
-    let start: Int
-    let count: Int
-
-    var lineBefore: Int {
-        count > 0 ? start - 1 : start
-    }
-
-    var lineAfter: Int {
-        start + max(count, 1)
     }
 }
 
