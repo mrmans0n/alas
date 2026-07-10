@@ -40,7 +40,7 @@ struct DiffCodeText: View {
         ))
     }
 
-    static func attributedString(
+    nonisolated static func attributedString(
         text: String,
         fileExtension: String,
         codeFontFamily: String,
@@ -48,7 +48,8 @@ struct DiffCodeText: View {
         showWhitespace: Bool,
         inlineSpans: [DiffInlineSpan],
         inlineTone: DiffInlineTone,
-        theme: Theme
+        theme: Theme,
+        highlightSyntax: Bool = true
     ) -> NSAttributedString {
         let visibleText = visibleWhitespaceText(text, enabled: showWhitespace)
         let output = NSMutableAttributedString(
@@ -57,14 +58,16 @@ struct DiffCodeText: View {
         )
         let visibleLength = (visibleText as NSString).length
 
-        applySyntaxSpans(
-            to: output,
-            text: text,
-            fileExtension: fileExtension,
-            inlineTone: inlineTone,
-            theme: theme,
-            visibleLength: visibleLength
-        )
+        if highlightSyntax {
+            applySyntaxSpans(
+                to: output,
+                spans: TreeSitterHighlighter.tokenize(line: text, fileExtension: fileExtension),
+                offset: 0,
+                inlineTone: inlineTone,
+                theme: theme,
+                visibleLength: visibleLength
+            )
+        }
         applyInlineSpans(
             to: output,
             inlineSpans: inlineSpans,
@@ -76,7 +79,7 @@ struct DiffCodeText: View {
         return output
     }
 
-    private static func baseAttributes(
+    nonisolated private static func baseAttributes(
         codeFontFamily: String,
         codeFontSize: CGFloat,
         theme: Theme
@@ -88,31 +91,33 @@ struct DiffCodeText: View {
         ]
     }
 
-    private static func applySyntaxSpans(
+    nonisolated static func applySyntaxSpans(
         to output: NSMutableAttributedString,
-        text: String,
-        fileExtension: String,
+        spans: [HighlightSpan],
+        offset: Int,
         inlineTone: DiffInlineTone,
         theme: Theme,
         visibleLength: Int
     ) {
-        let spans = TreeSitterHighlighter.tokenize(line: text, fileExtension: fileExtension)
+        let spans = spans
             .filter { isValid($0.range, in: visibleLength) }
             .sorted { $0.range.location < $1.range.location }
 
         var cursor = 0
         for span in spans {
             guard span.range.location >= cursor else { continue }
+            let outputRange = NSRange(location: offset + span.range.location, length: span.range.length)
+            guard isValid(outputRange, in: output.length) else { continue }
             output.addAttribute(
                 .foregroundColor,
                 value: NSColor(syntaxColor(for: span.capture, inlineTone: inlineTone, theme: theme)),
-                range: span.range
+                range: outputRange
             )
             cursor = NSMaxRange(span.range)
         }
     }
 
-    private static func applyInlineSpans(
+    nonisolated private static func applyInlineSpans(
         to output: NSMutableAttributedString,
         inlineSpans: [DiffInlineSpan],
         inlineTone: DiffInlineTone,
@@ -130,11 +135,11 @@ struct DiffCodeText: View {
         }
     }
 
-    private static func isValid(_ range: NSRange, in length: Int) -> Bool {
+    nonisolated private static func isValid(_ range: NSRange, in length: Int) -> Bool {
         range.location >= 0 && range.length >= 0 && NSMaxRange(range) <= length
     }
 
-    private static func inlineColor(for tone: DiffInlineTone, theme: Theme) -> Color {
+    nonisolated private static func inlineColor(for tone: DiffInlineTone, theme: Theme) -> Color {
         switch tone {
         case .add:
             return theme.color("add")
@@ -145,7 +150,7 @@ struct DiffCodeText: View {
         }
     }
 
-    private static func syntaxColor(for capture: HighlightCapture, inlineTone: DiffInlineTone, theme: Theme) -> Color {
+    nonisolated private static func syntaxColor(for capture: HighlightCapture, inlineTone: DiffInlineTone, theme: Theme) -> Color {
         switch capture {
         case .keyword:
             return theme.color("syntax-keyword")
@@ -169,7 +174,7 @@ struct DiffCodeText: View {
         }
     }
 
-    private static func visibleWhitespaceText(_ text: String, enabled: Bool) -> String {
+    nonisolated private static func visibleWhitespaceText(_ text: String, enabled: Bool) -> String {
         guard enabled else { return text }
         return text
             .replacingOccurrences(of: " ", with: "·")
