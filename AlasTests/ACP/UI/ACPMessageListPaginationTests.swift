@@ -183,6 +183,16 @@ struct ACPMessageListPaginationTests {
         ) == nil)
     }
 
+    @Test("row frame preferences are legacy-only")
+    func rowFramePreferencesAreLegacyOnly() {
+        #expect(ACPMessageList.shouldUseLegacyRowFramePreferences(
+            isModernScrollTrackingAvailable: false
+        ))
+        #expect(!ACPMessageList.shouldUseLegacyRowFramePreferences(
+            isModernScrollTrackingAvailable: true
+        ))
+    }
+
     @Test("visible message lookup records ids and transcript indices")
     func visibleMessageLookupRecordsIdsAndTranscriptIndices() {
         let lookup = ACPMessageList.visibleMessageLookup(rows: [
