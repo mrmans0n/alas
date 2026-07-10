@@ -165,6 +165,26 @@ struct ACPSelectChipTests {
         #expect(ACPSelectChip.filteredItems(items, query: "kimi-2.7").map(\.id) == ["kimi-2.7"])
     }
 
+    @Test("can exclude hidden identifiers for model filtering")
+    func filteringCanIgnoreHiddenIdentifiers() {
+        let items = [
+            ACPSelectChip.Item(id: "auto", name: "Auto", description: nil),
+            ACPSelectChip.Item(id: "provider:gpt-5-composer-2.5", name: "Composer 2.5", description: nil),
+            ACPSelectChip.Item(id: "provider:gpt-5-opus-4.8", name: "Opus 4.8", description: nil),
+            ACPSelectChip.Item(id: "provider:gpt-5.5", name: "GPT-5.5", description: nil),
+            ACPSelectChip.Item(id: "provider:gpt-5-fable-5", name: "Fable 5", description: nil),
+        ]
+
+        let result = ACPSelectChip.filteredItems(
+            items,
+            query: "gpt-5",
+            searchDescriptions: false,
+            searchIdentifiers: false
+        )
+
+        #expect(result.map(\.name) == ["GPT-5.5"])
+    }
+
     @Test("trims whitespace from query before filtering")
     func filteringTrimsWhitespace() {
         let items = [
