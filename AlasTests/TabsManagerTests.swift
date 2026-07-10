@@ -1078,6 +1078,48 @@ struct TabsManagerPaneTests {
     }
 }
 
+struct TerminalSplitDragStateTests {
+    @Test func transientFractionUsesStartFractionAndClampsBounds() {
+        var drag = TerminalSplitDragState()
+
+        let first = drag.changed(
+            persistedFraction: 0.4,
+            translation: 90,
+            totalForFraction: 300
+        )
+        let second = drag.changed(
+            persistedFraction: 0.7,
+            translation: 180,
+            totalForFraction: 300
+        )
+        let low = drag.changed(
+            persistedFraction: 0.7,
+            translation: -300,
+            totalForFraction: 300
+        )
+        let committed = drag.ended(fallback: 0.4)
+
+        #expect(first == 0.7)
+        #expect(second == 0.9)
+        #expect(low == 0.1)
+        #expect(committed == 0.1)
+        #expect(drag.currentFraction == nil)
+    }
+
+    @Test func transientFractionIgnoresInvalidGeometry() {
+        var drag = TerminalSplitDragState()
+
+        let fraction = drag.changed(
+            persistedFraction: 0.4,
+            translation: 30,
+            totalForFraction: 0
+        )
+
+        #expect(fraction == 0.4)
+        #expect(drag.ended(fallback: 0.4) == 0.4)
+    }
+}
+
 // MARK: - Terminal runtime titles
 
 @MainActor

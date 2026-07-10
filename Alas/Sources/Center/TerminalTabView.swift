@@ -162,13 +162,14 @@ private struct SplitContainer: View {
 
     private let dividerThickness: CGFloat = 4
     @State private var isDividerHovering = false
-    @State private var dragStartFraction: Double? = nil
+    @State private var dragState = TerminalSplitDragState()
 
     var body: some View {
         GeometryReader { geo in
             let total: CGFloat = split.axis == .vertical ? geo.size.width : geo.size.height
             let usable = max(0, total - dividerThickness)
-            let firstSize = max(20, usable * split.fraction)
+            let fraction = dragState.currentFraction ?? split.fraction
+            let firstSize = max(20, usable * fraction)
             let secondSize = max(20, usable - firstSize)
             let totalForFraction = usable
             content(firstSize: firstSize, secondSize: secondSize, totalForFraction: totalForFraction)
@@ -230,21 +231,55 @@ private struct SplitContainer: View {
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
-                        // Capture the fraction at drag start so subsequent events that
-                        // re-render the view with an updated fraction don't compound.
-                        let start = dragStartFraction ?? split.fraction
-                        if dragStartFraction == nil { dragStartFraction = start }
                         let delta: CGFloat = isVertical ? value.translation.width : value.translation.height
-                        let newFraction = start + Double(delta / totalForFraction)
-                        _ = state.tabs.setSplitFraction(
-                            worktreeId: worktreeId, tabId: tabId,
-                            splitId: split.id, fraction: newFraction
+                        _ = dragState.changed(
+                            persistedFraction: split.fraction,
+                            translation: delta,
+                            totalForFraction: totalForFraction
                         )
                     }
                     .onEnded { _ in
-                        dragStartFraction = nil
+                        let finalFraction = dragState.ended(fallback: split.fraction)
+                        _ = state.tabs.setSplitFraction(
+                            worktreeId: worktreeId, tabId: tabId,
+                            splitId: split.id, fraction: finalFraction
+                        )
                     }
             )
+    }
+}
+
+struct TerminalSplitDragState {
+    private var startFraction: Double?
+    private(set) var currentFraction: Double?
+
+    mutating func changed(
+        persistedFraction: Double,
+        translation: CGFloat,
+        totalForFraction: CGFloat
+    ) -> Double {
+        let start = startFraction ?? Self.clamped(persistedFraction)
+        startFraction = start
+
+        guard totalForFraction > 0 else {
+            currentFraction = start
+            return start
+        }
+
+        let fraction = Self.clamped(start + Double(translation / totalForFraction))
+        currentFraction = fraction
+        return fraction
+    }
+
+    mutating func ended(fallback: Double) -> Double {
+        let fraction = currentFraction ?? startFraction ?? Self.clamped(fallback)
+        startFraction = nil
+        currentFraction = nil
+        return fraction
+    }
+
+    private static func clamped(_ fraction: Double) -> Double {
+        max(0.1, min(0.9, fraction))
     }
 }
 
