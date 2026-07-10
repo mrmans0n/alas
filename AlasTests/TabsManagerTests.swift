@@ -786,6 +786,66 @@ struct TabsManagerPaneTests {
         #expect(s.focusedLeafId == originalFocus)
     }
 
+    @Test func setFocusedLeafDoesNotImmediatelyPersist() {
+        let worktreeId = "tabs-manager-focus-no-immediate-persist-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else {
+            Issue.record("expected terminal tab")
+            return
+        }
+        let originalFocus = initialState.focusedLeafId
+        _ = mgr.splitFocusedLeaf(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            axis: .vertical,
+            newLeafId: "new-leaf",
+            newSessionId: "s2"
+        )
+
+        _ = mgr.setFocusedLeaf(worktreeId: worktreeId, tabId: tab.id, leafId: originalFocus)
+
+        guard let current = mgr.tabs(forWorktree: worktreeId).first(where: { $0.id == tab.id }),
+              case .terminal(let currentState) = current else {
+            Issue.record("expected in-memory terminal tab after setFocusedLeaf")
+            return
+        }
+        #expect(currentState.focusedLeafId == originalFocus)
+
+        let reloaded = TabsManager()
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        guard let persisted = reloaded.tabs(forWorktree: worktreeId).first(where: { $0.id == tab.id }),
+              case .terminal(let persistedState) = persisted else {
+            Issue.record("expected persisted terminal tab")
+            return
+        }
+        #expect(persistedState.focusedLeafId == "new-leaf")
+    }
+
+    @Test func setFocusedLeafReturnsTabWhenLeafIsAlreadyFocused() {
+        let worktreeId = "tabs-manager-refocus-active-leaf-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else {
+            Issue.record("expected terminal tab")
+            return
+        }
+
+        let updated = mgr.setFocusedLeaf(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            leafId: initialState.focusedLeafId
+        )
+
+        guard case .terminal(let updatedState) = updated else {
+            Issue.record("expected terminal tab when re-focusing active leaf")
+            return
+        }
+        #expect(updatedState.focusedLeafId == initialState.focusedLeafId)
+    }
+
     @Test func splitFocusedLeafReplacesFocusedLeafWithSplit() {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
@@ -1016,6 +1076,67 @@ struct TabsManagerPaneTests {
            case .leaf(let l) = s.root {
             #expect(l.lastCwd == "/Users/test")
         }
+    }
+
+    @Test func setLeafCwdUpdatesInMemoryWithoutImmediatePersistence() {
+        let worktreeId = "tabs-manager-cwd-no-immediate-persist-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else {
+            Issue.record("expected terminal tab")
+            return
+        }
+
+        let updated = mgr.setLeafCwd(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            leafId: initialState.focusedLeafId,
+            cwd: "/Users/test"
+        )
+
+        guard case .terminal(let updatedState) = updated,
+              case .leaf(let updatedLeaf) = updatedState.root else {
+            Issue.record("expected updated terminal tab")
+            return
+        }
+        #expect(updatedLeaf.lastCwd == "/Users/test")
+
+        let reloaded = TabsManager()
+        reloaded.loadAll(worktreeIds: [worktreeId])
+        guard let persisted = reloaded.tabs(forWorktree: worktreeId).first(where: { $0.id == tab.id }),
+              case .terminal(let persistedState) = persisted,
+              case .leaf(let persistedLeaf) = persistedState.root else {
+            Issue.record("expected persisted terminal tab")
+            return
+        }
+        #expect(persistedLeaf.lastCwd == nil)
+    }
+
+    @Test func setLeafCwdIgnoresUnchangedCwd() {
+        let worktreeId = "tabs-manager-cwd-unchanged-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else {
+            Issue.record("expected terminal tab")
+            return
+        }
+
+        _ = mgr.setLeafCwd(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            leafId: initialState.focusedLeafId,
+            cwd: "/Users/test"
+        )
+        let repeated = mgr.setLeafCwd(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            leafId: initialState.focusedLeafId,
+            cwd: "/Users/test"
+        )
+
+        #expect(repeated == nil)
     }
 
     @Test func replaceLeafSessionPreservesLastCwd() {

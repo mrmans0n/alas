@@ -276,7 +276,6 @@ final class TabsManager {
         let tab = Tab.terminal(state)
         file.tabs[idx] = tab
         byWorktree[worktreeId] = file
-        persist(worktreeId)
         return tab
     }
 
@@ -379,7 +378,9 @@ final class TabsManager {
     func setLeafCwd(worktreeId: String, tabId: TabID, leafId: String, cwd: String) -> Tab? {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
-              case .terminal(var state) = file.tabs[idx] else { return nil }
+              case .terminal(var state) = file.tabs[idx],
+              let existing = state.root.find(leafId: leafId)?.leaf else { return nil }
+        guard existing.lastCwd != cwd else { return nil }
         state.root = updatingLeaf(state.root, leafId: leafId) { l in
             var copy = l
             copy.lastCwd = cwd
@@ -388,7 +389,6 @@ final class TabsManager {
         let tab = Tab.terminal(state)
         file.tabs[idx] = tab
         byWorktree[worktreeId] = file
-        persist(worktreeId)
         return tab
     }
 
