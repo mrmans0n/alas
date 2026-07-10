@@ -1524,11 +1524,14 @@ extension ACPSessionRunner {
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
             let basePayload: Data?
             if i < persistedMessageCount {
-                // Prefer our in-memory record of the row we last wrote; only
-                // fall back to a one-time SQLite read for a row persisted by a
-                // previous session load that this runner never rewrote.
-                let id = "msg-\(sessionId)-\(i)"
-                guard let base = lastPersistedPayloads[i] ?? (try? store.loadMessagePayload(id: id)) else { continue }
+                // The compare-and-swap base MUST be what THIS runner last wrote
+                // while it still held the lease. Reading the row from SQLite now
+                // is unsafe — the lease has already moved, so the row may hold
+                // the new owner's payload, which would become `expectedPayload`
+                // and let the CAS clobber the new writer. Without our own record
+                // we cannot write this row safely, so skip it; the new owner is
+                // authoritative for a row we never persisted ourselves.
+                guard let base = lastPersistedPayloads[i] else { continue }
                 basePayload = base
             } else {
                 basePayload = nil

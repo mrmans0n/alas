@@ -1358,6 +1358,84 @@ struct ACPSessionRunnerTests {
         #expect(text.value == "new writer")
     }
 
+    @Test("takeover flush skips a dirtied row this runner never persisted")
+    func takeoverFlushSkipsRowWithoutCachedBase() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        // A tool row persisted by a *previous* session load: it counts toward
+        // persistedMessageCount, but this runner never wrote it, so it has no
+        // entry in lastPersistedPayloads.
+        let tool = ACPMessage.toolCall(.init(
+            toolCallId: "tool-x", title: "Run", kind: "execute",
+            status: "in_progress", content: "base"))
+        try store.appendMessage(
+            sessionId: sid, id: "msg-\(sid)-0", kind: "tool_call",
+            seq: 0, payload: try ACPMessageCodec.encode(tool), createdAt: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.replaceTranscriptMessages([tool])
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        // Dirty the pre-existing tool row mid-stream: it enters the persist
+        // buffer without a CAS base captured while we held the lease.
+        mock.emitToolCallUpdate(.init(
+            toolCallId: "tool-x",
+            status: "completed",
+            content: [.content(.text("mine"))]))
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Takeover, then the new owner rewrites that same row.
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        let newOwnerPayload = try ACPMessageCodec.encode(.toolCall(.init(
+            toolCallId: "tool-x", title: "Run", kind: "execute",
+            status: "completed", content: "new owner")))
+        try store.updateMessagePayload(id: "msg-\(sid)-0", payload: newOwnerPayload)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        // Without a base captured under our lease, reading the row now would
+        // pick up the new owner's payload and let the CAS clobber it — so the
+        // row must be skipped entirely.
+        let rows = try store.loadMessages(sessionId: sid)
+        let toolRow = try #require(rows.first(where: { $0.id == "msg-\(sid)-0" }))
+        guard case .toolCall(let persisted) =
+                try ACPMessageCodec.decode(kind: toolRow.kind, payload: toolRow.payload) else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == "new owner")
+    }
+
     @Test("stop persists buffered streamed chunks while the lease is still held")
     func stopPersistsBufferedStreamingChunksWhileLeaseHeld() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
