@@ -1238,6 +1238,9 @@ enum ReviewDraftCommentRowSegmentation {
         canCreateDraftComment: Bool = true
     ) -> Result {
         let pendingKey = pendingAnchor.flatMap { pendingRowKey(for: $0, in: group) }
+        let duplicatePendingKey = pendingKey.map { key in
+            group.rows.filter { ReviewDraftCommentPlacement.allRowKeys(in: $0).contains(key) }.count > 1
+        } ?? false
         var segments: [Segment] = []
         var bufferedRows: [DiffDisplayRow] = []
         var emittedCommentIDs: Set<String> = []
@@ -1252,7 +1255,11 @@ enum ReviewDraftCommentRowSegmentation {
                 excludingIDs: emittedCommentIDs
             )
             emittedCommentIDs.formUnion(comments.map(\.id))
-            let showsComposer = canCreateDraftComment && (pendingKey.map { keys.contains($0) } ?? false)
+            let showsComposer = canCreateDraftComment && (pendingKey.map { key in
+                guard keys.contains(key) else { return false }
+                guard duplicatePendingKey, let pendingAnchor else { return true }
+                return rowContainsDisplayRowIndex(pendingAnchor.endRowIndex, row: row)
+            } ?? false)
             guard !comments.isEmpty || showsComposer else { continue }
 
             segments.append(Segment(
@@ -1312,6 +1319,26 @@ enum ReviewDraftCommentRowSegmentation {
         return anchor
     }
 
+    static func sourceIndexedAnchor(
+        _ anchor: DiffReviewLineAnchor,
+        in rows: [DiffDisplayRow]
+    ) -> DiffReviewLineAnchor {
+        let rowIndex = sourceRowIndex(for: anchor.rowIndex, side: anchor.side, in: rows) ?? anchor.rowIndex
+        let endRowIndex = sourceRowIndex(for: anchor.endRowIndex, side: anchor.side, in: rows) ?? anchor.endRowIndex
+        guard rowIndex != anchor.rowIndex || endRowIndex != anchor.endRowIndex else { return anchor }
+
+        return DiffReviewLineAnchor(
+            path: anchor.path,
+            side: anchor.side,
+            line: anchor.line,
+            endLine: anchor.endLine,
+            rowIndex: rowIndex,
+            endRowIndex: endRowIndex,
+            selectedLines: anchor.selectedLines,
+            selectedText: anchor.selectedText
+        )
+    }
+
     private static func pendingRowKey(
         for anchor: DiffReviewLineAnchor,
         in group: DiffDisplayGroup
@@ -1335,6 +1362,29 @@ enum ReviewDraftCommentRowSegmentation {
         let keys = Set(ReviewDraftCommentPlacement.allRowKeys(in: group))
         return keys.contains(ReviewDraftCommentPlacement.RowKey(side: .unknown, line: anchor.draftPlacementLine))
             || keys.contains(ReviewDraftCommentPlacement.RowKey(side: .unknown, line: anchor.line))
+    }
+
+    private static func rowContainsDisplayRowIndex(_ rowIndex: Int, row: DiffDisplayRow) -> Bool {
+        row.old?.anchor.rowIndex == rowIndex
+            || row.new?.anchor.rowIndex == rowIndex
+            || row.collapsedRows.contains { rowContainsDisplayRowIndex(rowIndex, row: $0) }
+    }
+
+    private static func sourceRowIndex(
+        for localRowIndex: Int,
+        side: DiffReviewInlineFeedbackSide,
+        in rows: [DiffDisplayRow]
+    ) -> Int? {
+        guard rows.indices.contains(localRowIndex) else { return nil }
+        let row = rows[localRowIndex]
+        switch side {
+        case .old:
+            return row.old?.anchor.rowIndex ?? row.new?.anchor.rowIndex
+        case .new:
+            return row.new?.anchor.rowIndex ?? row.old?.anchor.rowIndex
+        case .unknown:
+            return row.old?.anchor.rowIndex ?? row.new?.anchor.rowIndex
+        }
     }
 
     private static func selectedLineRange(
