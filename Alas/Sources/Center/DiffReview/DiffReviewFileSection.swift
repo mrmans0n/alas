@@ -412,8 +412,15 @@ struct DiffReviewFileSection: View {
         renderContext?.groups.map(\.displayGroup)
     }
 
+    /// Review annotations that the placeholder hides while the diff is deferred.
+    /// Computed from the cheap input arrays so it never forces a `renderContext` build.
+    private var hiddenReviewItemCount: Int {
+        draftComments.count + inlineFeedback.count + threads.count
+    }
+
     private var renderBudgetPlaceholder: some View {
         let changedLines = file.summary.additions + file.summary.deletions
+        let hiddenItems = hiddenReviewItemCount
         return VStack(alignment: .leading, spacing: 8) {
             Text("Large diff hidden for performance")
                 .font(.system(size: 12, weight: .semibold))
@@ -421,6 +428,12 @@ struct DiffReviewFileSection: View {
             Text("\(changedLines.formatted()) changed lines. Rendering may be slow.")
                 .font(.system(size: 12))
                 .foregroundColor(theme.color("fg-dim"))
+            if hiddenItems > 0 {
+                Text("^[\(hiddenItems) comment](inflect: true) hidden — show the full diff to view.")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .accessibilityIdentifier("diff-review-render-budget-hidden-comments-\(file.id.rawValue)")
+            }
             Button {
                 showFullDiffOverride = true
             } label: {
