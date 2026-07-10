@@ -11,44 +11,50 @@ struct AgentLauncherDialog: View {
     @State private var loadingMore = false
 
     var body: some View {
-        if appState.isAgentLauncherOpen {
-            ZStack {
-                Color.black.opacity(0.42)
-                    .ignoresSafeArea()
-                    .onTapGesture { close() }
+        Group {
+            if appState.isAgentLauncherOpen {
+                ZStack {
+                    Color.black.opacity(0.42)
+                        .ignoresSafeArea()
+                        .onTapGesture { close() }
 
-                VStack(spacing: 0) {
-                    inputRow
-                    if chatAgent == nil {
-                        modePicker
+                    VStack(spacing: 0) {
+                        inputRow
+                        if chatAgent == nil {
+                            modePicker
+                        }
+                        Divider().background(theme.color("line"))
+                        rowList
+                        footer
                     }
-                    Divider().background(theme.color("line"))
-                    rowList
-                    footer
+                    .frame(width: 460)
+                    .frame(maxHeight: 420)
+                    .background(theme.color("bg-1").opacity(0.92))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
+                    .padding(.top, 70)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .onTapGesture { }
+                    .onKeyPress { press in handleKey(press) }
                 }
-                .frame(width: 460)
-                .frame(maxHeight: 420)
-                .background(theme.color("bg-1").opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                )
-                .shadow(color: .black.opacity(0.5), radius: 30, x: 0, y: 20)
-                .padding(.top, 70)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .onTapGesture { }
-                .onKeyPress { press in handleKey(press) }
+                .transition(.opacity.combined(with: .offset(y: -6)))
+                .onAppear {
+                    requestInputFocus()
+                }
+                .onChange(of: appState.agentLauncher.query) {
+                    selectedSessionIndex = 0
+                }
             }
-            .transition(.opacity.combined(with: .offset(y: -6)))
-            .onAppear {
+        }
+        .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
+            if isOpen {
                 requestInputFocus()
-            }
-            .onChange(of: appState.isAgentLauncherOpen) { _, isOpen in
-                if isOpen { requestInputFocus() }
-            }
-            .onChange(of: appState.agentLauncher.query) {
-                selectedSessionIndex = 0
+            } else {
+                resetSessionBrowser()
             }
         }
     }
@@ -481,23 +487,24 @@ struct AgentLauncherDialog: View {
     }
 
     private func backToAgents() {
-        let prior = discoveryModel
-        discoveryModel = nil
-        chatAgent = nil
-        selectedSessionIndex = 0
+        resetSessionBrowser()
         appState.agentLauncher.query = ""
-        Task { await prior?.stop() }
         requestInputFocus()
     }
 
     private func close() {
+        resetSessionBrowser()
+        appState.agentLauncher.reset()
+        appState.isAgentLauncherOpen = false
+    }
+
+    private func resetSessionBrowser() {
         let prior = discoveryModel
         discoveryModel = nil
         chatAgent = nil
         selectedSessionIndex = 0
+        loadingMore = false
         Task { await prior?.stop() }
-        appState.agentLauncher.reset()
-        appState.isAgentLauncherOpen = false
     }
 
     private func requestInputFocus() {
