@@ -5,6 +5,7 @@ struct ACPInitializeOutcome: Equatable {
     let authMethods: [ACPInitializeResult.ACPAuthMethod]
     let loadSession: Bool
     let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
+    let mcpCapabilities: ACPMCPServerCapabilities
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -30,7 +31,8 @@ final class ACPConnection: @unchecked Sendable {
             promptCapabilities: result.agentCapabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
             loadSession: result.agentCapabilities?.loadSession ?? false,
-            sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init()
+            sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init(),
+            mcpCapabilities: result.agentCapabilities?.mcpCapabilities ?? .init()
         )
     }
 
