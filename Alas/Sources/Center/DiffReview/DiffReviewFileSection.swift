@@ -146,12 +146,15 @@ struct DiffReviewFileSection: View {
             showFullDiffOverride = false
             resetContextState()
         }
-        .onChange(of: contextStateSignature) { _, _ in
-            // Re-arm the render budget when the same file reloads with new
-            // content (structuralHash changes) under an unchanged file.id.
-            // Context expansion does not alter this signature, so an opened
-            // large diff stays open while the reviewer expands context.
+        .onChange(of: renderBudgetResetSignal) { _, _ in
+            // Re-arm the render budget whenever the same file reloads with new
+            // content under an unchanged file.id. Keyed off `contentHash`, which
+            // captures text-only edits (unlike `structuralHash`); context
+            // expansion never mutates `file.displayModel`, so an opened large
+            // diff stays open while the reviewer expands context.
             showFullDiffOverride = false
+        }
+        .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
         }
         .onChange(of: pendingDraftAnchor) { _, anchor in
@@ -821,6 +824,14 @@ struct DiffReviewFileSection: View {
     /// its value on every body pass, so this must never walk the rows.
     private var displayStructuralHash: Int? {
         file.displayModel?.structuralHash
+    }
+
+    /// Content-level fingerprint (includes row text) used to re-arm the render
+    /// budget on same-file reloads. Unlike `structuralHash`, it changes on
+    /// pure text edits; unlike `file.id`, it changes when a same-path file
+    /// reloads with new content.
+    private var renderBudgetResetSignal: Int? {
+        file.displayModel?.contentHash
     }
 
     private var draftCommentDisplaySignature: DiffReviewDraftCommentDisplaySignature {
