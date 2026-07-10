@@ -1441,6 +1441,21 @@ extension ACPSessionRunner {
         // arm the debounce. Encoding the (growing) message and reading its
         // stored payload happen once per debounce window in the flush, not
         // once per streamed chunk.
+        //
+        // One exception: an already-persisted row this runner has not written
+        // yet (loaded from disk, or trimmed from the cache) has no compare-and-
+        // swap base. Capture its stored payload NOW — the caller reaches here
+        // only after confirming we hold the lease, so this reads our own view,
+        // not a future owner's. Deferring to the stand-down freeze would be too
+        // late (the row could hold a new owner's payload by then), and skipping
+        // it would silently drop a legitimate under-lease update. This reads at
+        // most once per such row, never on the hot streaming-tail path (a new
+        // trailing row is not yet persisted, so it is written, not read).
+        for i in indices where i < persistedMessageCount && lastPersistedPayloads[i] == nil {
+            if let base = try? store.loadMessagePayload(id: "msg-\(sessionId)-\(i)") {
+                lastPersistedPayloads[i] = base
+            }
+        }
         pendingStreamingPersistIndices.formUnion(indices)
         guard streamingPersistTask == nil else { return }
         streamingPersistTask = Task { @MainActor [weak self] in
@@ -1524,13 +1539,14 @@ extension ACPSessionRunner {
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
             let basePayload: Data?
             if i < persistedMessageCount {
-                // The compare-and-swap base MUST be what THIS runner last wrote
-                // while it still held the lease. Reading the row from SQLite now
-                // is unsafe — the lease has already moved, so the row may hold
-                // the new owner's payload, which would become `expectedPayload`
-                // and let the CAS clobber the new writer. Without our own record
-                // we cannot write this row safely, so skip it; the new owner is
-                // authoritative for a row we never persisted ourselves.
+                // The compare-and-swap base MUST be a payload captured while we
+                // held the lease — `scheduleStreamingPersist` records one for
+                // every persisted row it buffers, so the entry is normally
+                // present. Reading the row from SQLite HERE would be unsafe: the
+                // lease has already moved, so the row may hold the new owner's
+                // payload, which would become `expectedPayload` and let the CAS
+                // clobber it. If no under-lease base exists we cannot write
+                // safely, so skip the row and leave the new owner authoritative.
                 guard let base = lastPersistedPayloads[i] else { continue }
                 basePayload = base
             } else {

@@ -1436,6 +1436,78 @@ struct ACPSessionRunnerTests {
         #expect(persisted.content == "new owner")
     }
 
+    @Test("takeover flush persists an under-lease update to a loaded row the new owner left alone")
+    func takeoverFlushPersistsUnderLeaseUpdateToLoadedRow() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+
+        // A tool row persisted by a previous session load — no cache entry.
+        let tool = ACPMessage.toolCall(.init(
+            toolCallId: "tool-x", title: "Run", kind: "execute",
+            status: "in_progress", content: "base"))
+        try store.appendMessage(
+            sessionId: sid, id: "msg-\(sid)-0", kind: "tool_call",
+            seq: 0, payload: try ACPMessageCodec.encode(tool), createdAt: now)
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.replaceTranscriptMessages([tool])
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME"
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        // Update the loaded row while we still hold the lease. The CAS base is
+        // captured now, against the on-disk "base" payload.
+        mock.emitToolCallUpdate(.init(
+            toolCallId: "tool-x",
+            status: "completed",
+            content: [.content(.text("mine"))]))
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Takeover, but the new owner never touches this row.
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        mock.emitUsageUpdate()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        runner.stop()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        // The row still matches the base we captured under the lease, so the
+        // CAS succeeds and our under-lease update is not silently dropped.
+        let rows = try store.loadMessages(sessionId: sid)
+        let toolRow = try #require(rows.first(where: { $0.id == "msg-\(sid)-0" }))
+        guard case .toolCall(let persisted) =
+                try ACPMessageCodec.decode(kind: toolRow.kind, payload: toolRow.payload) else {
+            Issue.record("expected persisted tool call")
+            return
+        }
+        #expect(persisted.content == "mine")
+        #expect(persisted.status == "completed")
+    }
+
     @Test("stop persists buffered streamed chunks while the lease is still held")
     func stopPersistsBufferedStreamingChunksWhileLeaseHeld() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
