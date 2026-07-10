@@ -100,16 +100,30 @@ struct DiffReviewFileSection: View {
     @State private var hoveredInlineFeedbackID: String?
     @State private var hoveredDraftCommentID: String?
     @State private var activeThreadID: String?
+    @State private var showFullDiffOverride = false
     @FocusState private var draftComposerFocused: Bool
 
+    private var isOverRenderBudget: Bool {
+        guard let displayModel = file.displayModel else { return false }
+        return DiffReviewRenderBudget.isOverBudget(displayModel)
+    }
+
+    private var shouldDeferRender: Bool {
+        isOverRenderBudget && !showFullDiffOverride
+    }
+
     var body: some View {
-        let renderContext = renderContext
         VStack(spacing: 0) {
             header
             contextLoadErrorRow
-            fileLevelDraftCommentStack(renderContext: renderContext)
-            fileLevelInlineFeedbackStack(renderContext: renderContext)
-            content(renderContext: renderContext)
+            if shouldDeferRender {
+                renderBudgetPlaceholder
+            } else {
+                let renderContext = renderContext
+                fileLevelDraftCommentStack(renderContext: renderContext)
+                fileLevelInlineFeedbackStack(renderContext: renderContext)
+                content(renderContext: renderContext)
+            }
         }
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -129,6 +143,7 @@ struct DiffReviewFileSection: View {
             clearPendingDraft()
         }
         .onChange(of: file.id) { _, _ in
+            showFullDiffOverride = false
             resetContextState()
         }
         .onChange(of: contextStateSignature) { _, _ in
@@ -395,6 +410,41 @@ struct DiffReviewFileSection: View {
 
     private var currentDisplayGroups: [DiffDisplayGroup]? {
         renderContext?.groups.map(\.displayGroup)
+    }
+
+    private var renderBudgetPlaceholder: some View {
+        let changedLines = file.summary.additions + file.summary.deletions
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Large diff hidden for performance")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            Text("\(changedLines.formatted()) changed lines. Rendering may be slow.")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+            Button {
+                showFullDiffOverride = true
+            } label: {
+                Text("Show full diff")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("diff-review-show-full-diff-\(file.id.rawValue)")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 18)
+        .background(theme.color("bg-1"))
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-render-budget-\(file.id.rawValue)",
+                label: "Large diff hidden for performance"
+            )
+        )
     }
 
     @ViewBuilder
