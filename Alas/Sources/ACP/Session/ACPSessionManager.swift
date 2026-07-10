@@ -621,13 +621,18 @@ final class ACPSessionManager: ObservableObject {
         if followsTail {
             transcriptScrollMemory.removeValue(forKey: id)
         } else {
-            transcriptScrollMemory[id] = ACPTranscriptScrollMemory(
+            let memory = ACPTranscriptScrollMemory(
                 anchorMessageId: anchorMessageId,
                 anchorMessageIndex: anchorMessageIndex,
                 followsTail: false
             )
+            if transcriptScrollMemory[id] != memory {
+                transcriptScrollMemory[id] = memory
+            }
         }
-        sessions[id]?.followsTranscriptTail = followsTail
+        if sessions[id]?.followsTranscriptTail != followsTail {
+            sessions[id]?.followsTranscriptTail = followsTail
+        }
     }
 
     private func applyRememberedTranscriptScrollWindow(

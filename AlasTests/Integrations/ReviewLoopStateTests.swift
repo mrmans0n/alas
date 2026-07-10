@@ -788,6 +788,41 @@ struct ReviewLoopStateTests {
         #expect(state.lastError?.contains("git status failed") == true)
     }
 
+    @Test func cachedLocalRefreshPreservesEnrichedHeadRemoteMetadata() async throws {
+        let state = ReviewLoopState(
+            worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),
+            baseBranch: "upstream/main",
+            providerRegistry: CodeHostProviderRegistry(providers: [.github: FakeCodeHostProvider(kind: .github)])
+        )
+        await state.refresh(local: Self.makeLocal(baseBranch: "upstream/main", needsPush: true), remotes: [
+            GitRemote(name: "origin", url: "git@github.com:nacho/alas.git"),
+            GitRemote(name: "upstream", url: "git@github.com:mrmans0n/alas.git"),
+        ])
+        let enrichedLocal = try #require(state.snapshot?.local)
+        #expect(enrichedLocal.headRemoteName == "origin")
+        #expect(enrichedLocal.headRemoteOwner == "nacho")
+
+        let rawLocal = ReviewLoopLocalState(
+            branchName: enrichedLocal.branchName,
+            headSHA: enrichedLocal.headSHA,
+            baseBranch: enrichedLocal.baseBranch,
+            hasWorkingTreeChanges: enrichedLocal.hasWorkingTreeChanges,
+            hasStagedChanges: enrichedLocal.hasStagedChanges,
+            aheadCommitCount: enrichedLocal.aheadCommitCount,
+            hasUpstream: enrichedLocal.hasUpstream,
+            upstreamRemoteName: enrichedLocal.upstreamRemoteName,
+            upstreamBranchName: enrichedLocal.upstreamBranchName,
+            upstreamAheadCommitCount: enrichedLocal.upstreamAheadCommitCount,
+            needsPush: enrichedLocal.needsPush
+        )
+        let attempt = state.beginLocalRefresh(local: rawLocal)
+
+        state.finishLocalRefresh(attempt, preservingRemoteWith: rawLocal)
+
+        #expect(state.snapshot?.local.headRemoteName == "origin")
+        #expect(state.snapshot?.local.headRemoteOwner == "nacho")
+    }
+
     @Test func localInspectionFailureBlocksWithoutLocalSnapshot() async throws {
         let state = ReviewLoopState(
             worktreePath: URL(fileURLWithPath: "/tmp/alas-review-loop"),

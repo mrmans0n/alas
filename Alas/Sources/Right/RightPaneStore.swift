@@ -234,9 +234,9 @@ final class RightPaneStore {
     /// merge-conflict editor after `Mark resolved` so the Conflicts section
     /// reflects the staged resolution immediately without waiting for the
     /// FSEvents debouncer.
-    func refresh(worktreeId: String) async {
+    func refresh(worktreeId: String, forceReviewLoopRemote: Bool = false) async {
         guard let state = states[worktreeId] else { return }
-        await state.refresh()
+        await state.refresh(forceReviewLoopRemote: forceReviewLoopRemote)
     }
 
     func invalidateSnapshot(worktreeId: String) {

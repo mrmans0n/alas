@@ -213,6 +213,58 @@ struct RightPaneStateReviewLoopPushTests {
         #expect(count == 2)
     }
 
+    @Test func reviewLoopRemoteRefreshSkipsSameFingerprintInsideInterval() {
+        let fingerprint = Self.makeRemoteFingerprint(headSHA: "abc")
+        let now = Date(timeIntervalSince1970: 100)
+
+        #expect(!RightPaneState.shouldRefreshReviewLoopRemote(
+            now: now,
+            lastRefreshAt: now.addingTimeInterval(-10),
+            lastFingerprint: fingerprint,
+            fingerprint: fingerprint,
+            minimumInterval: 45
+        ))
+    }
+
+    @Test func reviewLoopRemoteRefreshRunsWhenFingerprintChanges() {
+        let now = Date(timeIntervalSince1970: 100)
+
+        #expect(RightPaneState.shouldRefreshReviewLoopRemote(
+            now: now,
+            lastRefreshAt: now.addingTimeInterval(-10),
+            lastFingerprint: Self.makeRemoteFingerprint(headSHA: "abc"),
+            fingerprint: Self.makeRemoteFingerprint(headSHA: "def"),
+            minimumInterval: 45
+        ))
+    }
+
+    @Test func reviewLoopRemoteRefreshRunsAfterInterval() {
+        let fingerprint = Self.makeRemoteFingerprint(headSHA: "abc")
+        let now = Date(timeIntervalSince1970: 100)
+
+        #expect(RightPaneState.shouldRefreshReviewLoopRemote(
+            now: now,
+            lastRefreshAt: now.addingTimeInterval(-60),
+            lastFingerprint: fingerprint,
+            fingerprint: fingerprint,
+            minimumInterval: 45
+        ))
+    }
+
+    @Test func reviewLoopRemoteFingerprintRemotesAreStable() {
+        let remotes = [
+            GitRemote(name: "upstream", url: "git@github.com:mrmans0n/alas.git"),
+            GitRemote(name: "origin", url: "git@github.com:fork/alas.git", direction: .push)
+        ]
+
+        let signature = RightPaneState.reviewLoopRemoteFingerprintRemotes(remotes)
+
+        #expect(signature == [
+            "origin\u{1F}push\u{1F}git@github.com:fork/alas.git",
+            "upstream\u{1F}fetch\u{1F}git@github.com:mrmans0n/alas.git"
+        ])
+    }
+
     @Test func forcePushArgumentsUseForceWithLease() {
         let snapshot = Self.makeSnapshot()
 
@@ -245,6 +297,23 @@ struct RightPaneStateReviewLoopPushTests {
         let result = ProcessResult(exitCode: 1, stdout: "", stderr: "")
 
         #expect(RightPaneState.reviewLoopPushFailureMessage(result) == "git push failed with exit code 1.")
+    }
+
+    private static func makeRemoteFingerprint(headSHA: String) -> ReviewLoopRemoteFingerprint {
+        ReviewLoopRemoteFingerprint(
+            branchName: "feature/review-loop",
+            headSHA: headSHA,
+            baseBranch: "main",
+            hasWorkingTreeChanges: false,
+            hasStagedChanges: false,
+            aheadCommitCount: 1,
+            hasUpstream: true,
+            upstreamRemoteName: "origin",
+            upstreamBranchName: "feature/review-loop",
+            upstreamAheadCommitCount: 0,
+            needsPush: false,
+            remotes: ["origin\u{1F}fetch\u{1F}git@github.com:mrmans0n/alas.git"]
+        )
     }
 
     private static func makeSnapshot(

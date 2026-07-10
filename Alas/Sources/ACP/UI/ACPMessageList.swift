@@ -33,7 +33,8 @@ struct ACPMessageList: View {
     @State private var headFrame: CGRect = .zero
     @State private var lastHeadStepAt: Date = .distantPast
     @State private var scrollViewRef = ACPWeakScrollViewRef()
-    @State private var latestTopVisibleAnchor: String?
+    @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
+    @State private var latestRememberedScrollAnchorIndex: Int?
     @State private var restoredRememberedAnchor: String?
     @State private var pendingTailScrollTask: Task<Void, Never>?
 
@@ -391,36 +392,47 @@ struct ACPMessageList: View {
         session.followsTranscriptTail = follows
         if follows {
             onRememberScrollAnchor(nil, nil, true)
+            latestRememberedScrollAnchorIndex = nil
         } else {
             pendingTailScrollTask?.cancel()
             pendingTailScrollTask = nil
             let lookup = visibleMessageLookup
+            let anchorIndex = lookup.transcriptIndex(for: latestTopVisibleAnchor.value)
             onRememberScrollAnchor(
-                latestTopVisibleAnchor,
-                lookup.transcriptIndex(for: latestTopVisibleAnchor),
+                latestTopVisibleAnchor.value,
+                anchorIndex,
                 false
             )
-            restoredRememberedAnchor = latestTopVisibleAnchor
+            latestRememberedScrollAnchorIndex = anchorIndex
+            restoredRememberedAnchor = latestTopVisibleAnchor.value
         }
     }
 
     private func handleRowFramePreference(_ frames: [String: CGRect], proxy: ScrollViewProxy) {
         restoreRememberedAnchorIfNeeded(proxy: proxy)
         guard let anchor = Self.topVisibleAnchorID(in: frames) else { return }
+        let anchorChanged = latestTopVisibleAnchor.value != anchor
+        if anchorChanged {
+            latestTopVisibleAnchor.value = anchor
+        }
         let lookup = visibleMessageLookup
-        latestTopVisibleAnchor = anchor
         guard !isRestoringTail else { return }
         guard !session.followsTranscriptTail else { return }
+        let rememberedAnchor = rememberedScrollAnchor()
+        let anchorIndex = lookup.transcriptIndex(for: anchor)
+        let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
+        guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
         if !Self.shouldRememberVisibleAnchor(
             anchor,
-            rememberedAnchor: rememberedScrollAnchor(),
+            rememberedAnchor: rememberedAnchor,
             restoredRememberedAnchor: restoredRememberedAnchor,
             visibleMessageIds: lookup.ids,
             isBackfillingOlderMessages: transcript.isBackfillingOlderMessages
         ) {
             return
         }
-        onRememberScrollAnchor(anchor, lookup.transcriptIndex(for: anchor), false)
+        onRememberScrollAnchor(anchor, anchorIndex, false)
+        latestRememberedScrollAnchorIndex = anchorIndex
         restoredRememberedAnchor = anchor
     }
 
@@ -430,10 +442,18 @@ struct ACPMessageList: View {
             in: ids,
             visibleMessageIds: lookup.ids
         ) else { return }
-        latestTopVisibleAnchor = anchor
+        let anchorChanged = latestTopVisibleAnchor.value != anchor
+        if anchorChanged {
+            latestTopVisibleAnchor.value = anchor
+        }
         guard !isRestoringTail, !session.followsTranscriptTail else { return }
+        let rememberedAnchor = rememberedScrollAnchor()
+        let anchorIndex = lookup.transcriptIndex(for: anchor)
+        let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
+        guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
         guard !transcript.isBackfillingOlderMessages else { return }
-        onRememberScrollAnchor(anchor, lookup.transcriptIndex(for: anchor), false)
+        onRememberScrollAnchor(anchor, anchorIndex, false)
+        latestRememberedScrollAnchorIndex = anchorIndex
         restoredRememberedAnchor = anchor
     }
 
@@ -798,6 +818,10 @@ struct ACPMessageList: View {
 
 private final class ACPWeakScrollViewRef {
     weak var scrollView: NSScrollView?
+}
+
+private final class ACPMutableScrollAnchor {
+    var value: String?
 }
 
 private struct ACPHeadFramePreferenceKey: PreferenceKey {

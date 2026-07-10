@@ -5,6 +5,21 @@ import os
 
 enum RightPaneTab: String { case changes, files }
 
+struct ReviewLoopRemoteFingerprint: Equatable, Sendable {
+    var branchName: String
+    var headSHA: String
+    var baseBranch: String
+    var hasWorkingTreeChanges: Bool
+    var hasStagedChanges: Bool
+    var aheadCommitCount: Int
+    var hasUpstream: Bool
+    var upstreamRemoteName: String?
+    var upstreamBranchName: String?
+    var upstreamAheadCommitCount: Int
+    var needsPush: Bool
+    var remotes: [String]
+}
+
 @Observable
 @MainActor
 final class RightPaneState {
@@ -200,10 +215,31 @@ final class RightPaneState {
     @ObservationIgnored
     private var syncStatusTimer: Task<Void, Never>? = nil
 
+    @ObservationIgnored
+    private var refreshInFlight = false
+
+    @ObservationIgnored
+    private var refreshRerunRequested = false
+
+    @ObservationIgnored
+    private var refreshRerunRequiresReviewLoopRemote = false
+
+    @ObservationIgnored
+    private var refreshWaiters: [CheckedContinuation<Void, Never>] = []
+
+    @ObservationIgnored
+    private var lastReviewLoopRemoteRefreshAt: Date?
+
+    @ObservationIgnored
+    private var lastReviewLoopRemoteFingerprint: ReviewLoopRemoteFingerprint?
+
     /// Refresh interval for `syncStatusTimer`. 5 minutes per design;
     /// constant in v1.
     @ObservationIgnored
     private let syncStatusInterval: UInt64 = 5 * 60 * 1_000_000_000 // ns
+
+    @ObservationIgnored
+    private let reviewLoopRemoteRefreshMinimumInterval: TimeInterval = 45
 
     /// True iff the "behind base" chip should be shown.
     var showBehindBaseChip: Bool {
@@ -301,7 +337,7 @@ final class RightPaneState {
             guard reviewLoop.beginAction(action) else { return }
             Task { @MainActor in
                 defer { reviewLoop.endAction(action) }
-                await refresh()
+                await refresh(forceReviewLoopRemote: true)
             }
         case .openReviewRequest:
             openReviewLoopProviderPage()
@@ -347,7 +383,7 @@ final class RightPaneState {
             Task { @MainActor in
                 defer { reviewLoop.endAction(action) }
                 if await reviewLoop.rerunFailedChecks(snapshot: snapshot) {
-                    await refresh()
+                    await refresh(forceReviewLoopRemote: true)
                 }
             }
         case .merge:
@@ -403,7 +439,38 @@ final class RightPaneState {
     }
 
     @MainActor
-    func refresh() async {
+    func refresh(forceReviewLoopRemote: Bool = false) async {
+        if refreshInFlight {
+            refreshRerunRequested = true
+            refreshRerunRequiresReviewLoopRemote = refreshRerunRequiresReviewLoopRemote || forceReviewLoopRemote
+            await withCheckedContinuation { continuation in
+                refreshWaiters.append(continuation)
+            }
+            return
+        }
+
+        refreshInFlight = true
+        defer {
+            refreshInFlight = false
+            let waiters = refreshWaiters
+            refreshWaiters = []
+            for waiter in waiters {
+                waiter.resume()
+            }
+        }
+
+        var forceRemoteRefresh = forceReviewLoopRemote
+        repeat {
+            forceRemoteRefresh = forceRemoteRefresh || refreshRerunRequiresReviewLoopRemote
+            refreshRerunRequested = false
+            refreshRerunRequiresReviewLoopRemote = false
+            await performRefresh(forceReviewLoopRemote: forceRemoteRefresh)
+            forceRemoteRefresh = false
+        } while refreshRerunRequested
+    }
+
+    @MainActor
+    private func performRefresh(forceReviewLoopRemote: Bool) async {
         let reviewLoopInspection = reviewLoop.beginLocalInspection()
         let snapshotGeneration = snapshotInvalidationGeneration
         loading = true
@@ -532,7 +599,9 @@ final class RightPaneState {
                 baseCommits: reviewLoopBaseResult?.commits,
                 headSHA: headSHA,
                 upstreamRemoteName: resolvedUpstream?.remote,
-                upstreamBranchName: upstreamBranchName
+                upstreamBranchName: upstreamBranchName,
+                remotes: remotes,
+                forceRemote: forceReviewLoopRemote
             )
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
@@ -582,7 +651,9 @@ final class RightPaneState {
         baseCommits: [CommitInfo]?,
         headSHA: String,
         upstreamRemoteName: String?,
-        upstreamBranchName: String?
+        upstreamBranchName: String?,
+        remotes: [GitRemote],
+        forceRemote: Bool
     ) async {
         async let needsPushProbe = git.needsPush(worktreePath: worktree.path)
         async let upstreamAheadProbe = git.upstreamAheadCommitCount(worktreePath: worktree.path)
@@ -609,13 +680,58 @@ final class RightPaneState {
         guard let attempt = reviewLoop.beginLocalRefresh(from: inspection, local: local) else {
             return
         }
-        do {
-            let remotes = try await git.remotes(worktreePath: worktree.path)
-            await reviewLoop.refresh(attempt, remotes: remotes)
-        } catch {
-            reviewLoop.failLocalRefresh(attempt, error: error)
-            logger.error("review loop refresh failed for worktree \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+
+        let fingerprint = ReviewLoopRemoteFingerprint(
+            branchName: local.branchName,
+            headSHA: local.headSHA,
+            baseBranch: local.baseBranch,
+            hasWorkingTreeChanges: local.hasWorkingTreeChanges,
+            hasStagedChanges: local.hasStagedChanges,
+            aheadCommitCount: local.aheadCommitCount,
+            hasUpstream: local.hasUpstream,
+            upstreamRemoteName: local.upstreamRemoteName,
+            upstreamBranchName: local.upstreamBranchName,
+            upstreamAheadCommitCount: local.upstreamAheadCommitCount,
+            needsPush: local.needsPush,
+            remotes: Self.reviewLoopRemoteFingerprintRemotes(remotes)
+        )
+        let now = Date()
+        guard forceRemote || Self.shouldRefreshReviewLoopRemote(
+            now: now,
+            lastRefreshAt: lastReviewLoopRemoteRefreshAt,
+            lastFingerprint: lastReviewLoopRemoteFingerprint,
+            fingerprint: fingerprint,
+            minimumInterval: reviewLoopRemoteRefreshMinimumInterval
+        ) else {
+            reviewLoop.finishLocalRefresh(attempt, preservingRemoteWith: local)
+            return
         }
+
+        lastReviewLoopRemoteRefreshAt = now
+        lastReviewLoopRemoteFingerprint = fingerprint
+        await reviewLoop.refresh(attempt, remotes: remotes)
+    }
+
+    static func reviewLoopRemoteFingerprintRemotes(_ remotes: [GitRemote]) -> [String] {
+        remotes
+            .map { remote in
+                "\(remote.name)\u{1F}\(remote.direction)\u{1F}\(remote.url)"
+            }
+            .sorted()
+    }
+
+    static func shouldRefreshReviewLoopRemote(
+        now: Date,
+        lastRefreshAt: Date?,
+        lastFingerprint: ReviewLoopRemoteFingerprint?,
+        fingerprint: ReviewLoopRemoteFingerprint,
+        minimumInterval: TimeInterval
+    ) -> Bool {
+        guard lastFingerprint == fingerprint,
+              let lastRefreshAt else {
+            return true
+        }
+        return now.timeIntervalSince(lastRefreshAt) >= minimumInterval
     }
 
     func invalidateFileTreeChildLoadsForRefresh() {
@@ -1099,10 +1215,10 @@ final class RightPaneState {
             }
             switch await reviewLoop.merge(snapshot: snapshot) {
             case .merged:
-                await refresh()
+                await refresh(forceReviewLoopRemote: true)
             case .queued:
                 mergeQueuedMessage = "Added to merge queue."
-                await refresh()
+                await refresh(forceReviewLoopRemote: true)
             case nil:
                 mergeError = reviewLoop.lastError ?? "Merge failed."
             }
