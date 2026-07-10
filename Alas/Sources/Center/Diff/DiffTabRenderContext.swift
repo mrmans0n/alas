@@ -2,7 +2,7 @@ import Combine
 import Foundation
 
 struct DiffTabRenderContextKey: Hashable {
-    private let displayModel: DiffTabDisplayModelSignature
+    private let displayContentHash: Int
     private let draftComments: [DiffTabDraftCommentSignature]
     private let pendingDraftPlacement: DiffTabPendingDraftPlacementSignature?
 
@@ -11,7 +11,7 @@ struct DiffTabRenderContextKey: Hashable {
         comments: [ReviewDraftComment],
         pendingDraftAnchor: DiffReviewLineAnchor?
     ) {
-        displayModel = DiffTabDisplayModelSignature(filePath: model.filePath, groups: model.groups)
+        displayContentHash = model.contentHash
         draftComments = comments.map(DiffTabDraftCommentSignature.init)
         pendingDraftPlacement = pendingDraftAnchor.map(DiffTabPendingDraftPlacementSignature.init)
     }
@@ -146,114 +146,6 @@ final class DiffTabRenderContextCache: ObservableObject {
     }
 }
 
-private struct DiffTabDisplayModelSignature: Hashable {
-    let filePath: String
-    let groups: [DiffTabGroupSignature]
-
-    init(filePath: String, groups: [DiffDisplayGroup]) {
-        self.filePath = filePath
-        self.groups = groups.map(DiffTabGroupSignature.init)
-    }
-}
-
-private struct DiffTabGroupSignature: Hashable {
-    let id: String
-    let header: String
-    let sourceHunk: DiffTabHunkSignature
-    let rows: [DiffTabRowSignature]
-
-    init(_ group: DiffDisplayGroup) {
-        id = group.id
-        header = group.header
-        sourceHunk = DiffTabHunkSignature(group.sourceHunk)
-        rows = group.rows.map(DiffTabRowSignature.init)
-    }
-}
-
-private struct DiffTabHunkSignature: Hashable {
-    let header: String
-    let oldStart: Int
-    let newStart: Int
-    let lines: [DiffTabHunkLineSignature]
-
-    init(_ hunk: ParsedDiff.Hunk) {
-        header = hunk.header
-        oldStart = hunk.oldStart
-        newStart = hunk.newStart
-        lines = hunk.lines.map(DiffTabHunkLineSignature.init)
-    }
-}
-
-private struct DiffTabHunkLineSignature: Hashable {
-    let kind: String
-    let textHash: Int
-    let oldNumber: Int?
-    let newNumber: Int?
-
-    init(_ line: ParsedDiff.Hunk.Line) {
-        kind = String(describing: line.kind)
-        textHash = line.text.hashValue
-        oldNumber = line.oldNumber
-        newNumber = line.newNumber
-    }
-}
-
-private struct DiffTabRowSignature: Hashable {
-    let id: String
-    let kind: String
-    let old: DiffTabLineSignature?
-    let new: DiffTabLineSignature?
-    let collapsedLineCount: Int
-    let collapsedRows: [DiffTabRowSignature]
-    let contextExpansion: DiffTabContextExpansionSignature?
-
-    init(_ row: DiffDisplayRow) {
-        id = row.id
-        kind = String(describing: row.kind)
-        old = row.old.map(DiffTabLineSignature.init)
-        new = row.new.map(DiffTabLineSignature.init)
-        collapsedLineCount = row.collapsedLineCount
-        collapsedRows = row.collapsedRows.map(DiffTabRowSignature.init)
-        contextExpansion = row.contextExpansion.map(DiffTabContextExpansionSignature.init)
-    }
-}
-
-private struct DiffTabLineSignature: Hashable {
-    let id: String
-    let side: Int
-    let oldLine: Int?
-    let newLine: Int?
-    let textHash: Int
-    let lineNumber: Int?
-    let kind: String
-    let inlineSpansHash: Int
-    let noTrailingNewline: Bool
-
-    init(_ line: DiffDisplayLine) {
-        id = line.id
-        side = line.anchor.side.rawValue
-        oldLine = line.anchor.oldLine
-        newLine = line.anchor.newLine
-        textHash = line.text.hashValue
-        lineNumber = line.lineNumber
-        kind = String(describing: line.kind)
-        inlineSpansHash = line.inlineSpans.hashValue
-        noTrailingNewline = line.noTrailingNewline
-    }
-}
-
-private struct DiffTabContextExpansionSignature: Hashable {
-    let groupID: String
-    let boundary: String
-    let remainingLineCount: Int
-
-    init(_ expansion: DiffContextExpansionRow) {
-        groupID = expansion.key.groupID
-        boundary = expansion.boundary.rawValue
-        remainingLineCount = expansion.remainingLineCount
-    }
-}
-
 private struct DiffTabDraftCommentSignature: Hashable {
     let id: String
     let fileID: String
@@ -299,7 +191,7 @@ private struct DiffTabProviderPublishSignature: Hashable {
     let publishedAt: Date
 
     init(_ publish: ReviewDraftProviderPublish) {
-        provider = String(describing: publish.provider)
+        provider = publish.provider.rawValue
         host = publish.host
         repositorySlug = publish.repositorySlug
         reviewNumber = publish.reviewNumber
@@ -316,7 +208,7 @@ private struct DiffTabProviderErrorSignature: Hashable {
     let occurredAt: Date
 
     init(_ error: ReviewDraftProviderError) {
-        provider = String(describing: error.provider)
+        provider = error.provider.rawValue
         message = error.message
         occurredAt = error.occurredAt
     }
