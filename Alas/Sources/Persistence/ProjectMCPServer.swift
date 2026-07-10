@@ -172,7 +172,10 @@ enum ProjectMCPValidation {
 
     private static func isValidHTTPURL(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), let host = url.host, !host.isEmpty else {
+        guard value == trimmed,
+              let url = URL(string: trimmed),
+              let host = url.host,
+              !host.isEmpty else {
             return false
         }
         return url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https"

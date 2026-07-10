@@ -31,6 +31,25 @@ struct ProjectMCPServerTests {
         ]
 
         let data = try JSONEncoder().encode(servers)
+        let objects = try #require(JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        let stdio = try #require(objects[0]["transport"] as? [String: Any])
+        let http = try #require(objects[1]["transport"] as? [String: Any])
+        let sse = try #require(objects[2]["transport"] as? [String: Any])
+
+        #expect(stdio["kind"] as? String == "stdio")
+        #expect(stdio["command"] as? String == "npx")
+        #expect(stdio["args"] as? [String] == ["-y", "server", "${WORKTREE_DIR}"])
+        #expect(stdio["environment"] as? [[String: String]] == [[
+            "id": "env", "name": "API_TOKEN", "value": "${TOKEN}",
+        ]])
+        #expect(http["kind"] as? String == "http")
+        #expect(http["url"] as? String == "https://mcp.linear.app/mcp")
+        #expect(http["headers"] as? [[String: String]] == [[
+            "id": "header", "name": "Authorization", "value": "Bearer ${LINEAR_TOKEN}",
+        ]])
+        #expect(sse["kind"] as? String == "sse")
+        #expect(sse["url"] as? String == "https://example.com/sse")
+        #expect(sse["headers"] as? [[String: String]] == [])
         #expect(try JSONDecoder().decode([ProjectMCPServer].self, from: data) == servers)
     }
 
@@ -66,7 +85,7 @@ struct ProjectMCPServerTests {
         #expect(ProjectMCPValidation.validate([server]) == [.invalidURL(serverName: "remote")])
     }
 
-    @Test(arguments: ["ftp://mcp.example.com", "https:///missing-host", "not a url"])
+    @Test(arguments: ["ftp://mcp.example.com", "https:///missing-host", "not a url", " https://mcp.example.com "])
     func validationRejectsInvalidRemoteURLs(_ url: String) {
         let server = ProjectMCPServer(
             id: "server",
