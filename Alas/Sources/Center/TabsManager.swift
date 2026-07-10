@@ -272,7 +272,6 @@ final class TabsManager {
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .terminal(var state) = file.tabs[idx],
               state.root.find(leafId: leafId) != nil else { return nil }
-        guard state.focusedLeafId != leafId else { return nil }
         state.focusedLeafId = leafId
         let tab = Tab.terminal(state)
         file.tabs[idx] = tab

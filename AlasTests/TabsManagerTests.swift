@@ -823,6 +823,29 @@ struct TabsManagerPaneTests {
         #expect(persistedState.focusedLeafId == "new-leaf")
     }
 
+    @Test func setFocusedLeafReturnsTabWhenLeafIsAlreadyFocused() {
+        let worktreeId = "tabs-manager-refocus-active-leaf-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let tab = mgr.appendTerminal(worktreeId: worktreeId, title: "t", sessionId: "s1")
+        guard case .terminal(let initialState) = tab else {
+            Issue.record("expected terminal tab")
+            return
+        }
+
+        let updated = mgr.setFocusedLeaf(
+            worktreeId: worktreeId,
+            tabId: tab.id,
+            leafId: initialState.focusedLeafId
+        )
+
+        guard case .terminal(let updatedState) = updated else {
+            Issue.record("expected terminal tab when re-focusing active leaf")
+            return
+        }
+        #expect(updatedState.focusedLeafId == initialState.focusedLeafId)
+    }
+
     @Test func splitFocusedLeafReplacesFocusedLeafWithSplit() {
         let mgr = TabsManager()
         let tab = mgr.appendTerminal(worktreeId: "wt", title: "t", sessionId: "s1")
