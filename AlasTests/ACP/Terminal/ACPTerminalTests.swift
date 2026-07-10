@@ -339,6 +339,52 @@ struct ACPTerminalTests {
         #expect(t.buffer.count <= ACPTerminal.internalBufferCap)
         #expect(footprintGrowth < 32 * 1024 * 1024)
     }
+
+    @Test("descendant cleanup snapshots and validates off the main actor")
+    func descendantCleanupRunsOffMainActor() throws {
+        let source = try acpTerminalSource()
+        #expect(source.contains("descendantTracker = Task.detached(priority: .utility)"))
+        #expect(source.contains("let cached = orphanedDescendants"))
+        #expect(source.contains("let preKillDescendants = Set(Self.collectChildDescendants(of: pid))"))
+        #expect(source.contains("let rootAliveAtKill = !rootHasExited"))
+        #expect(source.contains("Darwin.kill(-pid, SIGTERM)"))
+        #expect(source.contains("Task.detached(priority: .utility) {\n            var initial = preKillDescendants"))
+        #expect(source.contains("initial.formUnion(Self.collectDescendants(of: pid))"))
+        #expect(source.contains("initial.formUnion(Self.collectGroupMembers(of: pid))"))
+        #expect(source.contains("proc_listchildpids(parent"))
+        #expect(source.contains("let count = min(capacity, Int(pidCount))"))
+        #expect(source.contains(#""pid=,pgid=""#))
+        #expect(source.contains("nonisolated private static func signalTargets"))
+        #expect(source.contains("nonisolated private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey>"))
+        #expect(source.contains("let retained = Self.currentlyMatching(cached)"))
+        #expect(source.contains("orphanedDescendants.subtract(cached.subtracting(retained))"))
+        #expect(source.contains("let strongSelf = StrongBox(self)"))
+        #expect(source.contains("let termRootAlive = await MainActor.run"))
+        #expect(source.contains("Self.signalTargets(rootPid: pid, rootAlive: termRootAlive"))
+        #expect(source.contains("private final class StrongBox<T: AnyObject>: @unchecked Sendable"))
+        #expect(source.contains("let startedAt: ProcessStartTime"))
+        #expect(source.contains("nonisolated private static func processStartTime(of pid: pid_t) -> ProcessStartTime?"))
+        #expect(source.contains("proc_pidinfo(pid, PROC_PIDTBSDINFO"))
+        #expect(source.contains(#""pid=,ppid=""#))
+        #expect(!source.contains(#""pid=,ppid=,lstart=""#))
+        #expect(!source.contains(#""pid=,lstart=""#))
+        #expect(!source.contains("descendantTracker = Task { @MainActor"))
+        #expect(!source.contains("let initialSnapshot = Set(Self.collectDescendants(of: pid))"))
+        #expect(!source.contains("let preKillDescendants = Set(Self.collectDescendants(of: pid))"))
+        #expect(!source.contains("Int(pidCount) / MemoryLayout<pid_t>.stride"))
+        #expect(!source.contains("guard !Task.isCancelled,\n                          let terminal = weakSelf.value"))
+        #expect(!source.contains("pidStillMatches"))
+    }
+}
+
+private func acpTerminalSource() throws -> String {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    return try String(contentsOf: root.appendingPathComponent("Alas/Sources/ACP/Terminal/ACPTerminal.swift"),
+                      encoding: .utf8)
 }
 
 private func physicalFootprint() -> UInt64 {
