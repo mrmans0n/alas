@@ -18,6 +18,7 @@ struct ACPSelectChip: View {
     let items: [Item]
     let selectedId: String?
     let searchDescriptions: Bool
+    let searchIdentifiers: Bool
     let onSelect: (Item) -> Void
 
     @Environment(\.theme) private var theme
@@ -59,6 +60,7 @@ struct ACPSelectChip: View {
                 selectedId: selectedId,
                 accent: accent,
                 searchDescriptions: searchDescriptions,
+                searchIdentifiers: searchIdentifiers,
                 onSelect: { item in
                     onSelect(item)
                     showPopover = false
@@ -69,14 +71,19 @@ struct ACPSelectChip: View {
     }
 
     /// Case-insensitive substring filter used by the dropdown. Model pickers
-    /// disable description matching so numeric snippets in descriptions do
-    /// not pollute model results.
-    static func filteredItems(_ items: [Item], query: String, searchDescriptions: Bool = true) -> [Item] {
+    /// disable hidden metadata matching so invisible ids/descriptions do not
+    /// keep display-name misses in the result list.
+    static func filteredItems(
+        _ items: [Item],
+        query: String,
+        searchDescriptions: Bool = true,
+        searchIdentifiers: Bool = true
+    ) -> [Item] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if q.isEmpty { return items }
         return items.filter {
             $0.name.lowercased().contains(q)
-                || $0.id.lowercased().contains(q)
+                || (searchIdentifiers && $0.id.lowercased().contains(q))
                 || (searchDescriptions && ($0.description?.lowercased().contains(q) ?? false))
         }
     }
@@ -163,6 +170,7 @@ private struct DropdownPanel: View {
     let selectedId: String?
     let accent: Color
     let searchDescriptions: Bool
+    let searchIdentifiers: Bool
     let onSelect: (ACPSelectChip.Item) -> Void
 
     @Environment(\.theme) private var theme
@@ -179,7 +187,12 @@ private struct DropdownPanel: View {
     private var showSearch: Bool { items.count > 5 }
 
     private var filtered: [ACPSelectChip.Item] {
-        ACPSelectChip.filteredItems(items, query: query, searchDescriptions: searchDescriptions)
+        ACPSelectChip.filteredItems(
+            items,
+            query: query,
+            searchDescriptions: searchDescriptions,
+            searchIdentifiers: searchIdentifiers
+        )
     }
 
     var body: some View {

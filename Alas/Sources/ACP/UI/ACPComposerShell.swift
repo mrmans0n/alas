@@ -555,7 +555,8 @@ struct ACPComposer: View {
                     ?? "Model",
              placeholder: "Model",
              accent: theme.color("syntax-keyword"),
-             searchDescriptions: false)
+             searchDescriptions: false,
+             searchIdentifiers: false)
     }
 
     @ViewBuilder
@@ -623,7 +624,8 @@ struct ACPComposer: View {
                       label: String,
                       placeholder: String,
                       accent: Color,
-                      searchDescriptions: Bool = true) -> some View {
+                      searchDescriptions: Bool = true,
+                      searchIdentifiers: Bool = true) -> some View {
         ACPSelectChip(
             label: label,
             placeholder: placeholder,
@@ -633,6 +635,7 @@ struct ACPComposer: View {
             },
             selectedId: spec.currentId,
             searchDescriptions: searchDescriptions,
+            searchIdentifiers: searchIdentifiers,
             onSelect: { item in apply(spec: spec, selectedId: item.id) }
         )
     }
