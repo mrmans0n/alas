@@ -54,7 +54,21 @@ struct ACPMarkdownText: View {
                 Spacer(minLength: 0)
             }
         case .code(let lang, let body):
-            CodeBlockView(language: lang, code: body, typography: typography, showsCopyButton: showsCodeBlockCopyButton)
+            CodeBlockView(
+                language: lang,
+                code: body,
+                typography: typography,
+                showsCopyButton: showsCodeBlockCopyButton,
+                highlightsSyntax: true
+            )
+        case .streamingCode(let lang, let body):
+            CodeBlockView(
+                language: lang,
+                code: body,
+                typography: typography,
+                showsCopyButton: showsCodeBlockCopyButton,
+                highlightsSyntax: false
+            )
         case .table(let header, let rows):
             tableView(header: header, rows: rows)
         }
@@ -141,6 +155,7 @@ struct ACPMarkdownText: View {
         case paragraph(String)
         case quote(String)
         case code(language: String?, body: String)
+        case streamingCode(language: String?, body: String)
         case table(header: [String], rows: [[String]])
     }
 
@@ -256,8 +271,14 @@ struct ACPMarkdownText: View {
                     body.append(lines[i])
                     i += 1
                 }
-                if i < lines.count { i += 1 } // skip closing fence
-                blocks.append(.code(language: fence.language, body: body.joined(separator: "\n")))
+                let closesBeforeEnd = i < lines.count
+                if closesBeforeEnd { i += 1 } // skip closing fence
+                let codeBody = body.joined(separator: "\n")
+                if closesBeforeEnd {
+                    blocks.append(.code(language: fence.language, body: codeBody))
+                } else {
+                    blocks.append(.streamingCode(language: fence.language, body: codeBody))
+                }
                 continue
             }
 
@@ -319,6 +340,7 @@ private struct CodeBlockView: View {
     let code: String
     let typography: ACPChatTypography
     var showsCopyButton: Bool = true
+    var highlightsSyntax: Bool = true
     @Environment(\.theme) private var theme
     @State private var copied = false
 
@@ -326,13 +348,8 @@ private struct CodeBlockView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             ScrollView(.horizontal, showsIndicators: false) {
-                ACPSyntaxHighlightedText(
-                    text: code,
-                    explicitLanguage: language,
-                    fontFamily: typography.fontFamily,
-                    fontSize: typography.codeSize
-                )
-                .padding(.horizontal, 10).padding(.vertical, 8)
+                codeText
+                    .padding(.horizontal, 10).padding(.vertical, 8)
             }
         }
         .background(theme.color("bg-0").opacity(0.6))
@@ -388,6 +405,26 @@ private struct CodeBlockView: View {
         }
         .buttonStyle(.plain)
         .help("Copy code")
+    }
+
+    @ViewBuilder
+    private var codeText: some View {
+        if highlightsSyntax {
+            ACPSyntaxHighlightedText(
+                text: code,
+                explicitLanguage: language,
+                fontFamily: typography.fontFamily,
+                fontSize: typography.codeSize
+            )
+        } else {
+            Text(verbatim: code)
+                .font(Font(CenterTypography.resolveCodeFont(family: typography.fontFamily, size: typography.codeSize)))
+                .foregroundStyle(theme.color("fg"))
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private func copy() {

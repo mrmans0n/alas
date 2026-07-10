@@ -27,6 +27,22 @@ struct ACPMarkdownBlockCacheTests {
         #expect(cache.stableBlocks.count > stableAfterOpen)
     }
 
+    @Test("unclosed fenced code remains a streaming block")
+    func unclosedFenceParsesAsStreamingCode() async {
+        let cache = ACPMarkdownBlockCache()
+        cache.update(with: "```swift\nfunc greet() {\n")
+
+        #expect(ACPMarkdownText.parse(cache.tailUnparsed) == [
+            .streamingCode(language: "swift", body: "func greet() {\n"),
+        ])
+
+        cache.update(with: "```swift\nfunc greet() {\n}\n```")
+
+        #expect(ACPMarkdownText.parse(cache.tailUnparsed) == [
+            .code(language: "swift", body: "func greet() {\n}"),
+        ])
+    }
+
     @Test("blank line inside an unclosed tilde fence does NOT promote stable blocks")
     func tildeFenceKeepsUnstable() async {
         let cache = ACPMarkdownBlockCache()

@@ -300,6 +300,12 @@ struct ACPCodeBlockHighlighterTests {
             theme: dark,
             fontSize: 12
         )
+        let precomputedThemeKey = ACPSyntaxHighlightCacheKey(
+            text: "let value = 1",
+            resolvedExtension: "swift",
+            themeKey: ACPSyntaxHighlightCacheKey.themeKey(dark),
+            fontSize: 12
+        )
         let b = ACPSyntaxHighlightCacheKey(
             text: "let value = 1",
             resolvedExtension: "diff",
@@ -344,6 +350,7 @@ struct ACPCodeBlockHighlighterTests {
         )
 
         #expect(a == a)
+        #expect(a == precomputedThemeKey)
         #expect(a != b)
         #expect(a != c)
         #expect(a != differentText)

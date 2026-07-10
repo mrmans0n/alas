@@ -15,14 +15,30 @@ struct ACPSyntaxHighlightCacheKey: Equatable {
         fontFamily: String = ACPChatTypography.default.fontFamily,
         fontSize: CGFloat
     ) {
+        self.init(
+            text: text,
+            resolvedExtension: resolvedExtension,
+            themeKey: Self.themeKey(theme),
+            fontFamily: fontFamily,
+            fontSize: fontSize
+        )
+    }
+
+    init(
+        text: String,
+        resolvedExtension: String?,
+        themeKey: String,
+        fontFamily: String = ACPChatTypography.default.fontFamily,
+        fontSize: CGFloat
+    ) {
         self.text = text
         self.resolvedExtension = resolvedExtension
-        self.themeKey = Self.themeKey(theme)
+        self.themeKey = themeKey
         self.fontFamily = fontFamily
         self.fontSize = fontSize
     }
 
-    private static func themeKey(_ theme: Theme) -> String {
+    static func themeKey(_ theme: Theme) -> String {
         let tokenKey = theme.tokens
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
@@ -53,6 +69,8 @@ struct ACPSyntaxHighlightCacheKey: Equatable {
 private final class ACPSyntaxHighlightedTextCache: ObservableObject {
     private var key: ACPSyntaxHighlightCacheKey?
     private var value: AttributedString?
+    private var cachedTheme: Theme?
+    private var cachedThemeKey: String?
 
     func attributedString(
         text: String,
@@ -64,10 +82,11 @@ private final class ACPSyntaxHighlightedTextCache: ObservableObject {
     ) -> AttributedString {
         let resolvedExtension = explicitLanguage.flatMap(ACPCodeLanguage.highlighterExtension(for:))
             ?? ACPCodeLanguage.highlighterExtension(forPath: sourcePath)
+        let themeKey = themeKey(for: theme)
         let nextKey = ACPSyntaxHighlightCacheKey(
             text: text,
             resolvedExtension: resolvedExtension,
-            theme: theme,
+            themeKey: themeKey,
             fontFamily: fontFamily,
             fontSize: fontSize
         )
@@ -85,6 +104,16 @@ private final class ACPSyntaxHighlightedTextCache: ObservableObject {
         key = nextKey
         value = highlighted
         return highlighted
+    }
+
+    private func themeKey(for theme: Theme) -> String {
+        if cachedTheme == theme, let cachedThemeKey {
+            return cachedThemeKey
+        }
+        let key = ACPSyntaxHighlightCacheKey.themeKey(theme)
+        cachedTheme = theme
+        cachedThemeKey = key
+        return key
     }
 }
 
