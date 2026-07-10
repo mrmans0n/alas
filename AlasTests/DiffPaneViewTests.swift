@@ -1889,6 +1889,186 @@ let second = true
         #expect(rendered.attribute(.backgroundColor, at: 9, effectiveRange: nil) != nil)
     }
 
+    @Test func splitDocumentHighlightsSyntaxAcrossRowsWithOriginalWhitespaceSource() throws {
+        let theme = theme()
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,3 +1,3 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [
+                    .init(kind: .context, text: "\t/* start", oldNumber: 1, newNumber: 1),
+                    .init(kind: .context, text: "still comment */", oldNumber: 2, newNumber: 2),
+                    .init(kind: .context, text: "let value = 1", oldNumber: 3, newNumber: 3),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: true,
+            theme: theme
+        )
+        let rendered = result.newCode.attributedString.string as NSString
+        let commentStart = rendered.range(of: "still comment").location
+        let foreground = try #require(result.newCode.attributedString.attribute(
+            .foregroundColor,
+            at: commentStart,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(result.newCode.syntaxSource == "\t/* start\nstill comment */\nlet value = 1")
+        #expect(rendered.hasPrefix("→/*·start"))
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("fg-faint")))))
+    }
+
+    @Test func stackedDocumentDoesNotCarrySyntaxFromDeletedLinesIntoAddedLines() throws {
+        let theme = theme()
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,1 +1,1 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [
+                    .init(kind: .delete, text: "/* deleted starts", oldNumber: 1, newNumber: nil),
+                    .init(kind: .add, text: "let value = 1", oldNumber: nil, newNumber: 1),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme
+        )
+        let rendered = result.code.attributedString.string as NSString
+        let addedStart = rendered.range(of: "let value").location
+        let foreground = try #require(result.code.attributedString.attribute(
+            .foregroundColor,
+            at: addedStart,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("syntax-keyword")))))
+    }
+
+    @Test func stackedDocumentDoesNotCarrySyntaxFromDeletedLinesIntoFollowingContext() throws {
+        let theme = theme()
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,2 +1,1 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [
+                    .init(kind: .delete, text: "/* deleted starts", oldNumber: 1, newNumber: nil),
+                    .init(kind: .context, text: "let value = 1", oldNumber: 2, newNumber: 1),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let result = DiffPaneTextDocumentBuilder.buildStacked(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme
+        )
+        let rendered = result.code.attributedString.string as NSString
+        let contextStart = rendered.range(of: "let value").location
+        let foreground = try #require(result.code.attributedString.attribute(
+            .foregroundColor,
+            at: contextStart,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("syntax-keyword")))))
+    }
+
+    @Test func splitDocumentDoesNotCarrySyntaxAcrossCollapsedRows() throws {
+        let theme = theme()
+        let rows = [
+            DiffDisplayRow(
+                id: "context-open",
+                kind: .context,
+                old: diffLine(id: "old-open", side: .paired, oldLine: 1, newLine: 1, text: "/* open"),
+                new: diffLine(id: "new-open", side: .paired, oldLine: 1, newLine: 1, text: "/* open"),
+                collapsedLineCount: 0
+            ),
+            DiffDisplayRow(
+                id: "collapsed",
+                kind: .collapsed,
+                old: nil,
+                new: nil,
+                collapsedLineCount: 8
+            ),
+            DiffDisplayRow(
+                id: "context-after",
+                kind: .context,
+                old: diffLine(id: "old-after", side: .paired, oldLine: 10, newLine: 10, text: "let value = 1"),
+                new: diffLine(id: "new-after", side: .paired, oldLine: 10, newLine: 10, text: "let value = 1"),
+                collapsedLineCount: 0
+            ),
+        ]
+
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            rows: rows,
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme
+        )
+        let rendered = result.newCode.attributedString.string as NSString
+        let afterStart = rendered.range(of: "let value").location
+        let foreground = try #require(result.newCode.attributedString.attribute(
+            .foregroundColor,
+            at: afterStart,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("syntax-keyword")))))
+    }
+
+    @Test func splitDocumentCarriesSyntaxAcrossAlignmentPlaceholders() throws {
+        let theme = theme()
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,2 +1,3 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [
+                    .init(kind: .context, text: "/* open", oldNumber: 1, newNumber: 1),
+                    .init(kind: .add, text: "let inserted = 1", oldNumber: nil, newNumber: 2),
+                    .init(kind: .context, text: "still comment */", oldNumber: 2, newNumber: 3),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme
+        )
+        let rendered = result.oldCode.attributedString.string as NSString
+        let commentStart = rendered.range(of: "still comment").location
+        let foreground = try #require(result.oldCode.attributedString.attribute(
+            .foregroundColor,
+            at: commentStart,
+            effectiveRange: nil
+        ) as? NSColor)
+
+        #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("fg-faint")))))
+    }
+
     @Test func stackedProjectionRendersContextRowsOnce() throws {
         let row = try #require(model().groups[0].rows.first)
         #expect(row.kind == .context)
@@ -2478,6 +2658,30 @@ let second = true
 
     private func allSubviews(of view: NSView) -> [NSView] {
         view.subviews + view.subviews.flatMap { allSubviews(of: $0) }
+    }
+
+    private struct ColorComponents {
+        let red: Double
+        let green: Double
+        let blue: Double
+        let alpha: Double
+
+        func isClose(to other: ColorComponents, tolerance: Double = 0.001) -> Bool {
+            abs(red - other.red) <= tolerance
+                && abs(green - other.green) <= tolerance
+                && abs(blue - other.blue) <= tolerance
+                && abs(alpha - other.alpha) <= tolerance
+        }
+    }
+
+    private func colorComponents(_ color: NSColor) -> ColorComponents {
+        let normalized = color.usingColorSpace(.sRGB) ?? color
+        return ColorComponents(
+            red: Double(normalized.redComponent),
+            green: Double(normalized.greenComponent),
+            blue: Double(normalized.blueComponent),
+            alpha: Double(normalized.alphaComponent)
+        )
     }
 
     private final class ConstraintInvalidationCountingView: NSView {

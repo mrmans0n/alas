@@ -8,6 +8,7 @@ struct DiffPaneTextDocumentBuilder {
         var tone: DiffPaneLineTone? = nil
         var sourceLine: DiffDisplayLine? = nil
         var sourceRange: NSRange? = nil
+        var syntaxGroup: Int? = nil
         var expansionKey: DiffContextExpansionKey? = nil
         var expansionBoundary: DiffContextBoundary? = nil
     }
@@ -15,6 +16,13 @@ struct DiffPaneTextDocumentBuilder {
     struct CodeDocument {
         let attributedString: NSAttributedString
         let lines: [LineMetadata]
+        let syntaxSource: String?
+
+        init(attributedString: NSAttributedString, lines: [LineMetadata], syntaxSource: String? = nil) {
+            self.attributedString = attributedString
+            self.lines = lines
+            self.syntaxSource = syntaxSource
+        }
     }
 
     struct SplitResult {
@@ -136,9 +144,17 @@ struct DiffPaneTextDocumentBuilder {
         }
 
         return SplitResult(
-            oldCode: oldColumn.document,
+            oldCode: highlightedCodeDocument(
+                oldColumn.document,
+                fileExtension: fileExtension,
+                theme: theme
+            ),
             oldGutter: oldGutter.attributedString,
-            newCode: newColumn.document,
+            newCode: highlightedCodeDocument(
+                newColumn.document,
+                fileExtension: fileExtension,
+                theme: theme
+            ),
             newGutter: newGutter.attributedString
         )
     }
@@ -223,7 +239,14 @@ struct DiffPaneTextDocumentBuilder {
             }
         }
 
-        return StackedResult(code: codeColumn.document, gutter: gutter.attributedString)
+        return StackedResult(
+            code: highlightedCodeDocument(
+                codeColumn.document,
+                fileExtension: fileExtension,
+                theme: theme
+            ),
+            gutter: gutter.attributedString
+        )
     }
 
     static func build(
@@ -517,8 +540,143 @@ struct DiffPaneTextDocumentBuilder {
             showWhitespace: showWhitespace,
             inlineSpans: line.inlineSpans,
             inlineTone: inlineTone(for: line.kind),
-            theme: theme
+            theme: theme,
+            highlightSyntax: false
         )
+    }
+
+    private static func highlightedCodeDocument(
+        _ document: CodeDocument,
+        fileExtension: String,
+        theme: Theme
+    ) -> CodeDocument {
+        guard let source = document.syntaxSource, !source.isEmpty else {
+            return document
+        }
+
+        let output = NSMutableAttributedString(attributedString: document.attributedString)
+        for segment in syntaxSegments(in: document.lines) {
+            let segmentRange = NSRange(
+                location: segment.start,
+                length: segment.end - segment.start
+            )
+            let segmentSource = (source as NSString).substring(with: segmentRange)
+            let spans = TreeSitterHighlighter.highlight(source: segmentSource, fileExtension: fileExtension)
+                .map {
+                    HighlightSpan(
+                        range: NSRange(location: $0.range.location + segmentRange.location, length: $0.range.length),
+                        capture: $0.capture
+                    )
+                }
+                .sorted { $0.range.location < $1.range.location }
+            applySyntaxSpans(
+                spans,
+                to: output,
+                lines: document.lines,
+                startIndex: segment.startIndex,
+                endIndex: segment.endIndex,
+                theme: theme
+            )
+        }
+
+        return CodeDocument(
+            attributedString: output,
+            lines: document.lines,
+            syntaxSource: source
+        )
+    }
+
+    private static func syntaxSegments(in lines: [LineMetadata]) -> [SyntaxSegment] {
+        var result: [SyntaxSegment] = []
+        var index = 0
+        while index < lines.count {
+            guard let group = lines[index].syntaxGroup,
+                  let range = lines[index].sourceRange else {
+                index += 1
+                continue
+            }
+
+            let startIndex = index
+            var endIndex = index
+            var end = NSMaxRange(range)
+            index += 1
+            while index < lines.count, lines[index].syntaxGroup == group {
+                endIndex = index
+                if let nextRange = lines[index].sourceRange {
+                    end = NSMaxRange(nextRange)
+                } else {
+                    end = NSMaxRange(lines[index].range)
+                }
+                index += 1
+            }
+
+            result.append(SyntaxSegment(
+                start: range.location,
+                end: end,
+                startIndex: startIndex,
+                endIndex: endIndex
+            ))
+        }
+        return result
+    }
+
+    private static func applySyntaxSpans(
+        _ spans: [HighlightSpan],
+        to output: NSMutableAttributedString,
+        lines: [LineMetadata],
+        startIndex: Int,
+        endIndex: Int,
+        theme: Theme
+    ) {
+        var spansByLine = Array(repeating: [HighlightSpan](), count: endIndex - startIndex + 1)
+        var lineIndex = startIndex
+        for span in spans {
+            let spanEnd = NSMaxRange(span.range)
+            while lineIndex <= endIndex {
+                guard let sourceRange = lines[lineIndex].sourceRange else {
+                    lineIndex += 1
+                    continue
+                }
+                if NSMaxRange(sourceRange) > span.range.location {
+                    break
+                }
+                lineIndex += 1
+            }
+
+            var index = lineIndex
+            while index <= endIndex {
+                guard let sourceRange = lines[index].sourceRange else {
+                    index += 1
+                    continue
+                }
+                if sourceRange.location >= spanEnd { break }
+
+                let intersection = NSIntersectionRange(span.range, sourceRange)
+                if intersection.length > 0 {
+                    spansByLine[index - startIndex].append(HighlightSpan(
+                        range: NSRange(
+                            location: intersection.location - sourceRange.location,
+                            length: intersection.length
+                        ),
+                        capture: span.capture
+                    ))
+                }
+                index += 1
+            }
+        }
+
+        for (offset, lineSpans) in spansByLine.enumerated() where !lineSpans.isEmpty {
+            let line = lines[startIndex + offset]
+            guard let sourceRange = line.sourceRange else { continue }
+            DiffCodeText.applySyntaxSpans(
+                to: output,
+                spans: lineSpans,
+                offset: sourceRange.location,
+                inlineTone: inlineTone(for: line.tone ?? .context),
+                theme: theme,
+                visibleLength: sourceRange.length
+            )
+        }
     }
 
     fileprivate static func marker(
@@ -645,6 +803,17 @@ struct DiffPaneTextDocumentBuilder {
         }
     }
 
+    private static func inlineTone(for tone: DiffPaneLineTone) -> DiffInlineTone {
+        switch tone {
+        case .add:
+            return .add
+        case .delete:
+            return .del
+        case .context, .placeholder, .collapsed:
+            return .accent
+        }
+    }
+
     private static func markerColor(for side: DiffLineSide, theme: Theme) -> Color {
         switch side {
         case .old:
@@ -685,8 +854,11 @@ struct DiffPaneTextDocumentBuilder {
 
 private struct ColumnAccumulator {
     private let output = NSMutableAttributedString()
+    private let syntaxSource = NSMutableString()
     private var metadata: [DiffPaneTextDocumentBuilder.LineMetadata] = []
     private let newlineAttributes: [NSAttributedString.Key: Any]
+    private var syntaxGroup = 0
+    private var activeSyntaxSide: DiffLineSide?
 
     init(font: NSFont, theme: Theme) {
         newlineAttributes = [
@@ -699,7 +871,8 @@ private struct ColumnAccumulator {
     var document: DiffPaneTextDocumentBuilder.CodeDocument {
         DiffPaneTextDocumentBuilder.CodeDocument(
             attributedString: output,
-            lines: metadata
+            lines: metadata,
+            syntaxSource: syntaxSource as String
         )
     }
 
@@ -712,19 +885,57 @@ private struct ColumnAccumulator {
     ) {
         if output.length > 0 {
             output.append(NSAttributedString(string: "\n", attributes: newlineAttributes))
+            syntaxSource.append("\n")
         }
         let start = output.length
         output.append(line)
+        let lineSyntaxGroup: Int?
+        if let sourceLine {
+            syntaxSource.append(sourceLine.text)
+            if shouldStartNewSyntaxGroup(for: sourceLine.anchor.side) {
+                syntaxGroup += 1
+            }
+            lineSyntaxGroup = syntaxGroup
+            updateActiveSyntaxSide(with: sourceLine.anchor.side)
+        } else {
+            syntaxSource.append(String(repeating: " ", count: line.length))
+            if kind == .collapsed || kind == .expandableContext {
+                lineSyntaxGroup = nil
+                syntaxGroup += 1
+                activeSyntaxSide = nil
+            } else {
+                lineSyntaxGroup = syntaxGroup
+            }
+        }
         metadata.append(DiffPaneTextDocumentBuilder.LineMetadata(
             kind: kind,
             range: NSRange(location: start, length: line.length),
             tone: tone,
             sourceLine: sourceLine,
             sourceRange: sourceLine.map { _ in NSRange(location: start, length: line.length) },
+            syntaxGroup: lineSyntaxGroup,
             expansionKey: expansion?.key,
             expansionBoundary: expansion?.boundary
         ))
     }
+
+    private func shouldStartNewSyntaxGroup(for side: DiffLineSide) -> Bool {
+        guard let activeSyntaxSide, activeSyntaxSide != side else {
+            return false
+        }
+        return true
+    }
+
+    private mutating func updateActiveSyntaxSide(with side: DiffLineSide) {
+        activeSyntaxSide = side
+    }
+}
+
+private struct SyntaxSegment {
+    let start: Int
+    let end: Int
+    let startIndex: Int
+    let endIndex: Int
 }
 
 private struct GutterAccumulator {
