@@ -193,6 +193,8 @@ final class AppState {
     }
     @ObservationIgnored
     private var lspManager: WorkspaceLSPManager?
+    @ObservationIgnored
+    private var languageServerConfigChangeTracker: LanguageServerConfigChangeTracker
     @ObservationIgnored lazy var updates = UpdateController(
         isEnabled: { [weak self] in self?.config.general.autoUpdate ?? true }
     )
@@ -455,6 +457,9 @@ final class AppState {
         let projectsFile = (try? store.readIfExists(ProjectsFile.self, from: Paths.projectsFile)) ?? ProjectsFile(projects: [])
         let spacesFile = try? store.readIfExists(SpacesFile.self, from: Paths.spacesFile)
         self.config = config
+        self.languageServerConfigChangeTracker = LanguageServerConfigChangeTracker(
+            initial: config.code.languageServers
+        )
         // Publish the effective shortcut reservations so the terminal pane
         // can honor user overrides from the very first keystroke.
         ShortcutReservations.update(from: config)
@@ -644,6 +649,7 @@ final class AppState {
 
     @discardableResult
     func saveConfig() -> Bool {
+        let shouldUpdateLSPRegistry = languageServerConfigChangeTracker.consumeChange(in: config)
         let saved: Bool
         do {
             try store.write(config, to: Paths.appConfigFile)
@@ -652,8 +658,24 @@ final class AppState {
             saved = false
             persistenceErrorHandler("Settings Save Failed", error.localizedDescription)
         }
-        lspManager?.updateRegistry(LanguageServerRegistry(userDefined: config.code.languageServers))
+        if shouldUpdateLSPRegistry {
+            lspManager?.updateRegistry(LanguageServerRegistry(userDefined: config.code.languageServers))
+        }
         return saved
+    }
+
+    struct LanguageServerConfigChangeTracker {
+        private var lastSavedLanguageServers: [LanguageServerConfig]
+
+        init(initial: [LanguageServerConfig]) {
+            lastSavedLanguageServers = initial
+        }
+
+        mutating func consumeChange(in config: AppConfig) -> Bool {
+            guard config.code.languageServers != lastSavedLanguageServers else { return false }
+            lastSavedLanguageServers = config.code.languageServers
+            return true
+        }
     }
 
     @discardableResult

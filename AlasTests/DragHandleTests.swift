@@ -12,4 +12,13 @@ struct DragHandleTests {
     @Test func passesThroughInRange() {
         #expect(DragHandle.clamp(value: 350, min: 200, max: 600) == 350)
     }
+
+    @Test func dragSequenceSeparatesChangeDeltasFromEnd() {
+        var state = DragHandle.DragState(axis: .horizontal)
+
+        #expect(state.changed(width: 10, height: 0) == 10)
+        #expect(state.changed(width: 16, height: 0) == 6)
+        state.ended()
+        #expect(state.changed(width: 4, height: 0) == 4)
+    }
 }

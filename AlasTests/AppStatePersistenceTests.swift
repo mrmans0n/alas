@@ -63,4 +63,29 @@ struct AppStatePersistenceTests {
                 .some(ShortcutBinding(key: "o", modifiers: [.command])))
         #expect(reloaded.shortcutOverrides[ShortcutAction.switchRepository.rawValue] == .some(nil))
     }
+
+    @Test func languageServerRegistryRefreshesOnlyWhenLanguageServersChange() {
+        var tracker = AppState.LanguageServerConfigChangeTracker(
+            initial: AppConfig.defaults.code.languageServers
+        )
+
+        var widthOnlyConfig = AppConfig.defaults
+        widthOnlyConfig.sidebarWidth = 300
+        #expect(tracker.consumeChange(in: widthOnlyConfig) == false)
+
+        var languageServerConfig = widthOnlyConfig
+        languageServerConfig.code.languageServers = [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: "/usr/bin/sourcekit-lsp",
+                args: [],
+                env: [:],
+                rootMarkers: ["Package.swift"],
+                enabled: true
+            )
+        ]
+        #expect(tracker.consumeChange(in: languageServerConfig) == true)
+        #expect(tracker.consumeChange(in: languageServerConfig) == false)
+    }
 }
