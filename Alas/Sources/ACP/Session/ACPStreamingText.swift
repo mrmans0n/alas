@@ -15,13 +15,20 @@ import Combine
 @MainActor
 final class StreamingText: ObservableObject {
     @Published private(set) var value: String
+    private(set) var utf8Length: Int
+    private(set) var revision: UInt64 = 0
+    private(set) var lastAppendedSuffix: String?
 
     init(_ initial: String = "") {
         self.value = initial
+        self.utf8Length = initial.utf8.count
     }
 
     func append(_ s: String) {
         value.append(s)
+        utf8Length += s.utf8.count
+        revision &+= 1
+        lastAppendedSuffix = s
     }
 }
 

@@ -21,20 +21,71 @@ enum ACPMessage: Equatable {
         .thought(id: id, messageId: nil, text)
     }
 
-    var stableId: String {
+    enum StableIdentityKey: Hashable {
+        case userMessageId(String)
+        case agentMessageId(String)
+        case thoughtMessageId(String)
+        case userUUID(UUID)
+        case agentUUID(UUID)
+        case thoughtUUID(UUID)
+        case fileEdit(UUID)
+        case plan(UUID)
+        case systemNotice(UUID)
+        case toolCall(String)
+    }
+
+    var stableIdentityKey: StableIdentityKey {
         switch self {
         case .user(let id, let messageId, _, _):
-            return messageId.map { "acp-user:\($0)" } ?? id.uuidString
+            messageId.map(StableIdentityKey.userMessageId) ?? .userUUID(id)
         case .agent(let id, let messageId, _):
-            return messageId.map { "acp-agent:\($0)" } ?? id.uuidString
+            messageId.map(StableIdentityKey.agentMessageId) ?? .agentUUID(id)
         case .thought(let id, let messageId, _):
-            return messageId.map { "acp-thought:\($0)" } ?? id.uuidString
-        case .fileEdit(let id, _),
-             .plan(let id, _),
-             .systemNotice(let id, _):
-            return id.uuidString
+            messageId.map(StableIdentityKey.thoughtMessageId) ?? .thoughtUUID(id)
+        case .fileEdit(let id, _):
+            .fileEdit(id)
+        case .plan(let id, _):
+            .plan(id)
+        case .systemNotice(let id, _):
+            .systemNotice(id)
         case .toolCall(let tc):
-            return "tc-\(tc.toolCallId)"
+            .toolCall(tc.toolCallId)
+        }
+    }
+
+    var stableId: String {
+        Self.stableId(for: stableIdentityKey)
+    }
+
+    static func stableId(for key: StableIdentityKey) -> String {
+        switch key {
+        case .userMessageId(let messageId):
+            "acp-user:\(messageId)"
+        case .agentMessageId(let messageId):
+            "acp-agent:\(messageId)"
+        case .thoughtMessageId(let messageId):
+            "acp-thought:\(messageId)"
+        case .userUUID(let id), .agentUUID(let id), .thoughtUUID(let id),
+             .fileEdit(let id), .plan(let id), .systemNotice(let id):
+            id.uuidString
+        case .toolCall(let toolCallId):
+            "tc-\(toolCallId)"
+        }
+    }
+
+    @MainActor
+    var contentUTF8Length: Int {
+        switch self {
+        case .user(_, _, let text, _):
+            text.utf8.count
+        case .agent(_, _, let text), .thought(_, _, let text):
+            text.utf8Length
+        case .systemNotice(_, let text):
+            text.utf8.count
+        case .toolCall(let tc):
+            tc.content.utf8.count
+        case .fileEdit, .plan:
+            0
         }
     }
 

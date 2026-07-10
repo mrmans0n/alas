@@ -13,6 +13,9 @@ import AppKit
 struct ACPMarkdownText: View {
     let raw: String
     var cache: ACPMarkdownBlockCache? = nil
+    var knownAppendedSuffix: String? = nil
+    var updateRevision: UInt64? = nil
+    var updateSourceID: ObjectIdentifier? = nil
     var typography: ACPChatTypography = .default
     var showsCodeBlockCopyButton: Bool = true
     @Environment(\.theme) private var theme
@@ -27,7 +30,12 @@ struct ACPMarkdownText: View {
 
     private func currentBlocks() -> [Block] {
         if let cache {
-            cache.update(with: raw)
+            cache.update(
+                with: raw,
+                knownAppendedSuffix: knownAppendedSuffix,
+                revision: updateRevision,
+                sourceID: updateSourceID
+            )
             let tailBlocks = ACPMarkdownText.parse(cache.tailUnparsed)
             return cache.stableBlocks + tailBlocks
         }
