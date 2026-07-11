@@ -18,6 +18,14 @@ enum MCPAttachmentDisposition: Equatable {
     case skipped(MCPAttachmentSkipReason)
 }
 
+/// Project-scoped input that is deliberately fetched at attach time, so a
+/// fresh attach reflects the current project configuration without restarting
+/// an already connected session.
+struct MCPProjectContext: Equatable {
+    let projectDirectory: String
+    let configuredServers: [ProjectMCPServer]
+}
+
 struct MCPAttachmentServerStatus: Equatable, Identifiable {
     let name: String
     let transport: MCPTransportKind
@@ -30,6 +38,18 @@ struct MCPAttachmentPlan: Equatable {
     let wireServers: [ACPMCPServer]
     let statuses: [MCPAttachmentServerStatus]
     let configurationFingerprint: String
+}
+
+/// Session-visible attachment state. This intentionally excludes resolved
+/// wire definitions, which may contain environment-expanded credentials.
+struct MCPAttachmentSummary: Equatable {
+    let statuses: [MCPAttachmentServerStatus]
+    let configurationFingerprint: String
+
+    init(plan: MCPAttachmentPlan) {
+        statuses = plan.statuses
+        configurationFingerprint = plan.configurationFingerprint
+    }
 }
 
 struct MCPAttachmentPlannerInput {

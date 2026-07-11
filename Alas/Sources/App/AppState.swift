@@ -3453,6 +3453,15 @@ final class AppState {
                         sessionId: sessionId,
                         title: title
                     )
+                },
+                mcpProjectContextProvider: { [weak self] in
+                    guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
+                        return nil
+                    }
+                    return MCPProjectContext(
+                        projectDirectory: project.path,
+                        configuredServers: project.mcpServers
+                    )
                 }
             )
             acpManagers[worktree.id] = mgr

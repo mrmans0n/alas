@@ -12,6 +12,7 @@ private struct ACPTranscriptScrollMemory: Equatable {
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
     typealias ACPConnectionFactory = @MainActor (_ spec: ACPLaunchSpec) throws -> ACPConnection
+    typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
 
     let instanceId: String
     let pid: Int64
@@ -28,6 +29,7 @@ final class ACPSessionManager: ObservableObject {
     /// the user's unsaved edits rather than stale disk bytes.
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
+    private let mcpProjectContextProvider: MCPProjectContextProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
@@ -202,7 +204,8 @@ final class ACPSessionManager: ObservableObject {
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
-         connectionFactory: ACPConnectionFactory? = nil)
+         connectionFactory: ACPConnectionFactory? = nil,
+         mcpProjectContextProvider: MCPProjectContextProvider? = nil)
     {
         self.instanceId = instanceId
         self.pid = pid
@@ -212,6 +215,7 @@ final class ACPSessionManager: ObservableObject {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.mcpProjectContextProvider = mcpProjectContextProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
         self.setupEvaluator = setupEvaluator ?? { spec in
@@ -1510,6 +1514,16 @@ extension ACPSessionManager {
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
+            let projectContext = mcpProjectContextProvider?()
+                ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
+            let mcpPlan = MCPAttachmentPlanner.plan(.init(
+                configuredServers: projectContext.configuredServers,
+                projectDirectory: projectContext.projectDirectory,
+                worktreeDirectory: worktreePath,
+                environment: ProcessInfo.processInfo.environment,
+                capabilities: initialized.mcpCapabilities
+            ))
+            session.mcpAttachmentSummary = .init(plan: mcpPlan)
             if let pendingAuthMethodId = session.pendingAuthMethodId {
                 do {
                     try await connection.authenticate(methodId: pendingAuthMethodId)
@@ -1581,7 +1595,7 @@ extension ACPSessionManager {
                 session.firstRunConnectingPhase = .creatingSession
             }
             if freshlyCreated {
-                result = try await connection.newSession(cwd: worktreePath)
+                result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
@@ -1589,7 +1603,8 @@ extension ACPSessionManager {
                 switch restoreOperation {
                 case .resume:
                     do {
-                        result = try await connection.resumeSession(cwd: worktreePath, sessionId: remoteId)
+                        result = try await connection.resumeSession(
+                            cwd: worktreePath, sessionId: remoteId, mcpServers: mcpPlan.wireServers)
                         if !pendingRecovery {
                             session.contextRecoveryStatus = nil
                         }
@@ -1603,7 +1618,7 @@ extension ACPSessionManager {
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
-                        result = try await connection.newSession(cwd: worktreePath)
+                        result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
@@ -1622,7 +1637,8 @@ extension ACPSessionManager {
                     }
                 case .loadStrict:
                     do {
-                        result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                        result = try await connection.loadSession(
+                            cwd: worktreePath, sessionId: remoteId, mcpServers: mcpPlan.wireServers)
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -1637,7 +1653,8 @@ extension ACPSessionManager {
                     }
                 case .loadWithRecovery:
                     do {
-                        result = try await connection.loadSession(cwd: worktreePath, sessionId: remoteId)
+                        result = try await connection.loadSession(
+                            cwd: worktreePath, sessionId: remoteId, mcpServers: mcpPlan.wireServers)
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -1651,7 +1668,7 @@ extension ACPSessionManager {
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
-                        result = try await connection.newSession(cwd: worktreePath)
+                        result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             // Guard the store write: if another instance took over
@@ -1675,7 +1692,7 @@ extension ACPSessionManager {
                     throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
-                result = try await connection.newSession(cwd: worktreePath)
+                result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
                     // Guard the store write: if another instance took over

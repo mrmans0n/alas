@@ -5,6 +5,27 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore")
 struct ACPSessionManagerAttachRestoreTests {
+    @Test("new session attaches the current project MCP plan")
+    func newSessionAttachesCurrentProjectMCPPlan() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        let configuredServers = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
+        let manager = manager(store: store, client: client, mcpProjectContextProvider: {
+            MCPProjectContext(projectDirectory: "/tmp/project", configuredServers: configuredServers)
+        })
+        let session = manager.createSession(agentId: "claude")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        let params = try #require(client.sent.last?.params as? ACPSessionNewParams)
+        #expect(params.mcpServers == [.stdio(name: "filesystem", command: "mcp-files", args: [], env: [])])
+        let summary = try #require(session.mcpAttachmentSummary)
+        #expect(summary.statuses == [.init(name: "filesystem", transport: .stdio, disposition: .requested)])
+        #expect(summary.configurationFingerprint == MCPAttachmentPlanner.configurationFingerprint(for: configuredServers))
+    }
+
     @Test("reopened session uses session/load")
     func reopenedSessionUsesLoad() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
@@ -1298,13 +1319,18 @@ struct ACPSessionManagerAttachRestoreTests {
         )
     }
 
-    private func manager(store: ACPSessionStore, client: ACPMockClient) -> ACPSessionManager {
+    private func manager(
+        store: ACPSessionStore,
+        client: ACPMockClient,
+        mcpProjectContextProvider: ACPSessionManager.MCPProjectContextProvider? = nil
+    ) -> ACPSessionManager {
         ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
             store: store,
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _ in ACPConnection(client: client) }
+            connectionFactory: { _ in ACPConnection(client: client) },
+            mcpProjectContextProvider: mcpProjectContextProvider
         )
     }
 
