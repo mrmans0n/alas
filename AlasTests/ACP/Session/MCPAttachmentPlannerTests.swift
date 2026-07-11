@@ -137,6 +137,17 @@ struct MCPAttachmentPlannerTests {
         #expect(!String(describing: result.statuses).contains(secret))
     }
 
+    @Test("an empty resolved command skips only its server")
+    func emptyResolvedCommand() {
+        let result = plan([
+            .init(id: "empty", name: "empty", transport: .stdio(command: "${CMD}", args: [], environment: [])),
+            .stdio(name: "good", command: "node"),
+        ], environment: ["CMD": ""])
+
+        #expect(result.wireServers == [.stdio(name: "good", command: "node", args: [], env: [])])
+        #expect(result.statuses[0].disposition == .skipped(.invalidConfiguration("The server configuration is invalid.")))
+    }
+
     @Test("invalid configurations skip before capability checks and keep a safe explanation")
     func invalidConfiguration() {
         let result = plan([

@@ -61,7 +61,7 @@ enum MCPAttachmentPlanner {
             } else {
                 switch makeWireServer(server, environment: environment) {
                 case let .success(wireServer):
-                    if hasValidResolvedURL(wireServer) {
+                    if hasValidResolvedWireServer(wireServer) {
                         wireServers.append(wireServer)
                         disposition = .requested
                     } else {
@@ -139,11 +139,11 @@ enum MCPAttachmentPlanner {
         }
     }
 
-    private static func hasValidResolvedURL(_ server: ACPMCPServer) -> Bool {
+    private static func hasValidResolvedWireServer(_ server: ACPMCPServer) -> Bool {
         let value: String?
         switch server {
-        case .stdio:
-            return true
+        case let .stdio(_, command, _, _):
+            return !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case let .http(_, url, _), let .sse(_, url, _):
             value = url
         }
