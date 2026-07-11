@@ -595,6 +595,7 @@ final class DiffPaneTextScrollView: NSScrollView {
     private var expansionKeys: [DiffContextExpansionKey?] = []
     private var baseDocument: DiffPaneTextDocumentBuilder.CodeDocument?
     private var synchronizedRowHeights: [CGFloat] = []
+    private var synchronizedRowLineHeights: [CGFloat?] = []
     private var shouldResetHorizontalOrigin = false
     private var wraps = false
     private var font: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -701,6 +702,7 @@ final class DiffPaneTextScrollView: NSScrollView {
         self.expansionKeys = document.lines.map(\.expansionKey)
         self.baseDocument = document
         self.synchronizedRowHeights = []
+        self.synchronizedRowLineHeights = []
         self.shouldResetHorizontalOrigin = true
         self.wraps = wraps
         self.font = font
@@ -757,38 +759,77 @@ final class DiffPaneTextScrollView: NSScrollView {
         }
 
         let currentRows = textView.diffRowRects()
-        let synchronized = NSMutableAttributedString(attributedString: baseDocument.attributedString)
-        for index in 0..<min(rowHeights.count, baseDocument.lines.count, currentRows.count) {
-            let targetHeight = rowHeights[index]
-            let currentHeight = currentRows[index].height
-            guard targetHeight > currentHeight + 0.5 else { continue }
+        guard let textStorage = textView.textStorage else { return }
+        let previousRowHeights = synchronizedRowHeights
+        var nextLineHeights = Array<CGFloat?>(repeating: nil, count: rowHeights.count)
+        var changedParagraphs = false
+        var needsFollowUpSynchronization = false
+        let affectedCount = min(max(rowHeights.count, previousRowHeights.count), baseDocument.lines.count, currentRows.count)
+
+        textStorage.beginEditing()
+        for index in 0..<affectedCount {
+            let previousHeight = index < previousRowHeights.count ? previousRowHeights[index] : nil
+            let targetHeight = index < rowHeights.count ? rowHeights[index] : nil
+            let previousLineHeight = index < synchronizedRowLineHeights.count ? synchronizedRowLineHeights[index] : nil
+            let targetChanged = previousHeight == nil
+                || targetHeight == nil
+                || abs(previousHeight! - targetHeight!) > 0.5
+            guard targetChanged || previousLineHeight != nil
+            else {
+                nextLineHeights[index] = previousLineHeight
+                continue
+            }
 
             let range = baseDocument.lines[index].range
-            guard range.location < synchronized.length else { continue }
-            let paragraphRange = (synchronized.string as NSString).paragraphRange(for: NSRange(
+            guard range.location < textStorage.length else { continue }
+            let paragraphRange = (textStorage.string as NSString).paragraphRange(for: NSRange(
                 location: range.location,
                 length: max(range.length, 1)
             ))
-            let lineCount = max(1, Int(round(currentHeight / max(lineHeight(), 1))))
-            let targetLineHeight = targetHeight / CGFloat(lineCount)
+            let baseParagraph = paragraphStyle(from: baseDocument, at: range.location)
             let paragraph = NSMutableParagraphStyle()
-            if let existing = synchronized.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle {
-                paragraph.setParagraphStyle(existing)
-            } else {
-                paragraph.setParagraphStyle(CenterTypography.paragraphStyle())
-            }
-            paragraph.minimumLineHeight = targetLineHeight
-            paragraph.maximumLineHeight = targetLineHeight
-            synchronized.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
-        }
+            paragraph.setParagraphStyle(baseParagraph)
 
-        synchronizedRowHeights = rowHeights
-        textView.textStorage?.setAttributedString(synchronized)
+            if targetChanged, let targetHeight {
+                let lineCountHeight = synchronizedLineHeight(at: index) ?? lineHeight()
+                let lineCount = max(1, Int(round(currentRows[index].height / max(lineCountHeight, 1))))
+                let targetLineHeight = targetHeight / CGFloat(lineCount)
+                if targetLineHeight > lineHeight() + 0.5 {
+                    paragraph.minimumLineHeight = targetLineHeight
+                    paragraph.maximumLineHeight = targetLineHeight
+                    nextLineHeights[index] = targetLineHeight
+                }
+            } else if previousLineHeight != nil {
+                needsFollowUpSynchronization = true
+            }
+
+            textStorage.addAttribute(.paragraphStyle, value: paragraph, range: paragraphRange)
+            changedParagraphs = true
+        }
+        textStorage.endEditing()
+
+        synchronizedRowHeights = needsFollowUpSynchronization ? [] : rowHeights
+        synchronizedRowLineHeights = nextLineHeights
         textView.lineTones = lineTones
         textView.theme = theme
-        needsLayout = true
-        invalidateIntrinsicContentSize()
-        (verticalRulerView as? DiffPaneLineNumberRulerView)?.needsDisplay = true
+        if changedParagraphs {
+            needsLayout = true
+            invalidateIntrinsicContentSize()
+            (verticalRulerView as? DiffPaneLineNumberRulerView)?.needsDisplay = true
+        }
+    }
+
+    private func paragraphStyle(
+        from document: DiffPaneTextDocumentBuilder.CodeDocument,
+        at location: Int
+    ) -> NSParagraphStyle {
+        document.attributedString.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
+            ?? CenterTypography.paragraphStyle()
+    }
+
+    private func synchronizedLineHeight(at index: Int) -> CGFloat? {
+        guard index < synchronizedRowLineHeights.count else { return nil }
+        return synchronizedRowLineHeights[index]
     }
 
     override func layout() {

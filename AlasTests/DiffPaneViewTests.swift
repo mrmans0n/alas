@@ -815,6 +815,143 @@ let second = true
         }
     }
 
+    @Test func synchronizedRowHeightsPreserveUntouchedTextStorageAttributes() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = [
+            "let short = true",
+            "let medium = false",
+            "let untouched = true",
+        ]
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2", "3"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRects = codeView.diffRowRects()
+        #expect(rowRects.count == 3)
+        let sentinel = NSAttributedString.Key("DiffPaneRowHeightSentinel")
+        let untouchedRange = metadata[2].range
+        codeView.textStorage?.addAttribute(sentinel, value: "kept", range: untouchedRange)
+
+        scrollView.synchronizeRowHeights([
+            rowRects[0].height + 18,
+            rowRects[1].height,
+            rowRects[2].height,
+        ])
+
+        let value = codeView.textStorage?.attribute(sentinel, at: untouchedRange.location, effectiveRange: nil) as? String
+        #expect(value == "kept")
+    }
+
+    @Test func synchronizedRowHeightsResetPreviouslyPaddedRowsForRemeasurement() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let lines = [
+            "let first = true",
+            "let second = false",
+            "let third = true",
+        ]
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [
+                    .font: font,
+                    .paragraphStyle: CenterTypography.paragraphStyle(),
+                ]
+            ),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["1", "2", "3"],
+            wraps: true,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let codeView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRects = codeView.diffRowRects()
+        #expect(rowRects.count == 3)
+
+        let firstInflatedHeight = rowRects[0].height + 18
+        scrollView.synchronizeRowHeights([
+            firstInflatedHeight,
+            rowRects[1].height,
+            rowRects[2].height,
+        ])
+
+        let paddedParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(paddedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
+
+        scrollView.synchronizeRowHeights([
+            firstInflatedHeight,
+            rowRects[1].height + 18,
+            rowRects[2].height,
+        ])
+
+        let restoredParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(restoredParagraph.minimumLineHeight <= rowRects[0].height + 0.5)
+
+        scrollView.layoutSubtreeIfNeeded()
+        scrollView.synchronizeRowHeights([
+            firstInflatedHeight,
+            rowRects[1].height + 18,
+            rowRects[2].height,
+        ])
+
+        let reappliedParagraph = try #require(
+            codeView.textStorage?.attribute(.paragraphStyle, at: metadata[0].range.location, effectiveRange: nil) as? NSParagraphStyle
+        )
+        #expect(reappliedParagraph.minimumLineHeight > rowRects[0].height + 0.5)
+    }
+
     @Test func gutterSelectionOutlineWrapsContiguousRows() {
         let rowRects = [
             NSRect(x: 0, y: 8, width: 42, height: 18),
