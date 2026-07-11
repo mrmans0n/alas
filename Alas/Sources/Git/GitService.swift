@@ -112,6 +112,13 @@ extension GitService {
             : ["diff", "--numstat", "--cached"]
         let numstat = try await Process.git(numstatArgs, cwd: worktreePath)
         let counts = NumstatParser.parse(numstat.stdout)
+        let untrackedPaths = entries.filter { $0.add == 0 && $0.del == 0 }.map(\.path)
+        let remoteCounts: [String: Int]
+        if worktreePath.isRemoteAlasPath, let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+            remoteCounts = await RemoteFileStats.lineCounts(host: host, cwd: worktreePath.path, paths: untrackedPaths)
+        } else {
+            remoteCounts = [:]
+        }
 
         for i in entries.indices {
             if let c = counts[entries[i].path] {
@@ -127,8 +134,11 @@ extension GitService {
                 // show 0/0 in the Changes pane and the totals would
                 // under-report. Count the file's lines as adds when it exists
                 // on disk; deleted files (no longer present) stay at 0/0.
-                let url = worktreePath.appendingPathComponent(entries[i].path)
-                if !worktreePath.isRemoteAlasPath,
+                if worktreePath.isRemoteAlasPath, let lines = remoteCounts[entries[i].path] {
+                    entries[i] = ChangedFile(path: entries[i].path, status: entries[i].status, stage: entries[i].stage, add: lines, del: 0, renameFrom: entries[i].renameFrom, conflict: entries[i].conflict)
+                } else {
+                    let url = worktreePath.appendingPathComponent(entries[i].path)
+                    if !worktreePath.isRemoteAlasPath,
                    let data = try? Data(contentsOf: url),
                    let text = String(data: data, encoding: .utf8) {
                     let lines = text.isEmpty
@@ -141,6 +151,7 @@ extension GitService {
                                              del: 0,
                                              renameFrom: entries[i].renameFrom,
                                              conflict: entries[i].conflict)
+                    }
                 }
             }
         }
@@ -615,7 +626,7 @@ extension GitService {
     func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
         if worktreePath.isRemoteAlasPath {
             let prefix = path.isEmpty ? "" : path + "/"
-            let paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
+            var paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
                 .filter { path.isEmpty || $0.hasPrefix(prefix) }
             var directories = Set<String>()
             for candidate in paths {
@@ -623,6 +634,15 @@ extension GitService {
                 guard components.count > 1 else { continue }
                 for index in 1 ..< components.count {
                     directories.insert(components.prefix(index).joined(separator: "/"))
+                }
+            }
+            if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
+                let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
+                if let result = try? await RemoteExec.run(host: host, cwd: nil, command: "ls -1Ap " + SSHCommand.shellQuote(directory)), result.exitCode == 0 {
+                    for entry in RemoteFileStats.parseLsEntries(result.stdout) where entry.name != ".git" {
+                        let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
+                        if entry.isDirectory { directories.insert(fullPath) } else if !paths.contains(fullPath) { paths.append(fullPath) }
+                    }
                 }
             }
             let built = FileTreeBuilder.build(

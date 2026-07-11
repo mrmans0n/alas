@@ -41,4 +41,14 @@ struct SSHIntegrationTests {
             try await RemoteRepoValidator.validate(host: "localhost", path: "/nonexistent-alas")
         }
     }
+
+    @Test func remoteExecAndCapabilitiesAgainstLocalhost() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+        let echo = try await RemoteExec.run(host: "localhost", cwd: nil, command: "echo alas-ok")
+        #expect(echo.exitCode == 0)
+        #expect(echo.stdout.contains("alas-ok"))
+        let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: "localhost")
+        #expect(capabilities?.os == .macos)
+        #expect(capabilities?.gitVersion != nil)
+    }
 }

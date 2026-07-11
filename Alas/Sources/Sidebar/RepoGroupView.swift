@@ -42,6 +42,7 @@ struct RepoGroupView: View {
     let onDropWorktree: (_ draggedId: String, _ destinationId: String) -> Void
     let onDropProject: (_ draggedId: String, _ destinationId: String) -> Void
     @Environment(\.theme) var theme
+    @ObservedObject private var hostStatus = RemoteHostStatusStore.shared
     @State private var hovering = false
     @State private var plusHovering = false
 
@@ -61,14 +62,23 @@ struct RepoGroupView: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
                 if let host = project.host {
-                    Text(host)
+                    HStack(spacing: 3) {
+                        if hostStatus.isOffline(host) {
+                            Image(systemName: "bolt.horizontal.circle")
+                                .font(.system(size: 9))
+                                .foregroundColor(.orange)
+                        }
+                        Text(host)
+                    }
                         .font(.system(size: 9.5, weight: .medium))
                         .foregroundColor(theme.color("fg-faint"))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(theme.color("bg-4"))
                         .clipShape(Capsule())
-                        .help("Remote project on \(host) (SSH)")
+                        .help(hostStatus.isOffline(host)
+                            ? "Host \(host) is unreachable"
+                            : "Remote project on \(host) (SSH)")
                 }
                 Spacer(minLength: 0)
             }

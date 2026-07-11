@@ -378,7 +378,7 @@ final class ProjectsManager {
 
     /// Remote and local roots must not overlap: a prefix collision would make
     /// host routing ambiguous. Existing local-to-local nesting remains valid.
-    static func ensureNoPathCollision(
+    nonisolated static func ensureNoPathCollision(
         newRoot: String,
         newHost: String?,
         existing: [ProjectConfig]

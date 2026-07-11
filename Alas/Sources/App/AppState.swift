@@ -438,6 +438,8 @@ final class AppState {
     /// the sidebar when branches flip or worktrees appear/disappear externally.
     @ObservationIgnored
     private var projectGitWatchers: [String: ProjectGitWatcher] = [:]
+    @ObservationIgnored
+    private var remoteProjectWatchers: [String: RemoteProjectGitWatcher] = [:]
 
     init(
         store: any PersistenceStoreProtocol = PersistenceStore(),
@@ -1351,34 +1353,27 @@ final class AppState {
     /// stops any existing watcher for the same project id first.
     func startProjectGitWatcher(for project: ProjectConfig) {
         stopProjectGitWatcher(projectId: project.id)
-        if URL(fileURLWithPath: project.path).isRemoteAlasPath { return }
+        if project.host != nil {
+            let watcher = RemoteProjectGitWatcher(projectPath: URL(fileURLWithPath: project.path))
+            watcher.onHeadChanged = { [weak self] updates in
+                self?.handleProjectHeadUpdates(projectId: project.id, branchByWorktreePath: updates)
+            }
+            watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: project.id) }
+            remoteProjectWatchers[project.id] = watcher
+            watcher.start()
+            return
+        }
         let watcher = ProjectGitWatcher(repoPath: URL(fileURLWithPath: project.path))
         let projectId = project.id
-        watcher.onHeadChanged = { [weak self] map in
-            self?.projectsManager.applyHeadUpdates(
-                projectId: projectId,
-                branchByWorktreePath: map
-            )
-        }
-        watcher.onTopologyChanged = { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                let beforeIds = self.allWorktreeIds()
-                // refreshWorktrees returns true when the hidden-path GC dropped
-                // entries — persist so archived worktrees removed externally
-                // don't reappear after relaunch.
-                if (try? await self.projectsManager.refreshWorktrees(projectId: projectId)) == true {
-                    self.saveProjects()
-                }
-                self.cleanupMissingWorktrees(beforeIds: beforeIds)
-            }
-        }
+        watcher.onHeadChanged = { [weak self] map in self?.handleProjectHeadUpdates(projectId: projectId, branchByWorktreePath: map) }
+        watcher.onTopologyChanged = { [weak self] in self?.handleProjectTopologyChange(projectId: projectId) }
         watcher.start()
         projectGitWatchers[projectId] = watcher
     }
 
     func stopProjectGitWatcher(projectId: String) {
         projectGitWatchers.removeValue(forKey: projectId)?.stop()
+        remoteProjectWatchers.removeValue(forKey: projectId)?.stop()
     }
 
     func startAllProjectGitWatchers() {
@@ -1390,6 +1385,20 @@ final class AppState {
     func stopAllProjectGitWatchers() {
         for (_, watcher) in projectGitWatchers { watcher.stop() }
         projectGitWatchers.removeAll()
+        for (_, watcher) in remoteProjectWatchers { watcher.stop() }
+        remoteProjectWatchers.removeAll()
+    }
+
+    private func handleProjectHeadUpdates(projectId: String, branchByWorktreePath: [URL: String]) {
+        projectsManager.applyHeadUpdates(projectId: projectId, branchByWorktreePath: branchByWorktreePath)
+    }
+
+    private func handleProjectTopologyChange(projectId: String) {
+        Task { @MainActor in
+            let beforeIds = allWorktreeIds()
+            if (try? await projectsManager.refreshWorktrees(projectId: projectId)) == true { saveProjects() }
+            cleanupMissingWorktrees(beforeIds: beforeIds)
+        }
     }
 
     func updateProject(

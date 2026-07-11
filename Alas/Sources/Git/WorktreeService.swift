@@ -35,7 +35,9 @@ struct WorktreeService {
     func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        return Self.parsePorcelain(result.stdout, projectId: projectId)
+        var trees = Self.parsePorcelain(result.stdout, projectId: projectId)
+        if repoPath.isRemoteAlasPath { trees = await Self.fillingRemoteLastActivity(trees) }
+        return trees
     }
 
     /// Returns a best-effort "last activity" timestamp for the worktree at
@@ -112,6 +114,24 @@ struct WorktreeService {
         // (it's rewritten on each detached commit/checkout).
         if let m = mtime(of: headPath) { return m }
         return dirMtime()
+    }
+
+    static func date(fromEpochOutput output: String) -> Date? {
+        TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)).map(Date.init(timeIntervalSince1970:))
+    }
+
+    private static func fillingRemoteLastActivity(_ trees: [Worktree]) async -> [Worktree] {
+        await withTaskGroup(of: (Int, Date?).self) { group in
+            for (index, tree) in trees.enumerated() {
+                group.addTask {
+                    let result = try? await Process.git(["log", "-1", "--format=%ct", "HEAD"], cwd: tree.path)
+                    return (index, result.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil })
+                }
+            }
+            var trees = trees
+            for await (index, date) in group where date != nil { trees[index].lastActivity = date! }
+            return trees
+        }
     }
 
     static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {
