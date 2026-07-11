@@ -474,10 +474,10 @@ struct DiffPaneTextDocumentBuilder {
         font: NSFont,
         theme: Theme
     ) -> NSAttributedString {
-        NSAttributedString(
-            string: "      \(expandableContextLabel(row))",
-            attributes: collapsedTextAttributes(font: font, theme: theme)
-        )
+        // Unified/stacked column. Previously prefixed with six spaces for indent,
+        // which pushed the label off-center inside the pill. Indent now comes from
+        // the paragraph style, so the pill wraps the glyphs symmetrically.
+        expandableContextLabelString(row, font: font, theme: theme)
     }
 
     private static func collapsedCodeText(
@@ -496,18 +496,66 @@ struct DiffPaneTextDocumentBuilder {
         font: NSFont,
         theme: Theme
     ) -> NSAttributedString {
+        expandableContextLabelString(row, font: font, theme: theme)
+    }
+
+    /// The backing string is the plain label only. The directional chevron is
+    /// drawn separately by the text view (see `drawExpandableContextPill`) so it
+    /// stays out of the model — keeping selection/copy to just the label text.
+    private static func expandableContextLabelString(
+        _ row: DiffDisplayRow,
+        font: NSFont,
+        theme: Theme
+    ) -> NSAttributedString {
         NSAttributedString(
             string: expandableContextLabel(row),
-            attributes: collapsedTextAttributes(font: font, theme: theme)
+            attributes: expandableContextAttributes(font: font, theme: theme)
         )
     }
 
-    private static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
+    private static func expandableContextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.setParagraphStyle(CenterTypography.paragraphStyle())
+        let headIndent = expandableContextHeadIndent(font: font)
+        paragraph.firstLineHeadIndent = headIndent
+        paragraph.headIndent = headIndent
+        // Size the row from the font (code font is user-configurable up to 64pt),
+        // not a fixed height: natural line height plus symmetric vertical padding,
+        // so the row rect grows with the glyphs and the pill keeps its breathing
+        // room at any size. Baseline-shift the glyphs by the padding so they sit in
+        // the vertical center of the row and the pill can center on the row.
+        let naturalLineHeight = font.ascender - font.descender
+        let rowHeight = naturalLineHeight + expandableContextRowPadding * 2
+        paragraph.minimumLineHeight = rowHeight
+        paragraph.maximumLineHeight = rowHeight
+        return [
+            .font: font,
+            .foregroundColor: NSColor(theme.color("seg-pill-active-fg")),
+            .paragraphStyle: paragraph,
+            .baselineOffset: expandableContextRowPadding,
+        ]
+    }
+
+    /// Symmetric vertical padding between the label and the pill edge.
+    private static let expandableContextRowPadding: CGFloat = 5
+
+    /// Left inset of the expand label, leaving room for the separately-drawn
+    /// chevron and the pill's left padding. Scales with the font so the chevron
+    /// (sized from the same font) still fits at larger sizes.
+    static func expandableContextHeadIndent(font: NSFont) -> CGFloat {
+        font.pointSize + 16
+    }
+
+    static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
         let boundaryText = row.contextExpansion?.boundary == .below ? "below" : "above"
         guard row.collapsedLineCount > 0 else {
             return "Expand context \(boundaryText)"
         }
         return "Expand \(row.collapsedLineCount) unchanged lines \(boundaryText)"
+    }
+
+    static func expandableContextSymbolName(boundary: DiffContextBoundary?) -> String {
+        boundary == .above ? "chevron.up" : "chevron.down"
     }
 
     private static func collapsedTextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {

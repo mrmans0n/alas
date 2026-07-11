@@ -1005,7 +1005,23 @@ final class DiffPaneCodeTextView: NSTextView {
     private var lspController: DiffPaneLSPController?
     private var cachedRowGeometry: RowGeometry?
     private var rowGeometryComputationCount = 0
-    private var isPointingHandCursor = false
+    private var hoverExpansionRow: Int? {
+        didSet { if hoverExpansionRow != oldValue { needsDisplay = true } }
+    }
+    private var pressedExpansionRow: Int? {
+        didSet { if pressedExpansionRow != oldValue { needsDisplay = true } }
+    }
+    private var armedExpansionRow: Int?
+    private var armedExpansionOptionKey = false
+    /// Whether we last forced the pointing-hand cursor, so it can be restored to
+    /// the default when the mouse leaves the view.
+    private var didSetPointerCursor = false
+
+    nonisolated static func expandPillFillAlpha(hovered: Bool, pressed: Bool) -> CGFloat {
+        if pressed { return 0.36 }
+        if hovered { return 0.28 }
+        return 0.18
+    }
 
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
@@ -1114,12 +1130,28 @@ final class DiffPaneCodeTextView: NSTextView {
         super.mouseMoved(with: event)
         let point = convert(event.locationInWindow, from: nil)
         hoverHandler?(point)
-        updateCursor(at: point)
+        hoverExpansionRow = expansionRow(at: point)
+        // `super.mouseMoved` re-asserts the text view's I-beam on every move and
+        // wins the ordering against `cursorUpdate`, so re-apply the pointer here
+        // (unconditionally, no cached-state guard) after super has run.
+        applyPointerCursorIfNeeded(at: point)
+    }
+
+    private func applyPointerCursorIfNeeded(at point: NSPoint) {
+        if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
+            NSCursor.pointingHand.set()
+            didSetPointerCursor = true
+        } else {
+            didSetPointerCursor = false
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
-        if invokeExpansion(at: point, optionKey: event.modifierFlags.contains(.option)) {
+        if let row = expansionRow(at: point) {
+            armedExpansionRow = row
+            armedExpansionOptionKey = event.modifierFlags.contains(.option)
+            pressedExpansionRow = row
             return
         }
         if event.modifierFlags.contains(.command), let commandClickHandler {
@@ -1129,6 +1161,30 @@ final class DiffPaneCodeTextView: NSTextView {
         super.mouseDown(with: event)
     }
 
+    override func mouseDragged(with event: NSEvent) {
+        guard let armed = armedExpansionRow else {
+            super.mouseDragged(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        pressedExpansionRow = expansionRow(at: point) == armed ? armed : nil
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let armed = armedExpansionRow else {
+            super.mouseUp(with: event)
+            return
+        }
+        let point = convert(event.locationInWindow, from: nil)
+        let releasedInside = expansionRow(at: point) == armed
+        let optionKey = armedExpansionOptionKey
+        pressedExpansionRow = nil
+        armedExpansionRow = nil
+        if releasedInside, let key = expansionKey(atRow: armed) {
+            invokeExpansion(key: key, optionKey: optionKey)
+        }
+    }
+
     override func flagsChanged(with event: NSEvent) {
         super.flagsChanged(with: event)
         flagsChangedHandler?(event)
@@ -1136,7 +1192,14 @@ final class DiffPaneCodeTextView: NSTextView {
 
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
-        clearPointingHandCursor()
+        hoverExpansionRow = nil
+        // Restore the default cursor when leaving the view, otherwise a pointing
+        // hand set over an expandable/source row can linger over the surrounding
+        // non-interactive chrome until the next cursor update.
+        if didSetPointerCursor {
+            NSCursor.arrow.set()
+            didSetPointerCursor = false
+        }
         mouseExitedHandler?()
     }
 
@@ -1150,7 +1213,7 @@ final class DiffPaneCodeTextView: NSTextView {
         }
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -1407,14 +1470,19 @@ final class DiffPaneCodeTextView: NSTextView {
         return rowRects.firstIndex(where: { $0.contains(point) })
     }
 
-    private func updateCursor(at point: NSPoint) {
-        guard let row = reviewLineRow(at: point),
-              rowShouldUsePointingHandCursor(row)
-        else {
-            clearPointingHandCursor()
-            return
+    override func cursorUpdate(with event: NSEvent) {
+        // A selectable NSTextView asserts its I-beam through `cursorUpdate(with:)`
+        // on its own cursor-update tracking areas, which overrides the legacy
+        // `addCursorRect`/`resetCursorRects` mechanism. Override it here so
+        // expandable-context and reviewable source rows show the pointer instead.
+        let point = convert(event.locationInWindow, from: nil)
+        if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
+            NSCursor.pointingHand.set()
+            didSetPointerCursor = true
+        } else {
+            didSetPointerCursor = false
+            super.cursorUpdate(with: event)
         }
-        setPointingHandCursor()
     }
 
     private func rowShouldUsePointingHandCursor(_ row: Int) -> Bool {
@@ -1423,32 +1491,18 @@ final class DiffPaneCodeTextView: NSTextView {
         return metadata.expansionKey != nil || metadata.sourceLine != nil
     }
 
-    private func setPointingHandCursor() {
-        guard !isPointingHandCursor else { return }
-        NSCursor.pointingHand.set()
-        isPointingHandCursor = true
-    }
-
-    private func clearPointingHandCursor() {
-        guard isPointingHandCursor else { return }
-        NSCursor.arrow.set()
-        isPointingHandCursor = false
-    }
-
     func invokeExpansionForTesting(row: Int, optionKey: Bool) {
         guard let key = expansionKey(atRow: row) else { return }
         invokeExpansion(key: key, optionKey: optionKey)
     }
 
-    private func invokeExpansion(at point: NSPoint, optionKey: Bool) -> Bool {
+    /// Row index of the expandable-context button under `point`, if any.
+    private func expansionRow(at point: NSPoint) -> Int? {
         let rowRects = diffRowRects()
         guard let row = rowRects.firstIndex(where: { $0.contains(point) }),
-              let key = expansionKey(atRow: row)
-        else {
-            return false
-        }
-        invokeExpansion(key: key, optionKey: optionKey)
-        return true
+              expansionKey(atRow: row) != nil
+        else { return nil }
+        return row
     }
 
     private func expansionKey(atRow row: Int) -> DiffContextExpansionKey? {
@@ -1632,6 +1686,12 @@ final class DiffPaneCodeTextView: NSTextView {
         let range = lineMetadata[row].range
         guard range.length > 0 else { return }
 
+        // In split mode the opposite column keeps the expandable-context metadata
+        // on a blank " " placeholder. Only the column holding the real label
+        // should render the button, so skip rows whose text is empty.
+        let label = (string as NSString).substring(with: range)
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         guard glyphRange.length > 0 else { return }
 
@@ -1639,19 +1699,61 @@ final class DiffPaneCodeTextView: NSTextView {
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
         guard !textRect.isEmpty else { return }
 
-        let pillHeight = min(max(textRect.height + 6, 18), max(rowRect.height - 4, 1))
+        // The expandable row uses a taller fixed line height and the label is
+        // baseline-shifted to the row's vertical center (see the builder), so the
+        // pill can simply center on the row and inset a little to fit within it.
+        // The chevron is drawn here (not baked into the text) so the backing
+        // string stays a plain label for selection/copy.
+        let chevronGap: CGFloat = 5
+        let tint = NSColor(theme.color("seg-pill-active-fg"))
+        let chevronImage = Self.expandChevronImage(
+            boundary: lineMetadata[row].expansionBoundary,
+            font: font,
+            color: tint
+        )
+        let chevronSize = chevronImage?.size ?? .zero
+        let chevronLeftX = textRect.minX - chevronGap - chevronSize.width
+
+        let horizontalPadding: CGFloat = 12
+        let verticalInset: CGFloat = 2
+        let pillHeight = max(rowRect.height - verticalInset * 2, 1)
+        let pillLeft = (chevronImage == nil ? textRect.minX : chevronLeftX) - horizontalPadding
         let pillRect = NSRect(
-            x: textRect.minX - 10,
+            x: pillLeft,
             y: rowRect.midY - pillHeight / 2,
-            width: textRect.width + 20,
+            width: textRect.maxX + horizontalPadding - pillLeft,
             height: pillHeight
         )
-        let path = NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2)
-        NSColor(theme.color("bg-1")).withAlphaComponent(0.72).setFill()
+        let alpha = Self.expandPillFillAlpha(
+            hovered: hoverExpansionRow == row,
+            pressed: pressedExpansionRow == row
+        )
+        let path = NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6)
+        NSColor(theme.color("accent")).withAlphaComponent(alpha).setFill()
         path.fill()
-        NSColor(theme.color("line")).withAlphaComponent(0.55).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+
+        if let chevronImage {
+            let chevronRect = NSRect(
+                x: chevronLeftX,
+                y: rowRect.midY - chevronSize.height / 2,
+                width: chevronSize.width,
+                height: chevronSize.height
+            )
+            chevronImage.draw(in: chevronRect)
+        }
+    }
+
+    private static func expandChevronImage(
+        boundary: DiffContextBoundary?,
+        font: NSFont?,
+        color: NSColor
+    ) -> NSImage? {
+        let symbol = DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: boundary)
+        let pointSize = (font?.pointSize ?? 13) - 1
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
     }
 }
 
