@@ -395,9 +395,9 @@ struct DiffPaneView: View {
         let newLines = Set(visibleRows.compactMap { $0.new?.anchor.newLine })
         return threads.filter { t in
             if t.isOldSide {
-                return t.lineRange.contains(where: { oldLines.contains($0) })
+                return oldLines.contains(where: { t.lineRange.contains($0) })
             } else {
-                return t.lineRange.contains(where: { newLines.contains($0) })
+                return newLines.contains(where: { t.lineRange.contains($0) })
             }
         }
     }
