@@ -77,6 +77,8 @@ struct AgentHookInstallNudgeBanner: View {
                     installStatus = nil
                     resolvedNudge = nil
                 }
+                let key = await MainActor.run { nudgeKey }
+                await refreshNudge(for: key)
             } catch {
                 await MainActor.run {
                     installStatus = "Error: \(error.localizedDescription)"
@@ -95,6 +97,7 @@ struct AgentHookInstallNudgeBanner: View {
         }
     }
 
+    @MainActor
     private func refreshNudge(for key: HookInstallNudgeKey) async {
         guard !key.detectedHarnesses.isEmpty else {
             resolvedNudgeKey = key
