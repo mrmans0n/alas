@@ -20,7 +20,20 @@ struct Theme: Codable, Equatable {
     /// are purely runtime-derived.
     var resolvedColorOverrides: [String: Color] = [:]
 
+    /// Token-name → precomputed `Color` values derived from `tokens`.
+    /// Populated when bundled themes load so `color(_:)` does not parse and
+    /// convert OKLCH strings during every SwiftUI body pass.
+    private(set) var resolvedColors: [String: Color] = [:]
+
     enum CodingKeys: String, CodingKey { case id, name, tokens }
+
+    static func == (lhs: Theme, rhs: Theme) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.tokens == rhs.tokens
+            && lhs.accentOverrideHex == rhs.accentOverrideHex
+            && lhs.resolvedColorOverrides == rhs.resolvedColorOverrides
+    }
 
     static let bundledIds = ["cool-slate", "light"]
 
@@ -46,7 +59,9 @@ struct Theme: Codable, Equatable {
             throw NSError(domain: "Theme", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing theme \(id)"])
         }
         let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(Theme.self, from: data)
+        var theme = try JSONDecoder().decode(Theme.self, from: data)
+        theme.resolvedColors = precomputedColors(from: theme.tokens)
+        return theme
     }
 
     func color(_ token: String) -> Color {
@@ -61,11 +76,24 @@ struct Theme: Codable, Equatable {
                 return Color(hex: hex).opacity(0.18)
             }
         }
+        if let resolved = resolvedColors[token] {
+            return resolved
+        }
         guard let raw = tokens[token],
               let parsed = try? OKLCH.parse(raw) else {
             return .pink   // sentinel, easy to spot
         }
         return parsed.toColor()
+    }
+
+    private static func precomputedColors(from tokens: [String: String]) -> [String: Color] {
+        var colors: [String: Color] = [:]
+        colors.reserveCapacity(tokens.count)
+        for (token, raw) in tokens {
+            guard let parsed = try? OKLCH.parse(raw) else { continue }
+            colors[token] = parsed.toColor()
+        }
+        return colors
     }
 }
 

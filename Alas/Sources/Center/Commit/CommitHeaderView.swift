@@ -106,13 +106,17 @@ struct CommitHeaderView: View {
     }
 
     private func absoluteDate(_ date: Date) -> String {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd HH:mm"
-        return fmt.string(from: date)
+        Self.absoluteDateFormatter.string(from: date)
     }
 
     private func copyToPasteboard(_ text: String, feedback: String) {
         Clipboard.copy(text)
         copyFeedback.show(feedback)
     }
+
+    private static let absoluteDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter
+    }()
 }
