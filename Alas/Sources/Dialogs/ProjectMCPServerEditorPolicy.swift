@@ -9,7 +9,7 @@ enum ProjectMCPServerEditorPolicy {
             guard case let .invalidURL(serverName) = issue else { return false }
             return servers.contains { server in
                 server.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
-                    && hasTemplateURL(server.transport)
+                    && hasStructurallyValidTemplateURL(server.transport)
             }
         }
     }
@@ -63,8 +63,8 @@ enum ProjectMCPServerEditorPolicy {
 
     static func summary(for server: ProjectMCPServer) -> String {
         switch server.transport {
-        case let .stdio(command, args, _):
-            return ([command] + args).joined(separator: " ")
+        case let .stdio(command, _, _):
+            return command
         case let .http(url, _), let .sse(url, _):
             return safeRemoteSummary(url)
         }
@@ -85,13 +85,34 @@ enum ProjectMCPServerEditorPolicy {
         return components.string ?? withoutQuery
     }
 
-    private static func hasTemplateURL(_ transport: ProjectMCPTransport) -> Bool {
+    private static func hasStructurallyValidTemplateURL(_ transport: ProjectMCPTransport) -> Bool {
         switch transport {
         case let .http(url, _), let .sse(url, _):
-            return !templateVariables(in: url).isEmpty
+            guard !templateVariables(in: url).isEmpty else { return false }
+            return isValidHTTPURL(replacingTemplateVariables(in: url))
         case .stdio:
             return false
         }
+    }
+
+    private static func replacingTemplateVariables(in value: String) -> String {
+        let pattern = #"\$\{[A-Za-z_][A-Za-z0-9_]*\}"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return value }
+        let range = NSRange(value.startIndex..., in: value)
+        return expression.stringByReplacingMatches(
+            in: value,
+            range: range,
+            withTemplate: "mcp"
+        )
+    }
+
+    private static func isValidHTTPURL(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value == trimmed,
+              let url = URL(string: value),
+              let host = url.host,
+              !host.isEmpty else { return false }
+        return url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https"
     }
 
     private static func strippingUserInfo(from value: String) -> String {

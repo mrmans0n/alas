@@ -15,6 +15,22 @@ struct ProjectMCPServerEditorPolicyTests {
         #expect(ProjectMCPServerEditorPolicy.canSave([deferred]))
     }
 
+    @Test func canSaveRejectsStructurallyInvalidURLTemplates() {
+        let wrongScheme = ProjectMCPServer(
+            id: "wrong-scheme",
+            name: "wrong-scheme",
+            transport: .http(url: "ftp://${HOST}/mcp", headers: [])
+        )
+        let malformed = ProjectMCPServer(
+            id: "malformed",
+            name: "malformed",
+            transport: .http(url: "https://example.com/${TOKEN} not-valid", headers: [])
+        )
+
+        #expect(!ProjectMCPServerEditorPolicy.canSave([wrongScheme]))
+        #expect(!ProjectMCPServerEditorPolicy.canSave([malformed]))
+    }
+
     @Test func extractsDistinctTemplateVariablesInEncounterOrder() {
         let server = ProjectMCPServer(
             id: "server",
@@ -45,6 +61,20 @@ struct ProjectMCPServerEditorPolicyTests {
         )
 
         #expect(ProjectMCPServerEditorPolicy.summary(for: server) == "https://mcp.example.com/v1")
+    }
+
+    @Test func stdioSummaryNeverIncludesArguments() {
+        let server = ProjectMCPServer(
+            id: "stdio",
+            name: "stdio",
+            transport: .stdio(
+                command: "mcp-files",
+                args: ["--token", "literal-secret"],
+                environment: []
+            )
+        )
+
+        #expect(ProjectMCPServerEditorPolicy.summary(for: server) == "mcp-files")
     }
 
     @Test func labelsSSEAsLegacy() {
