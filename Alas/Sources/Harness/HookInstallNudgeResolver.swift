@@ -1,6 +1,6 @@
 import Foundation
 
-struct HookInstallNudge: Equatable {
+struct HookInstallNudge: Equatable, Sendable {
     let agent: AgentKind
     let installState: InstallState
     let title: String

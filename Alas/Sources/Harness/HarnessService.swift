@@ -60,8 +60,8 @@ final class HarnessService {
 
     func recordHarnessDetection(sessionId: String, kind: HarnessKind?) {
         if let kind {
-            harnessBySession[sessionId] = kind
-            activeHarnessBySession[sessionId] = kind
+            if harnessBySession[sessionId] != kind { harnessBySession[sessionId] = kind }
+            if activeHarnessBySession[sessionId] != kind { activeHarnessBySession[sessionId] = kind }
             // Seed running activity for users without hooks installed (or for
             // the gap before the first hook fires). Don't clobber an existing
             // hook-driven state — socket events are authoritative once they
@@ -76,7 +76,9 @@ final class HarnessService {
                 )
             }
         } else {
-            activeHarnessBySession.removeValue(forKey: sessionId)
+            if activeHarnessBySession[sessionId] != nil {
+                activeHarnessBySession.removeValue(forKey: sessionId)
+            }
             // Process exited. Drop the running badge but preserve
             // awaiting/idle state — those carry the last notification
             // context, and the stop-hook may still race process exit.

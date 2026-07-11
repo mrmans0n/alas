@@ -1,6 +1,6 @@
 import Foundation
 
-enum HarnessKind: String, Codable, CaseIterable, Identifiable {
+enum HarnessKind: String, Codable, CaseIterable, Identifiable, Sendable {
     case claudeCode = "claude-code"
     case codex      = "codex-cli"
     case cursor     = "cursor-agent"
