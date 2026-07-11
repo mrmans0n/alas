@@ -523,16 +523,32 @@ struct DiffPaneTextDocumentBuilder {
         paragraph.setParagraphStyle(CenterTypography.paragraphStyle())
         paragraph.firstLineHeadIndent = expandableContextHeadIndent
         paragraph.headIndent = expandableContextHeadIndent
+        // Give the row a taller fixed line height so the row rect itself grows and
+        // the button pill has vertical room without being clipped by neighbouring
+        // rows. (Paragraph spacing does not enlarge the measured row rect.)
+        paragraph.minimumLineHeight = expandableContextRowHeight
+        paragraph.maximumLineHeight = expandableContextRowHeight
+        // A fixed line height puts all the extra space above the glyphs (they end
+        // up bottom-aligned). Raise the glyphs by half the surplus so they sit in
+        // the vertical center of the row, letting the pill center on the row and
+        // still wrap the label symmetrically.
+        let naturalLineHeight = font.ascender - font.descender
+        let baselineOffset = max(0, (expandableContextRowHeight - naturalLineHeight) / 2)
         return [
             .font: font,
             .foregroundColor: NSColor(theme.color("seg-pill-active-fg")),
             .paragraphStyle: paragraph,
+            .baselineOffset: baselineOffset,
         ]
     }
 
     /// Left inset of the expand button from the code column edge. Replaces the old
     /// six-space string prefix; keeps the pill from hugging the gutter.
     private static let expandableContextHeadIndent: CGFloat = 8
+
+    /// Fixed line height for the expandable-context row, taller than a code line
+    /// so the button pill has room around the label.
+    private static let expandableContextRowHeight: CGFloat = 26
 
     private static func chevronAttachment(symbolName: String, font: NSFont, color: NSColor) -> NSTextAttachment? {
         let config = NSImage.SymbolConfiguration(pointSize: font.pointSize - 1, weight: .semibold)

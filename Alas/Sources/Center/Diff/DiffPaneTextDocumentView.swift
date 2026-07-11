@@ -1087,6 +1087,16 @@ final class DiffPaneCodeTextView: NSTextView {
         let point = convert(event.locationInWindow, from: nil)
         hoverHandler?(point)
         hoverExpansionRow = expansionRow(at: point)
+        // `super.mouseMoved` re-asserts the text view's I-beam on every move and
+        // wins the ordering against `cursorUpdate`, so re-apply the pointer here
+        // (unconditionally, no cached-state guard) after super has run.
+        applyPointerCursorIfNeeded(at: point)
+    }
+
+    private func applyPointerCursorIfNeeded(at point: NSPoint) {
+        if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
+            NSCursor.pointingHand.set()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1149,7 +1159,7 @@ final class DiffPaneCodeTextView: NSTextView {
         }
         let trackingArea = NSTrackingArea(
             rect: bounds,
-            options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
         )
@@ -1167,7 +1177,6 @@ final class DiffPaneCodeTextView: NSTextView {
 
     func invalidateDiffRowGeometry() {
         cachedRowGeometry = nil
-        window?.invalidateCursorRects(for: self)
     }
 
     private func rowGeometry() -> RowGeometry {
@@ -1407,10 +1416,16 @@ final class DiffPaneCodeTextView: NSTextView {
         return rowRects.firstIndex(where: { $0.contains(point) })
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        for (row, rect) in diffRowRects().enumerated() where rowShouldUsePointingHandCursor(row) {
-            addCursorRect(rect, cursor: .pointingHand)
+    override func cursorUpdate(with event: NSEvent) {
+        // A selectable NSTextView asserts its I-beam through `cursorUpdate(with:)`
+        // on its own cursor-update tracking areas, which overrides the legacy
+        // `addCursorRect`/`resetCursorRects` mechanism. Override it here so
+        // expandable-context and reviewable source rows show the pointer instead.
+        let point = convert(event.locationInWindow, from: nil)
+        if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
+            NSCursor.pointingHand.set()
+        } else {
+            super.cursorUpdate(with: event)
         }
     }
 
@@ -1622,11 +1637,16 @@ final class DiffPaneCodeTextView: NSTextView {
             .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
         guard !textRect.isEmpty else { return }
 
-        let pillHeight = min(max(textRect.height + 6, 18), max(rowRect.height - 4, 1))
+        // The expandable row uses a taller fixed line height and the label is
+        // baseline-shifted to the row's vertical center (see the builder), so the
+        // pill can simply center on the row and inset a little to fit within it.
+        let horizontalPadding: CGFloat = 12
+        let verticalInset: CGFloat = 2
+        let pillHeight = max(rowRect.height - verticalInset * 2, 1)
         let pillRect = NSRect(
-            x: textRect.minX - 10,
+            x: textRect.minX - horizontalPadding,
             y: rowRect.midY - pillHeight / 2,
-            width: textRect.width + 20,
+            width: textRect.width + horizontalPadding * 2,
             height: pillHeight
         )
         let alpha = Self.expandPillFillAlpha(
