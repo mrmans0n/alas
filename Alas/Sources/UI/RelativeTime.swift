@@ -1,5 +1,13 @@
 import Foundation
 
+private enum RelativeTimeFormatters {
+    static let monthDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
+}
+
 /// Compact "now / Nm / Nh / Nd / MMM d" age label, used in commit rows
 /// and commit headers.
 func relativeTime(_ date: Date) -> String {
@@ -8,7 +16,5 @@ func relativeTime(_ date: Date) -> String {
     if delta < 3600 { return "\(Int(delta / 60))m" }
     if delta < 86_400 { return "\(Int(delta / 3600))h" }
     if delta < 30 * 86_400 { return "\(Int(delta / 86_400))d" }
-    let fmt = DateFormatter()
-    fmt.dateFormat = "MMM d"
-    return fmt.string(from: date)
+    return RelativeTimeFormatters.monthDay.string(from: date)
 }

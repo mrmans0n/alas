@@ -155,9 +155,7 @@ struct WorktreeRowView: View {
     }
 
     private func relative(_ date: Date) -> String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: Date())
+        Self.relativeDateFormatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func pillTooltip(for summary: HarnessService.WorktreeHarnessSummary) -> String {
@@ -168,6 +166,12 @@ struct WorktreeRowView: View {
         }
         return "\(summary.agent.displayName) · \(stateText)"
     }
+
+    private static let relativeDateFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
 }
 
 private extension String {
