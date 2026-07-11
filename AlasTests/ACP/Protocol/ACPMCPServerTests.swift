@@ -68,6 +68,27 @@ struct ACPMCPServerTests {
         #expect(sse == .sse(name: "events", url: "https://example.com/sse", headers: []))
     }
 
+    @Test("round trips nonempty stdio environment and remote headers")
+    func roundTripsNonemptyCollections() throws {
+        let servers: [ACPMCPServer] = [
+            .stdio(
+                name: "filesystem",
+                command: "npx",
+                args: ["-y", "@modelcontextprotocol/server-filesystem"],
+                env: [.init(name: "ROOT", value: "/workspace")]
+            ),
+            .http(
+                name: "remote",
+                url: "https://example.com/mcp",
+                headers: [.init(name: "Authorization", value: "Bearer token")]
+            ),
+        ]
+
+        for server in servers {
+            #expect(try JSONDecoder().decode(ACPMCPServer.self, from: JSONEncoder().encode(server)) == server)
+        }
+    }
+
     @Test("rejects unknown MCP server types")
     func decodeUnknownType() {
         let data = Data("""

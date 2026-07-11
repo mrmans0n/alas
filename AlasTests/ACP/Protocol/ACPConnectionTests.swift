@@ -40,6 +40,10 @@ struct ACPConnectionTests {
                   "image": true,
                   "audio": false,
                   "embeddedContext": true
+                },
+                "mcpCapabilities": {
+                  "http": true,
+                  "sse": true
                 }
               },
               "authMethods": [
@@ -56,6 +60,7 @@ struct ACPConnectionTests {
         #expect(initialized.promptCapabilities.audio == false)
         #expect(initialized.promptCapabilities.embeddedContext == true)
         #expect(initialized.authMethods.map(\.id) == ["claude-ai-login"])
+        #expect(initialized.mcpCapabilities == .init(http: true, sse: true))
     }
 
     @Test("loadSession sends session/load with cwd and remote session id")
