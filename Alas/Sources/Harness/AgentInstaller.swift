@@ -13,6 +13,10 @@ protocol AgentInstaller: Sendable {
     func uninstall() throws
 }
 
+extension Notification.Name {
+    static let agentHookInstallStateDidChange = Notification.Name("io.nlopez.alas.agentHookInstallStateDidChange")
+}
+
 struct AgentInstallerRegistry: Sendable {
     let installers: [any AgentInstaller]
 

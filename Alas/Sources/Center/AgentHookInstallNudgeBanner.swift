@@ -33,6 +33,10 @@ struct AgentHookInstallNudgeBanner: View {
         .task(id: currentNudgeKey) {
             await refreshNudge(for: currentNudgeKey)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .agentHookInstallStateDidChange)) { _ in
+            let key = nudgeKey
+            Task { await refreshNudge(for: key) }
+        }
     }
 
     private func bannerRow(nudge: HookInstallNudge) -> some View {
@@ -76,6 +80,7 @@ struct AgentHookInstallNudgeBanner: View {
                 await MainActor.run {
                     installStatus = nil
                     resolvedNudge = nil
+                    NotificationCenter.default.post(name: .agentHookInstallStateDidChange, object: nil)
                 }
                 let key = await MainActor.run { nudgeKey }
                 await refreshNudge(for: key)
