@@ -498,6 +498,13 @@ enum DiffReviewSurfaceSelectionSync {
         let programmaticScroll: DiffReviewProgrammaticScrollController
     }
 
+    private struct VisibilityLookupCache {
+        let topTargetLookup: [String: DiffReviewFileID]
+        let sectionTargetLookup: [String: DiffReviewFileID]
+    }
+
+    private static var visibilityLookupCache: (key: String, value: VisibilityLookupCache)?
+
     static func fileSetKey(for fileIDs: [DiffReviewFileID]) -> String {
         fileIDs.map { "\($0.rawValue.count):\($0.rawValue)" }.joined(separator: "|")
     }
@@ -529,13 +536,21 @@ enum DiffReviewSurfaceSelectionSync {
         fileIDs: [DiffReviewFileID],
         programmaticScroll: DiffReviewProgrammaticScrollController
     ) -> DiffReviewFileID? {
-        let topTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
-            (topVisibilityTargetID(for: $0), $0)
-        })
-        let sectionTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
-            (sectionVisibilityTargetID(for: $0), $0)
-        })
-        let visibleTopTarget = visibleRawIDs.lazy.compactMap { topTargetLookup[$0] }.first
+        let key = fileSetKey(for: fileIDs)
+        let cache: VisibilityLookupCache
+        if let cached = visibilityLookupCache, cached.key == key {
+            cache = cached.value
+        } else {
+            let topTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
+                (topVisibilityTargetID(for: $0), $0)
+            })
+            let sectionTargetLookup = Dictionary(uniqueKeysWithValues: fileIDs.map {
+                (sectionVisibilityTargetID(for: $0), $0)
+            })
+            cache = VisibilityLookupCache(topTargetLookup: topTargetLookup, sectionTargetLookup: sectionTargetLookup)
+            visibilityLookupCache = (key, cache)
+        }
+        let visibleTopTarget = visibleRawIDs.lazy.compactMap { cache.topTargetLookup[$0] }.first
         let currentIsVisible = current.map { current in
             visibleRawIDs.contains(topVisibilityTargetID(for: current))
                 || visibleRawIDs.contains(sectionVisibilityTargetID(for: current))
@@ -543,7 +558,7 @@ enum DiffReviewSurfaceSelectionSync {
         guard visibleTopTarget != nil || !currentIsVisible else { return nil }
 
         let active = visibleTopTarget
-            ?? visibleRawIDs.lazy.compactMap { sectionTargetLookup[$0] }.first
+            ?? visibleRawIDs.lazy.compactMap { cache.sectionTargetLookup[$0] }.first
         guard let active,
               active != current,
               programmaticScroll.acceptsScrollSpyUpdate(for: active)

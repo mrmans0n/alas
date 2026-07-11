@@ -1467,7 +1467,7 @@ final class DiffPaneCodeTextView: NSTextView {
 
     func reviewLineRow(at point: NSPoint) -> Int? {
         let rowRects = diffRowRects()
-        return rowRects.firstIndex(where: { $0.contains(point) })
+        return rowRects.binarySearchRow(containing: point)
     }
 
     override func cursorUpdate(with event: NSEvent) {
@@ -1499,7 +1499,7 @@ final class DiffPaneCodeTextView: NSTextView {
     /// Row index of the expandable-context button under `point`, if any.
     private func expansionRow(at point: NSPoint) -> Int? {
         let rowRects = diffRowRects()
-        guard let row = rowRects.firstIndex(where: { $0.contains(point) }),
+        guard let row = rowRects.binarySearchRow(containing: point),
               expansionKey(atRow: row) != nil
         else { return nil }
         return row
@@ -2106,12 +2106,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     private func rowIndex(at point: NSPoint) -> Int? {
-        let rowRects = rowGeometry().rowRects
-        let visibleRows = visibleRowIndices(
-            in: NSRect(x: point.x, y: point.y, width: 1, height: 0),
-            rowRects: rowRects
-        )
-        return visibleRows.first { rowRects[$0].contains(point) }
+        diffRowRects().binarySearchRow(containing: point)
     }
 
     private func invokeExpansion(row: Int, optionKey: Bool) -> Bool {
@@ -2424,5 +2419,27 @@ private extension DiffPaneTextDocumentBuilder.LineMetadata {
             ],
             selectedText: sourceLine.text
         )
+    }
+}
+
+extension Array where Element == NSRect {
+    func binarySearchRow(containing point: NSPoint) -> Int? {
+        var low = 0
+        var high = count - 1
+        while low <= high {
+            let mid = (low + high) / 2
+            let rect = self[mid]
+            if rect.contains(point) {
+                return mid
+            }
+            if point.y < rect.minY {
+                high = mid - 1
+            } else if point.y > rect.maxY {
+                low = mid + 1
+            } else {
+                return nil
+            }
+        }
+        return nil
     }
 }
