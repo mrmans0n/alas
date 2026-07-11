@@ -972,6 +972,9 @@ final class DiffPaneCodeTextView: NSTextView {
     }
     private var armedExpansionRow: Int?
     private var armedExpansionOptionKey = false
+    /// Whether we last forced the pointing-hand cursor, so it can be restored to
+    /// the default when the mouse leaves the view.
+    private var didSetPointerCursor = false
 
     static func expandPillFillAlpha(hovered: Bool, pressed: Bool) -> CGFloat {
         if pressed { return 0.36 }
@@ -1096,6 +1099,9 @@ final class DiffPaneCodeTextView: NSTextView {
     private func applyPointerCursorIfNeeded(at point: NSPoint) {
         if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
             NSCursor.pointingHand.set()
+            didSetPointerCursor = true
+        } else {
+            didSetPointerCursor = false
         }
     }
 
@@ -1146,6 +1152,13 @@ final class DiffPaneCodeTextView: NSTextView {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         hoverExpansionRow = nil
+        // Restore the default cursor when leaving the view, otherwise a pointing
+        // hand set over an expandable/source row can linger over the surrounding
+        // non-interactive chrome until the next cursor update.
+        if didSetPointerCursor {
+            NSCursor.arrow.set()
+            didSetPointerCursor = false
+        }
         mouseExitedHandler?()
     }
 
@@ -1424,7 +1437,9 @@ final class DiffPaneCodeTextView: NSTextView {
         let point = convert(event.locationInWindow, from: nil)
         if let row = reviewLineRow(at: point), rowShouldUsePointingHandCursor(row) {
             NSCursor.pointingHand.set()
+            didSetPointerCursor = true
         } else {
+            didSetPointerCursor = false
             super.cursorUpdate(with: event)
         }
     }
