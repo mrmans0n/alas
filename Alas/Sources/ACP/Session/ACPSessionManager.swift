@@ -1514,13 +1514,14 @@ extension ACPSessionManager {
             let initialized = try await connection.initialize()
             session.promptCapabilities = initialized.promptCapabilities
             session.authMethods = initialized.authMethods
+            let agentEnvironment = ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv)
             let projectContext = mcpProjectContextProvider?()
                 ?? MCPProjectContext(projectDirectory: worktreePath, configuredServers: [])
             let mcpPlan = MCPAttachmentPlanner.plan(.init(
                 configuredServers: projectContext.configuredServers,
                 projectDirectory: projectContext.projectDirectory,
                 worktreeDirectory: worktreePath,
-                environment: ProcessInfo.processInfo.environment,
+                environment: agentEnvironment,
                 capabilities: initialized.mcpCapabilities
             ))
             session.mcpAttachmentSummary = .init(plan: mcpPlan)
@@ -1551,7 +1552,7 @@ extension ACPSessionManager {
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           store: store, sessionId: sessionId,
                                           worktreePath: worktreePath,
-                                          agentEnv: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv),
+                                          agentEnv: agentEnvironment,
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
                                           onDirtyCheck: onDirtyCheck,
                                           onLiveBufferRead: onLiveBufferRead,
