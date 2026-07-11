@@ -15,7 +15,7 @@ struct ACPGeminiE2ETests {
         try client.start()
         let conn = ACPConnection(client: client)
         try await conn.initialize()
-        let new = try await conn.newSession(cwd: FileManager.default.temporaryDirectory.path)
+        let new = try await conn.newSession(cwd: FileManager.default.temporaryDirectory.path, mcpServers: [])
         try await conn.prompt(sessionId: new.sessionId, blocks: [.text("say hi in three words")])
 
         let got = await withTimeout(seconds: 30) { () async -> String? in

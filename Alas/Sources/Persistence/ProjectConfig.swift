@@ -91,6 +91,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     /// cleared by "Reset Sort to Default".
     var worktreeOrderIsManual: Bool = false
     var startupScripts: ProjectStartupScripts = .defaults
+    var mcpServers: [ProjectMCPServer] = []
     /// Per-project "open after create" preference. `nil` = use global default (true).
     var worktreeOpenAfterCreate: Bool?
     /// Per-project launcher mode preference. `nil` = use global default.
@@ -99,7 +100,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              worktreeOrderIsManual, startupScripts,
-             worktreeOpenAfterCreate, worktreeDefaultLauncherMode
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode
     }
 
     init(
@@ -113,6 +114,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeOrder: [String] = [],
         worktreeOrderIsManual: Bool = false,
         startupScripts: ProjectStartupScripts = .defaults,
+        mcpServers: [ProjectMCPServer] = [],
         worktreeOpenAfterCreate: Bool? = nil,
         worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil
     ) {
@@ -125,6 +127,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.worktreeOrder = worktreeOrder
         self.worktreeOrderIsManual = worktreeOrderIsManual
         self.startupScripts = startupScripts
+        self.mcpServers = mcpServers
         self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
         self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
     }
@@ -149,6 +152,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         worktreeOrderIsManual = (try? c.decode(Bool.self, forKey: .worktreeOrderIsManual)) ?? false
         startupScripts = (try? c.decode(ProjectStartupScripts.self, forKey: .startupScripts))
             ?? .defaults
+        mcpServers = (try? c.decode([ProjectMCPServer].self, forKey: .mcpServers)) ?? []
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
     }
@@ -165,6 +169,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encode(worktreeOrder, forKey: .worktreeOrder)
         try c.encode(worktreeOrderIsManual, forKey: .worktreeOrderIsManual)
         try c.encode(startupScripts, forKey: .startupScripts)
+        try c.encode(mcpServers, forKey: .mcpServers)
         try c.encodeIfPresent(worktreeOpenAfterCreate, forKey: .worktreeOpenAfterCreate)
         try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
     }

@@ -175,6 +175,34 @@ struct ACPInitializeTests {
         #expect(omitted.agentCapabilities?.sessionCapabilities.supportsFork == false)
     }
 
+    @Test("decodes MCP transport capabilities with conservative defaults")
+    func decodeMCPTransportCapabilities() throws {
+        let supported = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": {
+            "mcpCapabilities": { "http": true, "sse": true }
+          }
+        }
+        """.utf8))
+        let missingObject = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        { "protocolVersion": 1, "agentCapabilities": {} }
+        """.utf8))
+        let missingFields = try JSONDecoder().decode(ACPInitializeResult.self, from: Data("""
+        {
+          "protocolVersion": 1,
+          "agentCapabilities": { "mcpCapabilities": {} }
+        }
+        """.utf8))
+
+        #expect(supported.agentCapabilities?.mcpCapabilities.http == true)
+        #expect(supported.agentCapabilities?.mcpCapabilities.sse == true)
+        #expect(missingObject.agentCapabilities?.mcpCapabilities.http == false)
+        #expect(missingObject.agentCapabilities?.mcpCapabilities.sse == false)
+        #expect(missingFields.agentCapabilities?.mcpCapabilities.http == false)
+        #expect(missingFields.agentCapabilities?.mcpCapabilities.sse == false)
+    }
+
     @Test("decodes terminal auth method metadata")
     func decodesTerminalAuthMethod() throws {
         let data = Data("""

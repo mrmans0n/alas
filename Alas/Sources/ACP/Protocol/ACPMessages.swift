@@ -203,15 +203,18 @@ struct ACPInitializeResult: Codable, Equatable {
         let promptCapabilities: ACPPromptCapabilities?
         let loadSession: Bool
         let sessionCapabilities: ACPAgentSessionCapabilities
+        let mcpCapabilities: ACPMCPServerCapabilities
 
         init(
             promptCapabilities: ACPPromptCapabilities? = nil,
             loadSession: Bool = false,
-            sessionCapabilities: ACPAgentSessionCapabilities = .init()
+            sessionCapabilities: ACPAgentSessionCapabilities = .init(),
+            mcpCapabilities: ACPMCPServerCapabilities = .init()
         ) {
             self.promptCapabilities = promptCapabilities
             self.loadSession = loadSession
             self.sessionCapabilities = sessionCapabilities
+            self.mcpCapabilities = mcpCapabilities
         }
 
         init(from decoder: Decoder) throws {
@@ -222,6 +225,7 @@ struct ACPInitializeResult: Codable, Equatable {
                 ACPAgentSessionCapabilities.self,
                 forKey: .sessionCapabilities
             ) ?? .init()
+            mcpCapabilities = try c.decodeIfPresent(ACPMCPServerCapabilities.self, forKey: .mcpCapabilities) ?? .init()
         }
     }
 
@@ -533,12 +537,6 @@ struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
 struct ACPSessionNewParams: Codable, Equatable {
     let cwd: String
     let mcpServers: [ACPMCPServer]
-
-    struct ACPMCPServer: Codable, Equatable {
-        let name: String
-        let command: String
-        let args: [String]
-    }
 }
 
 struct ACPModelInfo: Codable, Equatable, Identifiable, Hashable {
@@ -726,7 +724,7 @@ private struct ACPModesBlock: Decodable {
 struct ACPSessionLoadParams: Codable, Equatable {
     let cwd: String
     let sessionId: String
-    let mcpServers: [ACPSessionNewParams.ACPMCPServer]
+    let mcpServers: [ACPMCPServer]
 }
 
 // MARK: - session/list + session/resume + session/fork

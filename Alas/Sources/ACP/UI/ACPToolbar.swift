@@ -19,6 +19,10 @@ struct ACPToolbar: View {
                 worktree: worktree,
                 agentLookup: agentLookup
             )
+            ACPMCPStatusControl(
+                session: session,
+                currentServers: state.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? []
+            )
             ACPRecoveryPill(session: session)
             if let currentGoal = session.currentGoal {
                 ACPGoalPill(goal: currentGoal)

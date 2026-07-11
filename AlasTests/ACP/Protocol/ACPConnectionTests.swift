@@ -22,10 +22,13 @@ struct ACPConnectionTests {
 
         let conn = ACPConnection(client: mock)
         try await conn.initialize()
-        let new = try await conn.newSession(cwd: "/tmp")
+        let mcpServers: [ACPMCPServer] = [.stdio(name: "files", command: "mcp-files", args: ["--root", "/tmp"], env: [])]
+        let new = try await conn.newSession(cwd: "/tmp", mcpServers: mcpServers)
         #expect(new.sessionId == "s1")
         #expect(new.availableModels.count == 1)
         #expect(new.availableModes.first?.id == "agent")
+        let params = try #require(mock.sent.last?.params as? ACPSessionNewParams)
+        #expect(params.mcpServers == mcpServers)
     }
 
     @Test("initialize returns prompt capabilities")
@@ -40,6 +43,10 @@ struct ACPConnectionTests {
                   "image": true,
                   "audio": false,
                   "embeddedContext": true
+                },
+                "mcpCapabilities": {
+                  "http": true,
+                  "sse": true
                 }
               },
               "authMethods": [
@@ -56,6 +63,7 @@ struct ACPConnectionTests {
         #expect(initialized.promptCapabilities.audio == false)
         #expect(initialized.promptCapabilities.embeddedContext == true)
         #expect(initialized.authMethods.map(\.id) == ["claude-ai-login"])
+        #expect(initialized.mcpCapabilities == .init(http: true, sse: true))
     }
 
     @Test("loadSession sends session/load with cwd and remote session id")
@@ -73,7 +81,8 @@ struct ACPConnectionTests {
         }
 
         let conn = ACPConnection(client: mock)
-        let result = try await conn.loadSession(cwd: "/tmp/wt", sessionId: "remote-old")
+        let mcpServers: [ACPMCPServer] = [.http(name: "remote", url: "https://mcp.example.com", headers: [])]
+        let result = try await conn.loadSession(cwd: "/tmp/wt", sessionId: "remote-old", mcpServers: mcpServers)
 
         #expect(result.sessionId == "remote-restored")
         let req = try #require(mock.sent.last)
@@ -81,7 +90,7 @@ struct ACPConnectionTests {
         let params = try #require(req.params as? ACPSessionLoadParams)
         #expect(params.cwd == "/tmp/wt")
         #expect(params.sessionId == "remote-old")
-        #expect(params.mcpServers.isEmpty)
+        #expect(params.mcpServers == mcpServers)
     }
 
     @Test("resumeSession sends session/resume and preserves the requested id for an empty result")
@@ -90,7 +99,8 @@ struct ACPConnectionTests {
         mock.script(method: "session/resume") { _ in Data("{}".utf8) }
 
         let conn = ACPConnection(client: mock)
-        let result = try await conn.resumeSession(cwd: "/tmp/wt", sessionId: "remote-old")
+        let mcpServers: [ACPMCPServer] = [.sse(name: "events", url: "https://mcp.example.com/events", headers: [])]
+        let result = try await conn.resumeSession(cwd: "/tmp/wt", sessionId: "remote-old", mcpServers: mcpServers)
 
         #expect(result.sessionId == "remote-old")
         let req = try #require(mock.sent.last)
@@ -98,6 +108,7 @@ struct ACPConnectionTests {
         let params = try #require(req.params as? ACPSessionResumeParams)
         #expect(params.cwd == "/tmp/wt")
         #expect(params.sessionId == "remote-old")
+        #expect(params.mcpServers == mcpServers)
     }
 
     @Test("listSessions sends cwd and opaque cursor and decodes a page")

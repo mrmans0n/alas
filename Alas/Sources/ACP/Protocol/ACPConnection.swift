@@ -5,6 +5,7 @@ struct ACPInitializeOutcome: Equatable {
     let authMethods: [ACPInitializeResult.ACPAuthMethod]
     let loadSession: Bool
     let sessionCapabilities: ACPInitializeResult.ACPAgentSessionCapabilities
+    let mcpCapabilities: ACPMCPServerCapabilities
 }
 
 /// Higher-level wrapper that owns one `ACPClient` and exposes typed
@@ -30,13 +31,14 @@ final class ACPConnection: @unchecked Sendable {
             promptCapabilities: result.agentCapabilities?.promptCapabilities ?? .init(),
             authMethods: result.authMethods,
             loadSession: result.agentCapabilities?.loadSession ?? false,
-            sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init()
+            sessionCapabilities: result.agentCapabilities?.sessionCapabilities ?? .init(),
+            mcpCapabilities: result.agentCapabilities?.mcpCapabilities ?? .init()
         )
     }
 
-    func newSession(cwd: String) async throws -> ACPSessionNewResult {
+    func newSession(cwd: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/new",
-                             params: ACPSessionNewParams(cwd: cwd, mcpServers: []))
+                             params: ACPSessionNewParams(cwd: cwd, mcpServers: mcpServers))
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
         guard !result.sessionId.isEmpty else {
@@ -55,18 +57,18 @@ final class ACPConnection: @unchecked Sendable {
         ))
     }
 
-    func loadSession(cwd: String, sessionId: String) async throws -> ACPSessionNewResult {
+    func loadSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
         let req = ACPRequest(method: "session/load",
-                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: []))
+                             params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers))
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
         return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
     }
 
-    func resumeSession(cwd: String, sessionId: String) async throws -> ACPSessionNewResult {
+    func resumeSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/resume",
-            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: [])
+            params: ACPSessionResumeParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers)
         )
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
@@ -82,10 +84,10 @@ final class ACPConnection: @unchecked Sendable {
         return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body)
     }
 
-    func forkSession(cwd: String, sessionId: String) async throws -> ACPSessionNewResult {
+    func forkSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
         let req = ACPRequest(
             method: "session/fork",
-            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: [])
+            params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers)
         )
         let resp = try await client.send(req)
         return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)

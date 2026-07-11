@@ -76,7 +76,7 @@ struct ProjectsManagerTests {
         #expect(mgr.worktrees(projectId: project.id).isEmpty)
     }
 
-    @Test func updateProjectUpdatesNameIconAndStartupScriptsOnly() {
+    @Test func updateProjectUpdatesNameIconAndStartupScriptsWhilePreservingMCPServers() {
         let addedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let project = ProjectConfig(
             id: "project-1",
@@ -84,7 +84,8 @@ struct ProjectsManagerTests {
             path: "/tmp/before",
             color: "#5fb7c4",
             addedAt: addedAt,
-            hiddenWorktreePaths: ["/tmp/before/.worktree"]
+            hiddenWorktreePaths: ["/tmp/before/.worktree"],
+            mcpServers: [.stdio(name: "filesystem", command: "npx")]
         )
         let other = ProjectConfig(
             id: "project-2",
@@ -110,6 +111,7 @@ struct ProjectsManagerTests {
         #expect(mgr.projects[0].addedAt == project.addedAt)
         #expect(mgr.projects[0].hiddenWorktreePaths == project.hiddenWorktreePaths)
         #expect(mgr.projects[0].startupScripts == .defaults)
+        #expect(mgr.projects[0].mcpServers == project.mcpServers)
         #expect(mgr.projects[1] == other)
 
         mgr.updateProject(
@@ -120,6 +122,35 @@ struct ProjectsManagerTests {
         #expect(mgr.projects[0].name == "After")
         #expect(mgr.projects[0].icon == icon)
         #expect(mgr.projects[1] == other)
+    }
+
+    @Test func updateProjectReplacesMCPServersWhenExplicitlyProvided() {
+        let original = ProjectMCPServer.stdio(name: "filesystem", command: "npx")
+        let replacement = ProjectMCPServer(
+            id: "linear",
+            name: "linear",
+            transport: .http(url: "https://mcp.linear.app/mcp", headers: [])
+        )
+        let project = ProjectConfig(
+            id: "project-1",
+            name: "Before",
+            path: "/tmp/before",
+            color: "#5fb7c4",
+            addedAt: Date(timeIntervalSince1970: 0),
+            mcpServers: [original]
+        )
+        let manager = ProjectsManager(persistedProjects: [project])
+
+        manager.updateProject(
+            id: project.id,
+            update: ProjectUpdate(
+                name: "After",
+                icon: project.icon,
+                mcpServers: [replacement]
+            )
+        )
+
+        #expect(manager.projects[0].mcpServers == [replacement])
     }
 
     @Test func setWorktreeLaunchDefaultsPersistsPerProject() {

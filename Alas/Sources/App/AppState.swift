@@ -1386,7 +1386,13 @@ final class AppState {
         projectGitWatchers.removeAll()
     }
 
-    func updateProject(id: String, name: String, icon: ProjectIcon, startupScripts: ProjectStartupScripts) {
+    func updateProject(
+        id: String,
+        name: String,
+        icon: ProjectIcon,
+        startupScripts: ProjectStartupScripts,
+        mcpServers: [ProjectMCPServer]
+    ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
@@ -1395,18 +1401,26 @@ final class AppState {
             update: ProjectUpdate(
                 name: trimmedName,
                 icon: icon,
-                startupScripts: startupScripts
+                startupScripts: startupScripts,
+                mcpServers: mcpServers
             )
         )
         saveProjects()
     }
 
-    func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {
+    func updateProject(
+        id: String,
+        name: String,
+        color: String,
+        startupScripts: ProjectStartupScripts,
+        mcpServers: [ProjectMCPServer]
+    ) {
         updateProject(
             id: id,
             name: name,
             icon: ProjectIcon.default(color: color),
-            startupScripts: startupScripts
+            startupScripts: startupScripts,
+            mcpServers: mcpServers
         )
     }
 
@@ -3527,6 +3541,15 @@ final class AppState {
                         worktreeId: worktree.id,
                         sessionId: sessionId,
                         title: title
+                    )
+                },
+                mcpProjectContextProvider: { [weak self] in
+                    guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
+                        return nil
+                    }
+                    return MCPProjectContext(
+                        projectDirectory: project.path,
+                        configuredServers: project.mcpServers
                     )
                 }
             )
