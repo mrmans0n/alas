@@ -51,6 +51,7 @@ private struct ProjectDialog: View {
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
     @State private var worktreeCreateScript: String = ""
     @State private var mcpServers: [ProjectMCPServer] = []
+    @State private var mcpManagerPresented = false
     @State private var isValidating = false
     @State private var errorMessage: String?
 
@@ -104,6 +105,8 @@ private struct ProjectDialog: View {
                 if case .edit = mode {
                     Divider().padding(.vertical, 4)
                     startupScriptsSection
+                    Divider().padding(.vertical, 4)
+                    integrationsSection
                 }
                 if let errorMessage {
                     Text(errorMessage).font(.system(size: 11)).foregroundColor(.red)
@@ -127,6 +130,9 @@ private struct ProjectDialog: View {
                     await loadAvatarPresetIfAvailable()
                 }
             }
+        }
+        .sheet(isPresented: $mcpManagerPresented) {
+            ProjectMCPServerManager(servers: $mcpServers)
         }
     }
 
@@ -318,6 +324,23 @@ private struct ProjectDialog: View {
                         .background(theme.color("bg-0"))
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
                 }
+            }
+        }
+    }
+
+    private var integrationsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Integrations")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            HStack(spacing: 8) {
+                Text(mcpServers.isEmpty ? "No MCP servers configured" : "\(mcpServers.count) MCP server\(mcpServers.count == 1 ? "" : "s") configured")
+                    .font(.system(size: 11.5))
+                    .foregroundColor(theme.color("fg-dim"))
+                Spacer()
+                AlasButton(title: "Manage MCP Servers…", icon: "slider", action: {
+                    mcpManagerPresented = true
+                })
             }
         }
     }

@@ -5,11 +5,22 @@ import Foundation
 /// available when an ACP session is created for a specific worktree.
 enum ProjectMCPServerEditorPolicy {
     static func canSave(_ servers: [ProjectMCPServer]) -> Bool {
-        ProjectMCPValidation.validate(servers).allSatisfy { issue in
+        let validationAllowsTemplates = ProjectMCPValidation.validate(servers).allSatisfy { issue in
             guard case let .invalidURL(serverName) = issue else { return false }
             return servers.contains { server in
                 server.name.trimmingCharacters(in: .whitespacesAndNewlines) == serverName
                     && hasStructurallyValidTemplateURL(server.transport)
+            }
+        }
+        guard validationAllowsTemplates else { return false }
+
+        return servers.allSatisfy { server in
+            switch server.transport {
+            case let .http(url, _), let .sse(url, _):
+                guard !templateVariables(in: url).isEmpty else { return true }
+                return isValidHTTPURL(replacingTemplateVariables(in: url))
+            case .stdio:
+                return true
             }
         }
     }
@@ -109,6 +120,7 @@ enum ProjectMCPServerEditorPolicy {
     private static func isValidHTTPURL(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard value == trimmed,
+              !value.contains(where: \.isWhitespace),
               let url = URL(string: value),
               let host = url.host,
               !host.isEmpty else { return false }
