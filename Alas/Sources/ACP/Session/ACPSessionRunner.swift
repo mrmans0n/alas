@@ -278,11 +278,22 @@ final class ACPSessionRunner {
             let writer = ACPFileWriter(
                 worktreeRoot: URL(fileURLWithPath: self.worktreePath)
             )
+            let remoteServer = RemoteHostRegistry.shared.host(forPath: self.worktreePath).map {
+                ACPRemoteFileServer(host: $0, worktreeRoot: self.worktreePath)
+            }
             for await req in self.connection.client.fileRequests {
                 self.flushPendingIncomingUpdates()
                 switch req {
                 case .read(let id, let params):
                     do {
+                        if let remoteServer {
+                            let target = try remoteServer.resolveInsideWorktree(path: params.path)
+                            let live = self.onLiveBufferRead?(target)
+                            let full = try await remoteServer.read(path: target, liveBuffer: live)
+                            let body = try JSONEncoder().encode(ACPFsReadResult(content: Self.sliceLines(full, line: params.line, limit: params.limit)))
+                            self.connection.client.respondToFileRequest(id: id, result: .success(body))
+                            continue
+                        }
                         // Same containment check as the write path —
                         // without this an adapter could request any
                         // absolute path (e.g. `~/.ssh/config`) and
@@ -324,6 +335,12 @@ final class ACPSessionRunner {
                             id: id,
                             result: .failure(.init(code: -32001, message: "path outside worktree", data: nil))
                         )
+                    } catch ACPRemoteFileServer.ServerError.outsideWorktree(let p) {
+                        self.appendAndPersistSystemNotice("Blocked read outside worktree: \(p)")
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32001, message: "path outside worktree", data: nil))
+                        )
                     } catch {
                         self.connection.client.respondToFileRequest(
                             id: id,
@@ -360,7 +377,13 @@ final class ACPSessionRunner {
                         self.appendAndPersistSystemNotice("Agent wrote to \(URL(fileURLWithPath: params.path).lastPathComponent) — you have unsaved changes in this file.")
                     }
                     do {
-                        let res = try writer.write(path: params.path, content: params.content)
+                        let res: ACPFileWriter.Result
+                        if let remoteServer {
+                            let target = try remoteServer.resolveInsideWorktree(path: params.path)
+                            res = try await remoteServer.write(path: target, content: params.content)
+                        } else {
+                            res = try writer.write(path: params.path, content: params.content)
+                        }
                         // Persist the worktree-relative path so the
                         // "Open diff" button can pass it straight to
                         // `git.diff(file:)` (which keys by relative
@@ -376,6 +399,11 @@ final class ACPSessionRunner {
                         let body = Data("null".utf8)
                         self.connection.client.respondToFileRequest(id: id, result: .success(body))
                     } catch ACPFileWriter.Error.outsideWorktree(let p) {
+                        self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32001, message: "path outside worktree", data: nil)))
+                    } catch ACPRemoteFileServer.ServerError.outsideWorktree(let p) {
                         self.appendAndPersistSystemNotice("Blocked write outside worktree: \(p)")
                         self.connection.client.respondToFileRequest(
                             id: id,

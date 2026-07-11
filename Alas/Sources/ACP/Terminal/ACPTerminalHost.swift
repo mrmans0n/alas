@@ -43,13 +43,14 @@ final class ACPTerminalHost: ObservableObject {
         let env = mergedEnv(p.env)
         let limit = p.outputByteLimit ?? 65_536
         do {
-            let term = try ACPTerminal(
-                id: id,
-                command: p.command,
-                args: p.args ?? [],
-                env: env,
-                cwd: cwd,
-                outputByteLimit: limit)
+            let term: ACPTerminal
+            if let host = RemoteHostRegistry.shared.host(forPath: cwd) {
+                let script = ACPRemoteLaunch.terminalCommand(command: p.command, args: p.args ?? [], env: agentRequestedEnv(p.env), cwd: cwd)
+                let ssh = SSHCommand(host: host, mode: .batch)
+                term = try ACPTerminal(id: id, command: SSHCommand.executable, args: ssh.argv(remoteScript: SSHCommand.remoteScript(command: script)), env: ProcessInfo.processInfo.environment, cwd: FileManager.default.temporaryDirectory.path, outputByteLimit: limit)
+            } else {
+                term = try ACPTerminal(id: id, command: p.command, args: p.args ?? [], env: env, cwd: cwd, outputByteLimit: limit)
+            }
             term.onExit = { [weak self] in
                 self?.pruneFinishedTerminals()
             }
@@ -139,6 +140,10 @@ final class ACPTerminalHost: ObservableObject {
         var out = sessionEnv
         for v in overlay ?? [] { out[v.name] = v.value }
         return out
+    }
+
+    private func agentRequestedEnv(_ env: [ACPEnvVar]?) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: (env ?? []).map { ($0.name, $0.value) })
     }
 
     private func metadataTerminal(terminalId: String, cwd: String?) -> ACPTerminal {
