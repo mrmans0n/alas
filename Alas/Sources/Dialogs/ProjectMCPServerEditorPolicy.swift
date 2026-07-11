@@ -17,6 +17,7 @@ enum ProjectMCPServerEditorPolicy {
         return servers.allSatisfy { server in
             switch server.transport {
             case let .http(url, _), let .sse(url, _):
+                guard !isStandaloneTemplate(url) else { return true }
                 let validationURL = templateVariables(in: url).isEmpty
                     ? url
                     : replacingTemplateVariables(in: url)
@@ -102,10 +103,17 @@ enum ProjectMCPServerEditorPolicy {
         switch transport {
         case let .http(url, _), let .sse(url, _):
             guard !templateVariables(in: url).isEmpty else { return false }
+            guard !isStandaloneTemplate(url) else { return true }
             return isValidHTTPURL(replacingTemplateVariables(in: url))
         case .stdio:
             return false
         }
+    }
+
+    private static func isStandaloneTemplate(_ value: String) -> Bool {
+        guard value == value.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        let pattern = #"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$"#
+        return value.range(of: pattern, options: .regularExpression) != nil
     }
 
     private static func replacingTemplateVariables(in value: String) -> String {

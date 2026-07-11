@@ -10,9 +10,15 @@ struct ProjectMCPServerEditorPolicyTests {
             name: "remote",
             transport: .http(url: "https://${MCP_HOST}/mcp", headers: [])
         )
+        let fullURLTemplate = ProjectMCPServer(
+            id: "full-url",
+            name: "full-url",
+            transport: .http(url: "${MCP_URL}", headers: [])
+        )
 
         #expect(!ProjectMCPServerEditorPolicy.canSave([incomplete]))
         #expect(ProjectMCPServerEditorPolicy.canSave([deferred]))
+        #expect(ProjectMCPServerEditorPolicy.canSave([fullURLTemplate]))
     }
 
     @Test func canSaveRejectsStructurallyInvalidURLTemplates() {
