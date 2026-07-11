@@ -242,6 +242,50 @@ struct TerminalServiceZmxTests {
         #expect(recorder.calls.map(\.args) == [["ls"]])
     }
 
+    @Test func resolveSessionNameForAttachUsesPreloadedLegacyInfo() {
+        let infos = [
+            ZmxSessionInfo(
+                name: "alas-legacy-leaf",
+                startDir: "/tmp/repo/subdir",
+                pid: 1,
+                clients: 0,
+                created: 1,
+                cmd: "/bin/zsh -l"
+            ),
+        ]
+
+        let name = TerminalService.resolveSessionNameForAttach(
+            worktreeId: "/tmp/wt",
+            projectPath: "/tmp/repo",
+            leafId: "legacy-leaf",
+            allowLegacy: true,
+            legacySessionInfos: infos
+        )
+
+        #expect(name == "alas-legacy-leaf")
+    }
+
+    @Test func resolveSessionNameForAttachFallsBackToScopedName() {
+        let name = TerminalService.resolveSessionNameForAttach(
+            worktreeId: "/tmp/wt",
+            projectPath: "/tmp/repo",
+            leafId: "legacy-leaf",
+            allowLegacy: true,
+            legacySessionInfos: [
+                ZmxSessionInfo(
+                    name: "alas-legacy-leaf",
+                    startDir: "/tmp/repo-other",
+                    pid: 1,
+                    clients: 0,
+                    created: 1,
+                    cmd: "/bin/zsh -l"
+                ),
+            ]
+        )
+
+        #expect(name == ZmxSessionName.derive(worktreeId: "/tmp/wt", leafId: "legacy-leaf"))
+    }
+
     // MARK: detachAll
 
     @Test

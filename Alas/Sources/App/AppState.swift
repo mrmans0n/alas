@@ -2000,6 +2000,48 @@ final class AppState {
     /// leaves are skipped, and the failing leaf is retried.
     @discardableResult
     func restoreTerminalTabIfNeeded(worktreeId: String, tabId: TabID) throws -> Tab? {
+        try restoreTerminalTabIfNeeded(
+            worktreeId: worktreeId,
+            tabId: tabId,
+            legacySessionInfos: nil
+        )
+    }
+
+    @discardableResult
+    func restoreTerminalTabIfNeededAsync(worktreeId: String, tabId: TabID) async throws -> Tab? {
+        let legacySessionInfos = await legacySessionInfosForTerminalRestore(
+            worktreeId: worktreeId,
+            tabId: tabId
+        )
+        return try restoreTerminalTabIfNeeded(
+            worktreeId: worktreeId,
+            tabId: tabId,
+            legacySessionInfos: legacySessionInfos
+        )
+    }
+
+    private func legacySessionInfosForTerminalRestore(
+        worktreeId: String,
+        tabId: TabID
+    ) async -> [ZmxSessionInfo]? {
+        guard config.terminal.keepSessionsAlive,
+              terminal.zmxClient.isAvailable,
+              let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
+              case .terminal(let state) = tab,
+              state.root.leaves().contains(where: { terminal.registry.session(for: $0.id) == nil })
+        else { return nil }
+
+        let client = terminal.zmxClient
+        return await Task.detached(priority: .utility) {
+            client.listSessionInfos()
+        }.value
+    }
+
+    private func restoreTerminalTabIfNeeded(
+        worktreeId: String,
+        tabId: TabID,
+        legacySessionInfos: [ZmxSessionInfo]?
+    ) throws -> Tab? {
         guard let tab = tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId }),
               case .terminal(let state) = tab,
               let worktree = worktree(withId: worktreeId),
@@ -2035,12 +2077,23 @@ final class AppState {
             if terminal.registry.session(for: leaf.id) != nil { continue }
 
             let forcedCwd = leaf.lastCwd.map { URL(fileURLWithPath: $0) }
+            let allowLegacyAttach = config.terminal.keepSessionsAlive
+            let preResolvedZmxSessionName = legacySessionInfos.map {
+                TerminalService.resolveSessionNameForAttach(
+                    worktreeId: worktree.id,
+                    projectPath: project.path,
+                    leafId: leaf.id,
+                    allowLegacy: allowLegacyAttach,
+                    legacySessionInfos: $0
+                )
+            }
             let session = try terminal.openSession(
                 worktree: worktree, project: project,
                 cfg: config.terminal, theme: themeStore.current,
                 forcedCwd: forcedCwd,
                 leafId: leaf.id,
-                allowLegacyAttach: true
+                allowLegacyAttach: allowLegacyAttach,
+                preResolvedZmxSessionName: preResolvedZmxSessionName
             )
             harness.detector.register(sessionId: session.id) { [weak session] in
                 session?.surface.foregroundPid

@@ -31,7 +31,7 @@ struct TerminalTabView: View {
             state.terminalLeafFrames[tabId] = frames
         }
         .task(id: tabId) {
-            _ = try? state.restoreTerminalTabIfNeeded(worktreeId: worktreeId, tabId: tabId)
+            _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId)
         }
         .background(theme.color("bg-0"))
     }
@@ -302,7 +302,7 @@ private struct TerminalRecoverPlaceholder: View {
                 .font(.system(size: 14))
                 .foregroundColor(theme.color("fg-muted"))
             AlasButton(title: "Open new terminal", style: .primary) {
-                Task { _ = try? state.restoreTerminalTabIfNeeded(worktreeId: worktreeId, tabId: tabId) }
+                Task { _ = try? await state.restoreTerminalTabIfNeededAsync(worktreeId: worktreeId, tabId: tabId) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
