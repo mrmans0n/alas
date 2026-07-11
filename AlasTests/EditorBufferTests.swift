@@ -379,6 +379,22 @@ struct EditorBufferTests {
         #expect(buffer.conflict == nil)
     }
 
+    @Test func externalRenameIntoHeavyDirectoryIsNotFollowed() async throws {
+        let root = tempWorktree()
+        let oldURL = try writeFile(root, "a.txt", "v1\n")
+        let newURL = root.appendingPathComponent("node_modules/pkg/a.txt")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+
+        try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+
+        #expect(buffer.relativePath == "a.txt")
+        #expect(buffer.conflict == nil)
+    }
+
     @Test func externalChangeWhileDirtyRaisesConflict() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "v1\n")
