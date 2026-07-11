@@ -1211,7 +1211,7 @@ final class TabsManager {
             return existing
         }
         let buffer: EditorBuffer
-        if let lsp {
+        if let lsp, !worktreeRoot.isRemoteAlasPath {
             buffer = EditorBuffer(
                 worktreeRoot: worktreeRoot,
                 relativePath: relativePath,

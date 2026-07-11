@@ -90,6 +90,16 @@ final class EditorBuffer {
     @ObservationIgnored
     private var watcherFD: Int32 = -1
     @ObservationIgnored
+    private let remoteHost: String?
+    @ObservationIgnored
+    private var remotePollTask: Task<Void, Never>?
+    @ObservationIgnored
+    private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
+    @ObservationIgnored
+    private var remoteLoadGeneration = 0
+    @ObservationIgnored
+    private var restoredRemoteSnapshot = false
+    @ObservationIgnored
     private static let watchQueue = DispatchQueue(label: "alas.editor.buffer.watch", qos: .utility)
     @ObservationIgnored
     private var moveLookupTask: Task<MovedFileLookupResult?, Never>?
@@ -253,6 +263,9 @@ final class EditorBuffer {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
+        self.remoteHost = RemoteHostRegistry.shared.host(
+            forPath: worktreeRoot.appendingPathComponent(relativePath).path
+        )
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -345,6 +358,7 @@ final class EditorBuffer {
     private func openLSPDocumentIfReady() {
         guard initialLoadFinished,
               !isExternal,
+              remoteHost == nil,
               openedLanguage == nil,
               lspOpenTask == nil,
               let lsp,
@@ -510,6 +524,12 @@ final class EditorBuffer {
     }
 
     func revert() {
+        if let remoteHost {
+            beginRemoteLoad(host: remoteHost, replacingDirty: true)
+            discardSnapshot()
+            handleEdit(edit: nil)
+            return
+        }
         loadFromDisk(preservePendingEdits: false) { [weak self] _ in
             self?.discardSnapshot()
             self?.handleEdit(edit: nil)
@@ -518,6 +538,10 @@ final class EditorBuffer {
 
     func startWatching() {
         stopWatching()
+        if remoteHost != nil {
+            startRemoteConflictPolling()
+            return
+        }
         let path = worktreeRoot.appendingPathComponent(relativePath).path
         let fd = open(path, O_EVTONLY)
         guard fd >= 0 else { return }
@@ -536,10 +560,41 @@ final class EditorBuffer {
     }
 
     func stopWatching() {
+        remotePollTask?.cancel()
+        remotePollTask = nil
         watcherSource?.cancel()
         watcherSource = nil
         watcherFD = -1
         cancelMoveLookup()
+    }
+
+    private func startRemoteConflictPolling() {
+        guard let host = remoteHost else { return }
+        let path = absoluteFileURL.path
+        remotePollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.remoteConflictPollNanos)
+                guard let self, !Task.isCancelled else { return }
+
+                do {
+                    guard let mtime = try await RemoteFileAccess.mtime(host: host, path: path) else {
+                        if self.dirty { self.conflict = .deletedOnDisk }
+                        continue
+                    }
+                    RemoteHostStatusStore.shared.reportSuccess(host: host)
+                    guard mtime > self.originalMtime else { continue }
+                    if self.dirty {
+                        self.conflict = .changedOnDisk
+                    } else {
+                        self.revert()
+                    }
+                } catch {
+                    if case .connectionFailed = error as? RemoteFileAccessError {
+                        RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+                    }
+                }
+            }
+        }
     }
 
     private func handleWatcherEvent() {
@@ -569,6 +624,7 @@ final class EditorBuffer {
     }
 
     private func startMoveLookupForMissingFile(at missingURL: URL) {
+        guard remoteHost == nil else { return }
         guard moveLookupTask == nil else { return }
         guard let originalIdentity else {
             markDeletedConflictIfNeeded()
@@ -708,6 +764,23 @@ final class EditorBuffer {
     }
 
     func resolveConflictKeepingMine() {
+        if let host = remoteHost {
+            let path = absoluteFileURL.path
+            Task { @MainActor [weak self] in
+                do {
+                    if let mtime = try await RemoteFileAccess.mtime(host: host, path: path) {
+                        self?.originalMtime = mtime
+                    }
+                    RemoteHostStatusStore.shared.reportSuccess(host: host)
+                } catch {
+                    if case .connectionFailed = error as? RemoteFileAccessError {
+                        RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+                    }
+                }
+            }
+            conflict = nil
+            return
+        }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date {
             originalMtime = mtime
@@ -737,6 +810,10 @@ final class EditorBuffer {
         case .clean, .ready:
             break
         }
+        if let host = remoteHost {
+            saveRemote(host: host)
+            return
+        }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if dirty,
            let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
@@ -754,10 +831,84 @@ final class EditorBuffer {
         notifyDidSave(url: url)
     }
 
+    /// Remote writes must not block the main actor. The visible state moves to
+    /// clean immediately, then rolls back to the pre-save baseline if the
+    /// mtime gate or write fails.
+    private func saveRemote(host: String) {
+        let canonical = storage.string
+        let serialized = lineEnding.normalize(canonical)
+        let priorOriginalText = originalText
+        let baseline = originalMtime
+        let path = absoluteFileURL.path
+
+        originalText = canonical
+        discardSnapshot()
+        notifyDidSave(url: absoluteFileURL)
+
+        Task { @MainActor [weak self] in
+            do {
+                let remoteMtime = try await RemoteFileAccess.mtime(host: host, path: path)
+                switch RemoteSaveGate.decision(
+                    originalMtime: baseline,
+                    remoteMtime: remoteMtime
+                ) {
+                case .conflict:
+                    self?.rollbackRemoteSave(to: priorOriginalText, conflict: .changedOnDisk)
+                    return
+                case .proceed, .targetDeleted:
+                    break
+                }
+
+                let newMtime = try await RemoteFileAccess.write(
+                    host: host,
+                    path: path,
+                    content: serialized
+                )
+                guard let self else { return }
+                self.originalMtime = newMtime
+                RemoteHostStatusStore.shared.reportSuccess(host: host)
+            } catch {
+                guard let self else { return }
+                if case .connectionFailed = error as? RemoteFileAccessError {
+                    RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+                }
+                self.rollbackRemoteSave(to: priorOriginalText, error: error)
+            }
+        }
+    }
+
+    private func rollbackRemoteSave(to originalText: String, conflict: Conflict) {
+        self.originalText = originalText
+        self.conflict = conflict
+    }
+
+    private func rollbackRemoteSave(to originalText: String, error: Error) {
+        self.originalText = originalText
+        switch error {
+        case let RemoteFileAccessError.connectionFailed(detail):
+            lastSaveError = "Unable to save remote file: \(detail)"
+        case let RemoteFileAccessError.writeFailed(detail):
+            lastSaveError = "Unable to save remote file: \(detail)"
+        default:
+            lastSaveError = (error as NSError).localizedDescription
+        }
+    }
+
+    private func remotePathOperationError() -> NSError {
+        NSError(
+            domain: "EditorBuffer",
+            code: 100,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Renaming or moving files is not yet supported for remote projects."
+            ]
+        )
+    }
+
     func saveAs(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
+        if remoteHost != nil { throw remotePathOperationError() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -790,6 +941,7 @@ final class EditorBuffer {
         lastSaveError = nil
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
+        if remoteHost != nil { throw remotePathOperationError() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -858,6 +1010,7 @@ final class EditorBuffer {
     }
 
     private func renameItem(at oldURL: URL, to newURL: URL) throws {
+        if remoteHost != nil { throw remotePathOperationError() }
         guard oldURL.path != newURL.path else { return }
         if Darwin.rename(oldURL.path, newURL.path) != 0 {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -1261,8 +1414,14 @@ final class EditorBuffer {
         originalText = snap.originalText
         originalMtime = snap.originalMtime
         lineEnding = snap.lineEnding
-        readOnly = false
-        updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
+        // Remote buffers need a successful async read before becoming editable.
+        // Keep a restored draft intact until that read establishes whether its
+        // on-host baseline changed while the app was closed.
+        restoredRemoteSnapshot = remoteHost != nil
+        readOnly = remoteHost != nil
+        if remoteHost == nil {
+            updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
+        }
     }
 
     private func replayPendingUserEdits(_ edits: [EditorTextEdit], fallbackText: String) {
@@ -1366,6 +1525,7 @@ final class EditorBuffer {
     /// user's snapshot is "their version" against a moved baseline — show
     /// the conflict banner. Called on first display after restore.
     func checkForConflictOnRestore() {
+        if remoteHost != nil { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             if dirty { conflict = .deletedOnDisk }
@@ -1377,17 +1537,106 @@ final class EditorBuffer {
         }
     }
 
+    private var absoluteFileURL: URL {
+        worktreeRoot.appendingPathComponent(relativePath)
+    }
+
+    private func setStorageText(_ text: String) {
+        withLoadEditTrackingSuppressed {
+            storage.setAttributedString(NSAttributedString(string: text))
+        }
+    }
+
+    private func applyLoadedText(_ raw: String) {
+        let detected = LineEnding.detect(in: raw)
+        let canonical = LineEnding.lf.normalize(raw)
+        storage.setAttributedString(NSAttributedString(string: canonical))
+        originalText = canonical
+        lineEnding = detected
+    }
+
+    private func beginRemoteLoad(host: String, replacingDirty: Bool) {
+        remoteLoadGeneration &+= 1
+        let generation = remoteLoadGeneration
+        let path = absoluteFileURL.path
+        if replacingDirty {
+            restoredRemoteSnapshot = false
+        }
+        setStorageText("(loading remote file...)")
+        readOnly = true
+
+        Task { @MainActor [weak self] in
+            let result: RemoteReadResult
+            do {
+                result = try await RemoteFileAccess.read(host: host, path: path)
+            } catch {
+                guard let self, self.remoteLoadGeneration == generation else { return }
+                if case .connectionFailed = error as? RemoteFileAccessError {
+                    RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+                }
+                if replacingDirty || !self.restoredRemoteSnapshot {
+                    self.setStorageText("(unable to read remote file: host unreachable)")
+                }
+                return
+            }
+
+            guard let self, self.remoteLoadGeneration == generation else { return }
+            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            switch result {
+            case .missing, .directory:
+                if replacingDirty || !self.restoredRemoteSnapshot {
+                    self.setStorageText("(unable to read file)")
+                }
+            case let .unreadable(detail):
+                if replacingDirty || !self.restoredRemoteSnapshot {
+                    self.setStorageText("(unable to read remote file: \(detail))")
+                }
+            case let .file(data, mtime):
+                guard let raw = String(data: data, encoding: .utf8) else {
+                    if replacingDirty || !self.restoredRemoteSnapshot {
+                        self.setStorageText("(read-only: file is not valid UTF-8)")
+                    }
+                    return
+                }
+                if self.restoredRemoteSnapshot {
+                    self.restoredRemoteSnapshot = false
+                    self.readOnly = false
+                    if self.storage.string != self.originalText, mtime != self.originalMtime {
+                        self.conflict = .changedOnDisk
+                    }
+                    self.startWatching()
+                    return
+                }
+                self.withLoadEditTrackingSuppressed {
+                    self.applyLoadedText(raw)
+                }
+                self.originalMtime = mtime
+                self.readOnly = false
+                self.startWatching()
+            }
+        }
+    }
+
     /// Load the file from disk, calling `completion` on the main actor
     /// when the content has been applied. The file read happens in a
     /// `Task.detached` so the main thread isn't blocked by
     /// `String(contentsOf:)` on large files.
     private func loadFromDisk(
         preservePendingEdits: Bool = false,
+        replacingDirty: Bool = false,
         notifyAfterLoad: Bool = true,
         hasPendingSnapshot: Bool = false,
         completion: @escaping @MainActor (LoadState.Pending?) -> Void
     ) {
-        let url = worktreeRoot.appendingPathComponent(relativePath)
+        if let remoteHost {
+            let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
+            beginRemoteLoad(host: remoteHost, replacingDirty: replacingDirty)
+            if let pending = acceptLoadCompletion(generation: generation) {
+                completion(preservePendingEdits ? pending : nil)
+            }
+            return
+        }
+        let url = absoluteFileURL
         let resolvedURL = url.resolvingSymlinksInPath()
         let isExternal = self.isExternal
         let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
@@ -1493,7 +1742,7 @@ final class EditorBuffer {
 
     @discardableResult
     private func loadFromDiskSync() -> Self {
-        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let url = absoluteFileURL
         let resolvedURL = url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
             withLoadEditTrackingSuppressed {

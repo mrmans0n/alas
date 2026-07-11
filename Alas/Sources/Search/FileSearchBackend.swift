@@ -37,6 +37,10 @@ actor FffFileSearchBackend {
     }
 
     func search(query: String, worktree: SearchWorktree, limit: Int) async throws -> [FileSearchBackendResult]? {
+        // fff mmaps and watches the local filesystem, neither of which is
+        // meaningful for an ssh-backed worktree. Returning nil selects the
+        // existing host-aware git-ls-files fallback in SearchModel.
+        if worktree.absolutePath.isRemoteAlasPath { return nil }
 #if canImport(FffC)
         guard canSearchWithFff(query: query) else {
             return nil

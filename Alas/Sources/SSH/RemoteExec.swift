@@ -29,6 +29,21 @@ enum RemoteExec {
         return try await Process.run(invocation.executable, args: invocation.args, timeout: timeout)
     }
 
+    /// Binary-safe variant of `run` (stdout as raw `Data`).
+    static func runData(
+        host: String,
+        cwd: String?,
+        command: String,
+        timeout: TimeInterval = Process.defaultTimeout
+    ) async throws -> ProcessResultData {
+        let invocation = invocation(host: host, cwd: cwd, command: command)
+        return try await Process.runData(
+            invocation.executable,
+            args: invocation.args,
+            timeout: timeout
+        )
+    }
+
     /// ssh reserves exit code 255 for its own failures (connect, auth,
     /// host key); any other code is the remote command's exit status.
     static func isConnectionFailure(exitCode: Int32) -> Bool {
