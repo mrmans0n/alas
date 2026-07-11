@@ -19,14 +19,17 @@ struct ACPImageThumbnail: View {
     }
 
     @ViewBuilder private var thumbnail: some View {
-        if let image = NSImage(contentsOf: fileURL) {
+        ACPCachedThumbnail(
+            cacheKey: ACPThumbnailImageCache.fileCacheKey(for: fileURL),
+            loadImage: { NSImage(contentsOf: fileURL) }
+        ) { image in
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: 96, height: 96)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
-        } else {
+        } placeholder: {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.gray.opacity(0.3))
                 .frame(width: 96, height: 96)
