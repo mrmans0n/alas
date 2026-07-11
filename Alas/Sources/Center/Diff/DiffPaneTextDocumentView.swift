@@ -1615,6 +1615,20 @@ final class DiffPaneCodeTextView: NSTextView {
 }
 
 final class DiffPaneLineNumberRulerView: NSRulerView {
+    private struct RulerGeometry {
+        let rowRects: [NSRect]
+        let labelRects: [NSRect]
+        let key: RulerGeometryKey
+    }
+
+    private struct RulerGeometryKey: Equatable {
+        let labelCount: Int
+        let documentViewSize: NSSize
+        let ruleThickness: CGFloat
+        let rowHeight: CGFloat
+        let contentTopInset: CGFloat
+    }
+
     private var labels: [String] = []
     private var lineTones: [DiffPaneLineTone] = []
     private var expansionKeys: [DiffContextExpansionKey?] = []
@@ -1638,9 +1652,15 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     private var boundsObserver: NSObjectProtocol?
     private var selectionStartRow: Int?
     private var selectionCurrentRow: Int?
+    private var cachedGeometry: RulerGeometry?
+    private var rowGeometryComputationCount = 0
 
     private let minimumThickness: CGFloat = 42
     private let horizontalPadding: CGFloat = 8
+
+    var rowGeometryComputationCountForTesting: Int {
+        rowGeometryComputationCount
+    }
 
     init(scrollView: NSScrollView) {
         super.init(scrollView: scrollView, orientation: .verticalRuler)
@@ -1675,7 +1695,16 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         self.activeCommentHighlight = activeCommentHighlight
         self.onContextExpansion = onContextExpansion
         updateThickness()
+        invalidateGeometry()
         needsDisplay = true
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let oldSize = frame.size
+        super.setFrameSize(newSize)
+        if abs(oldSize.width - newSize.width) > 0.5 || abs(oldSize.height - newSize.height) > 0.5 {
+            invalidateGeometry()
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1776,10 +1805,12 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
 
         guard let scrollView, !labels.isEmpty else { return }
         let visible = scrollView.contentView.bounds
-        let rowRects = diffRowRects()
+        let geometry = rowGeometry()
+        let rowRects = geometry.rowRects
         guard !rowRects.isEmpty else { return }
+        let visibleRows = visibleRowIndices(in: visible, rowRects: rowRects)
 
-        for index in visibleRowIndices(in: visible) {
+        for index in visibleRows {
             let sourceRowRect = rowRects[index]
             let y = sourceRowRect.minY - visible.minY
             let rowRect = NSRect(x: 0, y: y, width: ruleThickness, height: sourceRowRect.height)
@@ -1789,8 +1820,8 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
         drawActiveCommentHighlight(visibleRect: visible, rowRects: rowRects, theme: theme)
 
         let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
-        let labelRects = labelDrawRects()
-        for index in visibleRowIndices(in: visible) {
+        let labelRects = geometry.labelRects
+        for index in visibleRows {
             let label = labels[index]
             let sourceRowRect = rowRects[index]
             let y = sourceRowRect.minY - visible.minY
@@ -1814,25 +1845,73 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     func visibleRowIndices(in visibleRect: NSRect) -> [Int] {
-        let rowRects = diffRowRects()
-        return rowRects.indices.filter { index in
-            let rowRect = rowRects[index]
-            return rowRect.maxY >= visibleRect.minY && rowRect.minY <= visibleRect.maxY
-        }
+        visibleRowIndices(in: visibleRect, rowRects: rowGeometry().rowRects)
     }
 
     func labelDrawRects() -> [NSRect] {
+        rowGeometry().labelRects
+    }
+
+    func diffRowRects() -> [NSRect] {
+        rowGeometry().rowRects
+    }
+
+    private func visibleRowIndices(in visibleRect: NSRect, rowRects: [NSRect]) -> [Int] {
+        let start = lowerBound(rowRects) { rowRect in
+            rowRect.maxY >= visibleRect.minY
+        }
+        let end = lowerBound(rowRects) { rowRect in
+            rowRect.minY > visibleRect.maxY
+        }
+        guard start < end else { return [] }
+        return Array(start..<end)
+    }
+
+    private func lowerBound(_ rowRects: [NSRect], predicate: (NSRect) -> Bool) -> Int {
+        var low = 0
+        var high = rowRects.count
+        while low < high {
+            let mid = low + (high - low) / 2
+            if predicate(rowRects[mid]) {
+                high = mid
+            } else {
+                low = mid + 1
+            }
+        }
+        return low
+    }
+
+    private func rowGeometry() -> RulerGeometry {
+        let key = RulerGeometryKey(
+            labelCount: labels.count,
+            documentViewSize: scrollView?.documentView?.bounds.size ?? .zero,
+            ruleThickness: ruleThickness,
+            rowHeight: rowHeight,
+            contentTopInset: contentTopInset
+        )
+        if let cachedGeometry, cachedGeometry.key == key {
+            return cachedGeometry
+        }
+
+        let computed = computeRowGeometry(key: key)
+        cachedGeometry = computed
+        rowGeometryComputationCount += 1
+        return computed
+    }
+
+    private func computeRowGeometry(key: RulerGeometryKey) -> RulerGeometry {
+        let rowRects = computeDiffRowRects()
         let textHeight = ("8" as NSString).size(withAttributes: labelAttributes(for: "", row: nil)).height
         let textLineRects: [NSRect]
         if let textView = scrollView?.documentView as? DiffPaneCodeTextView {
             textLineRects = textView.diffFirstLineFragmentRects()
         } else {
-            textLineRects = diffRowRects().map {
+            textLineRects = rowRects.map {
                 NSRect(x: 0, y: $0.minY, width: $0.width, height: min($0.height, rowHeight))
             }
         }
 
-        return labels.indices.map { index in
+        let labelRects = labels.indices.map { index in
             let lineRect = textLineRects.indices.contains(index)
                 ? textLineRects[index]
                 : NSRect(x: 0, y: contentTopInset + CGFloat(index) * rowHeight, width: ruleThickness, height: rowHeight)
@@ -1843,9 +1922,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
                 height: textHeight
             )
         }
+        return RulerGeometry(rowRects: rowRects, labelRects: labelRects, key: key)
     }
 
-    func diffRowRects() -> [NSRect] {
+    private func computeDiffRowRects() -> [NSRect] {
         if let textView = scrollView?.documentView as? DiffPaneCodeTextView {
             return textView.diffRowRects().prefix(labels.count).map { rect in
                 NSRect(x: 0, y: rect.minY, width: ruleThickness, height: rect.height)
@@ -1859,6 +1939,10 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
                 height: rowHeight
             )
         }
+    }
+
+    private func invalidateGeometry() {
+        cachedGeometry = nil
     }
 
     func labelAttributesForTesting(row: Int) -> [NSAttributedString.Key: Any] {
@@ -1879,7 +1963,12 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     private func rowIndex(at point: NSPoint) -> Int? {
-        diffRowRects().firstIndex { $0.contains(point) }
+        let rowRects = rowGeometry().rowRects
+        let visibleRows = visibleRowIndices(
+            in: NSRect(x: point.x, y: point.y, width: 1, height: 0),
+            rowRects: rowRects
+        )
+        return visibleRows.first { rowRects[$0].contains(point) }
     }
 
     private func invokeExpansion(row: Int, optionKey: Bool) -> Bool {
@@ -1954,8 +2043,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             x: point.x,
             y: point.y + scrollView.contentView.bounds.origin.y
         )
-        let rowRects = diffRowRects()
-        guard let row = rowRects.firstIndex(where: { $0.contains(sourcePoint) }),
+        guard let row = rowIndex(at: sourcePoint),
               isReviewCommentableRow(row)
         else {
             hoverRowIndex = nil

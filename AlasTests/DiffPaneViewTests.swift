@@ -2210,6 +2210,49 @@ let second = true
         #expect(codeView.rowGeometryComputationCountForTesting == 2)
     }
 
+    @Test func diffPaneLineNumberRulerCachesMappedRowGeometryForVisibleLookups() throws {
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let lines = (1...80).map { "let value\($0) = \($0)" }
+        let text = lines.joined(separator: "\n")
+        var location = 0
+        let metadata = lines.map { line in
+            defer { location += (line as NSString).length + 1 }
+            return DiffPaneTextDocumentBuilder.LineMetadata(
+                kind: .context,
+                range: NSRange(location: location, length: (line as NSString).length)
+            )
+        }
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(string: text, attributes: [.font: font]),
+            lines: metadata
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 160))
+        let theme = try Theme.loadBundled(id: "cool-slate")
+
+        scrollView.update(
+            document: document,
+            lineLabels: lines.indices.map { "\($0 + 1)" },
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let ruler = try #require(scrollView.verticalRulerView as? DiffPaneLineNumberRulerView)
+        let visibleRect = NSRect(x: 0, y: 120, width: 420, height: 80)
+
+        let firstVisibleRows = ruler.visibleRowIndices(in: visibleRect)
+        _ = ruler.diffRowRects()
+        _ = ruler.labelDrawRects()
+        let secondVisibleRows = ruler.visibleRowIndices(in: visibleRect)
+
+        #expect(!firstVisibleRows.isEmpty)
+        #expect(firstVisibleRows == secondVisibleRows)
+        #expect(ruler.rowGeometryComputationCountForTesting == 1)
+    }
+
     @Test func diffPaneCodeTextViewResolvesSymbolsFromPoints() throws {
         let textView = DiffPaneCodeTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 80), textContainer: NSTextContainer())
         textView.textStorage?.setAttributedString(NSAttributedString(string: "let value = service.fetch()"))
