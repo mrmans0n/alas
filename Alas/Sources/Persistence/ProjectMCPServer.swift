@@ -113,7 +113,8 @@ enum ProjectMCPValidation {
 
             switch server.transport {
             case let .stdio(command, _, environment):
-                if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+                if command != trimmedCommand || trimmedCommand.isEmpty {
                     issues.append(.emptyCommand(serverName: serverName))
                 }
                 validateEnvironment(environment, serverName: serverName, issues: &issues)
@@ -180,6 +181,7 @@ enum ProjectMCPValidation {
     private static func isValidHTTPURL(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard value == trimmed,
+              !value.contains(where: \.isWhitespace),
               let url = URL(string: trimmed),
               let host = url.host,
               !host.isEmpty else {

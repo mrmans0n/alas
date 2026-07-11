@@ -31,6 +31,16 @@ struct ProjectMCPServerEditorPolicyTests {
         #expect(!ProjectMCPServerEditorPolicy.canSave([malformed]))
     }
 
+    @Test func canSaveRejectsLiteralRemoteURLsWithWhitespace() {
+        let server = ProjectMCPServer(
+            id: "literal",
+            name: "literal",
+            transport: .http(url: "https://mcp.example.com/a path", headers: [])
+        )
+
+        #expect(!ProjectMCPServerEditorPolicy.canSave([server]))
+    }
+
     @Test func extractsDistinctTemplateVariablesInEncounterOrder() {
         let server = ProjectMCPServer(
             id: "server",

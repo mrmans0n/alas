@@ -148,6 +148,17 @@ struct MCPAttachmentPlannerTests {
         #expect(result.statuses[0].disposition == .skipped(.invalidConfiguration("The server configuration is invalid.")))
     }
 
+    @Test("a whitespace-surrounded resolved command skips only its server")
+    func untrimmedResolvedCommand() {
+        let result = plan([
+            .init(id: "untrimmed", name: "untrimmed", transport: .stdio(command: "${CMD}", args: [], environment: [])),
+            .stdio(name: "good", command: "node"),
+        ], environment: ["CMD": " npx "])
+
+        #expect(result.wireServers == [.stdio(name: "good", command: "node", args: [], env: [])])
+        #expect(result.statuses[0].disposition == .skipped(.invalidConfiguration("The server configuration is invalid.")))
+    }
+
     @Test("invalid configurations skip before capability checks and keep a safe explanation")
     func invalidConfiguration() {
         let result = plan([

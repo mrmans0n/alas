@@ -189,11 +189,13 @@ enum MCPAttachmentPlanner {
         let value: String?
         switch server {
         case let .stdio(_, command, _, _):
-            return !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+            return command == trimmedCommand && !trimmedCommand.isEmpty
         case let .http(_, url, _), let .sse(_, url, _):
             value = url
         }
         guard let value, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.contains(where: \.isWhitespace),
               let url = URL(string: value), let host = url.host, !host.isEmpty else { return false }
         return url.scheme?.lowercased() == "http" || url.scheme?.lowercased() == "https"
     }

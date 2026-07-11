@@ -17,8 +17,10 @@ enum ProjectMCPServerEditorPolicy {
         return servers.allSatisfy { server in
             switch server.transport {
             case let .http(url, _), let .sse(url, _):
-                guard !templateVariables(in: url).isEmpty else { return true }
-                return isValidHTTPURL(replacingTemplateVariables(in: url))
+                let validationURL = templateVariables(in: url).isEmpty
+                    ? url
+                    : replacingTemplateVariables(in: url)
+                return isValidHTTPURL(validationURL)
             case .stdio:
                 return true
             }

@@ -85,7 +85,13 @@ struct ProjectMCPServerTests {
         #expect(ProjectMCPValidation.validate([server]) == [.invalidURL(serverName: "remote")])
     }
 
-    @Test(arguments: ["ftp://mcp.example.com", "https:///missing-host", "not a url", " https://mcp.example.com "])
+    @Test(arguments: [
+        "ftp://mcp.example.com",
+        "https:///missing-host",
+        "not a url",
+        " https://mcp.example.com ",
+        "https://mcp.example.com/a path",
+    ])
     func validationRejectsInvalidRemoteURLs(_ url: String) {
         let server = ProjectMCPServer(
             id: "server",
@@ -94,6 +100,12 @@ struct ProjectMCPServerTests {
         )
 
         #expect(ProjectMCPValidation.validate([server]) == [.invalidURL(serverName: "remote")])
+    }
+
+    @Test func validationRejectsUntrimmedStdioCommands() {
+        let server = ProjectMCPServer.stdio(name: "filesystem", command: " npx ")
+
+        #expect(ProjectMCPValidation.validate([server]) == [.emptyCommand(serverName: "filesystem")])
     }
 
     @Test func validationRejectsInvalidAndDuplicateEnvironmentNames() {
