@@ -100,16 +100,30 @@ struct DiffReviewFileSection: View {
     @State private var hoveredInlineFeedbackID: String?
     @State private var hoveredDraftCommentID: String?
     @State private var activeThreadID: String?
+    @State private var showFullDiffOverride = false
     @FocusState private var draftComposerFocused: Bool
 
+    private var isOverRenderBudget: Bool {
+        guard let displayModel = file.displayModel else { return false }
+        return DiffReviewRenderBudget.isOverBudget(displayModel)
+    }
+
+    private var shouldDeferRender: Bool {
+        isOverRenderBudget && !showFullDiffOverride
+    }
+
     var body: some View {
-        let renderContext = renderContext
         VStack(spacing: 0) {
             header
             contextLoadErrorRow
-            fileLevelDraftCommentStack(renderContext: renderContext)
-            fileLevelInlineFeedbackStack(renderContext: renderContext)
-            content(renderContext: renderContext)
+            if shouldDeferRender {
+                renderBudgetPlaceholder
+            } else {
+                let renderContext = renderContext
+                fileLevelDraftCommentStack(renderContext: renderContext)
+                fileLevelInlineFeedbackStack(renderContext: renderContext)
+                content(renderContext: renderContext)
+            }
         }
         .background(theme.color("bg-1"))
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -129,7 +143,16 @@ struct DiffReviewFileSection: View {
             clearPendingDraft()
         }
         .onChange(of: file.id) { _, _ in
+            showFullDiffOverride = false
             resetContextState()
+        }
+        .onChange(of: renderBudgetResetSignal) { _, _ in
+            // Re-arm the render budget whenever the same file reloads with new
+            // content under an unchanged file.id. Keyed off `contentHash`, which
+            // captures text-only edits (unlike `structuralHash`); context
+            // expansion never mutates `file.displayModel`, so an opened large
+            // diff stays open while the reviewer expands context.
+            showFullDiffOverride = false
         }
         .onChange(of: contextStateSignature) { _, _ in
             resetContextState()
@@ -395,6 +418,76 @@ struct DiffReviewFileSection: View {
 
     private var currentDisplayGroups: [DiffDisplayGroup]? {
         renderContext?.groups.map(\.displayGroup)
+    }
+
+    /// Review annotations that the placeholder hides while the diff is deferred.
+    /// Computed from the cheap input arrays so it never forces a `renderContext` build.
+    private var hiddenReviewItemCount: Int {
+        draftComments.count + inlineFeedback.count + threads.count
+    }
+
+    private var renderBudgetPlaceholder: some View {
+        let changedLines = file.summary.additions + file.summary.deletions
+        let hiddenItems = hiddenReviewItemCount
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Large diff hidden for performance")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+            Text("\(changedLines.formatted()) changed lines. Rendering may be slow.")
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg-dim"))
+            if hiddenItems > 0 {
+                Text("^[\(hiddenItems) comment](inflect: true) hidden — show the full diff to view.")
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .accessibilityIdentifier("diff-review-render-budget-hidden-comments-\(file.id.rawValue)")
+            }
+            Button {
+                showFullDiffOverride = true
+            } label: {
+                Text("Show full diff")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.color("fg-muted"))
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(theme.color("bg-3"))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("diff-review-show-full-diff-\(file.id.rawValue)")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 18)
+        .background(theme.color("bg-1"))
+        .background(renderBudgetScrollAnchors)
+        .background(
+            DiffReviewAccessibilityMarker(
+                identifier: "diff-review-render-budget-\(file.id.rawValue)",
+                label: "Large diff hidden for performance"
+            )
+        )
+    }
+
+    /// Zero-size anchors carrying the same target IDs the rendered comment views
+    /// would, so the summary-rail / comment-selection scroll flow resolves a
+    /// target even while the diff body is deferred. Scrolling lands on the
+    /// placeholder (with its "N comments hidden" hint) instead of silently
+    /// no-oping; the reviewer can then choose "Show full diff".
+    private var renderBudgetScrollAnchors: some View {
+        VStack(spacing: 0) {
+            ForEach(draftComments, id: \.id) { comment in
+                Color.clear
+                    .frame(height: 0)
+                    .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
+            }
+            ForEach(inlineFeedback, id: \.id) { item in
+                Color.clear
+                    .frame(height: 0)
+                    .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
+            }
+        }
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
@@ -753,6 +846,14 @@ struct DiffReviewFileSection: View {
     /// its value on every body pass, so this must never walk the rows.
     private var displayStructuralHash: Int? {
         file.displayModel?.structuralHash
+    }
+
+    /// Content-level fingerprint (includes row text) used to re-arm the render
+    /// budget on same-file reloads. Unlike `structuralHash`, it changes on
+    /// pure text edits; unlike `file.id`, it changes when a same-path file
+    /// reloads with new content.
+    private var renderBudgetResetSignal: Int? {
+        file.displayModel?.contentHash
     }
 
     private var draftCommentDisplaySignature: DiffReviewDraftCommentDisplaySignature {
