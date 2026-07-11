@@ -16,6 +16,7 @@ final class ACPTerminal: ObservableObject {
     let id: String
     let createdAt: Date
     let outputByteLimit: Int
+    private let normalizesCRLF: Bool
 
     @Published private(set) var cwd: String?
     @Published private(set) var buffer: Data = Data()
@@ -69,11 +70,13 @@ final class ACPTerminal: ObservableObject {
          args: [String],
          env: [String: String],
          cwd: String,
-         outputByteLimit: Int) throws
+         outputByteLimit: Int,
+         normalizesCRLF: Bool = false) throws
     {
         self.id = id
         self.createdAt = Date()
         self.cwd = cwd
+        self.normalizesCRLF = normalizesCRLF
         // Cap against the internal buffer so an agent can't ask us to
         // return more than we ever retain. Floor at 1 so callers that
         // pass 0 or negative don't trip divide-by-zero / nonsense math
@@ -135,6 +138,7 @@ final class ACPTerminal: ObservableObject {
         self.createdAt = Date()
         self.cwd = cwd
         self.outputByteLimit = max(1, min(outputByteLimit, Self.internalBufferCap))
+        self.normalizesCRLF = false
         self.process = nil
         self.pipe = nil
     }
@@ -494,7 +498,13 @@ final class ACPTerminal: ObservableObject {
         var stream = ANSIStream()
         let runs = stream.feed(slice)
         let text = runs.map(\.text).joined()
-        return (text, truncated || didTruncate)
+        return (normalizesCRLF ? Self.normalizeCRLF(text) : text, truncated || didTruncate)
+    }
+
+    /// Remote SSH terminals use a pty, which translates LF to CRLF. Preserve
+    /// lone carriage returns because they carry progress-bar redraw semantics.
+    nonisolated static func normalizeCRLF(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
     }
 
     // MARK: - Helpers

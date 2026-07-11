@@ -138,8 +138,12 @@ struct ImagePreviewTabView: View {
             do {
                 switch try await RemoteFileAccess.read(host: host, path: url.path) {
                 case let .file(contents, _): data = contents
-                case .missing, .directory: loadState = .missing; return
-                case .unreadable: loadState = .decodeFailed; return
+                case .missing, .directory, .symlink:
+                    loadState = .missing
+                    return
+                case .unreadable:
+                    loadState = .decodeFailed
+                    return
                 }
             } catch {
                 loadState = .missing
@@ -172,7 +176,6 @@ struct ImagePreviewTabView: View {
         }
         return CGSize(width: cgImage.width, height: cgImage.height)
     }
-
 }
 
 private enum LoadState {

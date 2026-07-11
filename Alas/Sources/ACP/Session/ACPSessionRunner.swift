@@ -104,6 +104,7 @@ final class ACPSessionRunner {
     /// restored snapshot ahead of the steer's replacement prompt. Once
     /// the redirect is in flight, normal drain semantics resume.
     private var steerInProgress: Bool = false
+    var onUnexpectedDisconnect: (() -> Void)?
 
     /// How many trailing rows to retain in `lastPersistedPayloads`. Only the
     /// actively-streamed tail is ever re-persisted, so older rows can be
@@ -252,6 +253,7 @@ final class ACPSessionRunner {
                 // the next prompt would just fail. The queue stays put
                 // and drains naturally on the next successful reattach.
                 self.appendAndPersistSystemNotice("Agent disconnected.")
+                self.onUnexpectedDisconnect?()
             }
         }
 
@@ -271,7 +273,8 @@ final class ACPSessionRunner {
         // CLAUDECODE/CLAUDE_SESSION_ID markers (otherwise a Claude-
         // aware CLI run from the terminal refuses to start).
         session.terminalHost.updateContext(sessionCwd: worktreePath,
-                                           sessionEnv: agentEnv)
+                                           sessionEnv: agentEnv,
+                                           sessionRemoteHost: RemoteHostRegistry.shared.host(forPath: worktreePath))
 
         filesTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -287,9 +290,9 @@ final class ACPSessionRunner {
                 case .read(let id, let params):
                     do {
                         if let remoteServer {
-                            let target = try remoteServer.resolveInsideWorktree(path: params.path)
+                            let target = try remoteServer.lexicallyResolveInsideWorktree(path: params.path)
                             let live = self.onLiveBufferRead?(target)
-                            let full = try await remoteServer.read(path: target, liveBuffer: live)
+                            let full = try await remoteServer.read(path: params.path, liveBuffer: live)
                             let body = try JSONEncoder().encode(ACPFsReadResult(content: Self.sliceLines(full, line: params.line, limit: params.limit)))
                             self.connection.client.respondToFileRequest(id: id, result: .success(body))
                             continue
@@ -379,8 +382,11 @@ final class ACPSessionRunner {
                     do {
                         let res: ACPFileWriter.Result
                         if let remoteServer {
-                            let target = try remoteServer.resolveInsideWorktree(path: params.path)
-                            res = try await remoteServer.write(path: target, content: params.content)
+                            res = try await remoteServer.write(path: params.path, content: params.content) {
+                                guard self.holdsLeaseForWrite() else {
+                                    throw ACPRemoteFileServer.ServerError.leaseLost
+                                }
+                            }
                         } else {
                             res = try writer.write(path: params.path, content: params.content)
                         }
@@ -408,6 +414,10 @@ final class ACPSessionRunner {
                         self.connection.client.respondToFileRequest(
                             id: id,
                             result: .failure(.init(code: -32001, message: "path outside worktree", data: nil)))
+                    } catch ACPRemoteFileServer.ServerError.leaseLost {
+                        self.connection.client.respondToFileRequest(
+                            id: id,
+                            result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                     } catch {
                         self.connection.client.respondToFileRequest(
                             id: id,

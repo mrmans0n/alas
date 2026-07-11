@@ -473,7 +473,11 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let e = d
             .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
-                if let wt = selectedWorktree() { _ = try? state.openTerminalTab(for: wt) }
+                if let wt = selectedWorktree() {
+                    Task { @MainActor in
+                        _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
+                    }
+                }
             }
         let f = e
             .onReceive(NotificationCenter.default.publisher(for: .alasCloseTab)) { _ in

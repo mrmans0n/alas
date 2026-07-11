@@ -36,7 +36,7 @@ enum RemoteTerminalScript {
         } else {
             body = "exec \(shell)"
         }
-        return "cd -- \(SSHCommand.shellQuote(worktreePath)) && \(body)"
+        return "cd \(SSHCommand.shellQuote(worktreePath)) || exit; \(body)"
     }
 
     /// `-tt` forces remote pty allocation. Interactive SSH permits first-use

@@ -870,11 +870,12 @@ final class AppState {
         destination: URL,
         runStartup: Bool,
         launchSurface: WorktreeLaunchSurface
-    ) -> String {
+    ) async -> String {
         guard let project = projects.first(where: { $0.id == projectId }) else {
             // Should not happen if the dialog validated the project; fail silently.
             return ""
         }
+        let repoPath = URL(fileURLWithPath: project.path)
         // Canonicalize once and use this URL everywhere downstream — both
         // the optimistic row and the eventual `WorktreeService.add` return
         // value derive their `id` from the path we hand in, so any
@@ -884,10 +885,16 @@ final class AppState {
         // resolvingSymlinksInPath only resolves links along path components
         // that exist on disk; the leaf doesn't exist yet, so resolve the
         // parent (which does) and reattach the leaf.
-        let canonicalDestination = destination
-            .deletingLastPathComponent()
-            .resolvingSymlinksInPath()
-            .appendingPathComponent(destination.lastPathComponent)
+        let canonicalDestination: URL
+        do {
+            canonicalDestination = try await Self.preparedCreateWorktreeDestination(
+                repoPath: repoPath,
+                destination: destination
+            )
+        } catch {
+            showFileActionError(title: "Create Worktree Failed", message: error.localizedDescription)
+            return ""
+        }
         let optimisticId = Worktree.makeId(path: canonicalDestination)
         if projectsManager.worktrees(projectId: projectId).contains(where: { $0.id == optimisticId }) {
             let isRetryingFailedCreate: Bool
@@ -918,7 +925,6 @@ final class AppState {
         projectsManager.setOperationState(id: optimistic.id, state: .creating)
         selectWorktree(id: optimistic.id)
 
-        let repoPath = URL(fileURLWithPath: project.path)
         let startupScript = StartupScriptResolver.worktreeCreateScript(
             global: config.terminal,
             project: project
@@ -946,11 +952,15 @@ final class AppState {
                 )
                 guard projects.contains(where: { $0.id == projectId }) else { return }
                 if runStartup && !startupScript.isEmpty {
-                    _ = try? await Process.run(
-                        "/bin/zsh",
-                        args: ["-c", startupScript],
-                        cwd: newWorktree.path
-                    )
+                    if let host = project.host ?? RemoteHostRegistry.shared.host(forPath: newWorktree.path.path) {
+                        _ = try? await RemoteExec.run(host: host, cwd: newWorktree.path.path, command: startupScript)
+                    } else {
+                        _ = try? await Process.run(
+                            "/bin/zsh",
+                            args: ["-c", startupScript],
+                            cwd: newWorktree.path
+                        )
+                    }
                 }
                 guard projects.contains(where: { $0.id == projectId }) else { return }
 
@@ -982,7 +992,7 @@ final class AppState {
                             else { return nil }
                             return self.agentStartupCommand(for: agent, project: project)
                         }()
-                        _ = try? openTerminalTab(
+                        _ = try? await openTerminalTabPreparingRemoteZmxIfNeeded(
                             for: newWorktree,
                             startupScriptSuffix: suffix
                         )
@@ -1035,7 +1045,7 @@ final class AppState {
             )
         }
 
-        let id = createWorktree(
+        let id = await createWorktree(
             projectId: project.id,
             base: resolvedBase,
             branch: branch,
@@ -1098,10 +1108,32 @@ final class AppState {
             throw AgentTerminalLaunchError.agentUnavailable
         }
         do {
-            if agent.id == AgentKind.copilot.rawValue {
+            if agent.id == AgentKind.copilot.rawValue, project.host == nil {
                 try CopilotInstaller(projectRootURL: worktree.path).install()
             }
             return try openTerminalTab(
+                for: worktree,
+                startupScriptSuffix: agentStartupCommand(for: agent, project: project)
+            )
+        } catch {
+            showFileActionError(title: "Launch Agent Failed", message: error.localizedDescription)
+            throw error
+        }
+    }
+
+    @discardableResult
+    func openAgentTerminalTabPreparingRemoteZmxIfNeeded(for worktree: Worktree, agentId: String) async throws -> Tab {
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            throw AgentTerminalLaunchError.projectUnavailable
+        }
+        guard let agent = agentRegistry.enabled().first(where: { $0.id == agentId }) else {
+            throw AgentTerminalLaunchError.agentUnavailable
+        }
+        do {
+            if agent.id == AgentKind.copilot.rawValue, project.host == nil {
+                try CopilotInstaller(projectRootURL: worktree.path).install()
+            }
+            return try await openTerminalTabPreparingRemoteZmxIfNeeded(
                 for: worktree,
                 startupScriptSuffix: agentStartupCommand(for: agent, project: project)
             )
@@ -1124,6 +1156,32 @@ final class AppState {
             exitOnCompletion: true
         )
         let tab = try openTerminalTab(
+            for: worktree,
+            startupScriptSuffix: startupScriptSuffix,
+            includeUserStartupScript: false,
+            forceInheritParentEnv: true,
+            environmentOverrides: Self.acpAuthTerminalEnvironmentOverrides(extra: command.env),
+            environmentRemovals: ACPProcessEnvironment.agentSessionMarkerKeys
+        )
+        if case .terminal(let terminal) = tab {
+            acpAuthTerminalExitHandlers[terminal.root.firstLeaf().sessionId] = onExit
+        }
+        return tab
+    }
+
+    @discardableResult
+    func openACPAuthTerminalTabPreparingRemoteZmxIfNeeded(
+        for worktree: Worktree,
+        command: ACPAuthTerminalCommand,
+        onExit: @escaping () -> Void
+    ) async throws -> Tab {
+        let startupScriptSuffix = try Self.shellCommand(
+            command: command.command,
+            args: command.args,
+            env: command.env,
+            exitOnCompletion: true
+        )
+        let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
             includeUserStartupScript: false,
@@ -1200,10 +1258,12 @@ final class AppState {
         projectId: String
     ) async throws -> Worktree {
         try await Task.detached {
-            try FileManager.default.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            if !repoPath.isRemoteAlasPath {
+                try FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+            }
             return try await WorktreeService().add(
                 repoPath: repoPath,
                 base: base,
@@ -1212,6 +1272,60 @@ final class AppState {
                 projectId: projectId
             )
         }.value
+    }
+
+    nonisolated static func preparedCreateWorktreeDestination(repoPath: URL, destination: URL) async throws -> URL {
+        let isRemote = repoPath.isRemoteAlasPath
+        let preparedDestination: URL
+        if isRemote,
+           let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+            let remoteHome = try await Self.remoteHomeDirectory(host: host)
+            preparedDestination = URL(fileURLWithPath: Self.destinationPathReplacingLocalHome(
+                destination.path,
+                remoteHome: remoteHome
+            ))
+        } else {
+            preparedDestination = destination
+        }
+        if isRemote {
+            return preparedDestination
+        }
+        return preparedDestination
+            .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(preparedDestination.lastPathComponent)
+    }
+
+    nonisolated static func destinationPathReplacingLocalHome(
+        _ path: String,
+        localHome: String = NSHomeDirectory(),
+        remoteHome: String
+    ) -> String {
+        let normalizedLocalHome = localHome.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let localHomePath = "/\(normalizedLocalHome)"
+        guard path == localHomePath || path.hasPrefix("\(localHomePath)/") else { return path }
+        let suffix = path.dropFirst(localHomePath.count)
+        return remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/")).isEmpty
+            ? path
+            : "/\(remoteHome.trimmingCharacters(in: CharacterSet(charactersIn: "/")))\(suffix)"
+    }
+
+    nonisolated private static func remoteHomeDirectory(host: String) async throws -> String {
+        let result = try await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: "printf '%s' \"$HOME\"",
+            timeout: 10
+        )
+        let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.exitCode == 0, !home.isEmpty else {
+            throw NSError(
+                domain: "RemoteHomeDirectory",
+                code: Int(result.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: "Could not resolve remote home directory for \(host)."]
+            )
+        }
+        return home
     }
 
     func removeFailedOptimisticWorktree(id: String, projectId: String) {
@@ -1261,7 +1375,18 @@ final class AppState {
 
     @discardableResult
     func removeProject(id: String) -> Bool {
-        guard let project = projects.first(where: { $0.id == id }) else { return false }
+        removeProjectResult(id: id) == .removed
+    }
+
+    private enum ProjectRemovalResult {
+        case removed
+        case scheduled
+        case cancelled
+    }
+
+    @discardableResult
+    private func removeProjectResult(id: String) -> ProjectRemovalResult {
+        guard let project = projects.first(where: { $0.id == id }) else { return .cancelled }
 
         let mainId = Worktree.makeId(path: URL(fileURLWithPath: project.path))
         let liveWorktrees = projectsManager.worktrees(projectId: id)
@@ -1304,27 +1429,47 @@ final class AppState {
                 dirtyCount: dirtyTotal
             ) {
             case .save:
-                for entry in dirtyByWorktree {
-                    guard saveDirtyBuffers(in: entry.worktree) else { return false }
+                let worktreesToSave = dirtyByWorktree.map(\.worktree)
+                Task { @MainActor in
+                    for worktree in worktreesToSave {
+                        guard await saveDirtyBuffers(in: worktree) else { return }
+                    }
+                    _ = removeProjectAfterDirtyResolution(id: id, candidateIds: candidateIds)
                 }
+                return .scheduled
             case .discard:
                 break
             case .cancel:
-                return false
+                return .cancelled
             }
         }
 
+        return removeProjectAfterDirtyResolution(id: id, candidateIds: candidateIds) ? .removed : .cancelled
+    }
+
+    @discardableResult
+    private func removeProjectAfterDirtyResolution(id: String, candidateIds: Set<String>) -> Bool {
         var beforeIds = allWorktreeIds()
         for candidateId in candidateIds {
             beforeIds.insert(candidateId)
         }
+        let remoteRootsToUnregister: [String]
+        if let project = projects.first(where: { $0.id == id }),
+           project.host != nil {
+            remoteRootsToUnregister = [project.path] + projectsManager.worktrees(projectId: id).map(\.path.path)
+        } else {
+            remoteRootsToUnregister = []
+        }
         stopProjectGitWatcher(projectId: id)
-        projectsManager.removeProject(id: id)
+        projectsManager.removeProject(id: id, unregisterRemoteRoots: remoteRootsToUnregister.isEmpty)
         spacesManager.removeProjectEverywhere(id)
         saveProjects()
         saveSpaces()
         let removedIds = beforeIds.subtracting(allWorktreeIds())
         cleanupMissingWorktrees(beforeIds: beforeIds)
+        for root in remoteRootsToUnregister {
+            RemoteHostRegistry.shared.unregister(root: root)
+        }
         for worktreeId in removedIds {
             try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId))
             try? FileManager.default.removeItem(at: Paths.buffersDir(forWorktreeId: worktreeId))
@@ -1337,8 +1482,14 @@ final class AppState {
         let ids = projects.map(\.id)
         var removed = 0
         for id in ids {
-            guard removeProject(id: id) else { break }
-            removed += 1
+            switch removeProjectResult(id: id) {
+            case .removed:
+                removed += 1
+            case .scheduled:
+                continue
+            case .cancelled:
+                return removed
+            }
         }
         return removed
     }
@@ -1350,6 +1501,7 @@ final class AppState {
             do {
                 try await projectsManager.refreshWorktrees(projectId: project.id)
             } catch {
+                guard project.host == nil else { continue }
                 guard !FileManager.default.fileExists(atPath: project.path) else { continue }
                 staleProjectIds.append(project.id)
                 continue
@@ -1362,8 +1514,14 @@ final class AppState {
 
         var removed = 0
         for id in staleProjectIds {
-            guard removeProject(id: id) else { break }
-            removed += 1
+            switch removeProjectResult(id: id) {
+            case .removed:
+                removed += 1
+            case .scheduled:
+                continue
+            case .cancelled:
+                return removed
+            }
         }
         return removed
     }
@@ -1415,10 +1573,19 @@ final class AppState {
 
     private func handleProjectTopologyChange(projectId: String) {
         Task { @MainActor in
-            let beforeIds = allWorktreeIds()
-            if (try? await projectsManager.refreshWorktrees(projectId: projectId)) == true { saveProjects() }
-            cleanupMissingWorktrees(beforeIds: beforeIds)
+            await refreshProjectTopology(projectId: projectId)
         }
+    }
+
+    func refreshProjectTopology(projectId: String) async {
+        let beforeIds = allWorktreeIds()
+        if (try? await projectsManager.refreshWorktrees(projectId: projectId)) == true { saveProjects() }
+        let afterIds = allWorktreeIds()
+        let addedIds = afterIds.subtracting(beforeIds)
+        if !addedIds.isEmpty {
+            tabs.loadAll(worktreeIds: Array(addedIds))
+        }
+        cleanupMissingWorktrees(beforeIds: beforeIds)
     }
 
     func updateProject(
@@ -1481,7 +1648,11 @@ final class AppState {
                 onDiskDestructive: false
             ) {
             case .save:
-                guard saveDirtyBuffers(in: worktree) else { return }
+                Task { @MainActor in
+                    guard await saveDirtyBuffers(in: worktree) else { return }
+                    archiveWorktreeAfterSaving(worktree)
+                }
+                return
             case .discard:
                 break
             case .cancel:
@@ -1489,6 +1660,10 @@ final class AppState {
             }
         }
 
+        archiveWorktreeAfterSaving(worktree)
+    }
+
+    private func archiveWorktreeAfterSaving(_ worktree: Worktree) {
         // Snapshot index in the visible list BEFORE we mutate anything, so we
         // can pick a sensible follow-up selection.
         let siblingsBefore = projectsManager.visibleWorktrees(projectId: worktree.projectId)
@@ -1723,6 +1898,29 @@ final class AppState {
     }
 
     @discardableResult
+    func openTerminalTabPreparingRemoteZmxIfNeeded(
+        for worktree: Worktree,
+        startupScriptSuffix: String? = nil,
+        includeUserStartupScript: Bool = true,
+        forceInheritParentEnv: Bool = false,
+        environmentOverrides: [String: String] = [:],
+        environmentRemovals: Set<String> = []
+    ) async throws -> Tab {
+        guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
+            throw NSError(domain: "AppState", code: 2)
+        }
+        await prepareRemoteZmxIfNeeded(for: project)
+        return try openTerminalTab(
+            for: worktree,
+            startupScriptSuffix: startupScriptSuffix,
+            includeUserStartupScript: includeUserStartupScript,
+            forceInheritParentEnv: forceInheritParentEnv,
+            environmentOverrides: environmentOverrides,
+            environmentRemovals: environmentRemovals
+        )
+    }
+
+    @discardableResult
     func openTerminalTab(
         for worktree: Worktree,
         startupScriptSuffix: String? = nil,
@@ -1734,7 +1932,6 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
-        offerRemoteZmxInstallIfNeeded(for: project)
         // Single identity for this pane: used with the worktree id to derive
         // the zmx session name, plus the SessionRegistry key, leaf id, persisted
         // sessionId (mirrored to id on encode), and ALAS_SESSION_ID. Generated
@@ -1783,7 +1980,7 @@ final class AppState {
         return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
     }
 
-    private func offerRemoteZmxInstallIfNeeded(for project: ProjectConfig) {
+    private func prepareRemoteZmxIfNeeded(for project: ProjectConfig) async {
         guard config.terminal.keepSessionsAlive,
               let host = project.host,
               !promptedRemoteZmxHosts.contains(host),
@@ -1791,32 +1988,29 @@ final class AppState {
         else { return }
 
         promptedRemoteZmxHosts.insert(host)
-        Task { [weak self] in
-            guard let self,
-                  let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host),
-                  !capabilities.hasZmx,
-                  let resources = Bundle.main.resourceURL,
-                  RemoteZmxInstaller.bundledBinaryPath(
-                    os: capabilities.os,
-                    arch: capabilities.arch,
-                    resourceURL: resources
-                  ) != nil
-            else { return }
-
-            guard self.confirmPushZmx(host: host) else {
-                var declined = Set(UserDefaults.standard.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
-                declined.insert(host)
-                UserDefaults.standard.set(Array(declined).sorted(), forKey: "remote.zmx.declinedHosts")
-                return
-            }
-
-            if await RemoteZmxInstaller.install(
-                host: host,
-                capabilities: capabilities,
+        guard let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host),
+              !capabilities.hasZmx,
+              let resources = Bundle.main.resourceURL,
+              RemoteZmxInstaller.bundledBinaryPath(
+                os: capabilities.os,
+                arch: capabilities.arch,
                 resourceURL: resources
-            ) {
-                RemoteHostCapabilityStore.shared.invalidate(host: host)
-            }
+              ) != nil
+        else { return }
+
+        guard confirmPushZmx(host: host) else {
+            var declined = Set(UserDefaults.standard.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
+            declined.insert(host)
+            UserDefaults.standard.set(Array(declined).sorted(), forKey: "remote.zmx.declinedHosts")
+            return
+        }
+
+        if await RemoteZmxInstaller.install(
+            host: host,
+            capabilities: capabilities,
+            resourceURL: resources
+        ) {
+            RemoteHostCapabilityStore.shared.invalidate(host: host)
         }
     }
 
@@ -2206,18 +2400,20 @@ final class AppState {
     }
 
     func saveAllTabs() {
-        var roots: [String: URL] = [:]
-        for project in projects {
-            for worktree in projectsManager.worktrees(projectId: project.id) {
-                roots[worktree.id] = roots[worktree.id] ?? worktree.path
+        Task { @MainActor in
+            var roots: [String: URL] = [:]
+            for project in projects {
+                for worktree in projectsManager.worktrees(projectId: project.id) {
+                    roots[worktree.id] = roots[worktree.id] ?? worktree.path
+                }
             }
+            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots)
+            guard !errors.isEmpty else { return }
+            showFileActionError(
+                title: "Save All Failed",
+                message: "\(errors.count) file\(errors.count == 1 ? "" : "s") could not be saved."
+            )
         }
-        let errors = tabs.saveAll(worktreeRoots: roots)
-        guard !errors.isEmpty else { return }
-        showFileActionError(
-            title: "Save All Failed",
-            message: "\(errors.count) file\(errors.count == 1 ? "" : "s") could not be saved."
-        )
     }
 
     func revertActiveTab(worktreeId: String) {
@@ -2225,7 +2421,29 @@ final class AppState {
     }
 
     func newFile(in worktreeId: String) {
-        guard let worktree = worktree(withId: worktreeId) else { return }
+        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId) else { return }
+        if let host = project.host {
+            guard let relativePath = promptForRemoteRelativePath(
+                title: "New File",
+                message: "Enter a path relative to the remote worktree.",
+                defaultValue: "untitled.txt",
+                confirmTitle: "Create",
+                errorTitle: "New File Failed"
+            ) else { return }
+            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath) else {
+                showFileActionError(title: "New File Failed", message: "That file is already open in another editor tab.")
+                return
+            }
+            Task { @MainActor [weak self] in
+                do {
+                    try await Self.createRemoteEmptyFile(host: host, worktreeRoot: worktree.path, relativePath: relativePath)
+                    self?.openFile(relativePath: relativePath, worktreeId: worktreeId)
+                } catch {
+                    self?.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                }
+            }
+            return
+        }
         let panel = NSSavePanel()
         panel.title = "New File"
         panel.message = "Choose where to create the new file."
@@ -2247,10 +2465,47 @@ final class AppState {
         }
     }
 
+    nonisolated private static func createRemoteEmptyFile(host: String, worktreeRoot: URL, relativePath: String) async throws {
+        let path = worktreeRoot.appendingPathComponent(relativePath).path
+        try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
+        let result = try await RemoteExec.run(host: host, cwd: nil, command: RemoteFileOps.createEmptyFileCommand(path: path))
+        if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
+            throw RemoteFileAccessError.connectionFailed(result.stderr)
+        }
+        guard result.exitCode == 0 else {
+            if result.exitCode == 1 {
+                throw CocoaError(.fileWriteFileExists)
+            }
+            throw RemoteFileAccessError.writeFailed(result.stderr)
+        }
+    }
+
     func saveActiveTabAs(worktreeId: String) {
         guard let worktree = worktree(withId: worktreeId),
               let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
+        if context.buffer.isRemote {
+            guard let relativePath = promptForRemoteRelativePath(
+                title: "Save As",
+                message: "Enter a path relative to the remote worktree.",
+                defaultValue: context.tab.relativePath,
+                confirmTitle: "Save",
+                errorTitle: "Save As Failed"
+            ) else { return }
+            guard !tabs.hasEditor(worktreeId: worktreeId, relativePath: relativePath, excluding: context.tab.id) else {
+                showFileActionError(title: "Save As Failed", message: "That file is already open in another editor tab.")
+                return
+            }
+            Task { @MainActor [weak self] in
+                do {
+                    try await context.buffer.saveAsRemote(relativePath: relativePath)
+                    _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+                } catch {
+                    self?.showFileActionError(title: "Save As Failed", message: error.localizedDescription)
+                }
+            }
+            return
+        }
         let panel = NSSavePanel()
         panel.title = "Save As"
         panel.message = "Choose the new path for this editor buffer."
@@ -2272,10 +2527,71 @@ final class AppState {
         }
     }
 
+    private func promptForRemoteRelativePath(
+        title: String,
+        message: String,
+        defaultValue: String,
+        confirmTitle: String,
+        errorTitle: String
+    ) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
+        field.stringValue = defaultValue
+        alert.accessoryView = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        do {
+            return try Self.normalizedRemoteRelativePath(field.stringValue)
+        } catch {
+            showFileActionError(title: errorTitle, message: error.localizedDescription)
+            return nil
+        }
+    }
+
+    nonisolated static func normalizedRemoteRelativePath(_ raw: String) throws -> String {
+        let normalized = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\", with: "/")
+        guard !normalized.isEmpty,
+              !normalized.hasPrefix("/"),
+              !normalized.split(separator: "/", omittingEmptySubsequences: false).contains("..")
+        else {
+            throw NSError(
+                domain: "AppState",
+                code: 6,
+                userInfo: [NSLocalizedDescriptionKey: "Enter a relative path inside the remote worktree."]
+            )
+        }
+        return normalized
+    }
+
     func renameActiveFile(worktreeId: String) {
         guard let worktree = worktree(withId: worktreeId),
               let context = tabs.activeEditorContext(worktreeId: worktreeId) else { return }
         let currentURL = worktree.path.appendingPathComponent(context.tab.relativePath)
+        if context.buffer.isRemote {
+            guard let relativePath = promptForRemoteRelativePath(
+                title: "Rename File",
+                message: "Enter a path relative to the remote worktree.",
+                defaultValue: context.tab.relativePath,
+                confirmTitle: "Rename",
+                errorTitle: "Rename File Failed"
+            ) else { return }
+            guard relativePath != context.tab.relativePath else { return }
+            Task { @MainActor [weak self] in
+                do {
+                    try await context.buffer.moveToRemote(relativePath: relativePath)
+                    _ = self?.tabs.updateEditorPath(worktreeId: worktreeId, tabId: context.tab.id, relativePath: relativePath)
+                } catch {
+                    self?.showFileActionError(title: "Rename File Failed", message: error.localizedDescription)
+                }
+            }
+            return
+        }
         let panel = NSSavePanel()
         panel.title = "Rename File"
         panel.message = "Choose the new path for this file."
@@ -3024,8 +3340,16 @@ final class AppState {
             }
         }
         if saveBuffersFirst {
-            guard saveDirtyBuffers(in: worktree) else { return }
+            Task { @MainActor in
+                guard await saveDirtyBuffers(in: worktree) else { return }
+                beginDeleteWorktree(worktree, keepBranch: keepBranch)
+            }
+            return
         }
+        beginDeleteWorktree(worktree, keepBranch: keepBranch)
+    }
+
+    private func beginDeleteWorktree(_ worktree: Worktree, keepBranch: Bool) {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             showFileActionError(title: "Delete Failed", message: "Could not find the project for this worktree.")
             return
@@ -3524,8 +3848,8 @@ final class AppState {
     /// snapshot on disk. Returns true on full success; on partial failure
     /// surfaces an aggregate error and returns false so the caller can bail
     /// before the destructive cleanup.
-    private func saveDirtyBuffers(in worktree: Worktree) -> Bool {
-        let errors = tabs.saveAllUnsaved(forWorktree: worktree.id, root: worktree.path)
+    private func saveDirtyBuffers(in worktree: Worktree) async -> Bool {
+        let errors = await tabs.saveAllUnsavedAwaitingRemote(forWorktree: worktree.id, root: worktree.path)
         if !errors.isEmpty {
             let count = errors.count
             showFileActionError(

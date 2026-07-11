@@ -40,6 +40,37 @@ enum ACPRemoteLaunch {
         return "command -v \(SSHCommand.shellQuote(binary))"
     }
 
+    static func setupProbeCommand(check: ACPSetupCheck) -> String {
+        switch check {
+        case .binaryOnPath(let name):
+            return "command -v \(SSHCommand.shellQuote(name))"
+        case .npxPackage(let name):
+            return npmPackageProbeCommand(package: name)
+        case .binaryOnPathOrNpmPackage(let binary, let package):
+            return "command -v \(SSHCommand.shellQuote(binary)) >/dev/null 2>&1 || (\(npmPackageProbeCommand(package: package)))"
+        }
+    }
+
+    static func launchPathProbeCommand(for spec: ACPLaunchSpec) -> String? {
+        let binary = SSHCommand.shellQuote(spec.command)
+        switch spec.setupCheck {
+        case .binaryOnPath:
+            return nil
+        case .npxPackage:
+            return "\(npmGlobalBinaryProbeCommand(binary: spec.command)) || command -v \(binary)"
+        case .binaryOnPathOrNpmPackage:
+            return "command -v \(binary) || \(npmGlobalBinaryProbeCommand(binary: spec.command))"
+        }
+    }
+
+    private static func npmPackageProbeCommand(package: String) -> String {
+        "pkg=\(SSHCommand.shellQuote(package)); root=$(npm root -g 2>/dev/null) && [ -n \"$root\" ] && [ -d \"$root/$pkg\" ]"
+    }
+
+    private static func npmGlobalBinaryProbeCommand(binary: String) -> String {
+        "bin=\(SSHCommand.shellQuote(binary)); prefix=$(npm prefix -g 2>/dev/null) && [ -n \"$prefix\" ] && p=\"$prefix/bin/$bin\" && [ -x \"$p\" ] && printf '%s\\n' \"$p\""
+    }
+
     /// Remote script for an agent `terminal/create`. Only agent-requested
     /// env pairs cross the connection; sorting keeps the result deterministic.
     static func terminalCommand(
@@ -53,6 +84,6 @@ enum ACPRemoteLaunch {
         let scrub = markerScrub.map { "-u \($0)" }
         let argv = ([command] + args).map(SSHCommand.shellQuote)
         let envCommand = (["env"] + scrub + pairs + argv).joined(separator: " ")
-        return "cd -- \(SSHCommand.shellQuote(cwd)) && \(envCommand)"
+        return "cd \(SSHCommand.shellQuote(cwd)) && \(envCommand)"
     }
 }

@@ -20,7 +20,7 @@ struct ACPFileWriter {
         try FileManager.default.createDirectory(at: target.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         try content.write(to: target, atomically: true, encoding: .utf8)
-        return Self.makeResult(oldText: pre ?? "", newText: content, path: target.path)
+        return Self.makeResult(oldText: pre, newText: content, path: target.path)
     }
 
     /// Throws `outsideWorktree` if `path` resolves outside the
@@ -47,8 +47,8 @@ struct ACPFileWriter {
         return (setB.subtracting(setA).count, setA.subtracting(setB).count)
     }
 
-    static func makeResult(oldText: String, newText: String, path: String) -> Result {
-        let (added, removed) = diffLineCount(pre: oldText, post: newText)
+    static func makeResult(oldText: String?, newText: String, path: String) -> Result {
+        let (added, removed) = diffLineCount(pre: oldText ?? "", post: newText)
         return Result(added: added, removed: removed, path: path, oldText: oldText, newText: newText)
     }
 }

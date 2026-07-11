@@ -14,19 +14,26 @@ struct SSHCommandTests {
         #expect(SSHCommand.shellQuote("") == "''")
     }
 
-    @Test func remoteScriptChangesDirectoryThenExecsLoginShell() {
+    @Test func remoteScriptChangesDirectoryInsidePOSIXShell() {
         let script = SSHCommand.remoteScript(cwd: "/srv/repo", command: "git status")
-        #expect(script == "cd -- '/srv/repo' && exec \"$SHELL\" -l -c 'git status'")
+        #expect(script == "/bin/sh -c 'PATH=\"$HOME/.alas/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; export PATH; cd '\\''/srv/repo'\\'' && git status'")
     }
 
     @Test func remoteScriptQuotesCwdWithSpaces() {
         let script = SSHCommand.remoteScript(cwd: "/srv/my repo", command: "git status")
-        #expect(script.hasPrefix("cd -- '/srv/my repo' && "))
+        #expect(script.contains("cd '\\''/srv/my repo'\\'' && git status"))
     }
 
     @Test func remoteScriptWithoutCwdOmitsCd() {
         let script = SSHCommand.remoteScript(command: "git --version")
-        #expect(script == "exec \"$SHELL\" -l -c 'git --version'")
+        #expect(script == "/bin/sh -c 'PATH=\"$HOME/.alas/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; export PATH; git --version'")
+    }
+
+    @Test func remoteScriptTopLevelIsSafeForNonPOSIXLoginShells() {
+        let script = SSHCommand.remoteScript(command: "f='x'; [ -e \"$f\" ]")
+        #expect(script.hasPrefix("/bin/sh -c "))
+        #expect(!script.hasPrefix("PATH="))
+        #expect(!script.contains("\"$SHELL\" -l -c"))
     }
 
     @Test func batchModeArgvFailsFastAndNeverPrompts() {

@@ -9,7 +9,7 @@ struct ACPRecoveryPill: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
-        if let label = label(for: session.agentState) {
+        if let label = label(for: session.agentState, autoReconnecting: session.autoReconnecting) {
             HStack(spacing: 6) {
                 statusDot(animating: isAnimating(session.agentState))
                 Text(label)
@@ -28,24 +28,27 @@ struct ACPRecoveryPill: View {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
-            .help(helpText(for: session.agentState))
+            .help(helpText(for: session.agentState, autoReconnecting: session.autoReconnecting))
             .transition(.opacity)
         }
     }
 
-    private func label(for state: ACPSession.AgentState) -> String? {
+    private func label(for state: ACPSession.AgentState, autoReconnecting: Bool) -> String? {
         switch state {
         case .idle, .ready: return nil
         case .spawning: return "Reconnecting…"
-        case .disconnected: return "Disconnected"
+        case .disconnected: return autoReconnecting ? "Reconnecting…" : "Disconnected"
         case .failed: return "Failed"
         }
     }
 
-    private func helpText(for state: ACPSession.AgentState) -> String {
+    private func helpText(for state: ACPSession.AgentState, autoReconnecting: Bool) -> String {
         switch state {
         case .spawning: return "Bringing the agent process back up…"
-        case .disconnected: return "Agent process exited. Will reconnect on next send."
+        case .disconnected:
+            return autoReconnecting
+                ? "Connection lost. Retrying automatically; sending a message also reconnects."
+                : "Agent process exited. Will reconnect on next send."
         case .failed(let reason): return "Failed: \(reason)"
         default: return ""
         }

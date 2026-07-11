@@ -55,7 +55,7 @@ struct AppStateCreateWorktreeLaunchSurfaceTests {
 
         let dest = repo.deletingLastPathComponent()
             .appendingPathComponent("wt-acp-\(UUID().uuidString)")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "acp-branch",

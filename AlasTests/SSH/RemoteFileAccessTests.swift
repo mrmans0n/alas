@@ -6,10 +6,11 @@ struct RemoteFileAccessTests {
     @Test func readScriptEmitsMtimeHeaderThenBytes() {
         let script = RemoteFileAccess.readScript(path: "/srv/repo/a.txt")
         #expect(script.contains("f='/srv/repo/a.txt'"))
+        #expect(script.contains("[ -L \"$f\" ] && exit 5"))
         #expect(script.contains("[ -d \"$f\" ] && exit 3"))
         #expect(script.contains("[ -e \"$f\" ] || exit 4"))
-        #expect(script.contains("stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m -- \"$f\""))
-        #expect(script.contains("cat -- \"$f\""))
+        #expect(script.contains("stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m \"$f\""))
+        #expect(script.contains("cat \"$f\""))
     }
 
     @Test func parseReadPayloadSplitsHeaderFromBinaryBody() {
@@ -35,11 +36,16 @@ struct RemoteFileAccessTests {
     @Test func writeScriptPreservesPermissionsAndIsAtomic() {
         let script = RemoteFileAccess.writeScript(path: "/srv/repo/run.sh")
         #expect(script.contains("f='/srv/repo/run.sh'"))
-        #expect(script.contains("cp -p -- \"$f\" \"$t\""))
+        #expect(script.contains("[ -L \"$f\" ] && exit 6"))
+        #expect(script.contains("[ -d \"$f\" ] && exit 7"))
+        #expect(script.contains("mode=$(stat -c %a -- \"$f\" 2>/dev/null || stat -f %Lp \"$f\")"))
+        #expect(script.contains("cp -p \"$f\" \"$t\""))
+        #expect(script.contains("chmod u+w \"$t\""))
         #expect(script.contains("cat > \"$t\""))
-        #expect(script.contains("mv -- \"$t\" \"$f\""))
-        #expect(script.contains("rm -f -- \"$t\""))
-        #expect(script.contains("stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m -- \"$f\""))
+        #expect(script.contains("chmod \"$mode\" \"$t\""))
+        #expect(script.contains("mv \"$t\" \"$f\""))
+        #expect(script.contains("rm -f \"$t\""))
+        #expect(script.contains("stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m \"$f\""))
     }
 
     @Test func scriptsQuoteApostrophePaths() {
@@ -55,5 +61,14 @@ struct RemoteFileAccessTests {
         #expect(RemoteSaveGate.decision(originalMtime: t1, remoteMtime: nil) == .targetDeleted)
         #expect(RemoteSaveGate.decision(originalMtime: nil, remoteMtime: nil) == .proceed)
         #expect(RemoteSaveGate.decision(originalMtime: t2, remoteMtime: t1) == .proceed)
+    }
+
+    @Test func saveGateTreatsEqualMtimeAsAmbiguousForCallerContentCheck() {
+        let baseline = Date(timeIntervalSince1970: 100)
+        #expect(RemoteSaveGate.requiresContentCheck(originalMtime: baseline, remoteMtime: baseline))
+        #expect(RemoteSaveGate.requiresContentCheck(originalMtime: baseline, remoteMtime: Date(timeIntervalSince1970: 99)))
+        #expect(!RemoteSaveGate.requiresContentCheck(originalMtime: baseline, remoteMtime: Date(timeIntervalSince1970: 101)))
+        #expect(!RemoteSaveGate.requiresContentCheck(originalMtime: nil, remoteMtime: baseline))
+        #expect(!RemoteSaveGate.requiresContentCheck(originalMtime: baseline, remoteMtime: nil))
     }
 }

@@ -34,6 +34,14 @@ struct DiffOpenFileAvailabilityTests {
         #expect(!DiffOpenFileAvailability.isAvailable(worktreePath: tmp, relativePath: "Sources"))
     }
 
+    @Test func availableForRemoteWorktreeWithoutLocalFile() {
+        let root = URL(fileURLWithPath: "/srv/remote-\(UUID().uuidString)")
+        RemoteHostRegistry.shared.register(root: root.path, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root.path) }
+
+        #expect(DiffOpenFileAvailability.isAvailable(worktreePath: root, relativePath: "Sources/App.swift"))
+    }
+
     @Test func equatableConformance() {
         #expect(DiffOpenFileAvailability.available == .available)
         #expect(DiffOpenFileAvailability.unavailable(reason: "a") == .unavailable(reason: "a"))

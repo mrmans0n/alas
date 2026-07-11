@@ -28,6 +28,8 @@ private struct SyncFetchTarget: Hashable {
 @Observable
 @MainActor
 final class RightPaneState {
+    nonisolated static let remoteUntrackedContentFingerprintCommand = "git ls-files --others --exclude-standard -z | xargs -0 sh -c '[ \"$#\" -gt 0 ] || exit 0; git hash-object -- \"$@\"' sh 2>/dev/null"
+
     let worktree: Worktree
     let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
@@ -335,9 +337,25 @@ final class RightPaneState {
         if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         guard status.exitCode == 0 else { return }
         let head = try? await Process.git(["rev-parse", "HEAD"], cwd: worktree.path)
+        let unstagedDiff = try? await Process.git(["diff", "--no-ext-diff", "--binary"], cwd: worktree.path)
+        let stagedDiff = try? await Process.git(["diff", "--cached", "--no-ext-diff", "--binary"], cwd: worktree.path)
+        let untrackedContent: ProcessResult?
+        if let host {
+            untrackedContent = try? await RemoteExec.run(
+                host: host,
+                cwd: worktree.path.path,
+                command: Self.remoteUntrackedContentFingerprintCommand,
+                timeout: 15
+            )
+        } else {
+            untrackedContent = nil
+        }
         let fingerprint = RemoteStatusFingerprint.make(
             status: status.stdout,
-            head: head?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            head: head?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            unstagedDiff: unstagedDiff?.stdout ?? "",
+            stagedDiff: stagedDiff?.stdout ?? "",
+            untrackedContent: untrackedContent?.stdout ?? ""
         )
         let shouldRefresh = RemoteStatusFingerprint.shouldRefresh(previous: remoteFingerprint, current: fingerprint)
         remoteFingerprint = fingerprint

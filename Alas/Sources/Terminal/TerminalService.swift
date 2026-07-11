@@ -57,6 +57,15 @@ final class TerminalService {
         }
     }
 
+    private func dispatchTrackedKill(_ body: @escaping @Sendable () async -> Void) {
+        let task = Task.detached(operation: body)
+        pendingKillTasks.insert(task)
+        Task { @MainActor [weak self] in
+            _ = await task.value
+            self?.pendingKillTasks.remove(task)
+        }
+    }
+
     /// Build the global config file for this app + theme combination, then
     /// (re)create the AlasGhostty.App if the config has changed materially.
     /// Call this on launch and whenever theme/terminal settings change.
@@ -144,9 +153,10 @@ final class TerminalService {
         let args: [String]
         let envOverrides: [String: String]
         if let remoteHost {
+            let remoteCwd = forcedCwd?.path ?? worktree.path.path
             let launch = Self.remoteLaunch(
                 host: remoteHost,
-                worktreePath: worktree.path.path,
+                worktreePath: remoteCwd,
                 zmxSessionName: zmxSessionName,
                 keepAlive: cfg.keepSessionsAlive,
                 startupSuffix: effectiveScript.isEmpty ? nil : effectiveScript
@@ -198,7 +208,7 @@ final class TerminalService {
         return session
     }
 
-    static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?) -> (executable: String, args: [String]) {
+    nonisolated static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?) -> (executable: String, args: [String]) {
         let script = RemoteTerminalScript.attachScript(worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive, startupSuffix: startupSuffix)
         let invocation = RemoteTerminalScript.surfaceInvocation(host: host, script: script)
         return (invocation.executable, invocation.args)
@@ -220,12 +230,13 @@ final class TerminalService {
         // otherwise a quick close+Cmd-Q race would leak the daemon-side
         // session, and the next launch would carry forward the orphan.
         if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
-            Task { await Self.killRemoteSession(host: host, name: existingName) }
+            dispatchTrackedKill { await Self.killRemoteSession(host: host, name: existingName) }
         } else if let existingName = existing?.zmxSessionName {
             let client = zmxClient
             dispatchTrackedKill { client.killSession(name: existingName) }
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
             let client = zmxClient
+            let remoteHost = Self.remoteHostForCleanup(worktreeId: worktreeId, projectPath: projectPath)
             dispatchTrackedKill {
                 let sessionNames = Self.sessionNamesForCleanup(
                     worktreeId: worktreeId,
@@ -234,7 +245,11 @@ final class TerminalService {
                     zmxClient: client
                 )
                 for sessionName in sessionNames {
-                    client.killSession(name: sessionName)
+                    if let remoteHost {
+                        await Self.killRemoteSession(host: remoteHost, name: sessionName)
+                    } else {
+                        client.killSession(name: sessionName)
+                    }
                 }
             }
         }
@@ -265,22 +280,38 @@ final class TerminalService {
     /// `ZmxClient.killSession` blocks up to ~5s, so we run the sweep on
     /// `Task.detached` to keep the MainActor (UI) responsive.
     func terminateAll(additionalSessions: [TerminalSessionIdentity] = []) {
-        let liveNames = registry.all.map {
-            $0.zmxSessionName ?? ZmxSessionName.derive(worktreeId: $0.worktreeId, leafId: $0.id)
+        var localNames = Set<String>()
+        var remoteNamesByHost: [String: Set<String>] = [:]
+        for session in registry.all {
+            let name = session.zmxSessionName ?? ZmxSessionName.derive(worktreeId: session.worktreeId, leafId: session.id)
+            if let host = session.remoteHost {
+                remoteNamesByHost[host, default: []].insert(name)
+            } else {
+                localNames.insert(name)
+            }
         }
         let client = zmxClient
-        dispatchTrackedKill {
-            var allNames = Set(liveNames)
-            for session in additionalSessions {
-                allNames.formUnion(Self.sessionNamesForCleanup(
-                    worktreeId: session.worktreeId,
-                    projectPath: session.projectPath,
-                    leafId: session.leafId,
-                    zmxClient: client
-                ))
+        for session in additionalSessions {
+            let names = Self.sessionNamesForCleanup(
+                worktreeId: session.worktreeId,
+                projectPath: session.projectPath,
+                leafId: session.leafId,
+                zmxClient: client
+            )
+            if let host = Self.remoteHostForCleanup(worktreeId: session.worktreeId, projectPath: session.projectPath) {
+                remoteNamesByHost[host, default: []].formUnion(names)
+            } else {
+                localNames.formUnion(names)
             }
-            for name in allNames {
+        }
+        dispatchTrackedKill {
+            for name in localNames {
                 client.killSession(name: name)
+            }
+            for (host, names) in remoteNamesByHost {
+                for name in names {
+                    await Self.killRemoteSession(host: host, name: name)
+                }
             }
         }
     }
@@ -327,6 +358,11 @@ final class TerminalService {
             command: RemoteTerminalScript.zmxBatchCommand(["kill", name]),
             timeout: 10
         )
+    }
+
+    nonisolated static func remoteHostForCleanup(worktreeId: String, projectPath: String?) -> String? {
+        RemoteHostRegistry.shared.host(forPath: worktreeId)
+            ?? RemoteHostRegistry.shared.host(forPath: projectPath)
     }
 
     /// Find scoped remote sessions with no persisted terminal leaf and remove

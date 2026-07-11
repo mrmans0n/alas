@@ -17,6 +17,25 @@ struct ACPTerminalHostTests {
         #expect(host.terminal(id: r1.terminalId) != nil)
     }
 
+    @Test("remote sessions keep absolute requested cwd on the remote host")
+    func remoteSessionRoutesAbsoluteCwdToSessionHost() {
+        let host = ACPTerminalHost(sessionCwd: "/srv/repo", sessionEnv: [:], sessionRemoteHost: "devbox")
+
+        #expect(host.executionHost(forResolvedCwd: "/tmp") == "devbox")
+    }
+
+    @Test("agent-requested env handles duplicate names with last value winning")
+    func agentRequestedEnvDuplicateNamesAreLastWins() {
+        let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])
+
+        let env = host.agentRequestedEnv([
+            ACPEnvVar(name: "TOKEN", value: "old"),
+            ACPEnvVar(name: "TOKEN", value: "new"),
+        ])
+
+        #expect(env == ["TOKEN": "new"])
+    }
+
     @Test("output on unknown id throws 'terminal not found'")
     func unknownOutput() {
         let host = ACPTerminalHost(sessionCwd: "/tmp", sessionEnv: [:])

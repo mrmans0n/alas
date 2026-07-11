@@ -59,6 +59,10 @@ final class RemoteProjectGitWatcher {
 
         let entries = RemoteWorktreePoll.parse(porcelain: result.stdout)
         defer { lastEntries = entries }
+        guard lastEntries != nil else {
+            onTopologyChanged?()
+            return true
+        }
         guard let old = lastEntries, let delta = RemoteWorktreePoll.classify(old: old, new: entries) else {
             return true
         }

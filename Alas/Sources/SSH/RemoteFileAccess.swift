@@ -4,6 +4,7 @@ enum RemoteReadResult: Equatable {
     case file(data: Data, mtime: Date)
     case missing
     case directory
+    case symlink
     case unreadable(String)
 }
 
@@ -27,6 +28,11 @@ enum RemoteSaveGate {
         guard let remoteMtime else { return .targetDeleted }
         return remoteMtime > originalMtime ? .conflict : .proceed
     }
+
+    static func requiresContentCheck(originalMtime: Date?, remoteMtime: Date?) -> Bool {
+        guard let originalMtime, let remoteMtime else { return false }
+        return remoteMtime <= originalMtime
+    }
 }
 
 /// File I/O over ssh, one round trip per operation. Scripts are POSIX
@@ -34,14 +40,15 @@ enum RemoteSaveGate {
 /// OS-gated. Exit-code contract for reads: 3 = directory, 4 = missing.
 enum RemoteFileAccess {
     /// Chained GNU-then-BSD mtime probe, reused across scripts.
-    private static let statMtime = "stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m -- \"$f\""
+    private static let statMtime = "stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m \"$f\""
 
     static func readScript(path: String) -> String {
         "f=\(SSHCommand.shellQuote(path)); "
+            + "[ -L \"$f\" ] && exit 5; "
             + "[ -d \"$f\" ] && exit 3; "
             + "[ -e \"$f\" ] || exit 4; "
             + "(\(statMtime)); "
-            + "cat -- \"$f\""
+            + "cat \"$f\""
     }
 
     /// Payload is `<epoch-seconds>\\n<raw bytes>`; the body is binary-safe.
@@ -68,6 +75,8 @@ enum RemoteFileAccess {
             return .directory
         case 4:
             return .missing
+        case 5:
+            return .symlink
         case 0:
             guard let parsed = parseReadPayload(result.stdout) else {
                 return .unreadable("unexpected read payload")
@@ -83,9 +92,17 @@ enum RemoteFileAccess {
     /// mtime on stdout.
     static func writeScript(path: String) -> String {
         "f=\(SSHCommand.shellQuote(path)); t=\"$f.alas-$$.tmp\"; "
-            + "if [ -f \"$f\" ]; then cp -p -- \"$f\" \"$t\" || exit 3; fi; "
-            + "cat > \"$t\" || { rm -f -- \"$t\"; exit 4; }; "
-            + "mv -- \"$t\" \"$f\" || { rm -f -- \"$t\"; exit 5; }; "
+            + "[ -L \"$f\" ] && exit 6; "
+            + "[ -d \"$f\" ] && exit 7; "
+            + "mode=\"\"; "
+            + "if [ -f \"$f\" ]; then "
+            + "mode=$(stat -c %a -- \"$f\" 2>/dev/null || stat -f %Lp \"$f\") || exit 3; "
+            + "cp -p \"$f\" \"$t\" || exit 3; "
+            + "chmod u+w \"$t\" || { rm -f \"$t\"; exit 3; }; "
+            + "fi; "
+            + "cat > \"$t\" || { rm -f \"$t\"; exit 4; }; "
+            + "[ -z \"$mode\" ] || chmod \"$mode\" \"$t\" || { rm -f \"$t\"; exit 4; }; "
+            + "mv \"$t\" \"$f\" || { rm -f \"$t\"; exit 5; }; "
             + statMtime
     }
 

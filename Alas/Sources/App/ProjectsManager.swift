@@ -87,7 +87,13 @@ final class ProjectsManager {
         host: String? = nil,
         id: String = UUID().uuidString
     ) async throws -> ProjectConfig {
-        try Self.ensureNoPathCollision(newRoot: path.path, newHost: host, existing: projects)
+        let worktreeRootsByProject = worktreesByProject.mapValues { $0.map(\.path.path) }
+        try Self.ensureNoPathCollision(
+            newRoot: path.path,
+            newHost: host,
+            existing: projects,
+            existingWorktreeRootsByProject: worktreeRootsByProject
+        )
         if let host {
             try await RemoteRepoValidator.validate(host: host, path: path.path)
         } else {
@@ -127,8 +133,9 @@ final class ProjectsManager {
         )
     }
 
-    func removeProject(id: String) {
-        if let project = projects.first(where: { $0.id == id }), project.host != nil {
+    func removeProject(id: String, unregisterRemoteRoots: Bool = true) {
+        if unregisterRemoteRoots,
+           let project = projects.first(where: { $0.id == id }), project.host != nil {
             RemoteHostRegistry.shared.unregister(root: project.path)
             for worktree in worktreesByProject[id, default: []] {
                 RemoteHostRegistry.shared.unregister(root: worktree.path.path)
@@ -361,11 +368,7 @@ final class ProjectsManager {
         for id in clearOperationIds {
             worktreeOperationStates.removeValue(forKey: id)
         }
-        if let host = project.host {
-            for worktree in reconciled {
-                RemoteHostRegistry.shared.register(root: worktree.path.path, host: host)
-            }
-        }
+        reconcileRemoteHostRegistrations(project: project, previous: previous, reconciled: reconciled)
         worktreesByProject[projectId] = reconciled
         let orderChanged = applyWorktreeOrdering(projectId: projectId)
 
@@ -376,26 +379,40 @@ final class ProjectsManager {
         return orderChanged || projects[idx].hiddenWorktreePaths.count != before
     }
 
+    func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {
+        guard let host = project.host else { return }
+        let liveRoots = Set(reconciled.map { $0.path.path })
+        for worktree in previous where !liveRoots.contains(worktree.path.path) {
+            RemoteHostRegistry.shared.unregister(root: worktree.path.path)
+        }
+        for worktree in reconciled {
+            RemoteHostRegistry.shared.register(root: worktree.path.path, host: host)
+        }
+    }
+
     /// Remote and local roots must not overlap: a prefix collision would make
     /// host routing ambiguous. Existing local-to-local nesting remains valid.
     nonisolated static func ensureNoPathCollision(
         newRoot: String,
         newHost: String?,
-        existing: [ProjectConfig]
+        existing: [ProjectConfig],
+        existingWorktreeRootsByProject: [String: [String]] = [:]
     ) throws {
         func overlaps(_ lhs: String, _ rhs: String) -> Bool {
             lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
         }
 
         for project in existing {
-            let bothLocal = newHost == nil && project.host == nil
-            let sameHost = newHost != nil && newHost == project.host
-            if bothLocal || sameHost { continue }
-            if overlaps(newRoot, project.path) {
+            let roots = [project.path] + existingWorktreeRootsByProject[project.id, default: []]
+            for root in roots {
+                let bothLocal = newHost == nil && project.host == nil
+                let sameHost = newHost != nil && newHost == project.host
+                if bothLocal || sameHost { continue }
+                if !overlaps(newRoot, root) { continue }
                 throw NSError(
                     domain: "ProjectsManager",
                     code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: "Path \(newRoot) collides with existing project \(project.name) (\(project.path)). Remote and local project roots must not overlap."]
+                    userInfo: [NSLocalizedDescriptionKey: "Path \(newRoot) collides with existing project \(project.name) (\(root)). Remote and local project roots must not overlap."]
                 )
             }
         }

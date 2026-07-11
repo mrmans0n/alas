@@ -79,7 +79,9 @@ struct SidebarView: View {
                                 },
                                 onOpenTerminal: { wt in
                                     state.selectWorktree(id: wt.id)
-                                    _ = try? state.openTerminalTab(for: wt)
+                                    Task { @MainActor in
+                                        _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: wt)
+                                    }
                                 },
                                 onCopyPath: { wt in
                                     let pb = NSPasteboard.general
@@ -126,14 +128,16 @@ struct SidebarView: View {
                                     } else {
                                         retryBase = state.config.worktrees.baseBranch
                                     }
-                                    state.createWorktree(
-                                        projectId: project.id,
-                                        base: retryBase,
-                                        branch: wt.branch,
-                                        destination: wt.path,
-                                        runStartup: false,
-                                        launchSurface: .none
-                                    )
+                                    Task { @MainActor in
+                                        await state.createWorktree(
+                                            projectId: project.id,
+                                            base: retryBase,
+                                            branch: wt.branch,
+                                            destination: wt.path,
+                                            runStartup: false,
+                                            launchSurface: .none
+                                        )
+                                    }
                                 },
                                 onRetryDelete: { wt in state.deleteWorktree(wt) },
                                 onRemoveFailed: { wt in

@@ -14,11 +14,13 @@ final class ACPTerminalHost: ObservableObject {
 
     private(set) var sessionCwd: String
     private(set) var sessionEnv: [String: String]
+    private(set) var sessionRemoteHost: String?
     @Published private(set) var terminals: [String: ACPTerminal] = [:]
 
-    init(sessionCwd: String, sessionEnv: [String: String]) {
+    init(sessionCwd: String, sessionEnv: [String: String], sessionRemoteHost: String? = nil) {
         self.sessionCwd = sessionCwd
         self.sessionEnv = sessionEnv
+        self.sessionRemoteHost = sessionRemoteHost
     }
 
     /// UI lookup: returns released terminals too, so a tool card can keep
@@ -44,10 +46,10 @@ final class ACPTerminalHost: ObservableObject {
         let limit = p.outputByteLimit ?? 65_536
         do {
             let term: ACPTerminal
-            if let host = RemoteHostRegistry.shared.host(forPath: cwd) {
+            if let host = executionHost(forResolvedCwd: cwd) {
                 let script = ACPRemoteLaunch.terminalCommand(command: p.command, args: p.args ?? [], env: agentRequestedEnv(p.env), cwd: cwd)
                 let ssh = SSHCommand(host: host, mode: .batch)
-                term = try ACPTerminal(id: id, command: SSHCommand.executable, args: ssh.argv(remoteScript: SSHCommand.remoteScript(command: script)), env: ProcessInfo.processInfo.environment, cwd: FileManager.default.temporaryDirectory.path, outputByteLimit: limit)
+                term = try ACPTerminal(id: id, command: SSHCommand.executable, args: ["-tt"] + ssh.argv(remoteScript: SSHCommand.remoteScript(command: script)), env: ProcessInfo.processInfo.environment, cwd: FileManager.default.temporaryDirectory.path, outputByteLimit: limit, normalizesCRLF: true)
             } else {
                 term = try ACPTerminal(id: id, command: p.command, args: p.args ?? [], env: env, cwd: cwd, outputByteLimit: limit)
             }
@@ -122,12 +124,17 @@ final class ACPTerminalHost: ObservableObject {
         terminals.values.reduce(0) { $0 &+ UInt64($1.buffer.count) }
     }
 
-    func updateContext(sessionCwd: String, sessionEnv: [String: String]) {
+    func updateContext(sessionCwd: String, sessionEnv: [String: String], sessionRemoteHost: String? = nil) {
         self.sessionCwd = sessionCwd
         self.sessionEnv = sessionEnv
+        self.sessionRemoteHost = sessionRemoteHost
     }
 
     // MARK: - Helpers
+
+    func executionHost(forResolvedCwd cwd: String) -> String? {
+        sessionRemoteHost ?? RemoteHostRegistry.shared.host(forPath: cwd)
+    }
 
     private func resolveCwd(_ requested: String?) -> String {
         guard let r = requested, !r.isEmpty else { return sessionCwd }
@@ -142,8 +149,12 @@ final class ACPTerminalHost: ObservableObject {
         return out
     }
 
-    private func agentRequestedEnv(_ env: [ACPEnvVar]?) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: (env ?? []).map { ($0.name, $0.value) })
+    func agentRequestedEnv(_ env: [ACPEnvVar]?) -> [String: String] {
+        var out: [String: String] = [:]
+        for v in env ?? [] {
+            out[v.name] = v.value
+        }
+        return out
     }
 
     private func metadataTerminal(terminalId: String, cwd: String?) -> ACPTerminal {

@@ -572,7 +572,7 @@ struct AppStateSpacesTests {
         let state = AppState(store: MemoryStore(projectsFile: ProjectsFile(projects: [p1, p2]), spacesFile: spaces))
         state.config.worktrees.fetchRemoteBeforeCreate = false
 
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: "p2",
             base: "main",
             branch: "space-create",

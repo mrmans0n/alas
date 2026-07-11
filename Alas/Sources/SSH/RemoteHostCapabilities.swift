@@ -22,7 +22,7 @@ struct RemoteHostCapabilities: Equatable {
     static let probeCommand =
         "uname -s; git version 2>/dev/null; "
         + "command -v rg >/dev/null 2>&1 && echo rg=yes || echo rg=no; "
-        + "command -v zmx >/dev/null 2>&1 && echo zmx=yes || echo zmx=no; "
+        + "(command -v zmx >/dev/null 2>&1 || [ -x \"$HOME/.alas/bin/zmx\" ]) && echo zmx=yes || echo zmx=no; "
         + "echo \"arch=$(uname -m)\""
 
     static func parse(_ output: String) -> RemoteHostCapabilities {

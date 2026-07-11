@@ -72,6 +72,8 @@ final class ACPSession: ObservableObject, Identifiable {
     /// lifecycle), distinct from `StreamingState.idle` which means
     /// "runner is attached but not currently mid-prompt" (turn lifecycle).
     @Published var agentState: AgentState = .idle
+    /// Runtime-only state for bounded remote SSH reconnection attempts.
+    @Published var autoReconnecting: Bool = false
     /// Prompt content capabilities learned from ACP `initialize`.
     /// Runtime-only: re-learned on each attach, never persisted. Drives
     /// send-time hydration in `ACPSessionRunner.hydrate`.
@@ -235,6 +237,7 @@ final class ACPSession: ObservableObject, Identifiable {
         case checking
         case ready
         case needsSetup(reason: String)
+        case setupError(reason: String)
         case needsAuth(methods: [ACPInitializeResult.ACPAuthMethod], reason: String?)
     }
     struct PendingPermission: Identifiable, Equatable {

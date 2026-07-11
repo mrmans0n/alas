@@ -62,7 +62,7 @@ struct AppStateCreateWorktreeSymlinkTests {
         // report.
         let destinationThroughSymlink = linkURL.appendingPathComponent("wt-symlink")
 
-        let optimisticId = state.createWorktree(
+        let optimisticId = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "symlink-branch",

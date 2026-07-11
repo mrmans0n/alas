@@ -31,19 +31,22 @@ struct SSHCommand: Equatable {
 
     /// Remote-side script that runs `command` in `cwd`.
     ///
-    /// `exec "$SHELL" -l -c` forces a login shell: sshd runs remote
-    /// commands through a non-login shell whose PATH misses Homebrew
-    /// (macOS remotes) and per-user additions (Linux), so `git`/`rg`
-    /// would otherwise be "command not found".
+    /// The top-level string is parsed by the account's login shell before
+    /// it reaches our script. Keep that layer to a simple `/bin/sh` launch
+    /// so users with fish/csh login shells can still run the POSIX snippets
+    /// generated throughout the remote stack.
     static func remoteScript(cwd: String, command: String) -> String {
-        "cd -- \(shellQuote(cwd)) && \(remoteScript(command: command))"
+        remoteScript(command: "cd \(shellQuote(cwd)) && \(command)")
     }
 
     /// Remote-side script without a working-directory change (probes that
     /// must not assume `cwd` exists, e.g. repo validation via `git -C`).
     static func remoteScript(command: String) -> String {
-        "exec \"$SHELL\" -l -c \(shellQuote(command))"
+        "/bin/sh -c \(shellQuote(remotePathPrelude + command))"
     }
+
+    private static let remotePathPrelude =
+        "PATH=\"$HOME/.alas/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; export PATH; "
 
     /// Argv after `SSHCommand.executable`. The script rides as the final
     /// argument; sshd hands it to the remote shell as a single string.

@@ -273,12 +273,26 @@ private struct ACPToolCallAssetView: View {
         case .image:
             if asset.canLoadImage(trustedRoot: trustedImageRoot) {
                 cachedImageThumbnail
+            } else if let remoteImage = remoteImageLocation {
+                RemoteToolCallAssetImage(
+                    host: remoteImage.host,
+                    worktreeRoot: remoteImage.worktreeRoot,
+                    path: remoteImage.path,
+                    asset: asset
+                )
             } else {
                 compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
             }
         case .resource:
             if asset.looksLikeImage, asset.canLoadImage(trustedRoot: trustedImageRoot) {
                 cachedImageThumbnail
+            } else if asset.looksLikeImage, let remoteImage = remoteImageLocation {
+                RemoteToolCallAssetImage(
+                    host: remoteImage.host,
+                    worktreeRoot: remoteImage.worktreeRoot,
+                    path: remoteImage.path,
+                    asset: asset
+                )
             } else {
                 compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
             }
@@ -298,6 +312,18 @@ private struct ACPToolCallAssetView: View {
         } failure: {
             compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
         }
+    }
+
+    private var remoteImageLocation: (host: String, worktreeRoot: String, path: String)? {
+        guard let trustedImageRoot, trustedImageRoot.isRemoteAlasPath,
+              let host = RemoteHostRegistry.shared.host(forPath: trustedImageRoot.path),
+              let uri = asset.uri,
+              let path = ACPToolCallCard.trustedRemotePath(
+                from: uri,
+                trustedRoot: trustedImageRoot
+              )
+        else { return nil }
+        return (host, trustedImageRoot.standardizedFileURL.path, path)
     }
 
     private func imageThumbnail(_ image: NSImage) -> some View {
@@ -354,6 +380,99 @@ private struct ACPToolCallAssetView: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line-soft"), lineWidth: 0.5))
         .help(asset.displayText)
+    }
+}
+
+private struct RemoteToolCallAssetImage: View {
+    let host: String
+    let worktreeRoot: String
+    let path: String
+    let asset: ACPMessage.ToolCallAsset
+    @State private var image: NSImage?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Group {
+            if let image {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(theme.color("bg-1").opacity(0.7))
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(6)
+                }
+                .frame(width: 160, height: 120)
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+            } else {
+                placeholder
+            }
+        }
+        .help(asset.displayText)
+        .task(id: "\(host)\u{0}\(path)") {
+            image = nil
+            guard (try? await ACPRemoteFileServer(host: host, worktreeRoot: worktreeRoot)
+                .verifyRemoteContainment(path: path)) != nil
+            else { return }
+            guard let data = await RemoteImageCache.shared.imageData(host: host, path: path),
+                  !Task.isCancelled
+            else { return }
+            image = NSImage(data: data)
+        }
+    }
+
+    private var placeholder: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "photo")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 18, height: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.displayTitle)
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let detail = asset.displayDetail {
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .background(theme.color("bg-1").opacity(0.7))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line-soft"), lineWidth: 0.5))
+    }
+}
+
+extension ACPToolCallCard {
+    /// Resolves a remote tool asset under its worktree using the same lexical
+    /// containment rule as ACP remote file serving. Remote symlinks are not
+    /// resolved here because doing so would require an SSH round trip.
+    static func trustedRemotePath(from value: String, trustedRoot: URL) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let candidate: String
+        if let url = URL(string: trimmed), let scheme = url.scheme {
+            guard scheme.lowercased() == "file" else { return nil }
+            candidate = url.path
+        } else if trimmed.hasPrefix("/") {
+            candidate = trimmed
+        } else {
+            candidate = trustedRoot.path + "/" + trimmed
+        }
+
+        let root = trustedRoot.standardizedFileURL.path
+        return try? ACPRemoteFileServer(host: "", worktreeRoot: root)
+            .lexicallyResolveInsideWorktree(path: candidate)
     }
 }
 

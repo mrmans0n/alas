@@ -65,6 +65,47 @@ struct ProjectsManagerTests {
         #expect(trees.first?.branch == "main")
     }
 
+    @Test func remoteRegistrationReconcileUnregistersRemovedWorktreeRoots() {
+        let project = ProjectConfig(
+            id: "remote-project",
+            name: "remote",
+            path: "/srv/remote",
+            color: "#5fb7c4",
+            addedAt: Date(),
+            host: "devbox"
+        )
+        let removed = Worktree(
+            id: "removed",
+            projectId: project.id,
+            name: "removed",
+            branch: "main",
+            path: URL(fileURLWithPath: "/srv/remote-removed"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        let live = Worktree(
+            id: "live",
+            projectId: project.id,
+            name: "live",
+            branch: "main",
+            path: URL(fileURLWithPath: "/srv/remote-live"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        defer {
+            RemoteHostRegistry.shared.unregister(root: project.path)
+            RemoteHostRegistry.shared.unregister(root: removed.path.path)
+            RemoteHostRegistry.shared.unregister(root: live.path.path)
+        }
+        let mgr = ProjectsManager(persistedProjects: [project])
+        RemoteHostRegistry.shared.register(root: removed.path.path, host: "devbox")
+
+        mgr.reconcileRemoteHostRegistrations(project: project, previous: [removed], reconciled: [live])
+
+        #expect(RemoteHostRegistry.shared.host(forPath: removed.path.path) == nil)
+        #expect(RemoteHostRegistry.shared.host(forPath: live.path.path) == "devbox")
+    }
+
     @Test func removeProjectStripsItAndItsWorktrees() async throws {
         let repo = try await makeRepo(name: "gamma")
         defer { try? FileManager.default.removeItem(at: repo) }

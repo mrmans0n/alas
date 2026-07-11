@@ -36,7 +36,9 @@ struct WorktreeService {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
         var trees = Self.parsePorcelain(result.stdout, projectId: projectId)
-        if repoPath.isRemoteAlasPath { trees = await Self.fillingRemoteLastActivity(trees) }
+        if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+            trees = await Self.fillingRemoteLastActivity(trees, host: host)
+        }
         return trees
     }
 
@@ -120,11 +122,21 @@ struct WorktreeService {
         TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)).map(Date.init(timeIntervalSince1970:))
     }
 
-    private static func fillingRemoteLastActivity(_ trees: [Worktree]) async -> [Worktree] {
+    private static func fillingRemoteLastActivity(_ trees: [Worktree], host: String) async -> [Worktree] {
         await withTaskGroup(of: (Int, Date?).self) { group in
             for (index, tree) in trees.enumerated() {
                 group.addTask {
-                    let result = try? await Process.git(["log", "-1", "--format=%ct", "HEAD"], cwd: tree.path)
+                    let invocation = GitInvocation.build(
+                        gitArgs: ["log", "-1", "--format=%ct", "HEAD"],
+                        cwd: tree.path,
+                        host: host
+                    )
+                    let result = try? await Process.run(
+                        invocation.executable,
+                        args: invocation.args,
+                        cwd: invocation.cwd,
+                        env: invocation.env
+                    )
                     return (index, result.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil })
                 }
             }

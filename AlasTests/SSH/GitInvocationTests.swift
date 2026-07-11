@@ -28,10 +28,11 @@ struct GitInvocationTests {
     @Test func remoteScriptSetsGitEnvOnRemoteSide() throws {
         let inv = GitInvocation.build(gitArgs: ["status"], cwd: URL(fileURLWithPath: "/srv/repo"), host: "devbox")
         let script = try #require(inv.args.last)
-        #expect(script.hasPrefix("cd -- '/srv/repo' && "))
+        #expect(script.hasPrefix("/bin/sh -c "))
+        #expect(script.contains("cd '\\''/srv/repo'\\'' && "))
         #expect(script.contains("GIT_OPTIONAL_LOCKS=0"))
         #expect(script.contains("LC_ALL=C"))
-        #expect(script.contains("git 'status'"))
+        #expect(script.contains("git '\\''status'\\''"))
     }
 
     @Test func remoteArgsComposeThroughBothQuotingLayers() throws {
@@ -48,6 +49,6 @@ struct GitInvocationTests {
     @Test func remoteWithoutCwdStillRunsRemotely() throws {
         let inv = GitInvocation.build(gitArgs: ["--version"], cwd: nil, host: "devbox")
         #expect(inv.executable == "/usr/bin/ssh")
-        #expect(!(try #require(inv.args.last)).contains("cd -- "))
+        #expect(!(try #require(inv.args.last)).contains("cd "))
     }
 }

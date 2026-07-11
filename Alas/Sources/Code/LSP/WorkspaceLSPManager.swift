@@ -210,7 +210,18 @@ final class WorkspaceLSPManager: DocumentFormatter {
         ownership: DocumentOwnership
     ) async -> LSPClient? {
         guard let entry = registry.entry(forLanguage: languageId) else { return nil }
-        let lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreeRoot.path)
+        let lspRoot: URL
+        if let remoteHost {
+            lspRoot = await Self.resolveRemoteLSPRoot(
+                fileURL: fileURL,
+                worktreeRoot: worktreeRoot,
+                markers: entry.rootMarkers,
+                host: remoteHost
+            )
+        } else {
+            lspRoot = Self.resolveLSPRoot(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: entry.rootMarkers)
+        }
         let key = Key(root: lspRoot.path, command: entry.command, args: entry.args, env: entry.env)
         let uri = fileURL.lspURI
         var shouldReplaceTemporaryText = false
@@ -261,20 +272,27 @@ final class WorkspaceLSPManager: DocumentFormatter {
         } else {
             addPendingOpenRef(key: key, uri: uri, ownership: ownership)
             let availability = makeAvailability()
-            switch await availability.statusRemediatingGatekeeper(for: entry) {
-            case .disabled, .notInstalled:
-                _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
-                return nil
-            case .blockedByGatekeeper(let realPath):
-                _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
-                NotificationCenter.default.post(
-                    name: .lspBlockedByGatekeeper,
-                    object: nil,
-                    userInfo: ["language": entry.language, "realPath": realPath]
-                )
-                return nil
-            case .available:
-                break
+            if let remoteHost {
+                guard await RemoteLSPLauncher.isAvailable(command: entry.command, host: remoteHost, env: entry.env) else {
+                    _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
+                    return nil
+                }
+            } else {
+                switch await availability.statusRemediatingGatekeeper(for: entry) {
+                case .disabled, .notInstalled:
+                    _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
+                    return nil
+                case .blockedByGatekeeper(let realPath):
+                    _ = consumePendingOpenRef(key: key, uri: uri, ownership: ownership)
+                    NotificationCenter.default.post(
+                        name: .lspBlockedByGatekeeper,
+                        object: nil,
+                        userInfo: ["language": entry.language, "realPath": realPath]
+                    )
+                    return nil
+                case .available:
+                    break
+                }
             }
             guard consumePendingOpenRef(key: key, uri: uri, ownership: ownership) else { return nil }
             if let existing = holders[key] {
@@ -305,7 +323,9 @@ final class WorkspaceLSPManager: DocumentFormatter {
                     args: entry.args,
                     env: entry.env,
                     language: entry.language,
-                    availability: availability
+                    availability: availability,
+                    remoteHost: remoteHost,
+                    rootPath: lspRoot.path
                 )
                 let newClient = makeClient(spawn.executable, spawn.arguments, spawn.environment, languageId, lspRoot.lspURI)
                 let task = Task<Bool, Never> {
@@ -1192,8 +1212,24 @@ final class WorkspaceLSPManager: DocumentFormatter {
         args: [String],
         env: [String: String],
         language: String,
-        availability: LanguageServerAvailability
+        availability: LanguageServerAvailability,
+        remoteHost: String? = nil,
+        rootPath: String? = nil
     ) -> Spawn {
+        if let remoteHost, let rootPath {
+            let invocation = RemoteLSPLauncher.invocation(
+                host: remoteHost,
+                rootPath: rootPath,
+                command: command,
+                args: args,
+                env: env
+            )
+            return Spawn(
+                executable: URL(fileURLWithPath: invocation.executable),
+                arguments: invocation.args,
+                environment: [:]
+            )
+        }
         let probe = LanguageServerConfig(
             language: language, extensions: [], command: command, args: args,
             env: env, rootMarkers: [], enabled: true
@@ -1244,6 +1280,41 @@ final class WorkspaceLSPManager: DocumentFormatter {
             dir = parent
         }
         return worktreeRoot
+    }
+
+    static func remoteLSPRootProbeCommand(fileURL: URL, worktreeRoot: URL, markers: [String]) -> String {
+        let markerAssignments = markers.enumerated().map { index, marker in
+            "m\(index)=\(SSHCommand.shellQuote(marker))"
+        }.joined(separator: "; ")
+        let markerChecks = markers.enumerated().map { index, marker -> String in
+            let markerVariable = "\"$m\(index)\""
+            if marker.contains("*") {
+                return "if find \"$dir\" -maxdepth 1 -name \(markerVariable) -print -quit | grep -q .; then printf '%s\\n' \"$dir\"; exit 0; fi"
+            }
+            return "if [ -e \"$dir/$m\(index)\" ]; then printf '%s\\n' \"$dir\"; exit 0; fi"
+        }.joined(separator: "; ")
+        let file = SSHCommand.shellQuote(fileURL.path)
+        let root = SSHCommand.shellQuote(worktreeRoot.path)
+        return """
+        file=\(file); root=\(root); \(markerAssignments); dir=$(dirname "$file"); case "$dir" in "$root"|"$root"/*) ;; *) printf '%s\\n' "$root"; exit 0;; esac; while :; do \(markerChecks); [ "$dir" = "$root" ] && break; parent=$(dirname "$dir"); [ "$parent" = "$dir" ] && break; dir="$parent"; done; printf '%s\\n' "$root"
+        """
+    }
+
+    static func resolveRemoteLSPRoot(fileURL: URL, worktreeRoot: URL, markers: [String], host: String) async -> URL {
+        guard !markers.isEmpty else { return worktreeRoot }
+        do {
+            let result = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: remoteLSPRootProbeCommand(fileURL: fileURL, worktreeRoot: worktreeRoot, markers: markers)
+            )
+            guard result.exitCode == 0 else { return worktreeRoot }
+            let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty else { return worktreeRoot }
+            return URL(fileURLWithPath: path)
+        } catch {
+            return worktreeRoot
+        }
     }
 
     private static func directory(_ dir: URL, contains markers: [String], fm: FileManager) -> Bool {

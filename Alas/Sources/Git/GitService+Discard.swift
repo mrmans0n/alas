@@ -6,15 +6,16 @@ extension GitService {
     /// e.g. staged-rename origins no longer in the index), and truly untracked.
     /// In-index and HEAD-only paths route through
     /// `git restore --staged --worktree --source=HEAD --` (one batched call);
-    /// untracked paths are removed via `FileManager`. On unborn HEAD where
-    /// `--source=HEAD` won't resolve, every in-index path is necessarily a
-    /// staged add, so we use `git rm -f --cached --` + `FileManager` removal.
+    /// untracked paths are removed from the backing filesystem. On unborn HEAD
+    /// where `--source=HEAD` won't resolve, every in-index path is necessarily a
+    /// staged add, so we use `git rm -f --cached --` + filesystem removal.
     /// Empty `files` is a no-op. Missing untracked paths (ENOENT) are
     /// silently tolerated — the user already saw what they wanted gone.
     func discardPaths(worktreePath: URL, files: [String]) async throws {
         guard !files.isEmpty else { return }
 
         let head = try await hasHead(worktreePath: worktreePath)
+        let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath.path)
 
         // Partition by index presence. ls-files --error-unmatch exits 0 iff
         // the path is tracked in the index (includes staged adds and renames).
@@ -71,13 +72,7 @@ extension GitService {
                 )
                 try Self.assertSuccess(rm, op: "discard")
                 for path in indexTracked {
-                    let url = worktreePath.appendingPathComponent(path)
-                    do {
-                        try FileManager.default.removeItem(at: url)
-                    } catch CocoaError.fileNoSuchFile {
-                        continue
-                    }
-                    // any other error propagates
+                    try await removeUntrackedPath(worktreePath: worktreePath, path: path, remoteHost: remoteHost)
                 }
             }
         } else if !headOnlyPaths.isEmpty {
@@ -110,13 +105,27 @@ extension GitService {
 
         // Remove truly untracked files from disk.
         for path in trulyUntracked {
-            let url = worktreePath.appendingPathComponent(path)
+            try await removeUntrackedPath(worktreePath: worktreePath, path: path, remoteHost: remoteHost)
+        }
+    }
+
+    private func removeUntrackedPath(worktreePath: URL, path: String, remoteHost: String?) async throws {
+        let url = worktreePath.appendingPathComponent(path)
+        guard let remoteHost else {
             do {
                 try FileManager.default.removeItem(at: url)
             } catch CocoaError.fileNoSuchFile {
-                continue
+                return
             }
+            return
         }
+        let result = try await RemoteExec.run(
+            host: remoteHost,
+            cwd: nil,
+            command: RemoteFileOps.removeCommand(path: url.path),
+            timeout: 15
+        )
+        try Self.assertSuccess(result, op: "discard")
     }
 
     /// True iff `path` is a submodule registered in the index or HEAD.
@@ -140,19 +149,16 @@ extension GitService {
     }
 
     /// Apply a unified-diff patch in reverse against the worktree. Used by
-    /// per-hunk "Discard hunk" for tracked files. Writes the patch to a
-    /// temp file (git apply needs a real path, not stdin) and removes it
-    /// on completion. Throws if `git apply --reverse` exits non-zero —
+    /// per-hunk "Discard hunk" for tracked files. Pipes the patch over stdin
+    /// so the same path works for local and SSH-backed worktrees. Throws if
+    /// `git apply --reverse` exits non-zero —
     /// typically because the patch context no longer matches the working
     /// copy (e.g. the user already discarded it elsewhere).
     func applyPatchReverse(worktreePath: URL, patch: String) async throws {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("alas-discard-\(UUID().uuidString).patch")
-        try patch.write(to: tmp, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: tmp) }
         let result = try await Process.git(
-            ["apply", "--reverse", tmp.path],
-            cwd: worktreePath
+            ["apply", "--reverse", "-"],
+            cwd: worktreePath,
+            stdin: patch
         )
         try Self.assertSuccess(result, op: "applyPatchReverse")
     }

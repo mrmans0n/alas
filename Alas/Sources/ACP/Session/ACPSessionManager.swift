@@ -51,6 +51,7 @@ final class ACPSessionManager: ObservableObject {
     private var draftFlushHandoffSequence: UInt64 = 0
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
+    private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     #if DEBUG
     /// Number of attached runners. Public-but-namespaced read accessor for
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
@@ -723,6 +724,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func closeSession(id: ACPSession.ID) {
+        autoReconnectTasks.removeValue(forKey: id)?.cancel()
         // Flush any pending draft write before dropping the in-memory
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
@@ -741,6 +743,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deleteSession(id: ACPSession.ID) {
+        autoReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
@@ -1253,7 +1256,7 @@ final class ACPSessionManager: ObservableObject {
         }
 
         let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
-        let launchSpec = await resolvedLaunchSpec(for: spec)
+        let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
         let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
             let initialized = try await connection.initialize()
@@ -1626,6 +1629,7 @@ extension ACPSessionManager {
             await runner.flushPersistence()
             await runner.connection.shutdown()
         }
+        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         if let session = sessions[sessionId] {
             session.agentState = .idle
@@ -1954,7 +1958,7 @@ extension ACPSessionManager {
         }
         let setup = await evaluateSetup(for: spec)
         guard case .ready = setup else {
-            session.setupState = .needsSetup(reason: setup.reasonText)
+            session.setupState = setup.sessionSetupState
             session.agentState = .failed(setup.reasonText)
             await releaseWriterLease(sessionId: sessionId)
             return
@@ -1967,7 +1971,7 @@ extension ACPSessionManager {
         let connection: ACPConnection
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let launchSpec = await resolvedLaunchSpec(for: spec)
+            let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
             connection = try connectionFactory(launchSpec, host, worktreePath)
         } catch {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
@@ -2098,6 +2102,11 @@ extension ACPSessionManager {
                                           leaseFenceProvider: { [weak self] in
                                               self?.leaseFence(sessionId: sessionId)
                                           })
+            runner.onUnexpectedDisconnect = { [weak self] in
+                Task { @MainActor in
+                    self?.scheduleAutoReconnect(sessionId: sessionId)
+                }
+            }
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }
@@ -2341,6 +2350,45 @@ extension ACPSessionManager {
         }
     }
 
+    /// Remote SSH channel drops are commonly transient. Reuse the regular
+    /// reattach path so restoration and queued-prompt handling stay identical.
+    func scheduleAutoReconnect(sessionId: ACPSession.ID) {
+        guard sessions[sessionId] != nil,
+              RemoteHostRegistry.shared.host(forPath: worktreePath) != nil
+        else { return }
+
+        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        autoReconnectTasks[sessionId] = Task { @MainActor [weak self] in
+            defer {
+                self?.autoReconnectTasks.removeValue(forKey: sessionId)
+                self?.sessions[sessionId]?.autoReconnecting = false
+            }
+            self?.sessions[sessionId]?.autoReconnecting = true
+            var attempt = 0
+            while let delay = ACPReconnectPolicy.delay(forAttempt: attempt), !Task.isCancelled {
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled,
+                      let session = self.sessions[sessionId]
+                else { return }
+                switch session.agentState {
+                case .ready:
+                    return
+                case .disconnected, .failed:
+                    break
+                case .idle, .spawning:
+                    continue
+                }
+                if let host = RemoteHostRegistry.shared.host(forPath: self.worktreePath),
+                   RemoteHostStatusStore.shared.isOffline(host) {
+                    continue
+                }
+                await self.reattach(to: sessionId)
+                if self.sessions[sessionId]?.agentState == .ready { return }
+            }
+        }
+    }
+
     func transcriptContextPrompt(for session: ACPSession, agentName: String?) -> String? {
         guard session.hasConversationTranscript else { return nil }
         let markdown = ACPTranscriptMarkdown.document(
@@ -2475,17 +2523,25 @@ extension ACPSessionManager {
     /// Swap `spec.command` for the verified absolute launch path when one can
     /// be resolved (npm-backed adapters); otherwise return `spec` unchanged so
     /// launch falls back to PATH-based `/usr/bin/env <command>`.
-    private func resolvedLaunchSpec(for spec: ACPLaunchSpec) async -> ACPLaunchSpec {
-        guard RemoteHostRegistry.shared.host(forPath: worktreePath) == nil else {
-            return spec
+    private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async -> ACPLaunchSpec {
+        if let host {
+            guard let command = ACPRemoteLaunch.launchPathProbeCommand(for: spec),
+                  let probe = try? await RemoteExec.run(host: host, cwd: nil, command: command),
+                  probe.exitCode == 0
+            else {
+                return spec
+            }
+            let path = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return path.isEmpty ? spec : spec.overridingCommand(path)
+        } else {
+            let env = ProcessInfo.processInfo.environment
+            let resolver = ACPLaunchPathResolver(
+                env: env,
+                additionalPathDirectories: AgentPath.wellKnownDirectories,
+                npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
+            guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
+            return spec.overridingCommand(path)
         }
-        let env = ProcessInfo.processInfo.environment
-        let resolver = ACPLaunchPathResolver(
-            env: env,
-            additionalPathDirectories: AgentPath.wellKnownDirectories,
-            npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
-        guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
-        return spec.overridingCommand(path)
     }
 
     private func evaluateSetup(for spec: ACPLaunchSpec) async -> ACPSetupResult {
@@ -2497,10 +2553,10 @@ extension ACPSessionManager {
             let probe = try await RemoteExec.run(
                 host: host,
                 cwd: nil,
-                command: ACPRemoteLaunch.setupProbeCommand(command: spec.command)
+                command: ACPRemoteLaunch.setupProbeCommand(check: spec.setupCheck)
             )
             guard probe.exitCode == 0 else {
-                return .missing(reason: "\(spec.command) not found on \(host)")
+                return .error(message: "Required agent setup for \(spec.agentID) is missing on \(host)")
             }
             return .ready
         } catch {
@@ -2579,6 +2635,14 @@ private extension ACPSetupResult {
         case .ready: return ""
         case .missing(let r): return r
         case .error(let m): return m
+        }
+    }
+
+    var sessionSetupState: ACPSession.SetupState {
+        switch self {
+        case .ready: return .ready
+        case .missing(let reason): return .needsSetup(reason: reason)
+        case .error(let message): return .setupError(reason: message)
         }
     }
 }

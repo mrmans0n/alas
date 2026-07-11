@@ -380,6 +380,39 @@ struct AgentTerminalLaunchTests {
         #expect(FileManager.default.fileExists(atPath: hookURL.path))
     }
 
+    @Test func launchingCopilotForRemoteWorktreeSkipsLocalHookInstall() throws {
+        var project = project(mode: .useGlobal, useBypass: false)
+        project.path = "/srv/project"
+        project.host = "devbox"
+        let worktree = Worktree(
+            id: "wt",
+            projectId: project.id,
+            name: "main",
+            branch: "main",
+            path: URL(fileURLWithPath: "/srv/project"),
+            status: .clean,
+            lastActivity: Date()
+        )
+        var openerCalled = false
+        let state = AppState(
+            store: MemoryStore(),
+            terminalSessionOpener: { _, _, _, _, _, _, _, _, _ in
+                openerCalled = true
+                return AppState.OpenedTerminalSession(id: "session-1", foregroundPid: { nil })
+            }
+        )
+        state.projectsManager = ProjectsManager(persistedProjects: [project])
+        state.agentRegistry = AgentRegistry(
+            builtinState: [:],
+            customs: [],
+            installedIds: ["copilot"]
+        )
+
+        _ = try state.openAgentTerminalTab(for: worktree, agentId: "copilot")
+
+        #expect(openerCalled)
+    }
+
     @Test func launchingNonCopilotDoesNotCreateCopilotHook() throws {
         let (dir, cleanup) = tmpDir()
         defer { cleanup() }

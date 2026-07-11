@@ -46,6 +46,10 @@ struct RemoteHostCapabilitiesTests {
         #expect(!RemoteHostCapabilities.probeCommand.contains("--"))
     }
 
+    @Test func probeCommandChecksInstalledZmxFallback() {
+        #expect(RemoteHostCapabilities.probeCommand.contains("[ -x \"$HOME/.alas/bin/zmx\" ]"))
+    }
+
     @Test func parsesArchAndNormalizesArm64() {
         #expect(RemoteHostCapabilities.parse("Linux\narch=x86_64").arch == "x86_64")
         #expect(RemoteHostCapabilities.parse("Darwin\narch=arm64").arch == "aarch64")

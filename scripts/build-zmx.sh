@@ -73,13 +73,18 @@ linux_zmx_output() {
 }
 
 build_linux_binaries() {
-    local linux_target linux_arch linux_prefix linux_output
+    local linux_target linux_arch linux_prefix linux_output linux_marker linux_fingerprint
     for linux_target in x86_64-linux-musl aarch64-linux-musl; do
         linux_arch="${linux_target%%-*}"
         linux_prefix="${srcroot}/.build/zmx/linux-${linux_arch}/install"
         linux_output="${linux_prefix}/bin/zmx"
-        [ -x "${linux_output}" ] && continue
+        linux_marker="${srcroot}/.build/zmx/linux-${linux_arch}/fingerprint"
+        linux_fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "${zmx_sha}" "${zmx_dirt}" "${linux_target}" "${zig_bin}" "${zig_id}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+        if [ -x "${linux_output}" ] && [ -f "${linux_marker}" ] && [ "$(cat "${linux_marker}")" = "${linux_fingerprint}" ]; then
+            continue
+        fi
 
+        rm -f "${linux_output}"
         mkdir -p "${linux_prefix}"
         (
             cd "${zmx_src}"
@@ -91,6 +96,8 @@ build_linux_binaries() {
                 --global-cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache"
         )
         [ -x "${linux_output}" ] || die "Linux zmx build produced no binary: ${linux_output}"
+        printf '%s\n' "${linux_fingerprint}" > "${linux_marker}.tmp"
+        mv "${linux_marker}.tmp" "${linux_marker}"
     done
 }
 

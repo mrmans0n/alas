@@ -162,6 +162,34 @@ struct AppStateCleanupTests {
         #expect(state.tabs.tabs(forWorktree: treesB[0].id).count == 1)
     }
 
+    @Test func topologyRefreshLoadsPersistedTabsForNewWorktrees() async throws {
+        let repo = try await makeRepo(name: "topology-load-tabs")
+        let linked = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-cleanup-linked-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.removeItem(at: linked)
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: Worktree.makeId(path: linked)))
+        }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "topology-load-tabs", color: "#5fb7c4"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        #expect(state.projectsManager.worktrees(projectId: project.id).count == 1)
+
+        _ = try await Process.git(["worktree", "add", "-q", "-b", "linked-tabs", linked.path, "HEAD"], cwd: repo)
+        let linkedId = Worktree.makeId(path: linked)
+        let seededTabs = TabsManager()
+        seededTabs.appendTerminal(worktreeId: linkedId, title: "persisted", sessionId: "s1")
+
+        await state.refreshProjectTopology(projectId: project.id)
+
+        #expect(state.projectsManager.worktrees(projectId: project.id).contains { $0.id == linkedId })
+        #expect(state.tabs.tabs(forWorktree: linkedId).map(\.title) == ["persisted"])
+    }
+
     @Test func createWorktreeInsertsOptimisticRowImmediately() async throws {
         let repo = try await makeRepo(name: "create-opt")
         defer { try? FileManager.default.removeItem(at: repo) }
@@ -170,7 +198,7 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-opt")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "opt-b",
@@ -197,7 +225,7 @@ struct AppStateCleanupTests {
         state.selectedWorktreeId = existing.id
 
         let dest = repo.appendingPathComponent("wt-select-opt")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "select-opt-b",
@@ -225,7 +253,7 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         let existing = try #require(state.projectsManager.worktrees(projectId: project.id).first)
 
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "existing-path",
@@ -247,7 +275,7 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-fail")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "missing-base",
             branch: "fail-b",
@@ -277,7 +305,7 @@ struct AppStateCleanupTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-retry")
-        let failedId = state.createWorktree(
+        let failedId = await state.createWorktree(
             projectId: project.id,
             base: "missing-base",
             branch: "retry-b",
@@ -290,7 +318,7 @@ struct AppStateCleanupTests {
             return false
         }
 
-        let retryId = state.createWorktree(
+        let retryId = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "retry-b",
@@ -646,6 +674,26 @@ struct AppStateCleanupTests {
         #expect(state.projects.map(\.id) == [project.id])
     }
 
+    @Test func clearProjectsWithoutWorktreesKeepsRemoteProjectWhenRefreshFails() async throws {
+        let project = ProjectConfig(
+            id: UUID().uuidString,
+            name: "remote",
+            path: "/srv/offline-repo-\(UUID().uuidString)",
+            color: "#5fb7c4",
+            addedAt: Date(),
+            host: "localhost"
+        )
+        defer { RemoteHostRegistry.shared.unregister(root: project.path) }
+        let state = AppState(
+            store: MemoryStore(projectsFile: ProjectsFile(projects: [project]))
+        )
+
+        let removed = await state.clearProjectsWithoutWorktrees()
+
+        #expect(removed == 0)
+        #expect(state.projects.map(\.id) == [project.id])
+    }
+
     @Test func removeProjectResetsSelectionWhenSelectedWorktreeIsRemoved() async throws {
         let repoA = try await makeRepo(name: "remove-sel-a")
         let repoB = try await makeRepo(name: "remove-sel-b")
@@ -846,7 +894,7 @@ struct AppStateCleanupTests {
 
         let destination = repo.deletingLastPathComponent()
             .appendingPathComponent("race-wt-\(UUID().uuidString)")
-        _ = state.createWorktree(
+        _ = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "race/wt",

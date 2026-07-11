@@ -641,16 +641,18 @@ extension GitService {
                 if let result = try? await RemoteExec.run(host: host, cwd: nil, command: "ls -1Ap " + SSHCommand.shellQuote(directory)), result.exitCode == 0 {
                     for entry in RemoteFileStats.parseLsEntries(result.stdout) where entry.name != ".git" {
                         let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
-                        if entry.isDirectory { directories.insert(fullPath) } else if !paths.contains(fullPath) { paths.append(fullPath) }
+                        if entry.isDirectory { directories.insert(fullPath) }
+                        if !paths.contains(fullPath) { paths.append(fullPath) }
                     }
                 }
             }
+            let lazyDirectories = path.isEmpty ? directories : directories.subtracting([path])
             let built = FileTreeBuilder.build(
                 paths: paths,
                 badges: [:],
                 visibility: [:],
                 directories: directories,
-                lazyDirectories: directories,
+                lazyDirectories: lazyDirectories,
                 submodules: (try? await submodulePaths(worktreePath: worktreePath)) ?? []
             )
             return path.isEmpty ? built : findFileTreeNode(path: path, in: built)?.children ?? []

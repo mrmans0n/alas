@@ -386,13 +386,9 @@ struct DiffTabView: View {
                 tracked: tracked,
                 untrackedMode: untrackedMode
             )
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("alas-stage-\(UUID().uuidString).patch")
-            defer { try? FileManager.default.removeItem(at: tmp) }
             var didFail = false
             do {
-                try patch.write(to: tmp, atomically: true, encoding: .utf8)
-                let result = try await Process.git(["apply", "--cached", tmp.path], cwd: worktreePath)
+                let result = try await Process.git(["apply", "--cached", "-"], cwd: worktreePath, stdin: patch)
                 if result.exitCode != 0 {
                     self.error = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
                     didFail = true

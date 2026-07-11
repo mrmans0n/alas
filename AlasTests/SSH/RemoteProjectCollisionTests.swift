@@ -31,6 +31,40 @@ struct RemoteProjectCollisionTests {
         }
     }
 
+    @Test func localRootEqualToRemoteWorktreeRootIsRejected() {
+        let existing = project(path: "/srv/repo", host: "devbox")
+        #expect(throws: (any Error).self) {
+            try ProjectsManager.ensureNoPathCollision(
+                newRoot: "/srv/linked",
+                newHost: nil,
+                existing: [existing],
+                existingWorktreeRootsByProject: [existing.id: ["/srv/linked"]]
+            )
+        }
+    }
+
+    @Test func differentHostRootNestedInRemoteWorktreeRootIsRejected() {
+        let existing = project(path: "/srv/repo", host: "devbox")
+        #expect(throws: (any Error).self) {
+            try ProjectsManager.ensureNoPathCollision(
+                newRoot: "/srv/linked/sub",
+                newHost: "otherbox",
+                existing: [existing],
+                existingWorktreeRootsByProject: [existing.id: ["/srv/linked"]]
+            )
+        }
+    }
+
+    @Test func sameHostRootMayOverlapRemoteWorktreeRoot() throws {
+        let existing = project(path: "/srv/repo", host: "devbox")
+        try ProjectsManager.ensureNoPathCollision(
+            newRoot: "/srv/linked/sub",
+            newHost: "devbox",
+            existing: [existing],
+            existingWorktreeRootsByProject: [existing.id: ["/srv/linked"]]
+        )
+    }
+
     @Test func disjointRootsAreAccepted() throws {
         let existing = [project(path: "/srv/repo", host: "devbox")]
         try ProjectsManager.ensureNoPathCollision(newRoot: "/srv/other", newHost: nil, existing: existing)

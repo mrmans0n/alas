@@ -68,7 +68,9 @@ struct CenterPaneView: View {
                 onNewTerminal: openTerminal,
                 enabledAgents: state.agentRegistry.enabled(),
                 onLaunchAgent: { agentId in
-                    _ = try? state.openAgentTerminalTab(for: worktree, agentId: agentId)
+                    Task { @MainActor in
+                        _ = try? await state.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agentId)
+                    }
                 },
                 onLaunchACPSession: { agentId in
                     state.openNewACPSession(agentID: agentId)
@@ -314,6 +316,8 @@ struct CenterPaneView: View {
     }
 
     private func openTerminal() {
-        _ = try? state.openTerminalTab(for: worktree)
+        Task { @MainActor in
+            _ = try? await state.openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree)
+        }
     }
 }
