@@ -27,8 +27,14 @@ struct ACPTabView: View {
             // and no other UI surface still retains the same id, the manager
             // evicts it from `sessions` so its transcript + markdown caches
             // can be reclaimed. Reopening rehydrates from SQLite.
-            .onAppear { manager.retainSession(id: sessionId) }
-            .onDisappear { manager.releaseSession(id: sessionId) }
+            .onAppear {
+                manager.retainSession(id: sessionId)
+                manager.markSessionVisible(id: sessionId)
+            }
+            .onDisappear {
+                manager.unmarkSessionVisible(id: sessionId)
+                manager.releaseSession(id: sessionId)
+            }
         } else {
             VStack {
                 Spacer()
