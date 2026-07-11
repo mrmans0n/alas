@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Observation
 import UserNotifications
 @testable import Alas
 
@@ -262,6 +263,38 @@ struct HarnessServiceTests {
         service.recordHarnessDetection(sessionId: "s2", kind: nil)
         #expect(service.activityBySession["s2"]?.state == .awaitingInput)
         #expect(service.activeHarnessBySession["s2"] == nil)
+    }
+
+    @Test func recordHarnessDetection_skipsUnchangedActiveHarnessMutation() {
+        let (service, _) = makeService()
+        service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
+
+        var invalidations = 0
+        _ = withObservationTracking {
+            _ = service.activeHarnessBySession
+        } onChange: {
+            invalidations += 1
+        }
+
+        service.recordHarnessDetection(sessionId: "s1", kind: .claudeCode)
+        #expect(invalidations == 0)
+
+        service.recordHarnessDetection(sessionId: "s1", kind: nil)
+        #expect(invalidations == 1)
+    }
+
+    @Test func recordHarnessDetection_nilSkipsAbsentActiveHarnessMutation() {
+        let (service, _) = makeService()
+
+        var invalidations = 0
+        _ = withObservationTracking {
+            _ = service.activeHarnessBySession
+        } onChange: {
+            invalidations += 1
+        }
+
+        service.recordHarnessDetection(sessionId: "missing", kind: nil)
+        #expect(invalidations == 0)
     }
 
     // MARK: - Cursor idle debounce

@@ -9,28 +9,33 @@ struct AgentHookInstallNudgeBanner: View {
 
     @Environment(\.theme) var theme
     @State private var installStatus: String? = nil
+    @State private var resolvedNudgeKey: HookInstallNudgeKey?
+    @State private var resolvedNudge: HookInstallNudge?
 
-    private var nudge: HookInstallNudge? {
-        // Avoid re-evaluating installState() continuously during animation
-        // by memoizing around `terminalTab` identity changes.
+    private var nudgeKey: HookInstallNudgeKey {
         let sessionIds = terminalTab.root.leaves().map(\.sessionId)
         let detected = sessionIds.compactMap { appState.harness.activeHarnessBySession[$0] }
         var seen = Set<HarnessKind>()
         let uniqueDetected = detected.filter { seen.insert($0).inserted }
-        guard !uniqueDetected.isEmpty else { return nil }
-        let registry = AgentInstallerRegistry()
-        return HookInstallNudgeResolver.resolve(
+        return HookInstallNudgeKey(
             detectedHarnesses: uniqueDetected,
-            dismissed: appState.config.harness.dismissedHookInstallNudges,
-            installState: { agent in registry.installer(for: agent)?.installState() ?? .notInstalled }
+            dismissed: appState.config.harness.dismissedHookInstallNudges
         )
     }
 
     var body: some View {
+        let currentNudgeKey = nudgeKey
         Group {
-            if let nudge = nudge {
+            if resolvedNudgeKey == currentNudgeKey, let nudge = resolvedNudge {
                 bannerRow(nudge: nudge)
             }
+        }
+        .task(id: currentNudgeKey) {
+            await refreshNudge(for: currentNudgeKey)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .agentHookInstallStateDidChange)) { _ in
+            let key = nudgeKey
+            Task { await refreshNudge(for: key) }
         }
     }
 
@@ -74,7 +79,11 @@ struct AgentHookInstallNudgeBanner: View {
                 try await installer.install()
                 await MainActor.run {
                     installStatus = nil
+                    resolvedNudge = nil
+                    NotificationCenter.default.post(name: .agentHookInstallStateDidChange, object: nil)
                 }
+                let key = await MainActor.run { nudgeKey }
+                await refreshNudge(for: key)
             } catch {
                 await MainActor.run {
                     installStatus = "Error: \(error.localizedDescription)"
@@ -89,6 +98,32 @@ struct AgentHookInstallNudgeBanner: View {
             dismissed.append(agent.rawValue)
             appState.config.harness.dismissedHookInstallNudges = dismissed
             appState.saveConfig()
+            resolvedNudge = nil
         }
     }
+
+    @MainActor
+    private func refreshNudge(for key: HookInstallNudgeKey) async {
+        guard !key.detectedHarnesses.isEmpty else {
+            resolvedNudgeKey = key
+            resolvedNudge = nil
+            return
+        }
+        let nudge = await Task.detached(priority: .userInitiated) {
+            let registry = AgentInstallerRegistry()
+            return HookInstallNudgeResolver.resolve(
+                detectedHarnesses: key.detectedHarnesses,
+                dismissed: key.dismissed,
+                installState: { agent in registry.installer(for: agent)?.installState() ?? .notInstalled }
+            )
+        }.value
+        guard !Task.isCancelled, key == nudgeKey else { return }
+        resolvedNudgeKey = key
+        resolvedNudge = nudge
+    }
+}
+
+private struct HookInstallNudgeKey: Hashable, Sendable {
+    let detectedHarnesses: [HarnessKind]
+    let dismissed: [String]
 }

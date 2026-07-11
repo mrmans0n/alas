@@ -179,6 +179,7 @@ struct TerminalPane: View {
             do {
                 try await installer.install()
                 refreshInstallStates()
+                NotificationCenter.default.post(name: .agentHookInstallStateDidChange, object: nil)
                 hookStatus[agent] = "Installed"
             } catch {
                 refreshInstallStates()
@@ -192,6 +193,7 @@ struct TerminalPane: View {
         do {
             try installer.uninstall()
             refreshInstallStates()
+            NotificationCenter.default.post(name: .agentHookInstallStateDidChange, object: nil)
             hookStatus[agent] = "Uninstalled"
         } catch {
             refreshInstallStates()
