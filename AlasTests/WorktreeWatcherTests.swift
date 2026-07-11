@@ -25,6 +25,12 @@ struct WorktreeWatcherTests {
         ) == false)
     }
 
+    @Test func gitFetchHeadSkipsRefresh() {
+        #expect(WorktreeWatcher.shouldRefresh(
+            forEventPaths: ["/Users/x/repo/.git/FETCH_HEAD"]
+        ) == false)
+    }
+
     @Test func linkedWorktreeIndexLockSkipsRefresh() {
         #expect(WorktreeWatcher.shouldRefresh(
             forEventPaths: ["/Users/x/repo/.git/worktrees/feat-foo/index.lock"]

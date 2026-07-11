@@ -66,6 +66,20 @@ struct RightPaneStatePullTests {
         return (clone, remote)
     }
 
+    private func pushRemoteCommit(to remote: URL, fileName: String, message: String) async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-rpspull-push-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        _ = try await Process.git(["clone", "-q", remote.path, tmp.path], cwd: nil)
+        _ = try await Process.git(["config", "user.email", "x@e"], cwd: tmp)
+        _ = try await Process.git(["config", "user.name", "x"], cwd: tmp)
+        _ = try await Process.git(["config", "commit.gpgsign", "false"], cwd: tmp)
+        try "remote change\n".write(to: tmp.appendingPathComponent(fileName), atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", fileName], cwd: tmp)
+        _ = try await Process.git(["commit", "-q", "-m", message], cwd: tmp)
+        _ = try await Process.git(["push", "-q", "origin", "main"], cwd: tmp)
+    }
+
     /// Polls `condition` on the main actor up to ~5s, returning as soon as it
     /// holds. Avoids fixed sleeps that flake under load.
     private func wait(until condition: () -> Bool) async throws {
@@ -144,23 +158,39 @@ struct RightPaneStatePullTests {
             try? FileManager.default.removeItem(at: remote)
         }
         let state = RightPaneState(worktree: makeWorktree(at: clone, branch: "main"), baseBranch: "main")
-        // Simulate a very recent probe so the 30s throttle would skip fetches
-        // for both the upstream chip AND the base chip (which also resolves to
-        // origin/main here and would otherwise side-channel the fetch).
-        let recentDate = Date()
-        state.behindBase = GitService.BehindStatus(
-            ref: "origin/main", sha: "deadbeef", count: 0, probedAt: recentDate
-        )
-        state.behindUpstream = GitService.BehindStatus(
-            ref: "origin/main", sha: "deadbeef", count: 0, probedAt: recentDate
-        )
-
-        // Non-forced: throttle skips the fetch, so the stale ref still reads 0.
         await state.refreshSyncStatus()
-        #expect(state.behindUpstream?.count == 0)
-
-        // Forced: fetches now, sees the upstream commit → behind by 1.
-        await state.refreshSyncStatus(force: true)
         #expect(state.behindUpstream?.count == 1)
+
+        try await pushRemoteCommit(to: remote, fileName: "c.txt", message: "remote-2")
+
+        // Non-forced: throttle skips the fetch, so the stale ref still reads 1.
+        await state.refreshSyncStatus()
+        #expect(state.behindUpstream?.count == 1)
+
+        // Forced: fetches now, sees the upstream commit → behind by 2.
+        await state.refreshSyncStatus(force: true)
+        #expect(state.behindUpstream?.count == 2)
+    }
+
+    @Test func refreshThrottleSurvivesClearedBehindState() async throws {
+        let (clone, remote) = try await makeCloneBehindUpstream(conflicting: false)
+        defer {
+            try? FileManager.default.removeItem(at: clone)
+            try? FileManager.default.removeItem(at: remote)
+        }
+        let state = RightPaneState(worktree: makeWorktree(at: clone, branch: "main"), baseBranch: "main")
+
+        await state.refreshSyncStatus()
+        #expect(state.behindUpstream?.count == 1)
+
+        state.behindBase = nil
+        state.behindUpstream = nil
+        try await pushRemoteCommit(to: remote, fileName: "d.txt", message: "remote-2")
+
+        await state.refreshSyncStatus()
+        #expect(state.behindUpstream?.count == 1)
+
+        await state.refreshSyncStatus(force: true)
+        #expect(state.behindUpstream?.count == 2)
     }
 }

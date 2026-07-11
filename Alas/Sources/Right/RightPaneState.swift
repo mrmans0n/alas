@@ -20,6 +20,11 @@ struct ReviewLoopRemoteFingerprint: Equatable, Sendable {
     var remotes: [String]
 }
 
+private struct SyncFetchTarget: Hashable {
+    let remote: String
+    let branch: String
+}
+
 @Observable
 @MainActor
 final class RightPaneState {
@@ -63,6 +68,7 @@ final class RightPaneState {
     /// and disables re-entry. Only `pull()` mutates it.
     private(set) var pullInFlight: Bool = false
     private var fetchInFlight: Bool = false
+    private var lastSyncFetchAtByTarget: [SyncFetchTarget: Date] = [:]
     var fileTree: [FileTreeNode] = []
     var loading: Bool = false
     var openPaths: Set<String> = []   // expanded directories in the tree
@@ -1564,6 +1570,17 @@ final class RightPaneState {
     }
 
     @MainActor
+    private func shouldFetchSyncTarget(remote: String, branch: String, force: Bool) -> Bool {
+        let target = SyncFetchTarget(remote: remote, branch: branch)
+        let now = Date()
+        if force || now.timeIntervalSince(lastSyncFetchAtByTarget[target] ?? .distantPast) > 30 {
+            lastSyncFetchAtByTarget[target] = now
+            return true
+        }
+        return false
+    }
+
+    @MainActor
     private func refreshBehindBase(force: Bool = false) async {
         do {
             guard let resolved = try await git.resolveBaseRef(
@@ -1575,13 +1592,13 @@ final class RightPaneState {
                 return
             }
             if let remote = resolved.remote {
-                let last = behindBase?.probedAt ?? .distantPast
-                if force || Date().timeIntervalSince(last) > 30 {
+                let branch = resolved.fetchBranch ?? baseBranch
+                if shouldFetchSyncTarget(remote: remote, branch: branch, force: force) {
                     do {
                         try await git.fetchRef(
                             worktreePath: worktree.path,
                             remote: remote,
-                            branch: resolved.fetchBranch ?? baseBranch
+                            branch: branch
                         )
                     } catch {
                         logger.error("base fetch failed for \(self.worktree.path.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -1611,8 +1628,7 @@ final class RightPaneState {
             // Upstream ref looks like "origin/<branch>"; the local branch name
             // is what we fetch.
             let branchName = String(upstream.ref.dropFirst(upstream.remote.count + 1))
-            let last = behindUpstream?.probedAt ?? .distantPast
-            if force || Date().timeIntervalSince(last) > 30 {
+            if shouldFetchSyncTarget(remote: upstream.remote, branch: branchName, force: force) {
                 do {
                     try await git.fetchRef(
                         worktreePath: worktree.path,
