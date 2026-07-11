@@ -45,4 +45,14 @@ struct RemoteHostCapabilitiesTests {
         #expect(!RemoteHostCapabilities.probeCommand.contains("xargs"))
         #expect(!RemoteHostCapabilities.probeCommand.contains("--"))
     }
+
+    @Test func parsesArchAndNormalizesArm64() {
+        #expect(RemoteHostCapabilities.parse("Linux\narch=x86_64").arch == "x86_64")
+        #expect(RemoteHostCapabilities.parse("Darwin\narch=arm64").arch == "aarch64")
+        #expect(RemoteHostCapabilities.parse("Linux").arch == nil)
+    }
+
+    @Test func probeCommandEmitsArchLine() {
+        #expect(RemoteHostCapabilities.probeCommand.contains("echo \"arch=$(uname -m)\""))
+    }
 }

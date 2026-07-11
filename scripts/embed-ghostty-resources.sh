@@ -35,6 +35,17 @@ if [ -x "${zmx_source}" ]; then
     mkdir -p "${zmx_destination_dir}"
     rsync -a "${zmx_source}" "${zmx_destination}"
     chmod +x "${zmx_destination}"
+    for linux_arch in x86_64 aarch64; do
+        linux_source="${SRCROOT}/.build/zmx/linux-${linux_arch}/install/bin/zmx"
+        linux_destination_dir="${zmx_destination_dir}/linux-${linux_arch}"
+        if [ ! -x "${linux_source}" ]; then
+            echo "embed-ghostty-resources.sh: error: Linux zmx binary not found or not executable at ${linux_source}" >&2
+            exit 1
+        fi
+        mkdir -p "${linux_destination_dir}"
+        rsync -a "${linux_source}" "${linux_destination_dir}/zmx"
+        chmod +x "${linux_destination_dir}/zmx"
+    done
 elif [ "${ALAS_ZMX_OPTIONAL:-}" = "1" ]; then
     # Drop any previously bundled zmx so an incremental optional build does
     # not silently ship a stale helper despite warning that panes will not

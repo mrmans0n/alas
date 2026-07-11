@@ -48,6 +48,8 @@ final class AppState {
     private let terminalSessionOpener: TerminalSessionOpener?
     @ObservationIgnored
     private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
+    @ObservationIgnored
+    private var promptedRemoteZmxHosts: Set<String> = []
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
@@ -597,6 +599,21 @@ final class AppState {
             knownWorktreeIds: Set(worktreeIds),
             knownLeafIds: leafIds
         )
+
+        let remoteProjects = projects.filter { $0.host != nil }
+        for host in Set(remoteProjects.compactMap(\.host)) {
+            let hostWorktreeIds = Set(remoteProjects
+                .filter { $0.host == host }
+                .flatMap { projectsManager.worktrees(projectId: $0.id).map(\.id) })
+            guard !hostWorktreeIds.isEmpty else { continue }
+            Task {
+                await TerminalService.sweepRemoteOrphans(
+                    host: host,
+                    knownWorktreeIds: hostWorktreeIds,
+                    knownLeafIds: leafIds
+                )
+            }
+        }
     }
 
     var projects: [ProjectConfig] { projectsManager.projects }
@@ -1033,7 +1050,10 @@ final class AppState {
     }
 
     func agentStartupCommand(for agent: AgentDefinition, project: ProjectConfig) -> String {
-        var argv = [agent.resolvedBinary]
+        let binary = project.host == nil
+            ? agent.resolvedBinary
+            : URL(fileURLWithPath: agent.resolvedBinary).lastPathComponent
+        var argv = [binary]
         if let extra = agent.extraTerminalArgs, !extra.isEmpty {
             argv.append(contentsOf: extra)
         }
@@ -1714,6 +1734,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
+        offerRemoteZmxInstallIfNeeded(for: project)
         // Single identity for this pane: used with the worktree id to derive
         // the zmx session name, plus the SessionRegistry key, leaf id, persisted
         // sessionId (mirrored to id on encode), and ALAS_SESSION_ID. Generated
@@ -1760,6 +1781,53 @@ final class AppState {
         // `terminalSessionOpener` (test-only) generates its own id and we
         // honor it for backward-compat with existing tests.
         return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
+    }
+
+    private func offerRemoteZmxInstallIfNeeded(for project: ProjectConfig) {
+        guard config.terminal.keepSessionsAlive,
+              let host = project.host,
+              !promptedRemoteZmxHosts.contains(host),
+              !Set(UserDefaults.standard.stringArray(forKey: "remote.zmx.declinedHosts") ?? []).contains(host)
+        else { return }
+
+        promptedRemoteZmxHosts.insert(host)
+        Task { [weak self] in
+            guard let self,
+                  let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host),
+                  !capabilities.hasZmx,
+                  let resources = Bundle.main.resourceURL,
+                  RemoteZmxInstaller.bundledBinaryPath(
+                    os: capabilities.os,
+                    arch: capabilities.arch,
+                    resourceURL: resources
+                  ) != nil
+            else { return }
+
+            guard self.confirmPushZmx(host: host) else {
+                var declined = Set(UserDefaults.standard.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
+                declined.insert(host)
+                UserDefaults.standard.set(Array(declined).sorted(), forKey: "remote.zmx.declinedHosts")
+                return
+            }
+
+            if await RemoteZmxInstaller.install(
+                host: host,
+                capabilities: capabilities,
+                resourceURL: resources
+            ) {
+                RemoteHostCapabilityStore.shared.invalidate(host: host)
+            }
+        }
+    }
+
+    private func confirmPushZmx(host: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Enable persistent terminals on \(host)?"
+        alert.informativeText = "Alas can install its zmx helper to ~/.alas/bin on \(host) so terminal sessions survive disconnects and app restarts."
+        alert.addButton(withTitle: "Install zmx")
+        alert.addButton(withTitle: "Not Now")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - Pane splits

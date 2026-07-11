@@ -14,19 +14,23 @@ struct RemoteHostCapabilities: Equatable {
     let gitVersion: String?
     let hasRipgrep: Bool
     let hasZmx: Bool
+    /// Normalized machine architecture (`arm64` is represented as `aarch64`).
+    let arch: String?
 
     /// POSIX-portable probe; each line is independently parseable so a
     /// missing tool never shifts the others.
     static let probeCommand =
         "uname -s; git version 2>/dev/null; "
         + "command -v rg >/dev/null 2>&1 && echo rg=yes || echo rg=no; "
-        + "command -v zmx >/dev/null 2>&1 && echo zmx=yes || echo zmx=no"
+        + "command -v zmx >/dev/null 2>&1 && echo zmx=yes || echo zmx=no; "
+        + "echo \"arch=$(uname -m)\""
 
     static func parse(_ output: String) -> RemoteHostCapabilities {
         var os = OS.other
         var gitVersion: String?
         var hasRipgrep = false
         var hasZmx = false
+        var arch: String?
 
         for line in output.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) {
             switch line {
@@ -38,6 +42,10 @@ struct RemoteHostCapabilities: Equatable {
                 if line.hasPrefix("git version ") {
                     gitVersion = line.dropFirst("git version ".count)
                         .split(separator: " ").first.map(String.init)
+                } else if line.hasPrefix("arch=") {
+                    let value = String(line.dropFirst("arch=".count))
+                    guard !value.isEmpty else { continue }
+                    arch = value == "arm64" ? "aarch64" : value
                 }
             }
         }
@@ -46,7 +54,8 @@ struct RemoteHostCapabilities: Equatable {
             os: os,
             gitVersion: gitVersion,
             hasRipgrep: hasRipgrep,
-            hasZmx: hasZmx
+            hasZmx: hasZmx,
+            arch: arch
         )
     }
 }

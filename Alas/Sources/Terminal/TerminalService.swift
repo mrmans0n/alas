@@ -99,16 +99,17 @@ final class TerminalService {
         guard let app else { throw NSError(domain: "TerminalService", code: 1) }
 
         let sessionId = leafId
+        let remoteHost = project.host
         // Per-session socket path: AppState wires `socketPathProvider` to
         // `AgentHookSocketServer.linkSession(leafId:)`, which (re)creates
         // a per-leaf symlink. The same symlink path stays valid across
         // Alas restarts, so zmx-persisted shells keep delivering hooks
         // to the live socket on the next launch.
-        let perSessionSocket = socketPathProvider?(sessionId)
+        let perSessionSocket = remoteHost == nil ? socketPathProvider?(sessionId) : nil
         var env = EnvBuilder.build(
             project: project, worktree: worktree, sessionId: sessionId,
             socketPath: perSessionSocket, inheritParent: cfg.inheritParentEnv,
-            zmxDir: zmxClient.env.zmxDir?.path
+            zmxDir: remoteHost == nil ? zmxClient.env.zmxDir?.path : nil
         )
         for key in environmentRemovals {
             env.removeValue(forKey: key)
@@ -116,24 +117,22 @@ final class TerminalService {
         for (key, value) in environmentOverrides {
             env[key] = value
         }
-        if perSessionSocket != nil {
+        if remoteHost != nil {
+            env = env.filter { !$0.key.hasPrefix("ALAS_") }
+            env.removeValue(forKey: "ZMX_DIR")
+        }
+        if remoteHost == nil, perSessionSocket != nil {
             let binDir = try TerminalCLIInjection.installExecutables()
             env["PATH"] = TerminalCLIInjection.pathValue(
                 prepending: binDir.path,
                 to: env["PATH"]
             )
         }
-        let baseScript = includeUserStartupScript
-            ? StartupScriptResolver.sessionOpenScript(global: cfg, project: project)
-            : ""
-        let effectiveScript = Self.composeStartupScript(
-            userStartupScript: baseScript,
+        let effectiveScript = Self.effectiveStartupScript(
+            global: cfg,
+            project: project,
+            includeUserStartupScript: includeUserStartupScript,
             startupScriptSuffix: startupScriptSuffix
-        )
-        let innerPlan = try StartupScriptInstaller.plan(
-            shell: cfg.shell,
-            startupScript: effectiveScript,
-            sessionId: sessionId
         )
         let zmxSessionName = preResolvedZmxSessionName ?? sessionNameForAttach(
             worktree: worktree,
@@ -141,25 +140,40 @@ final class TerminalService {
             leafId: sessionId,
             allowLegacy: allowLegacyAttach
         )
-        let plan = TerminalService.resolveLaunchPlan(
-            keepAlive: cfg.keepSessionsAlive,
-            zmxClient: zmxClient,
-            sessionName: zmxSessionName,
-            innerPlan: innerPlan
-        )
+        let executable: String
+        let args: [String]
+        let envOverrides: [String: String]
+        if let remoteHost {
+            let launch = Self.remoteLaunch(
+                host: remoteHost,
+                worktreePath: worktree.path.path,
+                zmxSessionName: zmxSessionName,
+                keepAlive: cfg.keepSessionsAlive,
+                startupSuffix: effectiveScript.isEmpty ? nil : effectiveScript
+            )
+            executable = launch.executable
+            args = launch.args
+            envOverrides = [:]
+        } else {
+            let innerPlan = try StartupScriptInstaller.plan(shell: cfg.shell, startupScript: effectiveScript, sessionId: sessionId)
+            let plan = TerminalService.resolveLaunchPlan(keepAlive: cfg.keepSessionsAlive, zmxClient: zmxClient, sessionName: zmxSessionName, innerPlan: innerPlan)
+            executable = plan.executable
+            args = plan.args
+            envOverrides = plan.envOverrides
+        }
         // Plan-supplied env overrides (e.g. ZDOTDIR for zsh startup scripts)
         // win over inherited env.
-        for (k, v) in plan.envOverrides { env[k] = v }
-        let cwd = forcedCwd ?? resolveWorkingDirectory(
+        for (k, v) in envOverrides { env[k] = v }
+        let cwd = remoteHost == nil ? (forcedCwd ?? resolveWorkingDirectory(
             preference: cfg.workingDirectory,
             worktree: worktree,
             project: project
-        )
+        )) : FileManager.default.homeDirectoryForCurrentUser
         let surfaceConfig = GhosttyConfigBuilder.makeSurfaceConfiguration(
             cwd: cwd,
             env: env,
-            executable: plan.executable,
-            args: plan.args
+            executable: executable,
+            args: args
         )
         let surface = AlasGhostty.SurfaceView(
             app: app,
@@ -175,12 +189,19 @@ final class TerminalService {
             worktreeId: worktree.id,
             projectId: project.id,
             surface: surface,
-            executable: plan.executable,
-            args: plan.args,
-            zmxSessionName: (cfg.keepSessionsAlive && zmxClient.isAvailable) ? zmxSessionName : nil
+            executable: executable,
+            args: args,
+            zmxSessionName: cfg.keepSessionsAlive && (remoteHost != nil || zmxClient.isAvailable) ? zmxSessionName : nil,
+            remoteHost: remoteHost
         )
         registry.register(session)
         return session
+    }
+
+    static func remoteLaunch(host: String, worktreePath: String, zmxSessionName: String, keepAlive: Bool, startupSuffix: String?) -> (executable: String, args: [String]) {
+        let script = RemoteTerminalScript.attachScript(worktreePath: worktreePath, sessionName: zmxSessionName, useZmx: keepAlive, startupSuffix: startupSuffix)
+        let invocation = RemoteTerminalScript.surfaceInvocation(host: host, script: script)
+        return (invocation.executable, invocation.args)
     }
 
     func closeSession(
@@ -198,7 +219,9 @@ final class TerminalService {
         // `waitForPendingKills` can drain it before the app exits —
         // otherwise a quick close+Cmd-Q race would leak the daemon-side
         // session, and the next launch would carry forward the orphan.
-        if let existingName = existing?.zmxSessionName {
+        if let host = existing?.remoteHost, let existingName = existing?.zmxSessionName {
+            Task { await Self.killRemoteSession(host: host, name: existingName) }
+        } else if let existingName = existing?.zmxSessionName {
             let client = zmxClient
             dispatchTrackedKill { client.killSession(name: existingName) }
         } else if let worktreeId = explicitWorktreeId ?? existing?.worktreeId {
@@ -292,6 +315,45 @@ final class TerminalService {
             for name in orphans {
                 client.killSession(name: name)
             }
+        }
+    }
+
+    /// Best-effort remote counterpart to `ZmxClient.killSession`. This is
+    /// intentionally batch-mode so closing a pane can never wait for auth.
+    nonisolated static func killRemoteSession(host: String, name: String) async {
+        _ = try? await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: RemoteTerminalScript.zmxBatchCommand(["kill", name]),
+            timeout: 10
+        )
+    }
+
+    /// Find scoped remote sessions with no persisted terminal leaf and remove
+    /// them one at a time. Connection failures are ignored; the next boot or
+    /// a later successful connection will retry the sweep.
+    nonisolated static func sweepRemoteOrphans(
+        host: String,
+        knownWorktreeIds: Set<String>,
+        knownLeafIds: Set<String>
+    ) async {
+        guard let result = try? await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: RemoteTerminalScript.zmxBatchCommand(["ls", "--short"]),
+            timeout: 10
+        ), result.exitCode == 0 else {
+            return
+        }
+
+        let names = result.stdout.split(separator: "\n").map(String.init)
+        let orphans = orphanSessionNames(
+            allSessionNames: names,
+            knownWorktreeIdHashes: Set(knownWorktreeIds.map(ZmxSessionName.hash16)),
+            knownLeafIdHashes: Set(knownLeafIds.map(ZmxSessionName.hash16))
+        )
+        for name in orphans {
+            await killRemoteSession(host: host, name: name)
         }
     }
 
@@ -433,7 +495,22 @@ final class TerminalService {
         )
     }
 
-    private static func composeStartupScript(
+    nonisolated static func effectiveStartupScript(
+        global: AppConfig.Terminal,
+        project: ProjectConfig,
+        includeUserStartupScript: Bool,
+        startupScriptSuffix: String?
+    ) -> String {
+        let baseScript = includeUserStartupScript
+            ? StartupScriptResolver.sessionOpenScript(global: global, project: project)
+            : ""
+        return composeStartupScript(
+            userStartupScript: baseScript,
+            startupScriptSuffix: startupScriptSuffix
+        )
+    }
+
+    private nonisolated static func composeStartupScript(
         userStartupScript: String,
         startupScriptSuffix: String?
     ) -> String {

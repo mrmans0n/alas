@@ -40,6 +40,7 @@ final class TerminalSession {
     let executable: String
     let args: [String]
     let zmxSessionName: String?
+    let remoteHost: String?
 
     /// Set by HarnessService in Plan 5 — nil here.
     var harnessKind: String? = nil
@@ -52,7 +53,8 @@ final class TerminalSession {
         surface: AlasGhostty.SurfaceView,
         executable: String,
         args: [String],
-        zmxSessionName: String? = nil
+        zmxSessionName: String? = nil,
+        remoteHost: String? = nil
     ) {
         self.id = id
         self.worktreeId = worktreeId
@@ -61,6 +63,7 @@ final class TerminalSession {
         self.executable = executable
         self.args = args
         self.zmxSessionName = zmxSessionName
+        self.remoteHost = remoteHost
         self.createdAt = Date()
     }
 }

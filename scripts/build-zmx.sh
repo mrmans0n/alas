@@ -68,6 +68,32 @@ skip_if_optional() {
     die "$*"
 }
 
+linux_zmx_output() {
+    printf '%s/.build/zmx/linux-%s/install/bin/zmx\n' "${srcroot}" "$1"
+}
+
+build_linux_binaries() {
+    local linux_target linux_arch linux_prefix linux_output
+    for linux_target in x86_64-linux-musl aarch64-linux-musl; do
+        linux_arch="${linux_target%%-*}"
+        linux_prefix="${srcroot}/.build/zmx/linux-${linux_arch}/install"
+        linux_output="${linux_prefix}/bin/zmx"
+        [ -x "${linux_output}" ] && continue
+
+        mkdir -p "${linux_prefix}"
+        (
+            cd "${zmx_src}"
+            "${zig_bin}" build \
+                -Doptimize=ReleaseFast \
+                -Dtarget="${linux_target}" \
+                --prefix "${linux_prefix}" \
+                --cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-cache" \
+                --global-cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache"
+        )
+        [ -x "${linux_output}" ] || die "Linux zmx build produced no binary: ${linux_output}"
+    done
+}
+
 # Universal-build fast path: recursively invoke this script for each slice,
 # then `lipo` the results. Each per-arch recursive call goes through the
 # normal cache, so re-archives with no zmx change short-circuit on both
@@ -143,6 +169,7 @@ cached_binary="${cache_dir}/zmx"
 if [ -x "${cached_binary}" ]; then
     cp "${cached_binary}" "${zmx_output}"
     chmod +x "${zmx_output}"
+    build_linux_binaries
     exit 0
 fi
 
@@ -184,6 +211,7 @@ run_zig_build_with_retries() {
 }
 
 run_zig_build_with_retries
+build_linux_binaries
 
 # Publish to cache atomically. Use a per-process temp file so two concurrent
 # builds with the same fingerprint don't trample each other's `.tmp` mid-copy

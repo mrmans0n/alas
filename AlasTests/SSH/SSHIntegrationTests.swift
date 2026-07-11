@@ -74,4 +74,33 @@ struct SSHIntegrationTests {
         let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
         #expect(mode?.intValue == 0o755)
     }
+
+    @Test func remoteZmxBatchLadderDegradesGracefully() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+        let result = try await RemoteExec.run(
+            host: "localhost",
+            cwd: nil,
+            command: RemoteTerminalScript.zmxBatchCommand(["ls", "--short"]),
+            timeout: 10
+        )
+        #expect(result.exitCode == 0)
+    }
+
+    @Test func attachScriptRunsPlainShellOverSSH() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+        let script = RemoteTerminalScript.attachScript(
+            worktreePath: "/tmp",
+            sessionName: "alas-itest",
+            useZmx: false,
+            startupSuffix: "pwd; exit 0"
+        )
+        let result = try await RemoteExec.run(
+            host: "localhost",
+            cwd: nil,
+            command: script,
+            timeout: 20
+        )
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.contains("/tmp"))
+    }
 }

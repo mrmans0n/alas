@@ -18,6 +18,7 @@ struct SSHCommand: Equatable {
     }
 
     static let executable = "/usr/bin/ssh"
+    static let scpExecutable = "/usr/bin/scp"
 
     let host: String
     let mode: Mode
@@ -47,6 +48,18 @@ struct SSHCommand: Equatable {
     /// Argv after `SSHCommand.executable`. The script rides as the final
     /// argument; sshd hands it to the remote shell as a single string.
     func argv(remoteScript: String) -> [String] {
+        optionArgs + [host, remoteScript]
+    }
+
+    /// scp rides the same multiplexed batch connection as remote commands.
+    /// The destination is home-relative because scp does not reliably expand
+    /// a quoted `~` on every server implementation.
+    static func scpArgv(localPath: String, host: String, remotePath: String) -> [String] {
+        SSHCommand(host: host, mode: .batch).optionArgs
+            + ["-q", localPath, "\(host):\(remotePath)"]
+    }
+
+    private var optionArgs: [String] {
         var options: [String] = [
             "-o", "ControlMaster=auto",
             // %C is a short hash of (host, port, user); keeps the socket
@@ -64,6 +77,6 @@ struct SSHCommand: Equatable {
         case .interactive:
             options += ["-o", "ConnectTimeout=30"]
         }
-        return options + [host, remoteScript]
+        return options
     }
 }
