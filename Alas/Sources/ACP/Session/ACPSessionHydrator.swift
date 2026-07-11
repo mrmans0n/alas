@@ -29,16 +29,45 @@ actor ACPSessionHydrator {
         // Malformed payloads are skipped (matching the legacy try? in
         // openSession) rather than failing the whole hydration.
         let stored = try store.loadMessages(sessionId: sessionId)
+        let storedDraft = try? store.loadComposerDraftRecord(sessionId: sessionId)
+        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+        var staleSubmittedDraft = false
+        var sawRecordedSubmittedDraft = false
         var wire: [ACPMessageWire] = []
         wire.reserveCapacity(stored.count)
         for m in stored {
             if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
                 wire.append(w)
+                if storedDraft != nil,
+                   sawRecordedSubmittedDraft,
+                   w.isAgentSideProgress {
+                    staleSubmittedDraft = true
+                }
+                if let storedDraft,
+                   storedDraft.submittedRecovery,
+                   case .user(_, let text, let attachments) = w,
+                   storedDraft.draft.matchesSubmittedRecoveryPrompt(
+                    seq: m.seq,
+                    text: text,
+                    attachments: attachments,
+                    queue: queue,
+                    submittedAfterSeq: storedDraft.submittedAfterSeq)
+                {
+                    sawRecordedSubmittedDraft = true
+                }
             }
         }
 
-        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
-        let draft = try? store.loadComposerDraft(sessionId: sessionId)
+        let draft: ACPComposerDraft?
+        if staleSubmittedDraft, let storedDraft {
+            if (try? store.deleteComposerDraft(sessionId: sessionId, matching: storedDraft)) == true {
+                draft = nil
+            } else {
+                draft = (try? store.loadComposerDraftRecord(sessionId: sessionId))?.draft
+            }
+        } else {
+            draft = storedDraft?.draft
+        }
 
         // Post-load side effect: bump `last_opened_at` so the recents
         // list orders this session to the top. Use the narrow UPDATE

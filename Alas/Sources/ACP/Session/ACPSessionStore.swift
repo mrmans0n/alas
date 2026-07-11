@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 8
+    static let targetSchemaVersion = 10
     let db: SQLiteDatabase
 
     init(path: String) throws {
@@ -33,6 +33,8 @@ final class ACPSessionStore {
         if current < 6 { try migrate_to_v6() }
         if current < 7 { try migrate_to_v7() }
         if current < 8 { try migrate_to_v8() }
+        if current < 9 { try migrate_to_v9() }
+        if current < 10 { try migrate_to_v10() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -173,6 +175,14 @@ final class ACPSessionStore {
         WHERE remote_session_id IS NOT NULL
         """)
     }
+
+    private func migrate_to_v9() throws {
+        try db.exec("ALTER TABLE composer_drafts ADD COLUMN submitted_recovery INTEGER NOT NULL DEFAULT 0")
+    }
+
+    private func migrate_to_v10() throws {
+        try db.exec("ALTER TABLE composer_drafts ADD COLUMN submitted_after_seq INTEGER")
+    }
 }
 
 struct ACPSessionLease: Equatable {
@@ -213,6 +223,14 @@ struct ACPStoredMessage: Equatable {
     let seq: Int64
     let payload: Data
     let createdAt: Int64
+}
+
+struct ACPStoredComposerDraft: Equatable {
+    let draft: ACPComposerDraft
+    let updatedAt: Int64
+    let payload: Data
+    let submittedRecovery: Bool
+    let submittedAfterSeq: Int64?
 }
 
 extension ACPSessionStore {
@@ -288,26 +306,69 @@ extension ACPSessionStore {
     }
 
     func loadComposerDraft(sessionId: String) throws -> ACPComposerDraft? {
-        let rows = try db.query("""
-        SELECT payload FROM composer_drafts WHERE session_id = ?
-        """, bindings: [sessionId])
-        guard let payload = rows.first?["payload"] as? Data else { return nil }
-        return try JSONDecoder().decode(ACPComposerDraft.self, from: payload)
+        try loadComposerDraftRecord(sessionId: sessionId)?.draft
     }
 
-    func upsertComposerDraft(sessionId: String, draft: ACPComposerDraft, updatedAt: Int64) throws {
+    func loadComposerDraftRecord(sessionId: String) throws -> ACPStoredComposerDraft? {
+        let rows = try db.query("""
+        SELECT payload, updated_at, submitted_recovery, submitted_after_seq
+        FROM composer_drafts WHERE session_id = ?
+        """, bindings: [sessionId])
+        guard let row = rows.first,
+              let payload = row["payload"] as? Data,
+              let updatedAt = row["updated_at"] as? Int64
+        else { return nil }
+        return try ACPStoredComposerDraft(
+            draft: JSONDecoder().decode(ACPComposerDraft.self, from: payload),
+            updatedAt: updatedAt,
+            payload: payload,
+            submittedRecovery: (row["submitted_recovery"] as? Int64) == 1,
+            submittedAfterSeq: row["submitted_after_seq"] as? Int64
+        )
+    }
+
+    func upsertComposerDraft(
+        sessionId: String,
+        draft: ACPComposerDraft,
+        updatedAt: Int64,
+        submittedRecovery: Bool = false,
+        submittedAfterSeq: Int64? = nil
+    ) throws {
         let payload = try JSONEncoder().encode(draft)
         try db.exec("""
-        INSERT INTO composer_drafts (session_id, payload, updated_at)
-        VALUES (?,?,?)
+        INSERT INTO composer_drafts (session_id, payload, updated_at, submitted_recovery, submitted_after_seq)
+        VALUES (?,?,?,?,?)
         ON CONFLICT(session_id) DO UPDATE SET
             payload = excluded.payload,
-            updated_at = excluded.updated_at
-        """, bindings: [sessionId, payload, updatedAt])
+            updated_at = excluded.updated_at,
+            submitted_recovery = excluded.submitted_recovery,
+            submitted_after_seq = excluded.submitted_after_seq
+        """, bindings: [sessionId, payload, updatedAt, submittedRecovery ? 1 : 0, submittedAfterSeq])
     }
 
     func deleteComposerDraft(sessionId: String) throws {
         try db.exec("DELETE FROM composer_drafts WHERE session_id = ?", bindings: [sessionId])
+    }
+
+    func deleteComposerDraft(sessionId: String, matching stored: ACPStoredComposerDraft) throws -> Bool {
+        try db.execChanges("""
+        DELETE FROM composer_drafts
+        WHERE session_id = ?
+          AND payload = ?
+          AND updated_at = ?
+          AND submitted_recovery = ?
+          AND (
+            (submitted_after_seq IS NULL AND ? IS NULL)
+            OR submitted_after_seq = ?
+          )
+        """, bindings: [
+            sessionId,
+            stored.payload,
+            stored.updatedAt,
+            stored.submittedRecovery ? 1 : 0,
+            stored.submittedAfterSeq,
+            stored.submittedAfterSeq
+        ]) > 0
     }
 
     func setArchived(id: String, archived: Bool) throws {
@@ -386,6 +447,14 @@ extension ACPSessionStore {
         FROM messages WHERE session_id = ?
         """, bindings: [sessionId])
         return Int((rows.first?["count"] as? Int64) ?? 0)
+    }
+
+    func latestMessageSeq(sessionId: String) throws -> Int64? {
+        let rows = try db.query("""
+        SELECT MAX(seq) AS seq
+        FROM messages WHERE session_id = ?
+        """, bindings: [sessionId])
+        return rows.first?["seq"] as? Int64
     }
 
     func loadMessages(sessionId: String) throws -> [ACPStoredMessage] {

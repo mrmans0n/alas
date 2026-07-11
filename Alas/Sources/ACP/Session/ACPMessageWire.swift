@@ -14,6 +14,15 @@ enum ACPMessageWire: Sendable {
     case plan([ACPMessage.PlanItem])
     case systemNotice(text: String)
 
+    var isAgentSideProgress: Bool {
+        switch self {
+        case .agent, .thought, .toolCall, .fileEdit, .plan:
+            return true
+        case .user, .systemNotice:
+            return false
+        }
+    }
+
     /// Decode a persisted `(kind, payload)` pair into the matching wire variant.
     /// Mirrors `ACPMessageCodec.decode` but produces Sendable values and is
     /// safe to call from any isolation domain. Unknown kinds become system

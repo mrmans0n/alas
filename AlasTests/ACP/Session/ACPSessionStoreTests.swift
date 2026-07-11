@@ -81,5 +81,6 @@ struct ACPSessionStoreSchemaTests {
         try store.upsertComposerDraft(sessionId: "s", draft: draft, updatedAt: 123)
 
         #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+        #expect(try store.loadComposerDraftRecord(sessionId: "s")?.submittedRecovery == false)
     }
 }

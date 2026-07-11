@@ -1094,7 +1094,7 @@ extension ACPSessionRunner {
             // stays consistent.
             Task { @MainActor in onPromptFinished?(false) }
         case .sendNow:
-            sendNow(blocks: blocks, queuedItemId: nil, onPromptFinished: onPromptFinished)
+            sendNow(blocks: blocks, queuedItemId: nil, draft: draft, onPromptFinished: onPromptFinished)
         case .enqueue:
             session.enqueue(blocks: blocks, draft: draft)
             persistQueue()
@@ -1104,7 +1104,7 @@ extension ACPSessionRunner {
             // later when the flusher drains the head.
             Task { @MainActor in onPromptFinished?(true) }
         case .steer:
-            steer(blocks: blocks, onPromptFinished: onPromptFinished)
+            steer(blocks: blocks, draft: draft, onPromptFinished: onPromptFinished)
         }
     }
 
@@ -1187,6 +1187,7 @@ extension ACPSessionRunner {
     func steer(
         blocks: [ACPContentBlock],
         recordUserPrompt: Bool = true,
+        draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
@@ -1236,6 +1237,7 @@ extension ACPSessionRunner {
                     blocks: blocks,
                     queuedItemId: nil,
                     recordUserPrompt: recordUserPrompt,
+                    draft: draft,
                     onPromptFinished: onPromptFinished
                 )
             }
@@ -1279,6 +1281,7 @@ extension ACPSessionRunner {
         blocks: [ACPContentBlock],
         queuedItemId: UUID?,
         recordUserPrompt: Bool = true,
+        draft: ACPComposerDraft? = nil,
         onPromptFinished: (@MainActor (_ succeeded: Bool) -> Void)? = nil
     ) {
         flushPendingIncomingUpdates()

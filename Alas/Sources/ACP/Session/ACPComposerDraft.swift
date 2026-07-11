@@ -87,6 +87,68 @@ struct ACPComposerDraft: Codable, Equatable {
 }
 
 extension ACPComposerDraft {
+    func matchesPersistedUserPrompt(text: String, attachments: [ACPMessage.Attachment]) -> Bool {
+        normalizedPromptBlocks == Self.contentBlocks(text: text, attachments: attachments)
+    }
+
+    func matchesRecordedQueuedPrompt(in queue: [QueuedPrompt]) -> Bool {
+        queue.contains { item in
+            item.transcriptRecorded && self == item.restorableDraft
+        }
+    }
+
+    private var normalizedPromptBlocks: [ACPContentBlock] {
+        var text = ""
+        var attachments: [ACPMessage.Attachment] = []
+        for segment in segments {
+            switch segment {
+            case .text(let value):
+                text += value
+            case .mention(let displayName, let uri):
+                text += "@\(displayName) "
+                attachments.append(.init(uri: uri, name: displayName))
+            case .image(let uri, let mimeType):
+                attachments.append(.init(
+                    uri: uri,
+                    name: Self.displayName(forURI: uri),
+                    mimeType: mimeType))
+            }
+        }
+        return Self.contentBlocks(text: text, attachments: attachments)
+    }
+
+    func matchesSubmittedRecoveryPrompt(
+        seq: Int64,
+        text: String,
+        attachments: [ACPMessage.Attachment],
+        queue: [QueuedPrompt],
+        submittedAfterSeq: Int64?
+    ) -> Bool {
+        seq > (submittedAfterSeq ?? -1)
+            && !matchesRecordedQueuedPrompt(in: queue)
+            && matchesPersistedUserPrompt(text: text, attachments: attachments)
+    }
+
+    // Keep this isolation-free for hydration, which runs off the main actor.
+    // It mirrors ACPSessionRunner.blocks without pulling the runner into the
+    // persistence path.
+    private static func contentBlocks(
+        text: String,
+        attachments: [ACPMessage.Attachment]
+    ) -> [ACPContentBlock] {
+        var blocks: [ACPContentBlock] = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? []
+            : [.text(text)]
+        for attachment in attachments {
+            if let mimeType = attachment.mimeType, mimeType.hasPrefix("image/") {
+                blocks.append(.image(data: nil, uri: attachment.uri, mimeType: mimeType))
+            } else {
+                blocks.append(.resourceLink(uri: attachment.uri, name: attachment.name))
+            }
+        }
+        return blocks
+    }
+
     /// Rebuild an editable draft from a queued prompt's content blocks —
     /// the inverse of the submit path's draft→blocks serialization. Used
     /// when the user clicks "edit" on a queued item to pull it back into

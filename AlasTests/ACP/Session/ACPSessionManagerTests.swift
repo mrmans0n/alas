@@ -168,6 +168,14 @@ struct ACPSessionManagerTests {
         let store = try ACPSessionStore(path: url.path)
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = mgr.createSession(agentId: "claude")
+        try store.appendMessage(
+            sessionId: session.id,
+            id: "m0",
+            kind: "user",
+            seq: 0,
+            payload: Data("old".utf8),
+            createdAt: 1
+        )
         let submitted = ACPComposerDraft(segments: [.text("sent")])
 
         // Schedule a debounced write but DO NOT flush — simulates the
@@ -180,6 +188,7 @@ struct ACPSessionManagerTests {
         #expect(session.composerDraftRevision == suspendedRevision)
         // SQLite was written synchronously by suspend, no flush needed.
         #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
+        #expect(try store.loadComposerDraftRecord(sessionId: session.id)?.submittedAfterSeq == 0)
     }
 
     @Test("purgeSuspendedComposerDraft deletes SQLite only when revision matches")
