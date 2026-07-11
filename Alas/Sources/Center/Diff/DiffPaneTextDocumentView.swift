@@ -1655,13 +1655,26 @@ final class DiffPaneCodeTextView: NSTextView {
         // The expandable row uses a taller fixed line height and the label is
         // baseline-shifted to the row's vertical center (see the builder), so the
         // pill can simply center on the row and inset a little to fit within it.
+        // The chevron is drawn here (not baked into the text) so the backing
+        // string stays a plain label for selection/copy.
+        let chevronGap: CGFloat = 5
+        let tint = NSColor(theme.color("seg-pill-active-fg"))
+        let chevronImage = Self.expandChevronImage(
+            boundary: lineMetadata[row].expansionBoundary,
+            font: font,
+            color: tint
+        )
+        let chevronSize = chevronImage?.size ?? .zero
+        let chevronLeftX = textRect.minX - chevronGap - chevronSize.width
+
         let horizontalPadding: CGFloat = 12
         let verticalInset: CGFloat = 2
         let pillHeight = max(rowRect.height - verticalInset * 2, 1)
+        let pillLeft = (chevronImage == nil ? textRect.minX : chevronLeftX) - horizontalPadding
         let pillRect = NSRect(
-            x: textRect.minX - horizontalPadding,
+            x: pillLeft,
             y: rowRect.midY - pillHeight / 2,
-            width: textRect.width + horizontalPadding * 2,
+            width: textRect.maxX + horizontalPadding - pillLeft,
             height: pillHeight
         )
         let alpha = Self.expandPillFillAlpha(
@@ -1671,6 +1684,29 @@ final class DiffPaneCodeTextView: NSTextView {
         let path = NSBezierPath(roundedRect: pillRect, xRadius: 6, yRadius: 6)
         NSColor(theme.color("accent")).withAlphaComponent(alpha).setFill()
         path.fill()
+
+        if let chevronImage {
+            let chevronRect = NSRect(
+                x: chevronLeftX,
+                y: rowRect.midY - chevronSize.height / 2,
+                width: chevronSize.width,
+                height: chevronSize.height
+            )
+            chevronImage.draw(in: chevronRect)
+        }
+    }
+
+    private static func expandChevronImage(
+        boundary: DiffContextBoundary?,
+        font: NSFont?,
+        color: NSColor
+    ) -> NSImage? {
+        let symbol = DiffPaneTextDocumentBuilder.expandableContextSymbolName(boundary: boundary)
+        let pointSize = (font?.pointSize ?? 13) - 1
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
     }
 }
 

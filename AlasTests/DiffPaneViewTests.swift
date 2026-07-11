@@ -1560,7 +1560,21 @@ let second = true
             pressure: 1
         ))
 
+        let upEvent = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: windowPoint,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        // Expansion fires on mouse-up (the button models a real press cycle).
         textView.mouseDown(with: event)
+        textView.mouseUp(with: upEvent)
 
         #expect(captured?.0 == key)
         #expect(captured?.1 == .chunk(size: 10))
@@ -1616,7 +1630,21 @@ let second = true
             pressure: 1
         ))
 
+        let upEvent = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: windowPoint,
+            modifierFlags: .option,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        // Expansion fires on mouse-up (the button models a real press cycle).
         textView.mouseDown(with: event)
+        textView.mouseUp(with: upEvent)
 
         #expect(captured?.0 == key)
         #expect(captured?.1 == .all)
