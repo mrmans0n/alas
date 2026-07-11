@@ -1364,7 +1364,13 @@ final class AppState {
         projectGitWatchers.removeAll()
     }
 
-    func updateProject(id: String, name: String, icon: ProjectIcon, startupScripts: ProjectStartupScripts) {
+    func updateProject(
+        id: String,
+        name: String,
+        icon: ProjectIcon,
+        startupScripts: ProjectStartupScripts,
+        mcpServers: [ProjectMCPServer]
+    ) {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
@@ -1373,18 +1379,26 @@ final class AppState {
             update: ProjectUpdate(
                 name: trimmedName,
                 icon: icon,
-                startupScripts: startupScripts
+                startupScripts: startupScripts,
+                mcpServers: mcpServers
             )
         )
         saveProjects()
     }
 
-    func updateProject(id: String, name: String, color: String, startupScripts: ProjectStartupScripts) {
+    func updateProject(
+        id: String,
+        name: String,
+        color: String,
+        startupScripts: ProjectStartupScripts,
+        mcpServers: [ProjectMCPServer]
+    ) {
         updateProject(
             id: id,
             name: name,
             icon: ProjectIcon.default(color: color),
-            startupScripts: startupScripts
+            startupScripts: startupScripts,
+            mcpServers: mcpServers
         )
     }
 

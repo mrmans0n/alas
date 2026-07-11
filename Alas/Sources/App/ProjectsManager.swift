@@ -5,15 +5,33 @@ struct ProjectUpdate: Equatable {
     var name: String
     var icon: ProjectIcon
     var startupScripts: ProjectStartupScripts = .defaults
+    /// `nil` means this update does not change the project's MCP configuration.
+    var mcpServers: [ProjectMCPServer]?
 
-    init(name: String, icon: ProjectIcon, startupScripts: ProjectStartupScripts = .defaults) {
+    init(
+        name: String,
+        icon: ProjectIcon,
+        startupScripts: ProjectStartupScripts = .defaults,
+        mcpServers: [ProjectMCPServer]? = nil
+    ) {
         self.name = name
         self.icon = icon
         self.startupScripts = startupScripts
+        self.mcpServers = mcpServers
     }
 
-    init(name: String, color: String, startupScripts: ProjectStartupScripts = .defaults) {
-        self.init(name: name, icon: ProjectIcon.default(color: color), startupScripts: startupScripts)
+    init(
+        name: String,
+        color: String,
+        startupScripts: ProjectStartupScripts = .defaults,
+        mcpServers: [ProjectMCPServer]? = nil
+    ) {
+        self.init(
+            name: name,
+            icon: ProjectIcon.default(color: color),
+            startupScripts: startupScripts,
+            mcpServers: mcpServers
+        )
     }
 }
 
@@ -107,6 +125,9 @@ final class ProjectsManager {
         projects[idx].icon = update.icon
         projects[idx].color = update.icon.color
         projects[idx].startupScripts = update.startupScripts
+        if let mcpServers = update.mcpServers {
+            projects[idx].mcpServers = mcpServers
+        }
     }
 
     func reorderProject(fromIndex: Int, toIndex: Int) {

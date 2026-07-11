@@ -50,6 +50,7 @@ private struct ProjectDialog: View {
     @State private var sessionOpenScript: String = ""
     @State private var worktreeCreateMode: ProjectStartupScriptMode = .useGlobal
     @State private var worktreeCreateScript: String = ""
+    @State private var mcpServers: [ProjectMCPServer] = []
     @State private var isValidating = false
     @State private var errorMessage: String?
 
@@ -338,6 +339,7 @@ private struct ProjectDialog: View {
             sessionOpenScript = project.startupScripts.sessionOpenScript
             worktreeCreateMode = project.startupScripts.worktreeCreateMode
             worktreeCreateScript = project.startupScripts.worktreeCreateScript
+            mcpServers = project.mcpServers
         }
     }
 
@@ -492,7 +494,8 @@ private struct ProjectDialog: View {
                     worktreeAgentMode: project.startupScripts.worktreeAgentMode,
                     worktreeAgentId: project.startupScripts.worktreeAgentId,
                     worktreeAgentUseBypassPermissions: project.startupScripts.worktreeAgentUseBypassPermissions
-                )
+                ),
+                mcpServers: mcpServers
             )
             presented = false
         }
