@@ -156,24 +156,25 @@ struct MergeSidePane: NSViewRepresentable {
         case .local:  tint = NSColor.systemGreen.withAlphaComponent(0.14)
         case .remote: tint = NSColor.systemBlue.withAlphaComponent(0.14)
         }
+        let font = CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize)
         let pad = NSAttributedString(string: "\n", attributes: [
-            .font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
+            .font: font,
             .foregroundColor: NSColor.clear,
             .backgroundColor: NSColor.clear,
         ])
+        let hunkIndexSet = hunkRanges.isEmpty ? Set<Int>() : Set(hunkRanges.flatMap { $0 })
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor(theme.color("fg")),
+        ]
         for (i, row) in rows.enumerated() {
             if row.isPadding {
                 result.append(pad)
                 continue
             }
             let content = row.content + "\n"
-            let inHunk = hunkRanges.contains { $0.contains(i) }
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
-                .foregroundColor: NSColor(theme.color("fg")),
-            ]
             let line = NSMutableAttributedString(string: content, attributes: attrs)
-            if inHunk {
+            if hunkIndexSet.contains(i) {
                 line.addAttribute(.backgroundColor, value: tint,
                                   range: NSRange(location: 0, length: line.length))
             }

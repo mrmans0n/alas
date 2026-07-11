@@ -328,16 +328,8 @@ struct DiffPaneView: View {
             in: group,
             expandedCollapsedRowIDs: expandedCollapsedRowIDs
         )
-        let hunkThreads = threads.filter { t in
-            visibleRows.contains {
-                t.isOldSide
-                    ? t.lineRange.contains($0.old?.anchor.oldLine ?? -1)
-                    : t.lineRange.contains($0.new?.anchor.newLine ?? -1)
-            }
-        }
-        let hunkAnnotations = annotations.filter { a in
-            visibleRows.contains { $0.new?.anchor.newLine == a.newLine }
-        }
+        let hunkThreads = threadsForVisibleRows(visibleRows)
+        let hunkAnnotations = annotationsForVisibleRows(visibleRows)
         let blocks = DiffInlineCommentLayout.blocks(
             visibleRows: visibleRows,
             threads: hunkThreads,
@@ -395,6 +387,25 @@ struct DiffPaneView: View {
                 .stroke(theme.color("line"), lineWidth: 0.75)
         )
         .padding(.bottom, 10)
+    }
+
+    private func threadsForVisibleRows(_ visibleRows: [DiffDisplayRow]) -> [DiffInlineCommentThread] {
+        guard !threads.isEmpty else { return [] }
+        let oldLines = Set(visibleRows.compactMap { $0.old?.anchor.oldLine })
+        let newLines = Set(visibleRows.compactMap { $0.new?.anchor.newLine })
+        return threads.filter { t in
+            if t.isOldSide {
+                return oldLines.contains(where: { t.lineRange.contains($0) })
+            } else {
+                return newLines.contains(where: { t.lineRange.contains($0) })
+            }
+        }
+    }
+
+    private func annotationsForVisibleRows(_ visibleRows: [DiffDisplayRow]) -> [DiffInlineAnnotation] {
+        guard !annotations.isEmpty else { return [] }
+        let newLines = Set(visibleRows.compactMap { $0.new?.anchor.newLine })
+        return annotations.filter { newLines.contains($0.newLine) }
     }
 
     private func activeHighlight(for rows: [DiffDisplayRow]) -> DiffReviewCommentHighlight? {

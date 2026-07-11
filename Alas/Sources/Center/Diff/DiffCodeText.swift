@@ -7,40 +7,8 @@ enum DiffInlineTone {
     case accent
 }
 
-struct DiffCodeText: View {
-    let text: String
-    let fileExtension: String
-    let codeFontFamily: String
-    let codeFontSize: CGFloat
-    let wrapLines: Bool
-    let allowHorizontalExpansion: Bool
-    let showWhitespace: Bool
-    let inlineSpans: [DiffInlineSpan]
-    let inlineTone: DiffInlineTone
-
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        Text(attributedText)
-            .lineSpacing(CenterTypography.textLineSpacing(forFontSize: codeFontSize))
-            .lineLimit(wrapLines ? nil : 1)
-            .fixedSize(horizontal: allowHorizontalExpansion && !wrapLines, vertical: true)
-    }
-
-    private var attributedText: AttributedString {
-        AttributedString(Self.attributedString(
-            text: text,
-            fileExtension: fileExtension,
-            codeFontFamily: codeFontFamily,
-            codeFontSize: codeFontSize,
-            showWhitespace: showWhitespace,
-            inlineSpans: inlineSpans,
-            inlineTone: inlineTone,
-            theme: theme
-        ))
-    }
-
-    nonisolated static func attributedString(
+enum DiffCodeText {
+    static func attributedString(
         text: String,
         fileExtension: String,
         codeFontFamily: String,
@@ -79,7 +47,7 @@ struct DiffCodeText: View {
         return output
     }
 
-    nonisolated private static func baseAttributes(
+    private static func baseAttributes(
         codeFontFamily: String,
         codeFontSize: CGFloat,
         theme: Theme
@@ -91,7 +59,7 @@ struct DiffCodeText: View {
         ]
     }
 
-    nonisolated static func applySyntaxSpans(
+    static func applySyntaxSpans(
         to output: NSMutableAttributedString,
         spans: [HighlightSpan],
         offset: Int,
@@ -117,7 +85,7 @@ struct DiffCodeText: View {
         }
     }
 
-    nonisolated private static func applyInlineSpans(
+    private static func applyInlineSpans(
         to output: NSMutableAttributedString,
         inlineSpans: [DiffInlineSpan],
         inlineTone: DiffInlineTone,
@@ -135,11 +103,11 @@ struct DiffCodeText: View {
         }
     }
 
-    nonisolated private static func isValid(_ range: NSRange, in length: Int) -> Bool {
+    private static func isValid(_ range: NSRange, in length: Int) -> Bool {
         range.location >= 0 && range.length >= 0 && NSMaxRange(range) <= length
     }
 
-    nonisolated private static func inlineColor(for tone: DiffInlineTone, theme: Theme) -> Color {
+    private static func inlineColor(for tone: DiffInlineTone, theme: Theme) -> Color {
         switch tone {
         case .add:
             return theme.color("add")
@@ -150,7 +118,7 @@ struct DiffCodeText: View {
         }
     }
 
-    nonisolated private static func syntaxColor(for capture: HighlightCapture, inlineTone: DiffInlineTone, theme: Theme) -> Color {
+    private static func syntaxColor(for capture: HighlightCapture, inlineTone: DiffInlineTone, theme: Theme) -> Color {
         switch capture {
         case .keyword:
             return theme.color("syntax-keyword")
@@ -174,7 +142,7 @@ struct DiffCodeText: View {
         }
     }
 
-    nonisolated private static func visibleWhitespaceText(_ text: String, enabled: Bool) -> String {
+    private static func visibleWhitespaceText(_ text: String, enabled: Bool) -> String {
         guard enabled else { return text }
         return text
             .replacingOccurrences(of: " ", with: "·")
