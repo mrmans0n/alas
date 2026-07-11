@@ -516,34 +516,35 @@ struct DiffPaneTextDocumentBuilder {
     private static func expandableContextAttributes(font: NSFont, theme: Theme) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.setParagraphStyle(CenterTypography.paragraphStyle())
-        paragraph.firstLineHeadIndent = expandableContextHeadIndent
-        paragraph.headIndent = expandableContextHeadIndent
-        // Give the row a taller fixed line height so the row rect itself grows and
-        // the button pill has vertical room without being clipped by neighbouring
-        // rows. (Paragraph spacing does not enlarge the measured row rect.)
-        paragraph.minimumLineHeight = expandableContextRowHeight
-        paragraph.maximumLineHeight = expandableContextRowHeight
-        // A fixed line height puts all the extra space above the glyphs (they end
-        // up bottom-aligned). Raise the glyphs by half the surplus so they sit in
-        // the vertical center of the row, letting the pill center on the row and
-        // still wrap the label symmetrically.
+        let headIndent = expandableContextHeadIndent(font: font)
+        paragraph.firstLineHeadIndent = headIndent
+        paragraph.headIndent = headIndent
+        // Size the row from the font (code font is user-configurable up to 64pt),
+        // not a fixed height: natural line height plus symmetric vertical padding,
+        // so the row rect grows with the glyphs and the pill keeps its breathing
+        // room at any size. Baseline-shift the glyphs by the padding so they sit in
+        // the vertical center of the row and the pill can center on the row.
         let naturalLineHeight = font.ascender - font.descender
-        let baselineOffset = max(0, (expandableContextRowHeight - naturalLineHeight) / 2)
+        let rowHeight = naturalLineHeight + expandableContextRowPadding * 2
+        paragraph.minimumLineHeight = rowHeight
+        paragraph.maximumLineHeight = rowHeight
         return [
             .font: font,
             .foregroundColor: NSColor(theme.color("seg-pill-active-fg")),
             .paragraphStyle: paragraph,
-            .baselineOffset: baselineOffset,
+            .baselineOffset: expandableContextRowPadding,
         ]
     }
 
-    /// Left inset of the expand label from the code column edge. Leaves room for
-    /// the separately-drawn chevron and the pill's left padding.
-    static let expandableContextHeadIndent: CGFloat = 26
+    /// Symmetric vertical padding between the label and the pill edge.
+    private static let expandableContextRowPadding: CGFloat = 5
 
-    /// Fixed line height for the expandable-context row, taller than a code line
-    /// so the button pill has room around the label.
-    private static let expandableContextRowHeight: CGFloat = 26
+    /// Left inset of the expand label, leaving room for the separately-drawn
+    /// chevron and the pill's left padding. Scales with the font so the chevron
+    /// (sized from the same font) still fits at larger sizes.
+    static func expandableContextHeadIndent(font: NSFont) -> CGFloat {
+        font.pointSize + 16
+    }
 
     static func expandableContextLabel(_ row: DiffDisplayRow) -> String {
         let boundaryText = row.contextExpansion?.boundary == .below ? "below" : "above"
