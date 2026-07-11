@@ -189,11 +189,16 @@ extension Process {
         stdin: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
-        try await run(
-            "/usr/bin/env",
-            args: ["git"] + args,
+        let invocation = GitInvocation.build(
+            gitArgs: args,
             cwd: cwd,
-            env: gitEnv(),
+            host: RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        )
+        return try await run(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env,
             stdin: stdin,
             timeout: timeout
         )
@@ -216,11 +221,16 @@ extension Process {
         cwd: URL? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResultData {
-        try await runData(
-            "/usr/bin/env",
-            args: ["git"] + args,
+        let invocation = GitInvocation.build(
+            gitArgs: args,
             cwd: cwd,
-            env: gitEnv(),
+            host: RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        )
+        return try await runData(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env,
             timeout: timeout
         )
     }

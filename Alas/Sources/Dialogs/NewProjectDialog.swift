@@ -33,6 +33,12 @@ private struct ProjectDialog: View {
     @Environment(\.theme) var theme
 
     @State private var path: String = ""
+    private enum ProjectLocation: String, CaseIterable {
+        case local = "Local"
+        case remoteSSH = "Remote (SSH)"
+    }
+    @State private var location: ProjectLocation = .local
+    @State private var sshHost: String = ""
     @State private var name: String = ""
     @State private var iconMode: ProjectIcon.Mode = .letter
     @State private var iconColor: String = ProjectIcon.defaultColor
@@ -85,12 +91,24 @@ private struct ProjectDialog: View {
             subtitle: subtitle,
             width: DialogContainerLayout.projectWidth,
             content: {
-                DialogField(label: "Repository path") {
+                if case .add = mode {
+                    DialogField(label: "Location") {
+                        Seg(value: $location, options: ProjectLocation.allCases.map { ($0, $0.rawValue) })
+                    }
+                }
+                DialogField(label: location == .remoteSSH ? "Remote repository path" : "Repository path") {
                     switch mode {
                     case .add:
-                        HStack(spacing: 6) {
-                            AlasField(text: $path, placeholder: "/path/to/repo", monospaced: true)
-                            AlasButton(title: "Choose…", action: choose)
+                        if location == .local {
+                            HStack(spacing: 6) {
+                                AlasField(text: $path, placeholder: "/path/to/repo", monospaced: true)
+                                AlasButton(title: "Choose…", action: choose)
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 6) {
+                                AlasField(text: $sshHost, placeholder: "Host from ~/.ssh/config, e.g. devbox", monospaced: true)
+                                AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
+                            }
                         }
                     case .edit:
                         readOnlyPath
@@ -124,7 +142,7 @@ private struct ProjectDialog: View {
             Task { await loadAvatarPresetIfAvailable() }
         }
         .onChange(of: path) { _, new in
-            if case .add = mode {
+            if case .add = mode, location == .local {
                 Task {
                     await suggestName(for: new)
                     await loadAvatarPresetIfAvailable()
@@ -160,9 +178,12 @@ private struct ProjectDialog: View {
     private var confirmEnabled: Bool {
         switch mode {
         case .add:
-            !path.isEmpty && !name.isEmpty && !isValidating
+            let hasLocation = location == .local
+                ? !path.isEmpty
+                : !sshHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && path.hasPrefix("/")
+            return hasLocation && !name.isEmpty && !isValidating
         case .edit:
-            !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -492,6 +513,9 @@ private struct ProjectDialog: View {
                         path: url,
                         displayName: name,
                         icon: draftIcon,
+                        host: location == .remoteSSH
+                            ? sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+                            : nil,
                         id: pendingProjectId
                     )
                     presented = false

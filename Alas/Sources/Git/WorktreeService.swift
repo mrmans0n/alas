@@ -45,6 +45,7 @@ struct WorktreeService {
     /// Falls back through packed-refs, HEAD's own mtime, and the worktree
     /// directory mtime if any layer can't be resolved.
     static func lastActivity(forWorktreeAt path: URL) -> Date? {
+        if path.isRemoteAlasPath { return nil }
         let fm = FileManager.default
 
         func mtime(of pathStr: String) -> Date? {

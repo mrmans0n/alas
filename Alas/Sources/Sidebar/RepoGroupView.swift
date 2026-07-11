@@ -60,6 +60,16 @@ struct RepoGroupView: View {
                 Text(project.name)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundColor(theme.color("fg-muted"))
+                if let host = project.host {
+                    Text(host)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundColor(theme.color("fg-faint"))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(theme.color("bg-4"))
+                        .clipShape(Capsule())
+                        .help("Remote project on \(host) (SSH)")
+                }
                 Spacer(minLength: 0)
             }
             .padding(.leading, 12)

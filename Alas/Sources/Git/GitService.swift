@@ -128,7 +128,8 @@ extension GitService {
                 // under-report. Count the file's lines as adds when it exists
                 // on disk; deleted files (no longer present) stay at 0/0.
                 let url = worktreePath.appendingPathComponent(entries[i].path)
-                if let data = try? Data(contentsOf: url),
+                if !worktreePath.isRemoteAlasPath,
+                   let data = try? Data(contentsOf: url),
                    let text = String(data: data, encoding: .utf8) {
                     let lines = text.isEmpty
                         ? 0
@@ -350,6 +351,7 @@ extension GitService {
     }
 
     private func worktreeLinesOrUnavailable(worktreePath: URL, path: String) async throws -> DiffReviewFileContextLines {
+        if worktreePath.isRemoteAlasPath { return .unavailable }
         let url = worktreePath.appendingPathComponent(path)
         if let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) {
             return .available([destination])
@@ -517,7 +519,8 @@ extension GitService {
             }
         }
 
-        do {
+        if !worktreePath.isRemoteAlasPath {
+            do {
             let rootEntries = try FileManager.default.contentsOfDirectory(
                 at: worktreePath,
                 includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
@@ -572,10 +575,11 @@ extension GitService {
                     }
                 }
             }
-        } catch {
-            // Git-visible paths are still useful if the best-effort all-files
-            // root scan or ignore classification fails.
-            Self.logger.error("file tree root scan failed for \(worktreePath.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            } catch {
+                // Git-visible paths are still useful if the best-effort all-files
+                // root scan or ignore classification fails.
+                Self.logger.error("file tree root scan failed for \(worktreePath.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
         }
 
         let submodules = (try? await submodulePaths(worktreePath: worktreePath)) ?? []
@@ -609,6 +613,28 @@ extension GitService {
     }
 
     func fileTreeChildren(worktreePath: URL, path: String) async throws -> [FileTreeNode] {
+        if worktreePath.isRemoteAlasPath {
+            let prefix = path.isEmpty ? "" : path + "/"
+            let paths = try await gitVisibleFilePaths(worktreePath: worktreePath)
+                .filter { path.isEmpty || $0.hasPrefix(prefix) }
+            var directories = Set<String>()
+            for candidate in paths {
+                let components = candidate.split(separator: "/")
+                guard components.count > 1 else { continue }
+                for index in 1 ..< components.count {
+                    directories.insert(components.prefix(index).joined(separator: "/"))
+                }
+            }
+            let built = FileTreeBuilder.build(
+                paths: paths,
+                badges: [:],
+                visibility: [:],
+                directories: directories,
+                lazyDirectories: directories,
+                submodules: (try? await submodulePaths(worktreePath: worktreePath)) ?? []
+            )
+            return path.isEmpty ? built : findFileTreeNode(path: path, in: built)?.children ?? []
+        }
         let directory = worktreePath.appendingPathComponent(path)
         let urls = try FileManager.default.contentsOfDirectory(
             at: directory,

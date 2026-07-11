@@ -96,11 +96,13 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
     var worktreeOpenAfterCreate: Bool?
     /// Per-project launcher mode preference. `nil` = use global default.
     var worktreeDefaultLauncherMode: AppConfig.LauncherMode?
+    /// SSH destination when this project lives on another machine.
+    var host: String?
 
     enum CodingKeys: String, CodingKey {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
              worktreeOrderIsManual, startupScripts,
-             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode
+             mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, host
     }
 
     init(
@@ -116,7 +118,8 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         startupScripts: ProjectStartupScripts = .defaults,
         mcpServers: [ProjectMCPServer] = [],
         worktreeOpenAfterCreate: Bool? = nil,
-        worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil
+        worktreeDefaultLauncherMode: AppConfig.LauncherMode? = nil,
+        host: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -130,6 +133,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         self.mcpServers = mcpServers
         self.worktreeOpenAfterCreate = worktreeOpenAfterCreate
         self.worktreeDefaultLauncherMode = worktreeDefaultLauncherMode
+        self.host = host
     }
 
     // Tolerant decode: older projects.json files predate hiddenWorktreePaths
@@ -155,6 +159,7 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         mcpServers = (try? c.decode([ProjectMCPServer].self, forKey: .mcpServers)) ?? []
         worktreeOpenAfterCreate = try? c.decode(Bool.self, forKey: .worktreeOpenAfterCreate)
         worktreeDefaultLauncherMode = try? c.decode(AppConfig.LauncherMode.self, forKey: .worktreeDefaultLauncherMode)
+        host = try? c.decode(String.self, forKey: .host)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -172,5 +177,6 @@ struct ProjectConfig: Codable, Equatable, Identifiable {
         try c.encode(mcpServers, forKey: .mcpServers)
         try c.encodeIfPresent(worktreeOpenAfterCreate, forKey: .worktreeOpenAfterCreate)
         try c.encodeIfPresent(worktreeDefaultLauncherMode, forKey: .worktreeDefaultLauncherMode)
+        try c.encodeIfPresent(host, forKey: .host)
     }
 }

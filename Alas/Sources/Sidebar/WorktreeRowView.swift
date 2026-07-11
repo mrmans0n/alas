@@ -143,7 +143,9 @@ struct WorktreeRowView: View {
                 Button("Open in Terminal", action: onOpenTerminal)
                 Button("Copy Path", action: onCopyPath)
                 Button("Copy Branch Name", action: onCopyBranch)
-                Button("Reveal in Finder", action: onRevealInFinder)
+                if !worktree.path.isRemoteAlasPath {
+                    Button("Reveal in Finder", action: onRevealInFinder)
+                }
                 Divider()
                 Button("Archive", action: onArchive)
                 Button("Delete Worktree…", role: .destructive, action: onDelete)

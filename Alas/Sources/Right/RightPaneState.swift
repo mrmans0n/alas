@@ -282,7 +282,9 @@ final class RightPaneState {
     }
 
     func start() {
-        watcher.start()
+        if !worktree.path.isRemoteAlasPath {
+            watcher.start()
+        }
         Task { @MainActor in await self.refresh() }
         Task { @MainActor in await self.refreshSyncStatus() }
         syncStatusTimer?.cancel()

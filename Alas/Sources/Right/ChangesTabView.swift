@@ -119,7 +119,7 @@ struct ChangesTabView: View {
                     let absolute = rps.worktree.path.appendingPathComponent(file.path).path
                     Clipboard.copy(absolute)
                 },
-                onRevealInFinder: { file in
+                onRevealInFinder: rps.worktree.path.isRemoteAlasPath ? nil : { file in
                     let url = rps.worktree.path.appendingPathComponent(file.path)
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 },

@@ -1204,12 +1204,14 @@ final class AppState {
         path: URL,
         displayName: String,
         icon: ProjectIcon,
+        host: String? = nil,
         id: String = UUID().uuidString
     ) async throws {
         let project = try await projectsManager.addProject(
             path: path,
             displayName: displayName,
             icon: icon,
+            host: host,
             id: id
         )
         spacesManager.addProject(project.id, toSpace: spacesManager.activeSpaceId)
@@ -1349,6 +1351,7 @@ final class AppState {
     /// stops any existing watcher for the same project id first.
     func startProjectGitWatcher(for project: ProjectConfig) {
         stopProjectGitWatcher(projectId: project.id)
+        if URL(fileURLWithPath: project.path).isRemoteAlasPath { return }
         let watcher = ProjectGitWatcher(repoPath: URL(fileURLWithPath: project.path))
         let projectId = project.id
         watcher.onHeadChanged = { [weak self] map in
