@@ -69,6 +69,56 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.streamingState == .idle)
     }
 
+    @Test("recording a submitted prompt keeps the suspended composer draft until prompt completion")
+    func recordingPromptKeepsSuspendedDraftUntilPromptCompletion() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rn-recorded-draft-\(UUID().uuidString).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let submitted = ACPComposerDraft(segments: [.text("hello")])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: submitted,
+            updatedAt: 1,
+            submittedRecovery: true
+        )
+        let client = StreamingBatchACPClient()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: client),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+
+        var completion: Bool?
+        runner.send(
+            text: "hello",
+            attachments: [],
+            intent: .auto,
+            draft: submitted
+        ) { succeeded in
+            completion = succeeded
+        }
+
+        try await waitUntil {
+            session.transcript.messages.contains {
+                    if case .user(_, _, "hello", _) = $0 { return true }
+                    return false
+                }
+        }
+        #expect(try store.loadComposerDraft(sessionId: "s") == submitted)
+        #expect(completion == nil)
+
+        await client.finishPrompt()
+        try await waitUntil { completion == true }
+        #expect(try store.loadComposerDraft(sessionId: "s") == submitted)
+    }
+
     @Test("prompt completion waits for yielded updates before marking output boundary")
     func promptCompletionWaitsForYieldedUpdatesBeforeBoundary() async throws {
         let url = FileManager.default.temporaryDirectory

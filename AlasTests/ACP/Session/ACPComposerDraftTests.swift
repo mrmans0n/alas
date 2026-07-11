@@ -44,4 +44,17 @@ struct ACPComposerDraftTests {
         #expect(!draft.isEmpty)
         #expect(draft.hasContent)
     }
+
+    @Test("persisted prompt matching normalizes image chips")
+    func persistedPromptMatchingNormalizesImageChips() {
+        let draft = ACPComposerDraft(segments: [
+            .text("Look at "),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text(" ")
+        ])
+
+        #expect(draft.matchesPersistedUserPrompt(
+            text: "Look at  ",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")]))
+    }
 }

@@ -378,16 +378,35 @@ final class ACPSessionManager: ObservableObject {
             throw ACPSessionHydrator.Error.sessionNotFound(id)
         }
         let stored = (try? store.loadMessages(sessionId: id)) ?? []
+        let storedDraft = try? store.loadComposerDraftRecord(sessionId: id)
+        let queue = (try? store.loadQueue(sessionId: id)) ?? []
+        var staleSubmittedDraft = false
+        var sawRecordedSubmittedDraft = false
         var wire: [ACPMessageWire] = []
         wire.reserveCapacity(stored.count)
         let decoder = JSONDecoder()
         for m in stored {
             if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
                 wire.append(w)
+                if storedDraft != nil,
+                   sawRecordedSubmittedDraft,
+                   w.isAgentSideProgress {
+                    staleSubmittedDraft = true
+                }
+                if let storedDraft,
+                   storedDraft.submittedRecovery,
+                   case .user(_, let text, let attachments) = w,
+                   storedDraft.draft.matchesSubmittedRecoveryPrompt(
+                    seq: m.seq,
+                    text: text,
+                    attachments: attachments,
+                    queue: queue,
+                    submittedAfterSeq: storedDraft.submittedAfterSeq)
+                {
+                    sawRecordedSubmittedDraft = true
+                }
             }
         }
-        let queue = (try? store.loadQueue(sessionId: id)) ?? []
-        let draft = try? store.loadComposerDraft(sessionId: id)
         let now = Int64(Date().timeIntervalSince1970)
         try? store.touchLastOpenedAt(id: id, at: now)
         let touched = ACPSessionRow(
@@ -402,6 +421,16 @@ final class ACPSessionManager: ObservableObject {
             lastOpenedAt: now,
             archived: row.archived)
         let recent = (try? store.recentSessions()) ?? []
+        let draft: ACPComposerDraft?
+        if staleSubmittedDraft, let storedDraft {
+            if (try? store.deleteComposerDraft(sessionId: id, matching: storedDraft)) == true {
+                draft = nil
+            } else {
+                draft = (try? store.loadComposerDraftRecord(sessionId: id))?.draft
+            }
+        } else {
+            draft = storedDraft?.draft
+        }
         return HydrationResult(row: touched, wireMessages: wire,
                                queue: queue, draft: draft, recent: recent)
     }
@@ -905,7 +934,14 @@ final class ACPSessionManager: ObservableObject {
         pendingDraftWrites[sid] = nil
         if !submitted.isEmpty {
             let now = Int64(Date().timeIntervalSince1970)
-            try? store.upsertComposerDraft(sessionId: sid, draft: submitted, updatedAt: now)
+            let submittedAfterSeq = try? store.latestMessageSeq(sessionId: sid)
+            try? store.upsertComposerDraft(
+                sessionId: sid,
+                draft: submitted,
+                updatedAt: now,
+                submittedRecovery: true,
+                submittedAfterSeq: submittedAfterSeq
+            )
         }
         session.replaceComposerDraft(.empty)
         return session.composerDraftRevision
@@ -939,6 +975,8 @@ final class ACPSessionManager: ObservableObject {
               session.composerDraft.isEmpty
         else { return }
         session.replaceComposerDraft(submitted)
+        let now = Int64(Date().timeIntervalSince1970)
+        try? store.upsertComposerDraft(sessionId: session.id, draft: submitted, updatedAt: now)
     }
 
     func refreshRecent() {

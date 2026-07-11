@@ -12,7 +12,7 @@ import Foundation
     @Test("schema includes leases and session origins")
     func schemaIncludesLeasesAndOrigins() throws {
         let store = try tempStore()
-        #expect(try store.currentSchemaVersion() == 8)
+        #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
     }
 
     @Test("session_leases table exists and is empty")

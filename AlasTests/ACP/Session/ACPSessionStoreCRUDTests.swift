@@ -446,6 +446,9 @@ struct ACPSessionStoreCRUDTests {
         #expect(try store.messageCount(sessionId: "s") == 2)
         #expect(try store.messageCount(sessionId: "other") == 1)
         #expect(try store.messageCount(sessionId: "missing") == 0)
+        #expect(try store.latestMessageSeq(sessionId: "s") == 1)
+        #expect(try store.latestMessageSeq(sessionId: "other") == 0)
+        #expect(try store.latestMessageSeq(sessionId: "missing") == nil)
     }
 
     @Test("composer draft upsert load and delete round-trips")
@@ -466,6 +469,23 @@ struct ACPSessionStoreCRUDTests {
 
         #expect(try store.loadComposerDraft(sessionId: "s") == draft)
         #expect(try ACPSessionStore(path: url.path).loadComposerDraft(sessionId: "s") == draft)
+
+        let stored = try #require(try store.loadComposerDraftRecord(sessionId: "s"))
+        #expect(stored.submittedRecovery == false)
+        #expect(stored.submittedAfterSeq == nil)
+        let newer = ACPComposerDraft(segments: [.text("newer")])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: newer,
+            updatedAt: 124,
+            submittedRecovery: true,
+            submittedAfterSeq: 42
+        )
+        let newerStored = try #require(try store.loadComposerDraftRecord(sessionId: "s"))
+        #expect(newerStored.submittedRecovery == true)
+        #expect(newerStored.submittedAfterSeq == 42)
+        #expect(try store.deleteComposerDraft(sessionId: "s", matching: stored) == false)
+        #expect(try store.loadComposerDraft(sessionId: "s") == newer)
 
         try store.deleteComposerDraft(sessionId: "s")
         #expect(try store.loadComposerDraft(sessionId: "s") == nil)

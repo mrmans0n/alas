@@ -101,6 +101,361 @@ struct ACPSessionManagerHydrationTests {
         #expect(s.remoteSessionId == "remote-1")
     }
 
+    @Test("hydrateIfNeeded drops a suspended draft already recorded in the transcript")
+    func hydrateDropsRecordedSuspendedDraft() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let draft = ACPComposerDraft(segments: [.text("already sent")])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: draft,
+            updatedAt: 10,
+            submittedRecovery: true
+        )
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "already sent",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 11
+        )
+        let agentMessage = ACPMessage.agent(id: UUID(), StreamingText("done"))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m1",
+            kind: agentMessage.kind,
+            seq: 1,
+            payload: ACPMessageCodec.encode(agentMessage),
+            createdAt: 12
+        )
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == .empty)
+        #expect(try store.loadComposerDraft(sessionId: "s") == nil)
+    }
+
+    @Test("hydrateIfNeeded preserves a recorded draft until agent progress is stored")
+    func hydratePreservesRecordedDraftUntilAgentProgress() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let draft = ACPComposerDraft(segments: [.text("maybe not delivered")])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: draft,
+            updatedAt: 10,
+            submittedRecovery: true
+        )
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "maybe not delivered",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 11
+        )
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == draft)
+        #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+    }
+
+    @Test("hydrateIfNeeded preserves a matching draft newer than the transcript prompt")
+    func hydratePreservesNewerMatchingDraft() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "repeat this",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 10
+        )
+        let draft = ACPComposerDraft(segments: [.text("repeat this")])
+        try store.upsertComposerDraft(sessionId: "s", draft: draft, updatedAt: 11)
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == draft)
+        #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+    }
+
+    @Test("hydrateIfNeeded preserves a matching draft saved in the same second as a prompt")
+    func hydratePreservesSameSecondMatchingDraft() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "repeat this",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 10
+        )
+        let agentMessage = ACPMessage.agent(id: UUID(), StreamingText("done"))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m1",
+            kind: agentMessage.kind,
+            seq: 1,
+            payload: ACPMessageCodec.encode(agentMessage),
+            createdAt: 10
+        )
+        let draft = ACPComposerDraft(segments: [.text("repeat this")])
+        try store.upsertComposerDraft(sessionId: "s", draft: draft, updatedAt: 10)
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == draft)
+        #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+    }
+
+    @Test("hydrateIfNeeded drops a submitted recovery draft saved in the same second as a prompt")
+    func hydrateDropsSameSecondSubmittedRecoveryDraft() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let draft = ACPComposerDraft(segments: [.text("repeat this")])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: draft,
+            updatedAt: 10,
+            submittedRecovery: true
+        )
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "repeat this",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 10
+        )
+        let agentMessage = ACPMessage.agent(id: UUID(), StreamingText("done"))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m1",
+            kind: agentMessage.kind,
+            seq: 1,
+            payload: ACPMessageCodec.encode(agentMessage),
+            createdAt: 10
+        )
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == .empty)
+        #expect(try store.loadComposerDraft(sessionId: "s") == nil)
+    }
+
+    @Test("hydrateIfNeeded preserves a submitted recovery draft that only matches an older turn")
+    func hydratePreservesSubmittedRecoveryDraftMatchingOnlyOlderTurn() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let oldUserMessage = ACPMessage.user(
+            id: UUID(),
+            text: "repeat this",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: oldUserMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(oldUserMessage),
+            createdAt: 8
+        )
+        let oldAgentMessage = ACPMessage.agent(id: UUID(), StreamingText("old done"))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m1",
+            kind: oldAgentMessage.kind,
+            seq: 1,
+            payload: ACPMessageCodec.encode(oldAgentMessage),
+            createdAt: 9
+        )
+        let draft = ACPComposerDraft(segments: [.text("repeat this")])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: draft,
+            updatedAt: 10,
+            submittedRecovery: true,
+            submittedAfterSeq: 1
+        )
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == draft)
+        #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+    }
+
+    @Test("hydrateIfNeeded drops a submitted image recovery draft once the image prompt progresses")
+    func hydrateDropsSubmittedImageRecoveryDraftAfterProgress() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let draft = ACPComposerDraft(segments: [
+            .text("Look at "),
+            .image(uri: "file:///tmp/shot.png", mimeType: "image/png"),
+            .text(" ")
+        ])
+        try store.upsertComposerDraft(
+            sessionId: "s",
+            draft: draft,
+            updatedAt: 10,
+            submittedRecovery: true
+        )
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "Look at  ",
+            attachments: [.init(uri: "file:///tmp/shot.png", name: "shot.png", mimeType: "image/png")]
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 10
+        )
+        let agentMessage = ACPMessage.agent(id: UUID(), StreamingText("done"))
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m1",
+            kind: agentMessage.kind,
+            seq: 1,
+            payload: ACPMessageCodec.encode(agentMessage),
+            createdAt: 11
+        )
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == .empty)
+        #expect(try store.loadComposerDraft(sessionId: "s") == nil)
+    }
+
+    @Test("hydrateIfNeeded preserves a draft that matches a recorded queued prompt")
+    func hydratePreservesDraftMatchingRecordedQueueItem() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let userMessage = ACPMessage.user(
+            id: UUID(),
+            text: "queued repeat",
+            attachments: []
+        )
+        try store.appendMessage(
+            sessionId: "s",
+            id: "m0",
+            kind: userMessage.kind,
+            seq: 0,
+            payload: ACPMessageCodec.encode(userMessage),
+            createdAt: 11
+        )
+        let draft = ACPComposerDraft(segments: [.text("queued repeat")])
+        try store.upsertComposerDraft(sessionId: "s", draft: draft, updatedAt: 10)
+        try store.upsertQueue(sessionId: "s", items: [
+            QueuedPrompt(
+                blocks: [.text("queued repeat")],
+                draft: draft,
+                transcriptRecorded: true
+            )
+        ])
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let s = try #require(mgr.placeholderSession(id: "s"))
+
+        await mgr.hydrateIfNeeded(id: "s")
+
+        #expect(s.hydrationState == .ready)
+        #expect(s.composerDraft == draft)
+        #expect(try store.loadComposerDraft(sessionId: "s") == draft)
+        #expect(s.queue.count == 1)
+    }
+
     @Test("hydrateIfNeeded does not overwrite a newer in-memory remote ACP session id")
     func hydratePreservesNewerRemoteSessionId() async throws {
         let path = tmpStorePath()
