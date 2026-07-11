@@ -1,7 +1,7 @@
 import Foundation
 
-struct QueuedPrompt: Identifiable, Equatable, Codable {
-    enum Status: String, Codable, Equatable { case pending, sending }
+struct QueuedPrompt: Identifiable, Equatable, Codable, Sendable {
+    enum Status: String, Codable, Equatable, Sendable { case pending, sending }
 
     let id: UUID
     var blocks: [ACPContentBlock]

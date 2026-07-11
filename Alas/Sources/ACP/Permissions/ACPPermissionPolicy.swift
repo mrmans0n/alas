@@ -19,7 +19,7 @@ final class ACPPermissionPolicy {
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))
         }
-        if let logged = try? log.lookup(sessionId: session.id, scopeKey: scopeKey) {
+        if let logged = try? await log.lookup(sessionId: session.id, scopeKey: scopeKey) {
             switch logged {
             case .allow:
                 if let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
@@ -48,9 +48,19 @@ final class ACPPermissionPolicy {
     /// Called by the UI when the user clicks a button. `persistScope` is
     /// .session for Allow/Deny, .project for "Always for this tool", and nil
     /// for Allow-once. Decision recorded if non-nil.
-    func userDecided(scopeKey: String, optionId: String, decision: ACPPermissionDecision, persistScope: ACPPermissionScopeKind?) {
+    func userDecided(
+        scopeKey: String,
+        optionId: String,
+        decision: ACPPermissionDecision,
+        persistScope: ACPPermissionScopeKind?
+    ) async {
         if let scope = persistScope {
-            try? log.record(sessionId: session.id, scopeKey: scopeKey, decision: decision, scope: scope)
+            try? await log.record(
+                sessionId: session.id,
+                scopeKey: scopeKey,
+                decision: decision,
+                scope: scope
+            )
         }
         session.transcript.pendingPermission = nil
         session.transcript.streamingState = .streaming

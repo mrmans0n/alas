@@ -5,7 +5,7 @@ import Testing
 @Suite("ACPPermissionDecisionLog")
 struct ACPPermissionDecisionLogTests {
     @Test("session-scoped allow is found by exact session id only")
-    func sessionScope() throws {
+    func sessionScope() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("perm-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s1", agentId: "claude", title: "t",
@@ -16,13 +16,13 @@ struct ACPPermissionDecisionLogTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let log = ACPPermissionDecisionLog(store: store)
-        try log.record(sessionId: "s1", scopeKey: "tool:bash", decision: .allow, scope: .session)
-        #expect(try log.lookup(sessionId: "s1", scopeKey: "tool:bash") == .allow)
-        #expect(try log.lookup(sessionId: "s2", scopeKey: "tool:bash") == nil)
+        try await log.record(sessionId: "s1", scopeKey: "tool:bash", decision: .allow, scope: .session)
+        #expect(try await log.lookup(sessionId: "s1", scopeKey: "tool:bash") == .allow)
+        #expect(try await log.lookup(sessionId: "s2", scopeKey: "tool:bash") == nil)
     }
 
     @Test("project-scoped allow is found across any session")
-    func projectScope() throws {
+    func projectScope() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("perm-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s1", agentId: "claude", title: "t",
@@ -33,7 +33,7 @@ struct ACPPermissionDecisionLogTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let log = ACPPermissionDecisionLog(store: store)
-        try log.record(sessionId: "s1", scopeKey: "tool:bash", decision: .allow, scope: .project)
-        #expect(try log.lookup(sessionId: "s2", scopeKey: "tool:bash") == .allow)
+        try await log.record(sessionId: "s1", scopeKey: "tool:bash", decision: .allow, scope: .project)
+        #expect(try await log.lookup(sessionId: "s2", scopeKey: "tool:bash") == .allow)
     }
 }

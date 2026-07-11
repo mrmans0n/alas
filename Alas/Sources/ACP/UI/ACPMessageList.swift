@@ -29,7 +29,7 @@ struct ACPMessageList: View {
     /// expanded card's in-memory content was truncated. Wired by the host
     /// to `ACPSessionManager.reloadFullToolCallContent`. Returns nil when
     /// the row is gone or the payload is undecodable.
-    let onLoadFullToolCallContent: (String) -> String?
+    let onLoadFullToolCallContent: (String) async -> String?
     @Environment(\.theme) private var theme
     @State private var isRestoringTail = false
     @State private var headFrame: CGRect = .zero

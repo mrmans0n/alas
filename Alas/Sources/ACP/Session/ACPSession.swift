@@ -16,7 +16,7 @@ final class ACPComposerState: ObservableObject {
     }
 }
 
-enum ACPSessionTitleSource: String, Codable {
+enum ACPSessionTitleSource: String, Codable, Sendable {
     case placeholder
     case generated
     case manual

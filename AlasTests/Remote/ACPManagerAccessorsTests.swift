@@ -45,27 +45,26 @@ struct ACPManagerAccessorsTests {
         #expect(mgr.isWriter(for: s.id) == true)
     }
 
-    @Test func isWriterFalseWhenAnotherLiveInstanceOwnsLease() throws {
-        // Regression: after another window seizes the lease, the former owner
-        // keeps the id in `_ownedLeases` until its heartbeat stands down
-        // (~leaseStaleAfter seconds). isWriter must consult the store and report
-        // false in that window so a phone on the old owner can't keep writing
-        // into a session another instance now drives.
+    @Test func authoritativeWriterCheckStandsDownAfterTakeover() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-accessors-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
         let s = mgr.createSession(agentId: "claude")
-        mgr._ownedLeases.insert(s.id)
-        #expect(mgr.isWriter(for: s.id) == true)   // we claim it; no conflicting store row
-        // Another LIVE instance seizes the store lease (fresh heartbeat, live pid).
+        await mgr.flushPersistence()
+        #expect(await mgr.acquireWriterLease(sessionId: s.id))
+        #expect(mgr.isWriter(for: s.id))
         let now = Int64(Date().timeIntervalSince1970)
         try store.seizeLease(sessionId: s.id, instanceId: "other-window",
                              pid: Int64(ProcessInfo.processInfo.processIdentifier), now: now)
-        #expect(mgr.isWriter(for: s.id) == false)  // store says another live instance owns it
+
+        var result: Bool?
+        await mgr.sendPrompt(for: s.id, text: "hi", attachments: []) { result = $0 }
+        #expect(result == false)
+        #expect(mgr.isWriter(for: s.id) == false)
     }
 
-    @Test func sendPromptRefusedWhenNotWriter() throws {
+    @Test func sendPromptRefusedWhenNotWriter() async throws {
         // Re-checks the lease at call time: a manager that isn't the writer must
         // refuse the remote prompt instead of enqueuing it as a mirror (closing
         // the TOCTOU window between the gateway's isWriter gate and submit).
@@ -73,30 +72,55 @@ struct ACPManagerAccessorsTests {
         let s = mgr.createSession(agentId: "claude")
         #expect(mgr.isWriter(for: s.id) == false)
         var result: Bool?
-        mgr.sendPrompt(for: s.id, text: "hi", attachments: []) { result = $0 }
+        await mgr.sendPrompt(for: s.id, text: "hi", attachments: []) { result = $0 }
         #expect(result == false)   // refused synchronously
         #expect(s.queue.isEmpty)   // nothing enqueued/persisted as a mirror
     }
 
-    @Test func setAutoRunRequiresWriter() throws {
+    @Test func setAutoRunRequiresWriter() async throws {
         let mgr = try makeManager()
         let s = mgr.createSession(agentId: "claude")
-        mgr.setAutoRun(for: s.id, enabled: true)
+        await mgr.setAutoRun(for: s.id, enabled: true)
         #expect(s.autoRunEnabled == false)          // not writer → ignored
-        mgr._ownedLeases.insert(s.id)
-        mgr.setAutoRun(for: s.id, enabled: true)
+        await mgr.flushPersistence()
+        #expect(await mgr.acquireWriterLease(sessionId: s.id))
+        await mgr.setAutoRun(for: s.id, enabled: true)
         #expect(s.autoRunEnabled == true)
     }
 
-    @Test func setModelOptimisticallyUpdatesAndRequiresWriter() throws {
+    @Test func setModelOptimisticallyUpdatesAndRequiresWriter() async throws {
         let mgr = try makeManager()
         let s = mgr.createSession(agentId: "claude")
-        mgr.setModel(for: s.id, modelId: "opus")
+        await mgr.setModel(for: s.id, modelId: "opus")
         #expect(s.currentModel == nil)              // not writer → ignored
-        mgr._ownedLeases.insert(s.id)
-        mgr.setModel(for: s.id, modelId: "opus")
+        await mgr.flushPersistence()
+        #expect(await mgr.acquireWriterLease(sessionId: s.id))
+        await mgr.setModel(for: s.id, modelId: "opus")
         #expect(s.currentModel == "opus")           // optimistic update even with no runner
-        mgr.setMode(for: s.id, modeId: "ask")
+        await mgr.setMode(for: s.id, modeId: "ask")
         #expect(s.currentMode == "ask")
+    }
+
+    @Test func sendPromptRejectsFormerWriterAfterTakeover() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("acp-former-writer-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        await mgr.flushPersistence()
+        #expect(await mgr.acquireWriterLease(sessionId: session.id))
+        try store.seizeLease(
+            sessionId: session.id,
+            instanceId: "other-window",
+            pid: Int64(ProcessInfo.processInfo.processIdentifier),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+
+        var result: Bool?
+        await mgr.sendPrompt(for: session.id, text: "hi", attachments: []) { result = $0 }
+
+        #expect(result == false)
+        #expect(mgr.isWriter(for: session.id) == false)
+        #expect(session.queue.isEmpty)
     }
 }

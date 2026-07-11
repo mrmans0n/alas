@@ -82,7 +82,7 @@ final class ACPSessionDiscoveryHandle {
     private let worktreeId: String
     private let agentId: String
     private let cwd: String
-    private let store: ACPSessionStore
+    private let persistence: ACPSessionPersistence
     private let connection: ACPConnection
     private var nextCursor: String?
     private var hasLoadedPage = false
@@ -92,14 +92,14 @@ final class ACPSessionDiscoveryHandle {
         worktreeId: String,
         agentId: String,
         cwd: String,
-        store: ACPSessionStore,
+        persistence: ACPSessionPersistence,
         connection: ACPConnection,
         capabilities: ACPSessionDiscoveryCapabilities
     ) {
         self.worktreeId = worktreeId
         self.agentId = agentId
         self.cwd = cwd
-        self.store = store
+        self.persistence = persistence
         self.connection = connection
         self.capabilities = capabilities
     }
@@ -112,18 +112,23 @@ final class ACPSessionDiscoveryHandle {
         hasLoadedPage = true
         nextCursor = page.nextCursor
         let expectedCWD = URL(fileURLWithPath: cwd).standardizedFileURL.path
-        return page.sessions.compactMap { info in
+        var discovered: [ACPDiscoveredSession] = []
+        discovered.reserveCapacity(page.sessions.count)
+        for info in page.sessions {
             guard URL(fileURLWithPath: info.cwd).standardizedFileURL.path == expectedCWD else {
-                return nil
+                continue
             }
-            let local = try? store.loadSession(agentId: agentId, remoteSessionId: info.sessionId)
+            let local = try? await persistence.loadSession(
+                agentId: agentId,
+                remoteSessionId: info.sessionId
+            )
             let remoteTitle = info.title?.trimmingCharacters(in: .whitespacesAndNewlines)
             let displayTitle = if let remoteTitle, !remoteTitle.isEmpty {
                 remoteTitle
             } else {
                 "Agent session"
             }
-            return ACPDiscoveredSession(
+            discovered.append(ACPDiscoveredSession(
                 worktreeId: worktreeId,
                 agentId: agentId,
                 remoteSessionId: info.sessionId,
@@ -132,8 +137,9 @@ final class ACPSessionDiscoveryHandle {
                 updatedAt: info.updatedAt.flatMap { ISO8601DateFormatter().date(from: $0) },
                 additionalDirectories: info.additionalDirectories ?? [],
                 localSessionId: local?.id
-            )
+            ))
         }
+        return discovered
     }
 
     func close() async {

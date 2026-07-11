@@ -480,10 +480,14 @@ struct AgentLauncherDialog: View {
     }
 
     private func openDiscoveredSession(_ session: ACPDiscoveredSession) {
-        guard let capabilities = discoveryModel?.capabilities,
-              appState.openDiscoveredACPSession(session, capabilities: capabilities)
-        else { return }
-        close()
+        guard let capabilities = discoveryModel?.capabilities else { return }
+        Task {
+            guard await appState.openDiscoveredACPSession(
+                session,
+                capabilities: capabilities
+            ) else { return }
+            close()
+        }
     }
 
     private func backToAgents() {

@@ -196,8 +196,14 @@ struct ACPPermissionPrompt: View {
         case "allow_always", "reject_always": persistScope = .project
         default:                              persistScope = .session
         }
-        policy.userDecided(scopeKey: scopeKey, optionId: option.optionId,
-                           decision: decision, persistScope: persistScope)
+        Task {
+            await policy.userDecided(
+                scopeKey: scopeKey,
+                optionId: option.optionId,
+                decision: decision,
+                persistScope: persistScope
+            )
+        }
     }
 }
 

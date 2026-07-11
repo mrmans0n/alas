@@ -21,7 +21,7 @@ struct ReviewLoopHandoffRoutingTests {
         }
     }
 
-    @Test func handoffReusesActiveACPChatWithEmptyComposer() throws {
+    @Test func handoffReusesActiveACPChatWithEmptyComposer() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
         let initialTabs = acpTabs(in: state)
@@ -38,7 +38,7 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == existing.id)
     }
 
-    @Test func handoffOpensNewACPChatWhenActiveComposerHasText() throws {
+    @Test func handoffOpensNewACPChatWhenActiveComposerHasText() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
         let existing = try #require(acpTabs(in: state).first)
@@ -58,7 +58,7 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
     }
 
-    @Test func handoffOpensNewACPChatWhenActiveComposerHasWhitespaceOnlyText() throws {
+    @Test func handoffOpensNewACPChatWhenActiveComposerHasWhitespaceOnlyText() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
         let existing = try #require(acpTabs(in: state).first)
@@ -84,7 +84,7 @@ struct ReviewLoopHandoffRoutingTests {
         let worktreeId = try #require(state.selectedWorktreeId)
         let restoredSessionId = "restored-\(UUID().uuidString)"
         let persistedDraft = ACPComposerDraft(segments: [.text("Persisted draft")])
-        try seedPersistedSession(id: restoredSessionId, worktreeId: worktreeId, draft: persistedDraft)
+        try await seedPersistedSession(id: restoredSessionId, worktreeId: worktreeId, draft: persistedDraft)
         let existing = ACPSessionTabState(sessionId: restoredSessionId, title: "Restored")
         state.tabs.append(acpSession: existing, to: worktreeId)
 
@@ -93,6 +93,7 @@ struct ReviewLoopHandoffRoutingTests {
         let tabs = acpTabs(in: state)
         #expect(tabs.count == 2)
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        await manager.refreshRecentNow()
         let restoredSession = try #require(manager.placeholderSession(id: restoredSessionId))
         #expect(restoredSession.hydrationState == .loading)
         let newTab = try #require(tabs.last)
@@ -103,7 +104,7 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(restoredSession.composerDraft == persistedDraft)
     }
 
-    @Test func handoffOpensNewACPChatWhenActiveSessionHasTranscriptHistory() throws {
+    @Test func handoffOpensNewACPChatWhenActiveSessionHasTranscriptHistory() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
         let existing = try #require(acpTabs(in: state).first)
@@ -123,7 +124,7 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
     }
 
-    @Test func handoffOpensNewACPChatWhenActiveSessionHasQueuedPrompt() throws {
+    @Test func handoffOpensNewACPChatWhenActiveSessionHasQueuedPrompt() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
         let existing = try #require(acpTabs(in: state).first)
@@ -143,7 +144,7 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
     }
 
-    @Test func handoffOpensNewACPChatWhenActiveSessionUsesDifferentAgent() throws {
+    @Test func handoffOpensNewACPChatWhenActiveSessionUsesDifferentAgent() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "other-agent")
         let existing = try #require(acpTabs(in: state).first)
@@ -162,12 +163,13 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
     }
 
-    @Test func handoffOpensNewACPChatWhenActiveSessionIsMirror() throws {
+    @Test func handoffOpensNewACPChatWhenActiveSessionIsMirror() async throws {
         let state = makeState()
         state.openNewACPSession(agentID: "test-agent")
         let existing = try #require(acpTabs(in: state).first)
         let worktreeId = try #require(state.selectedWorktreeId)
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        await manager.flushPersistence()
         let mirrorOwner = ACPSessionManager(
             worktreeId: worktreeId,
             worktreePath: "/tmp/mirror-owner",
@@ -175,7 +177,8 @@ struct ReviewLoopHandoffRoutingTests {
             instanceId: "mirror-owner",
             pid: Int64(getpid())
         )
-        #expect(mirrorOwner.acquireWriterLease(sessionId: existing.sessionId))
+        #expect(await mirrorOwner.acquireWriterLease(sessionId: existing.sessionId))
+        #expect(!(await manager.acquireWriterLease(sessionId: existing.sessionId)))
         #expect(manager.isMirror(sessionId: existing.sessionId))
 
         state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
@@ -188,10 +191,10 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
         #expect(state.tabs.activeTabId(forWorktree: worktreeId) == newTab.id)
 
-        mirrorOwner.releaseWriterLease(sessionId: existing.sessionId)
+        await mirrorOwner.releaseWriterLease(sessionId: existing.sessionId)
     }
 
-    @Test func handoffOpensNewACPChatWhenNoActiveACPChatExists() throws {
+    @Test func handoffOpensNewACPChatWhenNoActiveACPChatExists() async throws {
         let state = makeState()
 
         state.openACPHandoff(agentID: "test-agent", initialPrompt: "Review feedback")
@@ -271,7 +274,7 @@ struct ReviewLoopHandoffRoutingTests {
         return state.acpManager(forWorktreeId: worktreeId)?.placeholderSession(id: tab.sessionId)
     }
 
-    private func seedPersistedSession(id: String, worktreeId: String, draft: ACPComposerDraft) throws {
+    private func seedPersistedSession(id: String, worktreeId: String, draft: ACPComposerDraft) async throws {
         let storeURL = Paths.acpSessionsDB(forWorktreeId: worktreeId)
         try? FileManager.default.removeItem(at: storeURL)
         try FileManager.default.createDirectory(

@@ -12,8 +12,36 @@ struct ACPTabView: View {
     let worktree: Worktree
 
     var body: some View {
-        if let manager = state.acpManager(for: worktree),
-           let session = manager.placeholderSession(id: sessionId) {
+        if let manager = state.acpManager(for: worktree) {
+            ACPManagedTabView(
+                sessionId: sessionId,
+                state: state,
+                worktree: worktree,
+                manager: manager
+            )
+        } else {
+            unavailable
+        }
+    }
+
+    private var unavailable: some View {
+        VStack {
+            Spacer()
+            Text("ACP session unavailable").foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct ACPManagedTabView: View {
+    let sessionId: ACPSession.ID
+    let state: AppState
+    let worktree: Worktree
+    @ObservedObject var manager: ACPSessionManager
+
+    var body: some View {
+        if let session = manager.placeholderSession(id: sessionId) {
             ACPSessionView(
                 sessionId: sessionId,
                 state: state,
@@ -36,12 +64,21 @@ struct ACPTabView: View {
                 manager.releaseSession(id: sessionId)
             }
         } else {
-            VStack {
-                Spacer()
-                Text("ACP session unavailable").foregroundStyle(.secondary)
-                Spacer()
+            if manager.isKnownMissingSession(id: sessionId) {
+                VStack {
+                    Spacer()
+                    Text("ACP session unavailable").foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task {
+                        _ = manager.placeholderSession(id: sessionId)
+                    }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -403,7 +440,7 @@ private struct ACPSessionView: View {
                 )
             },
             onLoadFullToolCallContent: { toolCallId in
-                manager.reloadFullToolCallContent(
+                await manager.reloadFullToolCallContent(
                     sessionId: sessionId, toolCallId: toolCallId)
             }
         )
@@ -582,7 +619,9 @@ private struct ACPSessionView: View {
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
-            Button("Take over here") { manager.takeOver(sessionId: sessionId) }
+            Button("Take over here") {
+                Task { await manager.takeOver(sessionId: sessionId) }
+            }
                 .controlSize(.small)
                 .padding(.trailing, 12)
         }

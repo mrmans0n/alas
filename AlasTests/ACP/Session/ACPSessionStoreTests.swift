@@ -22,6 +22,23 @@ struct ACPSessionStoreSchemaTests {
         _ = try ACPSessionStore(path: url.path) // must not throw
     }
 
+    @Test("migrates a version 10 lease table with a stable token column")
+    func migratesV10LeaseToken() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")
+        do {
+            let store = try ACPSessionStore(path: url.path)
+            try store.db.exec("ALTER TABLE session_leases DROP COLUMN lease_token")
+            try store.db.exec("UPDATE schema_version SET version = 10")
+        }
+
+        let store = try ACPSessionStore(path: url.path)
+        let columns = try store.db.query("PRAGMA table_info(session_leases)")
+        #expect(columns.contains { ($0["name"] as? String) == "lease_token" })
+        #expect(try store.currentSchemaVersion() == 11)
+
+        _ = try ACPSessionStore(path: url.path)
+    }
+
     @Test("migrates schema version 1 to current target")
     func migratesV1ToCurrent() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("acp-store-\(UUID()).sqlite")
@@ -82,5 +99,33 @@ struct ACPSessionStoreSchemaTests {
 
         #expect(try store.loadComposerDraft(sessionId: "s") == draft)
         #expect(try store.loadComposerDraftRecord(sessionId: "s")?.submittedRecovery == false)
+    }
+
+    @Test("streaming salvage never replaces an existing deterministic row")
+    @MainActor
+    func insertMessageIfMissingPreservesNewOwnerRow() throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let first = ACPStoredMessage(
+            id: "msg-s-1", sessionId: "s", kind: "agent", seq: 1,
+            payload: try ACPMessageCodec.encode(.agent(id: UUID(), StreamingText("new owner"))),
+            createdAt: 1
+        )
+        let stale = ACPStoredMessage(
+            id: "msg-s-1", sessionId: "s", kind: "agent", seq: 1,
+            payload: try ACPMessageCodec.encode(.agent(id: UUID(), StreamingText("former owner"))),
+            createdAt: 2
+        )
+
+        #expect(try store.insertMessageIfMissing(first))
+        #expect(!(try store.insertMessageIfMissing(stale)))
+        let stored = try #require(try store.loadMessages(sessionId: "s").first)
+        guard case .agent(_, _, let text) = try ACPMessageCodec.decode(kind: stored.kind, payload: stored.payload) else {
+            Issue.record("expected agent message")
+            return
+        }
+        #expect(text.value == "new owner")
     }
 }

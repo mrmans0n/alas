@@ -796,14 +796,14 @@ struct ACPSessionPromptParams: Codable, Equatable {
     let prompt: [ACPContentBlock]
 }
 
-enum ACPContentBlock: Codable, Equatable {
+enum ACPContentBlock: Codable, Equatable, Sendable {
     case text(String)
     case resourceLink(uri: String, name: String?)
     case image(data: String?, uri: String?, mimeType: String?)
     case resource(uri: String, mimeType: String?, text: String)
 
     private enum Keys: String, CodingKey { case type, text, uri, name, mimeType, data, resource }
-    private struct EmbeddedResource: Codable, Equatable {
+    private struct EmbeddedResource: Codable, Equatable, Sendable {
         let uri: String
         let mimeType: String?
         let text: String?

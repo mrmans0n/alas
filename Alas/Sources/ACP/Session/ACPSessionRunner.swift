@@ -4,7 +4,7 @@ import Foundation
 final class ACPSessionRunner {
     let session: ACPSession
     let connection: ACPConnection
-    let store: ACPSessionStore
+    let persistence: ACPSessionPersistence
     /// LOCAL session id — our UUID assigned by `ACPSessionManager.createSession`,
     /// used as the persistence key in `ACPSessionStore`. The protocol-side
     /// (remote) session id lives on `session.remoteSessionId` and is what
@@ -42,6 +42,9 @@ final class ACPSessionRunner {
     /// back in via a re-augment from `ProcessInfo`.
     private let agentEnv: [String: String]
     private let ownerInstanceId: String?
+    private let canWrite: () -> Bool
+    private let validateLease: () async -> Bool
+    private let leaseFenceProvider: () -> ACPSessionLeaseFence?
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
     private let onSessionTitleUpdated: ((String) -> Void)?
@@ -62,14 +65,21 @@ final class ACPSessionRunner {
     private var cancelledPromptIDs: Set<Int> = []
     private var appliedUpdateCount = 0
     private var persistedMessageCount: Int
+    private var persistenceTail: Task<Void, Never>?
+    private var persistenceGeneration = 0
     private var pendingCompletedOutputBoundaryUpdateCount: Int?
     private var pendingStreamingPersistIndices: Set<Int> = []
+    /// Revisions distinguish a new streamed chunk from the payload currently
+    /// being written. A successful write may only clear the revision it saw.
+    private var pendingStreamingPersistRevisions: [Int: Int] = [:]
+    private var streamingPersistInFlightIndices: Set<Int> = []
     private var pendingStreamingPersistSnapshots: [Int: StreamingPersistSnapshot] = [:]
     /// The exact payload bytes this runner last wrote for each message row.
     /// Used as the compare-and-swap base when a takeover forces a stand-down
     /// flush, so the CAS never reads the (potentially growing) payload blob
     /// from SQLite on the streaming path.
     private var lastPersistedPayloads: [Int: Data] = [:]
+    private var capturingPersistedBaseIndices: Set<Int> = []
     /// Set once a cross-process takeover is detected mid-stream. While true,
     /// streamed chunks are no longer buffered for persistence and the
     /// stand-down flush writes the frozen snapshots via compare-and-swap
@@ -107,7 +117,7 @@ final class ACPSessionRunner {
         let basePayload: Data?
     }
 
-    init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore,
+    init(session: ACPSession, connection: ACPConnection, store: ACPSessionStore? = nil,
          sessionId: String, worktreePath: String,
          agentEnv: [String: String] = ProcessInfo.processInfo.environment,
          suppressingLoadReplay: Bool = false,
@@ -120,11 +130,18 @@ final class ACPSessionRunner {
          onResumeTranscriptTail: (() -> Void)? = nil,
          streamingPersistDebounceNanos: UInt64 = 250_000_000,
          incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
-         ownerInstanceId: String? = nil)
+         ownerInstanceId: String? = nil,
+         persistence: ACPSessionPersistence? = nil,
+         persistedMessageCount: Int? = nil,
+         canWrite: (() -> Bool)? = nil,
+         validateLease: (() async -> Bool)? = nil,
+         leaseFenceProvider: (() -> ACPSessionLeaseFence?)? = nil)
     {
+        precondition(store != nil || persistence != nil, "ACPSessionRunner requires persistence")
+        let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
         self.session = session
         self.connection = connection
-        self.store = store
+        self.persistence = resolvedPersistence
         self.sessionId = sessionId
         self.worktreePath = worktreePath
         self.agentEnv = agentEnv
@@ -142,28 +159,84 @@ final class ACPSessionRunner {
         self.onLiveBufferRead = onLiveBufferRead
         self.onUserCancel = onUserCancel
         self.onResumeTranscriptTail = onResumeTranscriptTail
-        self.persistedMessageCount = (try? store.messageCount(sessionId: sessionId)) ?? 0
-        self.seq = Int64(persistedMessageCount)
+        let initialPersistedMessageCount = persistedMessageCount
+            ?? store.flatMap { try? $0.messageCount(sessionId: sessionId) }
+            ?? 0
+        self.persistedMessageCount = initialPersistedMessageCount
+        self.seq = Int64(initialPersistedMessageCount)
         // Capture the three values holdsLeaseForWrite() reads so the closure
         // can be formed before `self` is fully initialised (policy is the
         // last stored property). The logic is identical to holdsLeaseForWrite.
-        let _store = store
         let _sessionId = sessionId
         let _ownerInstanceId = ownerInstanceId
+        let defaultCanWrite = {
+            guard let id = _ownerInstanceId else { return true }
+            guard let store else { return false }
+            return (try? store.loadLease(sessionId: _sessionId))?.ownerInstance == id
+        }
+        self.canWrite = canWrite ?? defaultCanWrite
+        self.validateLease = validateLease ?? { canWrite?() ?? defaultCanWrite() }
+        let initialLease = ownerInstanceId.flatMap { owner in
+            guard let lease = try? store?.loadLease(sessionId: sessionId),
+                  lease.ownerInstance == owner else { return nil as ACPSessionLeaseFence? }
+            return ACPSessionLeaseFence(
+                sessionId: sessionId,
+                ownerInstance: owner,
+                token: lease.token
+            )
+        }
+        self.leaseFenceProvider = leaseFenceProvider ?? { initialLease }
         self.policy = ACPPermissionPolicy(
             session: session,
-            log: ACPPermissionDecisionLog(store: store, canWrite: {
-                guard let id = _ownerInstanceId else { return true }
-                return (try? _store.loadLease(sessionId: _sessionId))?.ownerInstance == id
-            })
+            log: ACPPermissionDecisionLog(
+                persistence: resolvedPersistence,
+                canWrite: canWrite ?? defaultCanWrite,
+                leaseFence: leaseFenceProvider
+            )
         )
+    }
+
+    private func enqueuePersistence(
+        _ operation: @escaping @Sendable (ACPSessionPersistence) async throws -> Void
+    ) {
+        let previous = persistenceTail
+        let persistence = persistence
+        persistenceGeneration += 1
+        persistenceTail = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            try? await operation(persistence)
+        }
+    }
+
+    private func enqueuePersistence<Result: Sendable>(
+        _ operation: @escaping @Sendable (ACPSessionPersistence) async throws -> Result,
+        completion: @escaping @MainActor (Result?) async -> Void
+    ) {
+        let previous = persistenceTail
+        let persistence = persistence
+        persistenceGeneration += 1
+        let task = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await completion(try? await operation(persistence))
+        }
+        persistenceTail = Task { await task.value }
+    }
+
+    func flushPersistence() async {
+        while let tail = persistenceTail {
+            let generation = persistenceGeneration
+            await tail.value
+            if persistenceGeneration == generation { return }
+        }
     }
 
     func start() {
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
-                await self.enqueueIncomingUpdate(u)
+                self.enqueueIncomingUpdate(u)
             }
             // The for-await also exits when the task gets cancelled —
             // that's the intentional detach path (tab close, worktree
@@ -171,7 +244,7 @@ final class ACPSessionRunner {
             // an "Agent disconnected" notice in that case; only flag
             // the unexpected stream-end.
             if Task.isCancelled { return }
-            await self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+            self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
             await MainActor.run {
                 self.session.agentState = .disconnected
                 self.session.transcript.streamingState = .idle
@@ -277,7 +350,7 @@ final class ACPSessionRunner {
                     // serializing agent writes against editor saves; that is
                     // deferred to a follow-up. The unbounded-read hot path
                     // (`serveRead`) carries the bulk of the main-thread win.
-                    guard self.holdsLeaseForWrite() else {
+                    guard await self.hasConfirmedLeaseForSideEffect() else {
                         self.connection.client.respondToFileRequest(
                             id: id,
                             result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
@@ -319,7 +392,7 @@ final class ACPSessionRunner {
         terminalsTask = Task { @MainActor [weak self] in
             guard let self else { return }
             for await req in self.connection.client.terminalRequests {
-                self.handleTerminalRequest(req)
+                await self.handleTerminalRequest(req)
             }
         }
     }
@@ -343,11 +416,8 @@ final class ACPSessionRunner {
     }
 
     private func capturePersistedBasesForIncomingUpdate(_ update: ACPSessionUpdate) {
-        for i in persistedCandidateIndices(for: update)
-        where i >= 0 && i < persistedMessageCount && lastPersistedPayloads[i] == nil {
-            if let base = try? store.loadMessagePayload(id: "msg-\(sessionId)-\(i)") {
-                lastPersistedPayloads[i] = base
-            }
+        for index in persistedCandidateIndices(for: update) {
+            capturePersistedBaseIfNeeded(at: index)
         }
     }
 
@@ -437,9 +507,11 @@ final class ACPSessionRunner {
             preAppliedSessionInfoDirty = nil
         }
         if suppressingLoadReplay {
-            let dirty = preAppliedSessionInfoDirty
-                ?? session.applySuppressedReplaySideEffects(params.update)
-            persistIndices(dirty)
+            if let dirty = preAppliedSessionInfoDirty {
+                persistIndices(dirty)
+            } else {
+                _ = session.applySuppressedReplaySideEffects(params.update)
+            }
             if let target = loadReplaySuppressionTarget,
                observedUpdateCount >= target {
                 finishLoadReplaySuppression()
@@ -486,6 +558,12 @@ final class ACPSessionRunner {
         }
     }
 
+    #if DEBUG
+    func applyIncomingUpdateForTesting(_ params: ACPSessionUpdateParams) {
+        applyIncomingUpdate(params)
+    }
+    #endif
+
     func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
         guard suppressingLoadReplay else { return }
         loadReplaySuppressionTarget = target
@@ -530,7 +608,7 @@ final class ACPSessionRunner {
         onPersist?()
     }
 
-    private func handleTerminalRequest(_ req: ACPTerminalRequest) {
+    private func handleTerminalRequest(_ req: ACPTerminalRequest) async {
         let host = self.session.terminalHost
         switch req {
         case .create(let id, let p):
@@ -540,7 +618,7 @@ final class ACPSessionRunner {
             // defense-in-depth alongside the heartbeat/stand-down path
             // (which calls stop() → terminalHost.killAll() within ~100ms
             // of a takeover ping). Matches the existing file-write gate.
-            guard holdsLeaseForWrite() else {
+            guard await hasConfirmedLeaseForSideEffect() else {
                 self.connection.client.respondToTerminalRequest(
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
@@ -598,7 +676,7 @@ final class ACPSessionRunner {
             // another instance now owns. Note: runner.stop() calls
             // terminalHost.killAll() directly (NOT through this handler),
             // so teardown is unaffected by this gate.
-            guard holdsLeaseForWrite() else {
+            guard await hasConfirmedLeaseForSideEffect() else {
                 self.connection.client.respondToTerminalRequest(
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
@@ -620,7 +698,7 @@ final class ACPSessionRunner {
             // another instance now owns. Note: runner.stop() calls
             // terminalHost.killAll() directly (NOT through this handler),
             // so teardown is unaffected by this gate.
-            guard holdsLeaseForWrite() else {
+            guard await hasConfirmedLeaseForSideEffect() else {
                 self.connection.client.respondToTerminalRequest(
                     id: id, result: .failure(.init(code: -32003, message: "lease lost to another instance", data: nil)))
                 break
@@ -662,36 +740,47 @@ final class ACPSessionRunner {
     /// handle, and the next open via the manager picks up the new row.
     func persistSessionRow(preserveTitle: Bool = true) {
         guard holdsLeaseForWrite() else { return }
-        guard let row = try? store.loadSession(id: sessionId) else { return }
-        let now = Int64(Date().timeIntervalSince1970)
-        try? store.upsertSession(.init(
-            id: row.id, agentId: row.agentId, title: session.title,
-            titleSource: session.titleSource,
-            remoteSessionId: row.remoteSessionId,
-            origin: row.origin,
-            contextRecoveryPending: row.contextRecoveryPending,
-            currentModel: session.currentModel, currentMode: session.currentMode,
-            autoRun: session.autoRunEnabled,
-            createdAt: row.createdAt, updatedAt: now,
-            lastOpenedAt: row.lastOpenedAt, archived: row.archived
-        ), preserveTitle: preserveTitle)
+        let title = session.title
+        let titleSource = session.titleSource
+        let currentModel = session.currentModel
+        let currentMode = session.currentMode
+        let autoRun = session.autoRunEnabled
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            _ = try await persistence.updateSessionFromRuntime(
+                id: sessionId,
+                title: title,
+                titleSource: titleSource,
+                currentModel: currentModel,
+                currentMode: currentMode,
+                autoRun: autoRun,
+                preserveTitle: preserveTitle,
+                fence: fence
+            )
+        }
     }
 
     func persistGeneratedTitleIfStoredPlaceholder() {
         guard holdsLeaseForWrite() else { return }
         let now = Int64(Date().timeIntervalSince1970)
-        guard (try? store.updateGeneratedTitleIfPlaceholder(
-            id: sessionId,
-            title: session.title,
-            updatedAt: now
-        )) == true else {
-            guard let row = try? store.loadSession(id: sessionId) else { return }
-            if row.titleSource != .placeholder {
-                session.title = row.title
-                session.titleSource = row.titleSource
-            }
-            return
-        }
+        let title = session.title
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            try await persistence.updateGeneratedTitleIfPlaceholder(
+                id: sessionId,
+                title: title,
+                updatedAt: now,
+                fence: fence
+            )
+        }, completion: { [weak self] updated in
+            guard updated != true, let self else { return }
+            guard let row = try? await self.persistence.loadSession(id: self.sessionId),
+                  row.titleSource != .placeholder else { return }
+            self.session.title = row.title
+            self.session.titleSource = row.titleSource
+        })
     }
 
     func applySessionInfoTitle(_ info: ACPSessionInfoUpdate) {
@@ -712,43 +801,52 @@ final class ACPSessionRunner {
         guard session.titleSource != .manual else { return }
 
         let now = Int64(Date().timeIntervalSince1970)
-        guard (try? store.updateGeneratedTitleIfNotManual(
-            id: sessionId,
-            title: trimmed,
-            updatedAt: now
-        )) == true else {
-            guard let row = try? store.loadSession(id: sessionId) else { return }
-            if row.titleSource == .manual {
-                session.title = row.title
-                session.titleSource = row.titleSource
-            }
-            return
-        }
-
         session.title = trimmed
         session.titleSource = .generated
-        onSessionTitleUpdated?(trimmed)
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            try await persistence.updateGeneratedTitleIfNotManual(
+                id: sessionId,
+                title: trimmed,
+                updatedAt: now,
+                fence: fence
+            )
+        }, completion: { [weak self] updated in
+            guard let self else { return }
+            if updated == true {
+                self.onSessionTitleUpdated?(trimmed)
+                return
+            }
+            guard let row = try? await self.persistence.loadSession(id: self.sessionId),
+                  row.titleSource == .manual else { return }
+            self.session.title = row.title
+            self.session.titleSource = row.titleSource
+        })
     }
 
     private func clearSessionInfoTitle() {
         guard session.titleSource != .manual else { return }
 
         let now = Int64(Date().timeIntervalSince1970)
-        guard (try? store.clearGeneratedTitleIfNotManual(
-            id: sessionId,
-            updatedAt: now
-        )) == true else {
-            guard let row = try? store.loadSession(id: sessionId) else { return }
-            if row.titleSource == .manual {
-                session.title = row.title
-                session.titleSource = row.titleSource
-            }
-            return
-        }
-
         session.title = "New session"
         session.titleSource = .placeholder
         onSessionTitleUpdated?("New session")
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence({ persistence in
+            try await persistence.clearGeneratedTitleIfNotManual(
+                id: sessionId,
+                updatedAt: now,
+                fence: fence
+            )
+        }, completion: { [weak self] updated in
+            guard updated != true, let self else { return }
+            guard let row = try? await self.persistence.loadSession(id: self.sessionId),
+                  row.titleSource == .manual else { return }
+            self.session.title = row.title
+            self.session.titleSource = row.titleSource
+        })
     }
 
     /// Returns `absolutePath` relative to the runner's worktree, or
@@ -859,7 +957,7 @@ final class ACPSessionRunner {
         // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
         // it only affects this runner's own sendNow catch path and has no
         // cross-instance side effects.
-        guard holdsLeaseForWrite() else { return }
+        guard await hasConfirmedLeaseForSideEffect() else { return }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)
@@ -877,14 +975,7 @@ final class ACPSessionRunner {
             let changedIndices = session.cancelInFlightToolCalls()
             session.terminalHost.killAll()
             if holdsLeaseForWrite() {
-                for i in changedIndices {
-                    let m = session.transcript.messages[i]
-                    if let payload = try? ACPMessageCodec.encode(m) {
-                        let id = "msg-\(sessionId)-\(i)"
-                        try? store.updateMessagePayload(id: id, payload: payload)
-                        lastPersistedPayloads[i] = payload
-                    }
-                }
+                _ = persistIndices(Set(changedIndices))
             }
             // Pop the head ONLY if it's the same `.sending` item we
             // were aiming at. If a queued item promoted itself during
@@ -1115,7 +1206,16 @@ extension ACPSessionRunner {
     /// lose a queue snapshot than the user's draft.
     func persistQueue() {
         guard holdsLeaseForWrite() else { return }
-        try? store.upsertQueue(sessionId: sessionId, items: session.queue)
+        let items = session.queue
+        let fence = leaseFenceProvider()
+        let sessionId = sessionId
+        enqueuePersistence { persistence in
+            _ = try await persistence.upsertQueue(
+                sessionId: sessionId,
+                items: items,
+                fence: fence
+            )
+        }
     }
 
     /// Drain the queue head if the runner is still live, setup is not
@@ -1300,6 +1400,16 @@ extension ACPSessionRunner {
                 await MainActor.run { onPromptFinished?(false) }
                 return
             }
+            guard await self.hasConfirmedLeaseForSideEffect() else {
+                await MainActor.run {
+                    if self.activePromptID == promptID {
+                        self.activePromptID = nil
+                    }
+                    self.cancelledPromptIDs.remove(promptID)
+                    onPromptFinished?(false)
+                }
+                return
+            }
             let proceeded = await MainActor.run { () -> Bool in
                 // If we were cancelled while this Task was being scheduled,
                 // exit without touching transcript or state. The connection
@@ -1368,6 +1478,9 @@ extension ACPSessionRunner {
                     promptCapabilities: promptCapabilities,
                     worktreePath: self.worktreePath
                 )
+                guard await self.hasConfirmedLeaseForSideEffect() else {
+                    throw CancellationError()
+                }
                 try await self.connection.prompt(sessionId: remoteId, blocks: wireBlocks)
                 await MainActor.run {
                     let isActivePrompt = self.activePromptID == promptID
@@ -1578,8 +1691,15 @@ extension ACPSessionRunner {
     /// When `ownerInstanceId` is nil (tests that construct a runner directly
     /// without a lease), gating is disabled and writes always proceed.
     private func holdsLeaseForWrite() -> Bool {
-        guard let ownerInstanceId else { return true }
-        return (try? store.loadLease(sessionId: sessionId))?.ownerInstance == ownerInstanceId
+        canWrite()
+    }
+
+    /// Cached authority is enough for in-memory updates and persistence fences,
+    /// but RPCs and process/file side effects must confirm the token against
+    /// SQLite immediately before they run.
+    private func hasConfirmedLeaseForSideEffect() async -> Bool {
+        guard holdsLeaseForWrite() else { return false }
+        return await validateLease()
     }
 
     private func shouldBatchStreamingPersist(
@@ -1625,13 +1745,14 @@ extension ACPSessionRunner {
         // most once per such row, never on the hot streaming-tail path (a new
         // trailing row is not yet persisted, so it is written, not read).
         if mayCapturePersistedBases {
-            for i in indices where i < persistedMessageCount && lastPersistedPayloads[i] == nil {
-                if let base = try? store.loadMessagePayload(id: "msg-\(sessionId)-\(i)") {
-                    lastPersistedPayloads[i] = base
-                }
+            for i in indices {
+                capturePersistedBaseIfNeeded(at: i)
             }
         }
         pendingStreamingPersistIndices.formUnion(indices)
+        for index in indices {
+            pendingStreamingPersistRevisions[index, default: 0] += 1
+        }
         guard streamingPersistTask == nil else { return }
         streamingPersistTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1639,6 +1760,28 @@ extension ACPSessionRunner {
             guard !Task.isCancelled else { return }
             self.flushStreamingPersist()
         }
+    }
+
+    private func capturePersistedBaseIfNeeded(at index: Int) {
+        guard index < persistedMessageCount,
+              lastPersistedPayloads[index] == nil,
+              !capturingPersistedBaseIndices.contains(index),
+              let fence = leaseFenceProvider()
+        else { return }
+        capturingPersistedBaseIndices.insert(index)
+        let id = "msg-\(sessionId)-\(index)"
+        enqueuePersistence({ persistence in
+            try await persistence.loadMessagePayload(id: id, fence: fence)
+        }, completion: { [weak self] payload in
+            guard let self else { return }
+            self.capturingPersistedBaseIndices.remove(index)
+            guard let payload = payload ?? nil else { return }
+            self.lastPersistedPayloads[index] = payload
+            if self.streamingLeaseLost {
+                self.freezeStreamingPersistSnapshots()
+                self.persistStreamingPersistSnapshots()
+            }
+        })
     }
 
     private func flushStreamingPersist() {
@@ -1653,6 +1796,8 @@ extension ACPSessionRunner {
         guard streamingLeaseLost else { return }
         streamingLeaseLost = false
         pendingStreamingPersistIndices.removeAll()
+        pendingStreamingPersistRevisions.removeAll()
+        streamingPersistInFlightIndices.removeAll()
         pendingStreamingPersistSnapshots.removeAll()
     }
 
@@ -1686,20 +1831,38 @@ extension ACPSessionRunner {
             persistStreamingPersistSnapshots()
             return
         }
-        guard !pendingStreamingPersistIndices.isEmpty else { return }
-        let indices = pendingStreamingPersistIndices
-        if persistIndices(indices, requiresLease: true) {
-            pendingStreamingPersistIndices.subtract(indices)
+        let indices = pendingStreamingPersistIndices.subtracting(streamingPersistInFlightIndices)
+        guard !indices.isEmpty else { return }
+        let revisions = Dictionary(uniqueKeysWithValues: indices.map {
+            ($0, pendingStreamingPersistRevisions[$0, default: 0])
+        })
+        streamingPersistInFlightIndices.formUnion(indices)
+        if persistIndices(indices, requiresLease: true, completion: { [weak self] succeeded in
+            guard let self else { return }
+            self.streamingPersistInFlightIndices.subtract(indices)
+            if succeeded {
+                for index in indices where self.pendingStreamingPersistRevisions[index] == revisions[index] {
+                    self.pendingStreamingPersistIndices.remove(index)
+                    self.pendingStreamingPersistRevisions.removeValue(forKey: index)
+                }
+                if !self.pendingStreamingPersistIndices.isEmpty, !self.streamingLeaseLost {
+                    self.flushStreamingPersist()
+                }
+                return
+            }
+            self.freezeStreamingPersistSnapshots()
+            self.streamingLeaseLost = true
+            self.persistStreamingPersistSnapshots()
+        }) {
             return
         }
+        streamingPersistInFlightIndices.subtract(indices)
         // The lease moved between the last chunk and this flush. Freeze the
         // buffered rows' current state — every chunk so far arrived while we
         // held the lease — for the stand-down CAS write.
         freezeStreamingPersistSnapshots()
         streamingLeaseLost = true
-        if !requiresLease {
-            persistStreamingPersistSnapshots()
-        }
+        persistStreamingPersistSnapshots()
     }
 
     /// Encode the buffered streaming rows from the live transcript into
@@ -1713,17 +1876,16 @@ extension ACPSessionRunner {
             let message = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
             let basePayload: Data?
-            if i < persistedMessageCount {
-                // The compare-and-swap base MUST be a payload captured while we
-                // held the lease — `scheduleStreamingPersist` records one for
-                // every persisted row it buffers, so the entry is normally
-                // present. Reading the row from SQLite HERE would be unsafe: the
-                // lease has already moved, so the row may hold the new owner's
-                // payload, which would become `expectedPayload` and let the CAS
-                // clobber it. If no under-lease base exists we cannot write
-                // safely, so skip the row and leave the new owner authoritative.
-                guard let base = lastPersistedPayloads[i] else { continue }
+            // A row may have been created by an earlier queued persistence
+            // operation even when `persistedMessageCount` has not caught up.
+            // Only a payload captured under our token may authorize a CAS
+            // update after takeover; otherwise this remains insert-only.
+            if let base = lastPersistedPayloads[i] {
                 basePayload = base
+            } else if i < persistedMessageCount {
+                // Never read a missing base after takeover: that could capture
+                // the new owner's payload and make a stale CAS destructive.
+                continue
             } else {
                 basePayload = nil
             }
@@ -1738,26 +1900,32 @@ extension ACPSessionRunner {
         for i in snapshots.keys.sorted() {
             guard let snapshot = snapshots[i] else { continue }
             let id = "msg-\(sessionId)-\(i)"
-            if i < persistedMessageCount {
-                guard let basePayload = snapshot.basePayload,
-                      (try? store.updateMessagePayloadIfUnchanged(
+            if let basePayload = snapshot.basePayload {
+                let payload = snapshot.payload
+                enqueuePersistence { persistence in
+                    _ = try await persistence.compareAndSwapMessagePayload(
                         id: id,
-                        payload: snapshot.payload,
+                        payload: payload,
                         expectedPayload: basePayload
-                      )) == true else {
-                    continue
+                    )
                 }
             } else {
-                do {
-                    try store.appendMessage(sessionId: sessionId, id: id, kind: snapshot.kind,
-                                            seq: Int64(i), payload: snapshot.payload, createdAt: now)
-                    persistedMessageCount = max(persistedMessageCount, i + 1)
-                } catch {
-                    continue
+                let row = ACPStoredMessage(
+                    id: id,
+                    sessionId: sessionId,
+                    kind: snapshot.kind,
+                    seq: Int64(i),
+                    payload: snapshot.payload,
+                    createdAt: now
+                )
+                enqueuePersistence { persistence in
+                    _ = try await persistence.insertMessageIfMissing(row)
                 }
+                persistedMessageCount = max(persistedMessageCount, i + 1)
             }
             lastPersistedPayloads[i] = snapshot.payload
             pendingStreamingPersistIndices.remove(i)
+            pendingStreamingPersistRevisions.removeValue(forKey: i)
             pendingStreamingPersistSnapshots.removeValue(forKey: i)
         }
         trimLastPersistedPayloads()
@@ -1771,52 +1939,67 @@ extension ACPSessionRunner {
     /// one, so the count-delta heuristic in `persistFromIndex` would
     /// write back the wrong row.
     @discardableResult
-    func persistIndices(_ indices: Set<Int>, requiresLease: Bool = true) -> Bool {
+    func persistIndices(
+        _ indices: Set<Int>,
+        requiresLease: Bool = true,
+        completion: ((Bool) -> Void)? = nil
+    ) -> Bool {
         streamingPersistTask?.cancel()
         streamingPersistTask = nil
         guard !requiresLease || holdsLeaseForWrite() else { return false }
-        guard !indices.isEmpty else { return true }
+        guard !indices.isEmpty else {
+            completion?(true)
+            return true
+        }
         let messages = session.transcript.messages
         let now = Int64(Date().timeIntervalSince1970)
+        var rows: [ACPStoredMessage] = []
         for i in indices.sorted() {
             guard i >= 0, i < messages.count else { continue }
             let m = messageForPersistence(messages[i])
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
-            if i < persistedMessageCount {
-                try? store.updateMessagePayload(id: id, payload: payload)
-                lastPersistedPayloads[i] = payload
-            } else {
-                do {
-                    try store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
-                                            seq: Int64(i), payload: payload, createdAt: now)
-                    persistedMessageCount = max(persistedMessageCount, i + 1)
-                    lastPersistedPayloads[i] = payload
-                } catch {
-                    if (try? store.updateMessageRow(id: id, kind: m.kind, seq: Int64(i), payload: payload)) == true {
-                        persistedMessageCount = max(persistedMessageCount, i + 1)
-                        lastPersistedPayloads[i] = payload
-                    }
-                }
-            }
+            rows.append(ACPStoredMessage(
+                id: id,
+                sessionId: sessionId,
+                kind: m.kind,
+                seq: Int64(i),
+                payload: payload,
+                createdAt: now
+            ))
         }
-        trimLastPersistedPayloads()
-        onPersist?()
+        let fence = requiresLease ? leaseFenceProvider() : nil
+        if !rows.isEmpty {
+            let messageRows = rows
+            enqueuePersistence({ persistence in
+                try await persistence.persistMessages(messageRows, fence: fence)
+            }, completion: { [weak self] persisted in
+                guard let self else { return }
+                guard persisted == true else {
+                    completion?(false)
+                    return
+                }
+                self.commitPersistedMessageRows(messageRows)
+                completion?(true)
+            })
+        } else {
+            completion?(true)
+        }
         return true
     }
 
     private func messageForPersistence(_ message: ACPMessage) -> ACPMessage {
-        guard case .toolCall(var toolCall) = message,
-              toolCall.isContentTruncated,
-              let storedContent = try? store.loadToolCallContent(
-                sessionId: sessionId,
-                toolCallId: toolCall.toolCallId
-              )
-        else {
-            return message
+        message
+    }
+
+    private func commitPersistedMessageRows(_ rows: [ACPStoredMessage]) {
+        for row in rows {
+            let index = Int(row.seq)
+            persistedMessageCount = max(persistedMessageCount, index + 1)
+            lastPersistedPayloads[index] = row.payload
         }
-        toolCall.content = storedContent
-        return .toolCall(toolCall)
+        trimLastPersistedPayloads()
+        onPersist?()
     }
 
     /// Persist messages from the apply() boundary. Three cases:
@@ -1849,28 +2032,29 @@ extension ACPSessionRunner {
         }
 
         let now = Int64(Date().timeIntervalSince1970)
+        var rows: [ACPStoredMessage] = []
         for i in lowerBound..<messages.count {
             let m = messages[i]
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(sessionId)-\(i)"
-            if i < persistedMessageCount {
-                try? store.updateMessagePayload(id: id, payload: payload)
-                lastPersistedPayloads[i] = payload
-            } else {
-                do {
-                    try store.appendMessage(sessionId: sessionId, id: id, kind: m.kind,
-                                            seq: Int64(i), payload: payload, createdAt: now)
-                    persistedMessageCount = max(persistedMessageCount, i + 1)
-                    lastPersistedPayloads[i] = payload
-                } catch {
-                    if (try? store.updateMessageRow(id: id, kind: m.kind, seq: Int64(i), payload: payload)) == true {
-                        persistedMessageCount = max(persistedMessageCount, i + 1)
-                        lastPersistedPayloads[i] = payload
-                    }
-                }
-            }
+            rows.append(ACPStoredMessage(
+                id: id,
+                sessionId: sessionId,
+                kind: m.kind,
+                seq: Int64(i),
+                payload: payload,
+                createdAt: now
+            ))
         }
-        trimLastPersistedPayloads()
-        onPersist?()
+        let fence = leaseFenceProvider()
+        if !rows.isEmpty {
+            let messageRows = rows
+            enqueuePersistence({ persistence in
+                try await persistence.persistMessages(messageRows, fence: fence)
+            }, completion: { [weak self] persisted in
+                guard let self, persisted == true else { return }
+                self.commitPersistedMessageRows(messageRows)
+            })
+        }
     }
 }

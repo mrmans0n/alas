@@ -24,7 +24,7 @@ final class ACPSessionManager: ObservableObject {
     let pid: Int64
     let worktreeId: String
     let worktreePath: String
-    let store: ACPSessionStore
+    let persistence: ACPSessionPersistence
     let changeNotifier: ACPChangeNotifier
     /// Called by each runner's write handler to check whether the target path
     /// has an open, dirty editor buffer. `nil` disables the check (no notices).
@@ -38,6 +38,13 @@ final class ACPSessionManager: ObservableObject {
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
+    @Published private(set) var persistenceError: String?
+    @Published private var persistedRows: [ACPSession.ID: ACPSessionRow] = [:]
+    @Published private var missingPersistedSessionIds: Set<ACPSession.ID> = []
+    private var rowLoadTasks: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var persistenceTail: Task<Void, Never>?
+    private var persistenceGeneration = 0
+    private var draftFlushHandoffSequence: UInt64 = 0
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
     #if DEBUG
@@ -85,15 +92,33 @@ final class ACPSessionManager: ObservableObject {
     /// Whether this instance is the legitimate current writer for the session —
     /// gates every remote drive action (`canDrive`, `sendPrompt`, `stop`).
     ///
-    /// Requires BOTH the in-memory claim AND store agreement: after another
-    /// window takes over, the former owner keeps the id in `_ownedLeases` until
-    /// its heartbeat stands down (~5s). Trusting the in-memory set alone would
-    /// let a phone connected to the old owner keep writing into a session
-    /// another instance now drives — corrupting the active conversation. So we
-    /// also consult the store row via `anotherLiveInstanceOwnsLease`, the same
-    /// guard the local write path (`holdsLeaseForWrite`) relies on.
+    /// Combines the local claim with the latest lease observation. The writer
+    /// watch refreshes that observation after takeover; SQLite mutations also
+    /// carry a token fence so stale cached authority cannot commit.
     func isWriter(for id: ACPSession.ID) -> Bool {
         _ownedLeases.contains(id) && !anotherLiveInstanceOwnsLease(sessionId: id)
+    }
+
+    /// Confirms ownership off-main immediately before an RPC or local process
+    /// side effect. Cached observations remain suitable for rendering, but are
+    /// not authority for actions that cannot be transactionally fenced.
+    private func confirmedWriterLease(for sessionId: ACPSession.ID) async -> Bool {
+        guard _ownedLeases.contains(sessionId),
+              let token = ownedLeaseTokens[sessionId]
+        else { return false }
+        do {
+            let lease = try await persistence.loadLease(sessionId: sessionId)
+            observedLeases[sessionId] = lease
+            guard lease?.ownerInstance == instanceId, lease?.token == token else {
+                await standDown(sessionId: sessionId)
+                return false
+            }
+            return true
+        } catch {
+            persistenceError = error.localizedDescription
+            await standDown(sessionId: sessionId)
+            return false
+        }
     }
 
     /// Submit a prompt using the same path the local composer uses (`.auto`
@@ -112,8 +137,8 @@ final class ACPSessionManager: ObservableObject {
     /// land between the gateway's `isWriter` gate and here, and `submit`'s
     /// `.idle`/`.disconnected` path would otherwise enqueue + persist the prompt
     /// as a mirror — injecting it into a session another instance now drives.
-    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
-        guard isWriter(for: id) else {
+    func sendPrompt(for id: ACPSession.ID, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
+        guard await confirmedWriterLease(for: id) else {
             onResult(false)
             return
         }
@@ -124,9 +149,9 @@ final class ACPSessionManager: ObservableObject {
 
     /// Interrupt the in-flight turn (same as the composer Stop / Esc). Guarded
     /// on the live lease for the same cross-process-takeover reason as `sendPrompt`.
-    func interrupt(for id: ACPSession.ID) {
-        guard isWriter(for: id), let runner = runners[id] else { return }
-        Task { await runner.userCancel() }
+    func interrupt(for id: ACPSession.ID) async {
+        guard await confirmedWriterLease(for: id), let runner = runners[id] else { return }
+        await runner.userCancel()
     }
 
     /// Pending model/mode to apply once a runner registers (the writer took over
@@ -135,8 +160,8 @@ final class ACPSessionManager: ObservableObject {
     var pendingMode: [ACPSession.ID: String] = [:]
 
     /// Toggle auto-run for a remotely-driven session. Writer-gated; persists.
-    func setAutoRun(for id: ACPSession.ID, enabled: Bool) {
-        guard isWriter(for: id), let session = sessions[id] else { return }
+    func setAutoRun(for id: ACPSession.ID, enabled: Bool) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         session.autoRunEnabled = enabled
         persist(session)
     }
@@ -144,8 +169,8 @@ final class ACPSessionManager: ObservableObject {
     /// Select the agent model. Optimistically updates + persists, then issues the
     /// agent RPC on the live runner — or records it pending until `attach`
     /// registers one (post-takeover window). Writer-gated.
-    func setModel(for id: ACPSession.ID, modelId: String) {
-        guard isWriter(for: id), let session = sessions[id] else { return }
+    func setModel(for id: ACPSession.ID, modelId: String) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         session.currentModel = modelId
         persist(session)
         guard let runner = runners[id] else {
@@ -153,12 +178,12 @@ final class ACPSessionManager: ObservableObject {
             return
         }
         let remoteId = session.remoteSessionId ?? id
-        Task { try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId) }
+        try? await runner.connection.setModel(sessionId: remoteId, modelId: modelId)
     }
 
     /// Select the agent mode. Same semantics as `setModel`.
-    func setMode(for id: ACPSession.ID, modeId: String) {
-        guard isWriter(for: id), let session = sessions[id] else { return }
+    func setMode(for id: ACPSession.ID, modeId: String) async {
+        guard await confirmedWriterLease(for: id), let session = sessions[id] else { return }
         session.currentMode = modeId
         persist(session)
         guard let runner = runners[id] else {
@@ -166,11 +191,13 @@ final class ACPSessionManager: ObservableObject {
             return
         }
         let remoteId = session.remoteSessionId ?? id
-        Task { try? await runner.connection.setMode(sessionId: remoteId, modeId: modeId) }
+        try? await runner.connection.setMode(sessionId: remoteId, modeId: modeId)
     }
 
     /// Sessions for which THIS instance holds the writer lease (backing store).
     var _ownedLeases: Set<ACPSession.ID> = []
+    private var ownedLeaseTokens: [ACPSession.ID: String] = [:]
+    private var observedLeases: [ACPSession.ID: ACPSessionLease?] = [:]
     /// Per-session periodic heartbeat tasks (backing store).
     var _heartbeatTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session debounced write tasks for `composer_drafts`. The
@@ -179,8 +206,12 @@ final class ACPSessionManager: ObservableObject {
     /// flush on submit / delete). Cancelled and re-scheduled on each
     /// further keystroke so a typing burst produces one write.
     private var pendingDraftWrites: [ACPSession.ID: Task<Void, Never>] = [:]
+    private struct DraftFlushHandoff {
+        let draft: ACPComposerDraft
+        let sequence: UInt64
+    }
+    private var draftFlushHandoffs: [ACPSession.ID: DraftFlushHandoff] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
-    private let hydrator: ACPSessionHydrator?
     private let setupEvaluator: ACPSetupEvaluator
     private let connectionFactory: ACPConnectionFactory
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -230,7 +261,8 @@ final class ACPSessionManager: ObservableObject {
     /// correct shutdown order (connection down before lease freed).
     private var attachingSessions: Set<ACPSession.ID> = []
 
-    init(worktreeId: String, worktreePath: String, store: ACPSessionStore,
+    init(worktreeId: String, worktreePath: String, store: ACPSessionStore? = nil,
+         persistence: ACPSessionPersistence? = nil,
          instanceId: String = UUID().uuidString,
          pid: Int64 = Int64(ProcessInfo.processInfo.processIdentifier),
          hydratorPath: String? = nil,
@@ -242,17 +274,19 @@ final class ACPSessionManager: ObservableObject {
          connectionFactory: ACPConnectionFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil)
     {
+        precondition(store != nil || persistence != nil, "ACPSessionManager requires persistence")
+        let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
         self.instanceId = instanceId
         self.pid = pid
         self.worktreeId = worktreeId
         self.worktreePath = worktreePath
-        self.store = store
+        self.persistence = resolvedPersistence
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
-        self.hydrator = hydratorPath.flatMap { try? ACPSessionHydrator(path: $0) }
+        _ = hydratorPath
         self.setupEvaluator = setupEvaluator ?? { spec in
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             return await checker.evaluate(spec.setupCheck)
@@ -273,7 +307,47 @@ final class ACPSessionManager: ObservableObject {
             try client.start()
             return ACPConnection(client: client)
         }
-        self.recent = (try? store.recentSessions()) ?? []
+        let initialRecent = store.flatMap { try? $0.recentSessions() } ?? []
+        self.recent = initialRecent
+        self.persistedRows = Dictionary(uniqueKeysWithValues: initialRecent.map { ($0.id, $0) })
+        if store == nil {
+            refreshRecent()
+        }
+    }
+
+    @discardableResult
+    private func enqueuePersistence(
+        _ operation: @escaping @Sendable (ACPSessionPersistence) async throws -> Void
+    ) -> Task<Void, Never> {
+        let previous = persistenceTail
+        let persistence = persistence
+        persistenceGeneration += 1
+        let task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            do {
+                try await operation(persistence)
+            } catch {
+                self?.persistenceError = error.localizedDescription
+            }
+        }
+        persistenceTail = task
+        return task
+    }
+
+    func flushPersistence() async {
+        while let tail = persistenceTail {
+            let generation = persistenceGeneration
+            await tail.value
+            if persistenceGeneration == generation { return }
+        }
+    }
+
+    func flushAllPersistence() async {
+        for runner in runners.values {
+            await runner.flushPersistence()
+        }
+        await flushPersistence()
     }
 
     func createSession(agentId: String, autoRunDefault: Bool = false) -> ACPSession {
@@ -284,14 +358,18 @@ final class ACPSessionManager: ObservableObject {
             titleSource: .placeholder,
             currentModel: nil, currentMode: nil, autoRun: autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
-        try? store.upsertSession(row)
+        persistedRows[id] = row
+        recent.removeAll { $0.id == id }
+        recent.insert(row, at: 0)
+        enqueuePersistence { persistence in
+            try await persistence.upsertSession(row)
+        }
         let session = ACPSession(
             id: id, agentId: agentId, worktreeId: worktreeId,
             title: row.title, titleSource: .placeholder, origin: row.origin,
             hydrationState: .ready)
         session.autoRunEnabled = autoRunDefault
         sessions[id] = session
-        refreshRecent()
         return session
     }
 
@@ -302,9 +380,10 @@ final class ACPSessionManager: ObservableObject {
     /// reading the queue + draft) is deferred to `hydrateIfNeeded`.
     func placeholderSession(id: ACPSession.ID) -> ACPSession? {
         if let s = sessions[id] { return s }
-        // Verify the session exists before allocating a placeholder so we
-        // don't insert orphan loading entries for typo'd ids.
-        guard let row = try? store.loadSession(id: id) else { return nil }
+        guard let row = persistedRows[id] else {
+            loadPersistedRowIfNeeded(id: id)
+            return nil
+        }
         let session = ACPSession(
             id: row.id, agentId: row.agentId, worktreeId: worktreeId,
             title: row.title, titleSource: row.titleSource, origin: row.origin,
@@ -314,8 +393,49 @@ final class ACPSessionManager: ObservableObject {
         if let memory = transcriptScrollMemory[id] {
             session.followsTranscriptTail = memory.followsTail
         }
+        if let handoff = draftFlushHandoffs[id] {
+            session.replaceComposerDraft(handoff.draft)
+        }
         sessions[id] = session
         return session
+    }
+
+    func isKnownMissingSession(id: ACPSession.ID) -> Bool {
+        missingPersistedSessionIds.contains(id)
+    }
+
+    private func loadPersistedRowIfNeeded(id: ACPSession.ID) {
+        guard rowLoadTasks[id] == nil else { return }
+        let persistence = persistence
+        rowLoadTasks[id] = Task { @MainActor [weak self] in
+            defer { self?.rowLoadTasks[id] = nil }
+            do {
+                guard let row = try await persistence.loadSession(id: id) else {
+                    self?.missingPersistedSessionIds.insert(id)
+                    return
+                }
+                self?.persistedRows[id] = row
+                self?.missingPersistedSessionIds.remove(id)
+            } catch {
+                self?.persistenceError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Loads one row for an explicit open request. Unlike `sessionRows`, this
+    /// covers rows outside the lazy recent-session cache before a tab title is
+    /// chosen.
+    func persistedSessionRow(id: ACPSession.ID) async -> ACPSessionRow? {
+        if let row = persistedRows[id] { return row }
+        do {
+            guard let row = try await persistence.loadSession(id: id) else { return nil }
+            persistedRows[id] = row
+            missingPersistedSessionIds.remove(id)
+            return row
+        } catch {
+            persistenceError = error.localizedDescription
+            return nil
+        }
     }
 
     /// Awaits any in-flight background backfill of older transcript messages
@@ -365,14 +485,7 @@ final class ACPSessionManager: ObservableObject {
 
     private func runHydration(id: ACPSession.ID, session: ACPSession) async {
         do {
-            let result: HydrationResult
-            if let hydrator {
-                result = try await hydrator.hydrate(sessionId: id)
-            } else {
-                // No off-main hydrator (test fallback): perform the same
-                // work synchronously via the manager's store.
-                result = try synchronousHydrate(id: id)
-            }
+            let result = try await persistence.hydrate(sessionId: id)
             // Drop the result if the captured session was closed (or closed
             // and reopened — the cached entry now points to a different
             // ACPSession instance) while we awaited. The fresh placeholder
@@ -385,72 +498,11 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    /// Synchronous hydration fallback used when no hydrator was wired in
-    /// (tests that construct the manager without a path). Same data, same
-    /// shape — just on the main thread.
-    private func synchronousHydrate(id: ACPSession.ID) throws -> HydrationResult {
-        guard let row = try store.loadSession(id: id) else {
-            throw ACPSessionHydrator.Error.sessionNotFound(id)
-        }
-        let stored = (try? store.loadMessages(sessionId: id)) ?? []
-        let storedDraft = try? store.loadComposerDraftRecord(sessionId: id)
-        let queue = (try? store.loadQueue(sessionId: id)) ?? []
-        var staleSubmittedDraft = false
-        var sawRecordedSubmittedDraft = false
-        var wire: [ACPMessageWire] = []
-        wire.reserveCapacity(stored.count)
-        let decoder = JSONDecoder()
-        for m in stored {
-            if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
-                wire.append(w)
-                if storedDraft != nil,
-                   sawRecordedSubmittedDraft,
-                   w.isAgentSideProgress {
-                    staleSubmittedDraft = true
-                }
-                if let storedDraft,
-                   storedDraft.submittedRecovery,
-                   case .user(_, let text, let attachments) = w,
-                   storedDraft.draft.matchesSubmittedRecoveryPrompt(
-                    seq: m.seq,
-                    text: text,
-                    attachments: attachments,
-                    queue: queue,
-                    submittedAfterSeq: storedDraft.submittedAfterSeq)
-                {
-                    sawRecordedSubmittedDraft = true
-                }
-            }
-        }
-        let now = Int64(Date().timeIntervalSince1970)
-        try? store.touchLastOpenedAt(id: id, at: now)
-        let touched = ACPSessionRow(
-            id: row.id, agentId: row.agentId, title: row.title,
-            titleSource: row.titleSource,
-            remoteSessionId: row.remoteSessionId,
-            origin: row.origin,
-            contextRecoveryPending: row.contextRecoveryPending,
-            currentModel: row.currentModel, currentMode: row.currentMode,
-            autoRun: row.autoRun,
-            createdAt: row.createdAt, updatedAt: row.updatedAt,
-            lastOpenedAt: now,
-            archived: row.archived)
-        let recent = (try? store.recentSessions()) ?? []
-        let draft: ACPComposerDraft?
-        if staleSubmittedDraft, let storedDraft {
-            if (try? store.deleteComposerDraft(sessionId: id, matching: storedDraft)) == true {
-                draft = nil
-            } else {
-                draft = (try? store.loadComposerDraftRecord(sessionId: id))?.draft
-            }
-        } else {
-            draft = storedDraft?.draft
-        }
-        return HydrationResult(row: touched, wireMessages: wire,
-                               queue: queue, draft: draft, recent: recent)
-    }
-
     private func applyHydration(_ result: HydrationResult, to session: ACPSession) {
+        persistedRows[result.row.id] = result.row
+        for row in result.recent {
+            persistedRows[row.id] = row
+        }
         // Tail-first hydration: a long transcript would otherwise force an
         // O(N) main-actor pass to wrap every wire message in `StreamingText`
         // (a `@MainActor` class) before the first paint can land, freezing
@@ -471,12 +523,16 @@ final class ACPSessionManager: ObservableObject {
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
         // appears, so the user can start typing before hydration finishes.
-        // Only restore the persisted draft when the live composer is still
-        // pristine (revision == 0); an intentional clear still bumps the
-        // revision, so it's distinguishable from "never edited" even though
-        // both leave `composerDraft.isEmpty == true`.
-        if let draft = result.draft, session.composerDraftRevision == 0 {
-            session.replaceComposerDraft(draft)
+        // Only restore the draft when the live composer is still pristine
+        // (revision == 0); an intentional clear still bumps the revision, so
+        // it's distinguishable from "never edited" even though both leave
+        // `composerDraft.isEmpty == true`.
+        if session.composerDraftRevision == 0 {
+            if let handoff = draftFlushHandoffs[session.id] {
+                session.replaceComposerDraft(handoff.draft)
+            } else if let draft = result.draft {
+                session.replaceComposerDraft(draft)
+            }
         }
         session.currentModel = result.row.currentModel
         session.currentMode = result.row.currentMode
@@ -679,8 +735,11 @@ final class ACPSessionManager: ObservableObject {
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
         pendingMode.removeValue(forKey: id)
-        try? store.deleteSession(id: id)
-        refreshRecent()
+        persistedRows.removeValue(forKey: id)
+        recent.removeAll { $0.id == id }
+        enqueuePersistence { persistence in
+            try await persistence.deleteSession(id: id)
+        }
     }
 
     /// Increment the UI refcount for `id`. No-op if the session isn't
@@ -791,8 +850,8 @@ final class ACPSessionManager: ObservableObject {
         case .idle, .disconnected, .failed: break
         }
         guard (sessionRefCounts[id] ?? 0) == 0 else { return }
-        // Flush the debounced composer-draft write SYNCHRONOUSLY before
-        // dropping the in-memory session. Otherwise a typing burst that
+        // Submit the debounced composer-draft write before dropping the
+        // in-memory session. Otherwise a typing burst that
         // ends within the 300ms debounce window loses its tail when the
         // session is evicted — the timer task fires on a nil `sessions[id]`
         // and silently returns.
@@ -810,8 +869,14 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func setArchived(id: ACPSession.ID, archived: Bool) {
-        try? store.setArchived(id: id, archived: archived)
-        refreshRecent()
+        if var row = persistedRows[id] {
+            row.archived = archived
+            persistedRows[id] = row
+        }
+        recent.removeAll { $0.id == id }
+        enqueuePersistence { persistence in
+            try await persistence.setArchived(id: id, archived: archived)
+        }
     }
 
     /// Persist a fresh trailing chunk of messages (`from..<session.transcript.messages.count`)
@@ -822,13 +887,27 @@ final class ACPSessionManager: ObservableObject {
         let now = Int64(Date().timeIntervalSince1970)
         let messages = session.transcript.messages
         guard from < messages.count else { return }
+        var rows: [ACPStoredMessage] = []
         for i in from..<messages.count {
             let m = messages[i]
             guard let payload = try? ACPMessageCodec.encode(m) else { continue }
             let id = "msg-\(session.id)-\(i)"
-            try? store.appendMessage(
-                sessionId: session.id, id: id, kind: m.kind,
-                seq: Int64(i), payload: payload, createdAt: now)
+            let sessionId = session.id
+            rows.append(ACPStoredMessage(
+                id: id,
+                sessionId: sessionId,
+                kind: m.kind,
+                seq: Int64(i),
+                payload: payload,
+                createdAt: now
+            ))
+        }
+        let messageRows = rows
+        let fence = leaseFence(sessionId: session.id)
+        if !messageRows.isEmpty {
+            enqueuePersistence { persistence in
+                _ = try await persistence.persistMessages(messageRows, fence: fence)
+            }
         }
     }
 
@@ -836,52 +915,62 @@ final class ACPSessionManager: ObservableObject {
     /// No-ops only when another live instance owns the writer lease (this pane
     /// is a mirror); the writer and not-yet-leased cases persist normally.
     func persist(_ s: ACPSession, preserveTitle: Bool = true) {
-        guard !anotherLiveInstanceOwnsLease(sessionId: s.id) else { return }
-        guard let row = try? store.loadSession(id: s.id) else { return }
+        guard !isMirror(sessionId: s.id) else { return }
+        guard var row = persistedRows[s.id] else { return }
         let now = Int64(Date().timeIntervalSince1970)
-        try? store.upsertSession(.init(
-            id: row.id, agentId: row.agentId, title: s.title,
-            titleSource: s.titleSource,
-            remoteSessionId: row.remoteSessionId,
-            origin: row.origin,
-            contextRecoveryPending: row.contextRecoveryPending,
-            currentModel: s.currentModel, currentMode: s.currentMode,
-            autoRun: s.autoRunEnabled,
-            createdAt: row.createdAt, updatedAt: now,
-            lastOpenedAt: row.lastOpenedAt, archived: row.archived),
-            preserveTitle: preserveTitle)
-        refreshRecent()
+        if !preserveTitle {
+            row.title = s.title
+            row.titleSource = s.titleSource
+        }
+        row.currentModel = s.currentModel
+        row.currentMode = s.currentMode
+        row.autoRun = s.autoRunEnabled
+        row.updatedAt = now
+        persistedRows[s.id] = row
+        replaceRecentRow(row)
+        let rowToPersist = row
+        let fence = leaseFence(sessionId: s.id)
+        enqueuePersistence { persistence in
+            _ = try await persistence.upsertSession(
+                rowToPersist,
+                preserveTitle: preserveTitle,
+                fence: fence
+            )
+        }
     }
 
     private func persistSessionRemoteId(_ s: ACPSession) {
-        guard let row = try? store.loadSession(id: s.id) else { return }
-        try? store.upsertSession(.init(
-            id: row.id,
-            agentId: row.agentId,
-            title: row.title,
-            titleSource: row.titleSource,
-            remoteSessionId: s.remoteSessionId,
-            origin: row.origin,
-            contextRecoveryPending: row.contextRecoveryPending,
-            currentModel: row.currentModel,
-            currentMode: row.currentMode,
-            autoRun: row.autoRun,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            lastOpenedAt: row.lastOpenedAt,
-            archived: row.archived
-        ))
+        guard var row = persistedRows[s.id] else { return }
+        row.remoteSessionId = s.remoteSessionId
+        persistedRows[s.id] = row
+        replaceRecentRow(row)
+        let rowToPersist = row
+        let fence = leaseFence(sessionId: s.id)
+        enqueuePersistence { persistence in
+            _ = try await persistence.upsertSession(rowToPersist, fence: fence)
+        }
     }
 
     private func persistContextRecoveryPending(sessionId: ACPSession.ID, pending: Bool) {
-        try? store.setContextRecoveryPending(sessionId: sessionId, pending: pending)
+        if var row = persistedRows[sessionId] {
+            row.contextRecoveryPending = pending
+            persistedRows[sessionId] = row
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.setContextRecoveryPending(
+                sessionId: sessionId,
+                pending: pending,
+                fence: fence
+            )
+        }
     }
 
     /// Rename a session with the given title and source. Updates both
     /// the in-memory session and SQLite in one call. No-ops only when
     /// another live instance owns the writer lease (this pane is a mirror).
     func renameSession(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) {
-        guard !anotherLiveInstanceOwnsLease(sessionId: id) else { return }
+        guard !isMirror(sessionId: id) else { return }
         guard let session = sessions[id] else { return }
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -894,22 +983,27 @@ final class ACPSessionManager: ObservableObject {
     func renameSessionCosmetic(id: ACPSession.ID, title: String, source: ACPSessionTitleSource) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
-              let row = try? store.loadSession(id: id),
+              var row = persistedRows[id],
               !row.archived else { return false }
         let now = Int64(Date().timeIntervalSince1970)
-        do {
-            guard try store.renameSession(id: id, title: trimmed, titleSource: source, updatedAt: now) else {
-                return false
-            }
-            if let session = sessions[id] {
-                session.title = trimmed
-                session.titleSource = source
-            }
-            refreshRecent()
-            return true
-        } catch {
-            return false
+        row.title = trimmed
+        row.titleSource = source
+        row.updatedAt = now
+        persistedRows[id] = row
+        replaceRecentRow(row)
+        if let session = sessions[id] {
+            session.title = trimmed
+            session.titleSource = source
         }
+        enqueuePersistence { persistence in
+            _ = try await persistence.renameSession(
+                id: id,
+                title: trimmed,
+                titleSource: source,
+                updatedAt: now
+            )
+        }
+        return true
     }
 
     func persistComposerDraft(_ draft: ACPComposerDraft, for session: ACPSession) {
@@ -923,7 +1017,11 @@ final class ACPSessionManager: ObservableObject {
     func clearComposerDraft(for session: ACPSession) {
         session.replaceComposerDraft(.empty)
         cancelPendingDraftWrite(for: session.id)
-        try? store.deleteComposerDraft(sessionId: session.id)
+        let sessionId = session.id
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.deleteComposerDraft(sessionId: sessionId, fence: fence)
+        }
     }
 
     private func scheduleDraftPersistence(for sessionId: ACPSession.ID) {
@@ -931,7 +1029,7 @@ final class ACPSessionManager: ObservableObject {
         pendingDraftWrites[sessionId] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.draftDebounceNanos)
             guard !Task.isCancelled else { return }
-            await self?.flushPendingDraftWrite(for: sessionId)
+            self?.flushPendingDraftWrite(for: sessionId)
         }
     }
 
@@ -942,11 +1040,30 @@ final class ACPSessionManager: ObservableObject {
         // the debounce window.
         guard let session = sessions[sessionId] else { return }
         let draft = session.composerDraft
+        let fence = leaseFence(sessionId: sessionId)
+        draftFlushHandoffSequence += 1
+        let handoffSequence = draftFlushHandoffSequence
+        draftFlushHandoffs[sessionId] = DraftFlushHandoff(draft: draft, sequence: handoffSequence)
+        let persistenceTask: Task<Void, Never>
         if draft.isEmpty {
-            try? store.deleteComposerDraft(sessionId: sessionId)
+            persistenceTask = enqueuePersistence { persistence in
+                _ = try await persistence.deleteComposerDraft(sessionId: sessionId, fence: fence)
+            }
         } else {
             let now = Int64(Date().timeIntervalSince1970)
-            try? store.upsertComposerDraft(sessionId: sessionId, draft: draft, updatedAt: now)
+            persistenceTask = enqueuePersistence { persistence in
+                try await persistence.upsertComposerDraft(
+                    sessionId: sessionId,
+                    draft: draft,
+                    updatedAt: now,
+                    fence: fence
+                )
+            }
+        }
+        Task { @MainActor [weak self] in
+            await persistenceTask.value
+            guard self?.draftFlushHandoffs[sessionId]?.sequence == handoffSequence else { return }
+            self?.draftFlushHandoffs.removeValue(forKey: sessionId)
         }
     }
 
@@ -955,9 +1072,8 @@ final class ACPSessionManager: ObservableObject {
         pendingDraftWrites[sessionId] = nil
     }
 
-    /// Flush every pending debounced draft write synchronously. Hook for
-    /// app-termination, scene resign, or tests that need a deterministic
-    /// post-write read.
+    /// Submit every pending debounced draft write to the ordered persistence
+    /// pipeline. Callers that require durability then await `flushPersistence`.
     func flushPendingDraftWrites() {
         for sessionId in Array(pendingDraftWrites.keys) {
             flushPendingDraftWrite(for: sessionId)
@@ -982,8 +1098,17 @@ final class ACPSessionManager: ObservableObject {
     /// mirror must not overwrite the active owner's queue. The writer and
     /// not-yet-leased cases persist normally.
     func persistQueue(for session: ACPSession) {
-        guard !anotherLiveInstanceOwnsLease(sessionId: session.id) else { return }
-        try? store.upsertQueue(sessionId: session.id, items: session.queue)
+        guard !isMirror(sessionId: session.id) else { return }
+        let sessionId = session.id
+        let items = session.queue
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.upsertQueue(
+                sessionId: sessionId,
+                items: items,
+                fence: fence
+            )
+        }
     }
 
     /// Eager-clear hook for an accepted composer submission. Synchronously
@@ -1010,14 +1135,20 @@ final class ACPSessionManager: ObservableObject {
         pendingDraftWrites[sid] = nil
         if !submitted.isEmpty {
             let now = Int64(Date().timeIntervalSince1970)
-            let submittedAfterSeq = try? store.latestMessageSeq(sessionId: sid)
-            try? store.upsertComposerDraft(
-                sessionId: sid,
-                draft: submitted,
-                updatedAt: now,
-                submittedRecovery: true,
-                submittedAfterSeq: submittedAfterSeq
-            )
+            let submittedAfterSeq = session.transcript.messages.isEmpty
+                ? nil
+                : Int64(session.transcript.messages.count - 1)
+            let fence = leaseFence(sessionId: sid)
+            enqueuePersistence { persistence in
+                try await persistence.upsertComposerDraft(
+                    sessionId: sid,
+                    draft: submitted,
+                    updatedAt: now,
+                    submittedRecovery: true,
+                    submittedAfterSeq: submittedAfterSeq,
+                    fence: fence
+                )
+            }
         }
         session.replaceComposerDraft(.empty)
         return session.composerDraftRevision
@@ -1033,7 +1164,11 @@ final class ACPSessionManager: ObservableObject {
         guard session.composerDraftRevision == suspendedRevision,
               session.composerDraft.isEmpty
         else { return }
-        try? store.deleteComposerDraft(sessionId: session.id)
+        let sessionId = session.id
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.deleteComposerDraft(sessionId: sessionId, fence: fence)
+        }
     }
 
     /// Restore the suspended draft back into memory when the prompt
@@ -1052,11 +1187,42 @@ final class ACPSessionManager: ObservableObject {
         else { return }
         session.replaceComposerDraft(submitted)
         let now = Int64(Date().timeIntervalSince1970)
-        try? store.upsertComposerDraft(sessionId: session.id, draft: submitted, updatedAt: now)
+        let sessionId = session.id
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            try await persistence.upsertComposerDraft(
+                sessionId: sessionId,
+                draft: submitted,
+                updatedAt: now,
+                fence: fence
+            )
+        }
     }
 
     func refreshRecent() {
-        recent = (try? store.recentSessions()) ?? []
+        Task { @MainActor [weak self] in
+            await self?.refreshRecentNow()
+        }
+    }
+
+    func refreshRecentNow() async {
+        let persistence = persistence
+        do {
+            let rows = try await persistence.recentSessions()
+            recent = rows
+            for row in rows {
+                persistedRows[row.id] = row
+            }
+        } catch {
+            persistenceError = error.localizedDescription
+        }
+    }
+
+    private func replaceRecentRow(_ row: ACPSessionRow) {
+        recent.removeAll { $0.id == row.id }
+        guard !row.archived else { return }
+        let insertionIndex = recent.firstIndex { $0.lastOpenedAt < row.lastOpenedAt } ?? recent.endIndex
+        recent.insert(row, at: insertionIndex)
     }
 
     func makeSessionDiscoveryHandle(agentId: String) async throws -> ACPSessionDiscoveryHandle {
@@ -1078,7 +1244,7 @@ final class ACPSessionManager: ObservableObject {
                 worktreeId: worktreeId,
                 agentId: agentId,
                 cwd: worktreePath,
-                store: store,
+                persistence: persistence,
                 connection: connection,
                 capabilities: .init(
                     canLoad: initialized.loadSession,
@@ -1097,11 +1263,11 @@ final class ACPSessionManager: ObservableObject {
         _ discovered: ACPDiscoveredSession,
         autoRunDefault: Bool = false,
         origin: ACPSessionOrigin = .agentImported
-    ) -> ACPSessionRow? {
+    ) async -> ACPSessionRow? {
         let discoveredCWD = URL(fileURLWithPath: discovered.cwd).standardizedFileURL.path
         let managerCWD = URL(fileURLWithPath: worktreePath).standardizedFileURL.path
         guard discovered.worktreeId == worktreeId, discoveredCWD == managerCWD else { return nil }
-        if let existing = try? store.loadSession(
+        if let existing = try? await persistence.loadSession(
             agentId: discovered.agentId,
             remoteSessionId: discovered.remoteSessionId
         ) {
@@ -1128,10 +1294,12 @@ final class ACPSessionManager: ObservableObject {
             archived: false
         )
         do {
-            try store.upsertSession(row)
-            refreshRecent()
+            try await persistence.upsertSession(row)
+            persistedRows[row.id] = row
+            replaceRecentRow(row)
             return row
         } catch {
+            persistenceError = error.localizedDescription
             return nil
         }
     }
@@ -1140,8 +1308,8 @@ final class ACPSessionManager: ObservableObject {
     /// tool-call card when expanding a message whose in-memory content
     /// was truncated to save memory. Returns nil if the row is gone or
     /// the payload can't be decoded.
-    func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) -> String? {
-        try? store.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
+    func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) async -> String? {
+        try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
     }
 }
 
@@ -1155,95 +1323,143 @@ extension ACPSessionManager {
     /// Attempt to become the writer for `sessionId`. Returns true if we
     /// now hold the lease. Idempotent for a lease we already own.
     @discardableResult
-    func acquireWriterLease(sessionId: ACPSession.ID) -> Bool {
+    func acquireWriterLease(sessionId: ACPSession.ID) async -> Bool {
+        await flushPersistence()
         let now = Int64(Date().timeIntervalSince1970)
-        let won = (try? store.claimLease(
-            sessionId: sessionId, instanceId: instanceId, pid: pid,
-            now: now, staleAfter: Self.leaseStaleAfter)) ?? false
-        if won { _ownedLeases.insert(sessionId) } else { _ownedLeases.remove(sessionId) }
-        return won
+        let requestedToken = UUID().uuidString
+        do {
+            guard let lease = try await persistence.claimLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                pid: pid,
+                now: now,
+                staleAfter: Self.leaseStaleAfter,
+                leaseToken: requestedToken
+            ) else {
+                let current = try? await persistence.loadLease(sessionId: sessionId)
+                observedLeases[sessionId] = current
+                _ownedLeases.remove(sessionId)
+                ownedLeaseTokens.removeValue(forKey: sessionId)
+                return false
+            }
+            observedLeases[sessionId] = lease
+            _ownedLeases.insert(sessionId)
+            ownedLeaseTokens[sessionId] = lease.token
+            return true
+        } catch {
+            persistenceError = error.localizedDescription
+            _ownedLeases.remove(sessionId)
+            ownedLeaseTokens.removeValue(forKey: sessionId)
+            return false
+        }
     }
 
-    func releaseWriterLease(sessionId: ACPSession.ID) {
-        try? store.releaseLease(sessionId: sessionId, instanceId: instanceId)
+    func releaseWriterLease(sessionId: ACPSession.ID) async {
+        await flushAllPersistence()
+        do {
+            try await persistence.releaseLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                leaseToken: ownedLeaseTokens[sessionId]
+            )
+        } catch {
+            persistenceError = error.localizedDescription
+        }
         _ownedLeases.remove(sessionId)
+        ownedLeaseTokens.removeValue(forKey: sessionId)
+        observedLeases[sessionId] = nil
     }
 
-    /// True when this session is open here but owned by another live
-    /// instance (read-only mirror). Delegates to `anotherLiveInstanceOwnsLease`
-    /// so a stale former owner (still in `_ownedLeases`) is immediately treated
-    /// as read-only after a takeover ping, without waiting for the heartbeat.
+    /// True when this session is open here and the latest observed lease is
+    /// owned by another live instance.
     func isMirror(sessionId: ACPSession.ID) -> Bool {
-        anotherLiveInstanceOwnsLease(sessionId: sessionId)
-    }
-
-    /// True when a DIFFERENT, live instance currently owns this session's
-    /// lease in the store. Unlike `isMirror`, this does NOT short-circuit on
-    /// our in-memory `_ownedLeases`: during a takeover the former owner keeps
-    /// the id in `_ownedLeases` until its heartbeat catches up, so manager
-    /// writes must consult the store row directly to avoid writing to a
-    /// session another instance now owns.
-    private func anotherLiveInstanceOwnsLease(sessionId: ACPSession.ID) -> Bool {
-        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        if _ownedLeases.contains(sessionId) { return false }
+        guard let observed = observedLeases[sessionId] else {
+            return isAwaitingInitialLeaseObservation(sessionId: sessionId)
+        }
+        guard let lease = observed else { return false }
         return lease.ownerInstance != instanceId
             && ACPProcessLiveness.pidAlive(lease.pid)
             && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
+    }
+
+    private func isAwaitingInitialLeaseObservation(sessionId: ACPSession.ID) -> Bool {
+        guard let session = sessions[sessionId],
+              session.restoredFromPersistence
+        else { return false }
+        return session.hydrationState == .loading || session.agentState == .spawning
+    }
+
+    /// True when the latest off-main lease read observed a different live
+    /// owner. This never performs SQLite work on the main actor.
+    private func anotherLiveInstanceOwnsLease(sessionId: ACPSession.ID) -> Bool {
+        guard let observed = observedLeases[sessionId], let lease = observed else { return false }
+        return lease.ownerInstance != instanceId
+            && ACPProcessLiveness.pidAlive(lease.pid)
+            && lease.heartbeatAt >= Int64(Date().timeIntervalSince1970) - Self.leaseStaleAfter
+    }
+
+    private func leaseFence(sessionId: ACPSession.ID) -> ACPSessionLeaseFence? {
+        guard _ownedLeases.contains(sessionId),
+              let token = ownedLeaseTokens[sessionId] else { return nil }
+        return ACPSessionLeaseFence(
+            sessionId: sessionId,
+            ownerInstance: instanceId,
+            token: token
+        )
     }
 
     /// Whether the instance currently writing this mirrored session is
     /// actively streaming (drives the mirror's busy spinner). Reads the
     /// lease status written by the owner's heartbeat.
     func mirrorIsBusy(sessionId: ACPSession.ID) -> Bool {
-        guard let lease = try? store.loadLease(sessionId: sessionId) else { return false }
+        guard let observed = observedLeases[sessionId], let lease = observed else { return false }
         return lease.status == "busy"
     }
 
     /// One heartbeat tick for an owned session. Returns true if the
     /// caller should stand down (we lost the lease to another instance).
-    /// Side effects: refreshes our heartbeat when we still own the row,
-    /// or re-asserts ownership (re-inserts) when the row has gone missing
-    /// while we still believe we own it (e.g. a failed concurrent takeover
-    /// deleted it) — preventing a rowless session another instance could
-    /// claim out from under us.
+    /// Side effects: refreshes our heartbeat when we still own the row. A
+    /// missing or differently owned row fails closed and requests stand-down.
     // exposed for tests
     @discardableResult
-    func heartbeatTick(sessionId: ACPSession.ID) -> Bool {
+    func heartbeatTick(sessionId: ACPSession.ID) async -> Bool {
         guard _ownedLeases.contains(sessionId) else { return false }
         let now = Int64(Date().timeIntervalSince1970)
-        if let lease = try? store.loadLease(sessionId: sessionId) {
+        do {
+            guard let lease = try await persistence.loadLease(sessionId: sessionId) else {
+                observedLeases[sessionId] = nil
+                return true
+            }
+            observedLeases[sessionId] = lease
             if lease.ownerInstance != instanceId {
                 return true   // taken over → stand down
             }
             // Still ours — refresh heartbeat + status.
             let status = runners[sessionId]?.session.transcript.streamingState == .streaming
                 ? "busy" : "idle"
-            try? store.refreshHeartbeat(
+            try await persistence.refreshHeartbeat(
                 sessionId: sessionId, instanceId: instanceId, now: now, status: status)
             return false
-        } else {
-            // Row missing but we believe we own it — re-assert ownership so
-            // the session isn't left rowless and claimable by another instance.
-            try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
+        } catch {
+            persistenceError = error.localizedDescription
             return false
         }
     }
 
     private func startHeartbeat(sessionId: ACPSession.ID) {
         _heartbeatTasks[sessionId]?.cancel()
-        _heartbeatTasks[sessionId] = Task { [weak self] in
+        _heartbeatTasks[sessionId] = Task { @MainActor [weak self] in
             // Refresh immediately so the just-claimed lease doesn't rely on
             // the first 5s tick (a slow initialize/newSession could otherwise
             // let the heartbeat age past leaseStaleAfter mid-attach).
-            await MainActor.run {
-                guard let self else { return }
-                if self.heartbeatTick(sessionId: sessionId) {
-                    Task { await self.standDown(sessionId: sessionId) }
-                }
+            guard let self else { return }
+            if await self.heartbeatTick(sessionId: sessionId) {
+                await self.standDown(sessionId: sessionId)
             }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)   // 5s
-                guard let self else { return }
-                let shouldStandDown = await MainActor.run { self.heartbeatTick(sessionId: sessionId) }
+                let shouldStandDown = await self.heartbeatTick(sessionId: sessionId)
                 if shouldStandDown {
                     await self.standDown(sessionId: sessionId)
                 }
@@ -1273,17 +1489,13 @@ extension ACPSessionManager {
 
     private func scheduleWriterOwnershipCheck(sessionId: ACPSession.ID) {
         writerWatchDebounce[sessionId]?.cancel()
-        writerWatchDebounce[sessionId] = Task { [weak self] in
+        writerWatchDebounce[sessionId] = Task { @MainActor [weak self] in
             // 100 ms coalesce window: the writer itself posts a ping on every
             // persist, so we debounce to avoid checking on each of those.
             try? await Task.sleep(nanoseconds: 100_000_000)
-            guard let self else { return }
-            await MainActor.run {
-                guard self._ownedLeases.contains(sessionId) else { return }
-                if self.heartbeatTick(sessionId: sessionId) {
-                    self._ownedLeases.remove(sessionId)
-                    Task { await self.standDown(sessionId: sessionId) }
-                }
+            guard let self, self._ownedLeases.contains(sessionId) else { return }
+            if await self.heartbeatTick(sessionId: sessionId) {
+                await self.standDown(sessionId: sessionId)
             }
         }
     }
@@ -1308,10 +1520,34 @@ extension ACPSessionManager {
     /// writer (re-attaching to the remote session via session/load inside
     /// `attach`). The previous owner stands down when its heartbeat sees
     /// it no longer owns the lease (within ~5s).
-    func takeOver(sessionId: ACPSession.ID) {
+    @discardableResult
+    func takeOver(sessionId: ACPSession.ID) async -> Bool {
         let now = Int64(Date().timeIntervalSince1970)
-        try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
+        let requestedToken = UUID().uuidString
+        let lease: ACPSessionLease
+        do {
+            lease = try await persistence.seizeLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                pid: pid,
+                now: now,
+                leaseToken: requestedToken
+            )
+        } catch {
+            persistenceError = error.localizedDescription
+            return false
+        }
+        guard sessions[sessionId] != nil else {
+            try? await persistence.releaseLease(
+                sessionId: sessionId,
+                instanceId: instanceId,
+                leaseToken: lease.token
+            )
+            return false
+        }
         _ownedLeases.insert(sessionId)
+        ownedLeaseTokens[sessionId] = lease.token
+        observedLeases[sessionId] = lease
         changeNotifier.post()
         startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
@@ -1324,8 +1560,9 @@ extension ACPSessionManager {
             // the store row here fixes that before attach branches on it.
             // Only overwrite when the store has a non-empty value so we
             // don't clobber a good in-memory id with a missing row.
-            if let row = try? store.loadSession(id: sessionId),
+            if let row = try? await persistence.loadSession(id: sessionId),
                let remote = row.remoteSessionId, !remote.isEmpty {
+                persistedRows[sessionId] = row
                 session.remoteSessionId = remote
             }
             // Refresh the queue from the store so the taking-over instance
@@ -1333,7 +1570,7 @@ extension ACPSessionManager {
             // stale/empty in-memory state the mirror cached. Queue writes
             // don't post a change notification, so the mirror's in-memory
             // queue can be stale at takeover time.
-            let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
+            let queue = (try? await persistence.loadQueue(sessionId: sessionId)) ?? []
             session.restoreQueue(queue)
             // Block immediate sends while the final mirror snapshot catches
             // the cached transcript up to the store before writer attach.
@@ -1349,6 +1586,7 @@ extension ACPSessionManager {
         } else {
             endMirroring(sessionId: sessionId)
         }
+        return true
     }
 
     /// Relinquish the writer role we just lost to a takeover: cancel any
@@ -1365,6 +1603,7 @@ extension ACPSessionManager {
         if let runner = runners.removeValue(forKey: sessionId) {
             runner.invalidateActivePrompt()
             runner.stop()
+            await runner.flushPersistence()
             await runner.connection.shutdown()
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
@@ -1388,8 +1627,8 @@ extension ACPSessionManager {
     /// registering a runner on a disposed manager.
     func isDisposedForTest() -> Bool { isDisposed }
 
-    func ownsLeaseForTest(sessionId: ACPSession.ID) -> Bool {
-        (try? store.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
+    func ownsLeaseForTest(sessionId: ACPSession.ID) async -> Bool {
+        (try? await persistence.loadLease(sessionId: sessionId))?.ownerInstance == instanceId
     }
 
     /// True while an `attach` coroutine holds the lease for `sessionId`
@@ -1399,8 +1638,8 @@ extension ACPSessionManager {
         attachingSessions.contains(sessionId)
     }
 
-    func heartbeatTickForTest(sessionId: ACPSession.ID) -> Bool {
-        heartbeatTick(sessionId: sessionId)
+    func heartbeatTickForTest(sessionId: ACPSession.ID) async -> Bool {
+        await heartbeatTick(sessionId: sessionId)
     }
 
     /// True when a mirror poll task is active for `sessionId`. Used by
@@ -1469,10 +1708,9 @@ extension ACPSessionManager {
     /// `connection.shutdown`, preserving the correct teardown order. The lease
     /// is never leaked — it is either released by the attach defer on abort, or
     /// goes stale in 15 s if the attach coroutine is permanently wedged.
-    func releaseAllOwnedLeases() {
+    func releaseAllOwnedLeases() async {
         for sid in Array(_ownedLeases) where !attachingSessions.contains(sid) {
-            try? store.releaseLease(sessionId: sid, instanceId: instanceId)
-            _ownedLeases.remove(sid)
+            await releaseWriterLease(sessionId: sid)
         }
     }
 
@@ -1496,7 +1734,7 @@ extension ACPSessionManager {
         mirrorPoll[sessionId]?.cancel()
         mirrorPoll[sessionId] = Task { [weak self] in
             while !Task.isCancelled {
-                let interval = await self?.mirrorPollIntervalNanos(sessionId: sessionId)
+                let interval = self?.mirrorPollIntervalNanos(sessionId: sessionId)
                     ?? ACPMirrorRefreshPolicy.inactivePollNanos
                 try? await Task.sleep(nanoseconds: interval)
                 guard !Task.isCancelled else { return }
@@ -1546,11 +1784,8 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId] else { return }
         let result: HydrationResult
         do {
-            if let hydrator {
-                result = try await hydrator.mirrorSnapshot(sessionId: sessionId)
-            } else {
-                result = try synchronousMirrorSnapshot(id: sessionId)
-            }
+            result = try await persistence.mirrorSnapshot(sessionId: sessionId)
+            observedLeases[sessionId] = try await persistence.loadLease(sessionId: sessionId)
         } catch {
             return
         }
@@ -1571,29 +1806,12 @@ extension ACPSessionManager {
             session: session)
     }
 
-    private func synchronousMirrorSnapshot(id: ACPSession.ID) throws -> HydrationResult {
-        guard let row = try store.loadSession(id: id) else {
-            throw ACPSessionHydrator.Error.sessionNotFound(id)
-        }
-        let stored = (try? store.loadMessages(sessionId: id)) ?? []
-        var wire: [ACPMessageWire] = []
-        wire.reserveCapacity(stored.count)
-        let decoder = JSONDecoder()
-        for m in stored {
-            if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
-                wire.append(w)
-            }
-        }
-        let queue = (try? store.loadQueue(sessionId: id)) ?? []
-        let recent = (try? store.recentSessions()) ?? []
-        return HydrationResult(row: row, wireMessages: wire, queue: queue, draft: nil, recent: recent)
-    }
-
     private func syncMirrorSessionMetadata(
         _ row: ACPSessionRow,
         to session: ACPSession,
         recentRows: [ACPSessionRow]? = nil
     ) {
+        persistedRows[row.id] = row
         let titleChanged = session.title != row.title || session.titleSource != row.titleSource
         session.title = row.title
         session.titleSource = row.titleSource
@@ -1603,7 +1821,12 @@ extension ACPSessionManager {
         if session.remoteSessionId == nil || session.remoteSessionId == row.remoteSessionId {
             session.remoteSessionId = row.remoteSessionId
         }
-        recent = recentRows ?? (try? store.recentSessions()) ?? []
+        if let recentRows {
+            recent = recentRows
+            for recentRow in recentRows {
+                persistedRows[recentRow.id] = recentRow
+            }
+        }
         if titleChanged {
             onSessionTitleUpdated?(row.id, row.title)
         }
@@ -1644,7 +1867,7 @@ extension ACPSessionManager {
         session.agentState = .spawning
         // Only the lease holder runs a live agent + writes. If another
         // live instance owns this session, stay a read-only mirror.
-        guard acquireWriterLease(sessionId: sessionId) else {
+        guard await acquireWriterLease(sessionId: sessionId) else {
             session.agentState = .idle
             beginMirroring(sessionId: sessionId)
             return
@@ -1664,7 +1887,6 @@ extension ACPSessionManager {
             if !attachSucceeded {
                 stopHeartbeat(sessionId: sessionId)
                 stopWriterWatch(sessionId: sessionId)
-                releaseWriterLease(sessionId: sessionId)
             }
         }
         // The runner persists transcript mutations under `msg-<sid>-<index>`,
@@ -1679,7 +1901,10 @@ extension ACPSessionManager {
         await awaitBackfill(id: sessionId)
         // Re-verify the session still exists; a close during the await above
         // would have cleared it.
-        guard sessions[sessionId] === session else { return }
+        guard sessions[sessionId] === session else {
+            await releaseWriterLease(sessionId: sessionId)
+            return
+        }
         // Drop any stale runner left over from a prior process (e.g. the
         // runner's stream-end branch flipped agentState to .disconnected
         // but did not unregister itself). The .ready/.spawning early-return
@@ -1688,6 +1913,7 @@ extension ACPSessionManager {
         // is a zombie whose update task already exited.
         if let stale = runners[sessionId] {
             stale.stop()
+            await stale.flushPersistence()
         }
         runners[sessionId] = nil
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
@@ -1703,12 +1929,14 @@ extension ACPSessionManager {
             let reason = "No ACP launch spec for \(session.agentId)"
             session.setupState = .needsSetup(reason: reason)
             session.agentState = .failed(reason)
+            await releaseWriterLease(sessionId: sessionId)
             return
         }
         let setup = await setupEvaluator(spec)
         guard case .ready = setup else {
             session.setupState = .needsSetup(reason: setup.reasonText)
             session.agentState = .failed(setup.reasonText)
+            await releaseWriterLease(sessionId: sessionId)
             return
         }
         session.setupState = .ready
@@ -1723,6 +1951,7 @@ extension ACPSessionManager {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
             session.agentState = .failed(msg)
+            await releaseWriterLease(sessionId: sessionId)
             return
         }
         // Collect a short tail of stderr so we can surface it when the
@@ -1796,7 +2025,7 @@ extension ACPSessionManager {
                 && session.hasConversationTranscript
                 && !(session.remoteSessionId ?? "").isEmpty
             let runner = ACPSessionRunner(session: session, connection: connection,
-                                          store: store, sessionId: sessionId,
+                                          sessionId: sessionId,
                                           worktreePath: worktreePath,
                                           agentEnv: agentEnvironment,
                                           suppressingLoadReplay: shouldSuppressLoadReplay,
@@ -1825,7 +2054,18 @@ extension ACPSessionManager {
                                                 followsTail: true
                                               )
                                           },
-                                          ownerInstanceId: instanceId)
+                                          ownerInstanceId: instanceId,
+                                          persistence: persistence,
+                                          persistedMessageCount: session.transcript.messages.count,
+                                          canWrite: { [weak self] in
+                                              self?.isWriter(for: sessionId) == true
+                                          },
+                                          validateLease: { [weak self] in
+                                              await self?.confirmedWriterLease(for: sessionId) == true
+                                          },
+                                          leaseFenceProvider: { [weak self] in
+                                              self?.leaseFence(sessionId: sessionId)
+                                          })
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }
@@ -1836,7 +2076,7 @@ extension ACPSessionManager {
             if shouldSuppressLoadReplay {
                 startRunnerIfNeeded()
             }
-            let pendingRecovery = (try? store.loadSession(id: sessionId)?.contextRecoveryPending) == true
+            let pendingRecovery = persistedRows[sessionId]?.contextRecoveryPending == true
             let result: ACPSessionNewResult
             var restoreWarning: ACPSession.ContextRestoreWarning?
             let hasRestorableContext = pendingRecovery || session.hasConversationTranscript
@@ -1871,7 +2111,7 @@ extension ACPSessionManager {
                         result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
-                            if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                            if isWriter(for: sessionId) {
                                 persistContextRecoveryPending(sessionId: sessionId, pending: true)
                             }
                         }
@@ -1924,7 +2164,7 @@ extension ACPSessionManager {
                             // Guard the store write: if another instance took over
                             // while we were awaiting loadSession/newSession, do not
                             // persist recovery state to a session we no longer own.
-                            if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                            if isWriter(for: sessionId) {
                                 persistContextRecoveryPending(sessionId: sessionId, pending: true)
                             }
                         }
@@ -1948,7 +2188,7 @@ extension ACPSessionManager {
                     // Guard the store write: if another instance took over
                     // while we were awaiting newSession, do not persist
                     // recovery state to a session we no longer own.
-                    if !anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+                    if isWriter(for: sessionId) {
                         persistContextRecoveryPending(sessionId: sessionId, pending: true)
                     }
                 }
@@ -1976,11 +2216,19 @@ extension ACPSessionManager {
             // persist for a session we no longer (or never will) own.
             // `attachSucceeded` stays false so the defer releases the lease
             // and stops the heartbeat/writerWatch.
-            if isDisposed || anotherLiveInstanceOwnsLease(sessionId: sessionId) {
+            let shouldAbortAttach: Bool
+            if isDisposed {
+                shouldAbortAttach = true
+            } else {
+                shouldAbortAttach = !(await confirmedWriterLease(for: sessionId))
+            }
+            if shouldAbortAttach {
                 await connection.shutdown()
                 startedRunner?.stop()
+                await startedRunner?.flushPersistence()
                 session.agentState = .idle
                 if !isDisposed { beginMirroring(sessionId: sessionId) }   // don't start a mirror on a disposed manager
+                await releaseWriterLease(sessionId: sessionId)
                 return
             }
             session.remoteSessionId = result.sessionId
@@ -1992,6 +2240,7 @@ extension ACPSessionManager {
             session.availableConfigOptions = result.configOptions
             session.contextRestoreWarning = restoreWarning
             persistSessionRemoteId(session)
+            await flushPersistence()
             startRunnerIfNeeded()
             runners[sessionId] = runner
             keepElicitationCoordinator = true
@@ -2039,7 +2288,9 @@ extension ACPSessionManager {
                 session.agentState = .failed(full)
             }
             startedRunner?.stop()
+            await startedRunner?.flushPersistence()
             await connection.shutdown()
+            await releaseWriterLease(sessionId: sessionId)
         }
     }
 
@@ -2107,10 +2358,14 @@ extension ACPSessionManager {
         guard let session = sessions[sessionId] else { return }
         let blocks = ACPSessionRunner.blocks(text: text, attachments: attachments)
         session.enqueue(blocks: blocks, draft: draft)
-        do {
-            try store.upsertQueue(sessionId: sessionId, items: session.queue)
-        } catch {
-            session.lastError = "Failed to persist queued prompt: \(error.localizedDescription)"
+        let items = session.queue
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.upsertQueue(
+                sessionId: sessionId,
+                items: items,
+                fence: fence
+            )
         }
     }
 
@@ -2206,6 +2461,7 @@ extension ACPSessionManager {
             session.restoreQueue(session.queue)
         }
         runner.stop()
+        await runner.flushPersistence()
         runners[sessionId] = nil
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         await runner.connection.shutdown()
@@ -2242,12 +2498,13 @@ extension ACPSessionManager {
             // head can come back as cleanly `.pending` after restoreQueue.
             runner.invalidateActivePrompt()
             runner.stop()
+            await runner.flushPersistence()
             await runner.connection.shutdown()
         }
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         stopHeartbeat(sessionId: sessionId)
         stopWriterWatch(sessionId: sessionId)
-        releaseWriterLease(sessionId: sessionId)
+        await releaseWriterLease(sessionId: sessionId)
         endMirroring(sessionId: sessionId)
         // SwiftUI's `.onDisappear` retain release for a closing tab can
         // arrive BEFORE this async detach starts, so the release runs while
