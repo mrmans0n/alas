@@ -28,6 +28,9 @@ struct CenterPaneView: View {
                     // re-evaluates this closure on every keystroke; without
                     // this, `dirty` (which depends on non-observable
                     // NSTextStorage) would only refresh on theme/tab changes.
+                    // The closure is consumed by the per-tab close button,
+                    // so the invalidation is scoped to that tiny view
+                    // instead of the whole tab bar.
                     _ = buffer?.editGeneration
                     return buffer?.dirty ?? false
                 },
@@ -169,11 +172,6 @@ struct CenterPaneView: View {
                         let openAvailable = DiffOpenFileAvailability.isAvailable(
                             worktreePath: worktree.path, relativePath: s.relativePath
                         )
-                        let rps = state.rightPaneStore.state(
-                            for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch,
-                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
-                        )
                         DiffTabView(
                             worktreePath: worktree.path,
                             relativePath: s.relativePath,
@@ -188,9 +186,14 @@ struct CenterPaneView: View {
                                 ? { state.openFile(relativePath: s.relativePath, worktreeId: worktree.id) }
                                 : nil,
                             onRequestDiscardFile: {
+                                let rps = state.rightPaneStore.activeState(worktreeId: worktree.id)
+                                    ?? activateRightPaneStateForCenterTab()
                                 rps.requestDiscardFile(path: s.relativePath)
                             }
                         )
+                        .task(id: rightPaneActivationKey) {
+                            activateRightPaneStateForCenterTab()
+                        }
                     case .stashDiff(let s):
                         StashDiffTabView(
                             worktreePath: worktree.path,
@@ -216,11 +219,6 @@ struct CenterPaneView: View {
                         )
                         .id(s.id)
                     case .draftCommit(let draftState):
-                        let _ = state.rightPaneStore.state(
-                            for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch,
-                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
-                        )
                         DraftCommitTabView(
                             worktreePath: worktree.path,
                             worktreeId: worktree.id,
@@ -228,6 +226,9 @@ struct CenterPaneView: View {
                             appState: state
                         )
                         .id(draftState.id)
+                        .task(id: rightPaneActivationKey) {
+                            activateRightPaneStateForCenterTab()
+                        }
                     case .draftReviewRequest(let draftState):
                         DraftReviewRequestTabView(
                             worktreePath: worktree.path,
@@ -237,29 +238,25 @@ struct CenterPaneView: View {
                         )
                         .id(draftState.id)
                     case .reviewChanges(let reviewState):
-                        let _ = state.rightPaneStore.state(
-                            for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch,
-                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
-                        )
                         ReviewChangesTabView(
                             worktree: worktree,
                             tabState: reviewState,
                             appState: state
                         )
                         .id(reviewState.id)
+                        .task(id: rightPaneActivationKey) {
+                            activateRightPaneStateForCenterTab()
+                        }
                     case .reviewPR(let prState):
-                        let _ = state.rightPaneStore.state(
-                            for: worktree,
-                            baseBranch: state.config.worktrees.baseBranch,
-                            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
-                        )
                         ReviewTabView(
                             worktree: worktree,
                             tabState: prState,
                             appState: state
                         )
                         .id(prState.id)
+                        .task(id: rightPaneActivationKey) {
+                            activateRightPaneStateForCenterTab()
+                        }
                     case .reviewSession(let sessionState):
                         ReviewSessionTabView(
                             worktree: worktree,
@@ -301,6 +298,19 @@ struct CenterPaneView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(theme.color("bg-1"))
+    }
+
+    private var rightPaneActivationKey: String {
+        "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.trackUpstreamForCommits)"
+    }
+
+    @discardableResult
+    private func activateRightPaneStateForCenterTab() -> RightPaneState {
+        state.rightPaneStore.state(
+            for: worktree,
+            baseBranch: state.config.worktrees.baseBranch,
+            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
+        )
     }
 
     private func openTerminal() {

@@ -54,50 +54,7 @@ struct TabBarView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 0) {
                         ForEach(Array(tabs.enumerated()), id: \.element.id) { idx, tab in
-                            TabButton(
-                                titleLookup: titleLookup,
-                                tab: tab,
-                                active: tab.id == activeId,
-                                showClose: true,
-                                harnessInfo: harnessLookup(tab.id),
-                                dirty: dirtyLookup(tab.id),
-                                transcript: transcriptLookup(tab.id),
-                                acpAgent: acpAgentLookup(tab.id),
-                                onActivate: { onActivate(tab.id) },
-                                onClose: { onClose(tab.id) }
-                            )
-                            .id(tab.id)
-                            .draggable(tab.id)
-                            .dropDestination(for: TabID.self) { ids, _ in
-                                guard let draggedId = ids.first, draggedId != tab.id else { return false }
-                                onMove(draggedId, tab.id)
-                                return true
-                            }
-                            .contextMenu {
-                                if case .terminal = tab {
-                                    Button("Rename…") { onRenameTerminal(tab.id) }
-                                    Divider()
-                                }
-                                if case .acpSession = tab {
-                                    Button("Rename…") { onRenameACPSession(tab.id) }
-                                    Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
-                                    Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
-                                    Divider()
-                                }
-                                Button("Close") { onClose(tab.id) }
-                                Button("Close Other Tabs") { onCloseOthers(tab.id) }
-                                    .disabled(tabs.count <= 1)
-                                Button("Close All Tabs") { onCloseAll() }
-                                Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
-                                    .disabled(idx == 0)
-                                Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
-                                    .disabled(idx == tabs.count - 1)
-                                Divider()
-                                if tab.relativeFilePath != nil {
-                                    Button("Copy Path") { onCopyPath(tab.id) }
-                                    Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
-                                }
-                            }
+                            tabButton(for: idx, tab: tab)
                         }
                     }
                 }
@@ -146,6 +103,53 @@ struct TabBarView: View {
         .windowDragHandle()
     }
 
+    private func tabButton(for idx: Int, tab: Tab) -> some View {
+        TabButton(
+            titleLookup: titleLookup,
+            tab: tab,
+            active: tab.id == activeId,
+            showClose: true,
+            harnessInfo: harnessLookup(tab.id),
+            dirtyLookup: { dirtyLookup(tab.id) },
+            transcript: transcriptLookup(tab.id),
+            acpAgent: acpAgentLookup(tab.id),
+            onActivate: { onActivate(tab.id) },
+            onClose: { onClose(tab.id) }
+        )
+        .id(tab.id)
+        .draggable(tab.id)
+        .dropDestination(for: TabID.self) { ids, _ in
+            guard let draggedId = ids.first, draggedId != tab.id else { return false }
+            onMove(draggedId, tab.id)
+            return true
+        }
+        .contextMenu {
+            if case .terminal = tab {
+                Button("Rename…") { onRenameTerminal(tab.id) }
+                Divider()
+            }
+            if case .acpSession = tab {
+                Button("Rename…") { onRenameACPSession(tab.id) }
+                Button("Copy Session as Markdown") { onCopyACPSession(tab.id) }
+                Button("Save Session as Markdown…") { onExportACPSession(tab.id) }
+                Divider()
+            }
+            Button("Close") { onClose(tab.id) }
+            Button("Close Other Tabs") { onCloseOthers(tab.id) }
+                .disabled(tabs.count <= 1)
+            Button("Close All Tabs") { onCloseAll() }
+            Button("Close Tabs to the Left") { onCloseToLeft(tab.id) }
+                .disabled(idx == 0)
+            Button("Close Tabs to the Right") { onCloseToRight(tab.id) }
+                .disabled(idx == tabs.count - 1)
+            Divider()
+            if tab.relativeFilePath != nil {
+                Button("Copy Path") { onCopyPath(tab.id) }
+                Button("Copy Relative Path") { onCopyRelativePath(tab.id) }
+            }
+        }
+    }
+
     private func scrollActiveTab(using proxy: ScrollViewProxy, animated: Bool) {
         guard let activeId else { return }
         if animated {
@@ -180,13 +184,12 @@ private struct TabButton: View {
     let active: Bool
     let showClose: Bool
     let harnessInfo: (agent: AgentKind, state: ActivityState)?
-    let dirty: Bool
+    let dirtyLookup: () -> Bool
     let transcript: ACPTranscript?
     let acpAgent: AgentDefinition?
     let onActivate: () -> Void
     let onClose: () -> Void
     @Environment(\.theme) var theme
-    @State private var hoveringClose = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -216,28 +219,7 @@ private struct TabButton: View {
                 TabPlanProgressChip(transcript: transcript)
             }
             if showClose {
-                Button(action: onClose) {
-                    ZStack {
-                        ZStack {
-                            if dirty && !hoveringClose {
-                                Circle()
-                                    .fill(theme.color("fg"))
-                                    .frame(width: 7, height: 7)
-                            } else {
-                                Icon(name: "x", size: 9,
-                                     color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
-                                    .background(hoveringClose ? theme.color("bg-4") : .clear)
-                                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                            }
-                        }
-                        .frame(width: 14, height: 14)
-                    }
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .onHover { hoveringClose = $0 }
-                .help(dirty ? "Unsaved changes — click to close" : "Close")
+                TabCloseButton(dirtyLookup: dirtyLookup, onClose: onClose)
             }
         }
         .padding(.horizontal, 10)
@@ -267,6 +249,42 @@ private struct TabButton: View {
         case .permissionRequest: return theme.color("mod")
         case .idle:          return theme.color("fg-faint")
         }
+    }
+}
+
+/// Small isolated view that observes the buffer's `editGeneration` so that
+/// typing in one editor only invalidates this tab's close/dirty dot, not the
+/// whole tab bar.
+private struct TabCloseButton: View {
+    let dirtyLookup: () -> Bool
+    let onClose: () -> Void
+    @Environment(\.theme) private var theme
+    @State private var hoveringClose = false
+
+    var body: some View {
+        let dirty = dirtyLookup()
+        Button(action: onClose) {
+            ZStack {
+                ZStack {
+                    if dirty && !hoveringClose {
+                        Circle()
+                            .fill(theme.color("fg"))
+                            .frame(width: 7, height: 7)
+                    } else {
+                        Icon(name: "x", size: 9,
+                             color: hoveringClose ? theme.color("fg") : theme.color("fg-faint"))
+                            .background(hoveringClose ? theme.color("bg-4") : .clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+                .frame(width: 14, height: 14)
+            }
+            .frame(width: 20, height: 20)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveringClose = $0 }
+        .help(dirty ? "Unsaved changes — click to close" : "Close")
     }
 }
 

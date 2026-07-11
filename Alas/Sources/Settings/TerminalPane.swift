@@ -5,7 +5,7 @@ struct TerminalPane: View {
     @Environment(\.theme) var theme
 
     @State private var hookStatus: [AgentKind: String] = [:]
-    @State private var installStateRefreshToken = 0
+    @State private var installStates: [AgentKind: InstallState] = [:]
     private let installerRegistry = AgentInstallerRegistry()
     private let installStateRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
@@ -135,16 +135,23 @@ struct TerminalPane: View {
                     ForEach(installerRegistry.supportedAgents) { agent in
                         SettingsRow(name: agent.displayName) {
                             HStack {
-                                let integrationState = installState(for: agent, refreshToken: installStateRefreshToken)
-                                ForEach(TerminalIntegrationActions.actions(for: integrationState)) { action in
-                                    AlasButton(title: action.title) {
-                                        switch action.kind {
-                                        case .install:
-                                            installAgent(agent)
-                                        case .uninstall:
-                                            uninstallAgent(agent)
+                                if let integrationState = installStates[agent] {
+                                    ForEach(TerminalIntegrationActions.actions(for: integrationState)) { action in
+                                        AlasButton(title: action.title) {
+                                            switch action.kind {
+                                            case .install:
+                                                installAgent(agent)
+                                            case .uninstall:
+                                                uninstallAgent(agent)
+                                            }
                                         }
                                     }
+                                } else {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Checking…")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(theme.color("fg-dim"))
                                 }
                                 if let status = hookStatus[agent] {
                                     Text(status).font(.system(size: 11))
@@ -165,12 +172,18 @@ struct TerminalPane: View {
         }
     }
 
-    private func installState(for agent: AgentKind, refreshToken _: Int) -> InstallState {
-        return installerRegistry.installer(for: agent)?.installState() ?? .notInstalled
-    }
-
     private func refreshInstallStates() {
-        installStateRefreshToken &+= 1
+        Task { @MainActor in
+            let registry = installerRegistry
+            let states = await Task.detached(priority: .utility) { [registry] in
+                var states: [AgentKind: InstallState] = [:]
+                for agent in registry.supportedAgents {
+                    states[agent] = registry.installer(for: agent)?.installState() ?? .notInstalled
+                }
+                return states
+            }.value
+            self.installStates = states
+        }
     }
 
     private func installAgent(_ agent: AgentKind) {
