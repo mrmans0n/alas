@@ -94,6 +94,7 @@ enum ProjectMCPValidationIssue: Equatable {
     case invalidEnvironmentName(serverName: String, name: String)
     case duplicateEnvironmentName(serverName: String, name: String)
     case emptyHeaderName(serverName: String)
+    case invalidHeaderName(serverName: String, name: String)
     case duplicateHeaderName(serverName: String, name: String)
 }
 
@@ -134,9 +135,10 @@ enum ProjectMCPValidation {
     ) {
         var names = Set<String>()
         for entry in environment {
-            let name = entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard isValidEnvironmentName(name) else {
-                issues.append(.invalidEnvironmentName(serverName: serverName, name: name))
+            let rawName = entry.name
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard rawName == name, isValidEnvironmentName(name) else {
+                issues.append(.invalidEnvironmentName(serverName: serverName, name: rawName))
                 continue
             }
             if !names.insert(name).inserted {
@@ -152,9 +154,14 @@ enum ProjectMCPValidation {
     ) {
         var names = Set<String>()
         for header in headers {
-            let name = header.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawName = header.name
+            let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else {
                 issues.append(.emptyHeaderName(serverName: serverName))
+                continue
+            }
+            guard rawName == name else {
+                issues.append(.invalidHeaderName(serverName: serverName, name: rawName))
                 continue
             }
             if !names.insert(name.lowercased()).inserted {

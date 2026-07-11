@@ -169,6 +169,7 @@ enum MCPAttachmentPlanner {
              let .invalidEnvironmentName(serverName, _),
              let .duplicateEnvironmentName(serverName, _),
              let .emptyHeaderName(serverName),
+             let .invalidHeaderName(serverName, _),
              let .duplicateHeaderName(serverName, _):
             return name == serverName
         }

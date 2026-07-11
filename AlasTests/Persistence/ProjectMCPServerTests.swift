@@ -113,7 +113,25 @@ struct ProjectMCPServerTests {
 
         #expect(ProjectMCPValidation.validate([server]) == [
             .invalidEnvironmentName(serverName: "filesystem", name: "1INVALID"),
-            .duplicateEnvironmentName(serverName: "filesystem", name: "TOKEN"),
+            .invalidEnvironmentName(serverName: "filesystem", name: " TOKEN "),
+        ])
+    }
+
+    @Test func validationRejectsWhitespaceAroundHeaderNames() {
+        let server = ProjectMCPServer(
+            id: "server",
+            name: "remote",
+            transport: .sse(
+                url: "https://mcp.example.com/sse",
+                headers: [
+                    .init(id: "one", name: " Authorization ", value: "a"),
+                    .init(id: "two", name: "authorization", value: "b"),
+                ]
+            )
+        )
+
+        #expect(ProjectMCPValidation.validate([server]) == [
+            .invalidHeaderName(serverName: "remote", name: " Authorization "),
         ])
     }
 
@@ -124,7 +142,7 @@ struct ProjectMCPServerTests {
             transport: .sse(
                 url: "https://mcp.example.com/sse",
                 headers: [
-                    .init(id: "one", name: " Authorization ", value: "a"),
+                    .init(id: "one", name: "Authorization", value: "a"),
                     .init(id: "two", name: "authorization", value: "b"),
                 ]
             )
