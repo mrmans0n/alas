@@ -45,11 +45,12 @@ struct CodePane: View {
 
                 SettingsGroup(title: "Languages") {
                     ForEach(allEntries(), id: \.id) { entry in
+                        let status = availability.status(for: entry)
                         SettingsRow(name: entry.language,
                                     desc: entry.extensions.joined(separator: ", ")) {
                             HStack(spacing: 8) {
-                                statusBadge(for: entry)
-                                installAffordance(for: entry)
+                                statusBadge(status)
+                                installAffordance(for: entry, status: status)
                                 AlasButton(title: "Edit",
                                            style: .subtle,
                                            action: { selected = entry })
@@ -101,6 +102,7 @@ struct CodePane: View {
                 // language so their hover/diagnostics/definitions wake up
                 // without the user closing and reopening the tab.
                 if let completedLanguage {
+                    state.lsp.invalidateAvailabilityCache(forLanguage: completedLanguage)
                     state.tabs.reopenLSPDocuments(forLanguage: completedLanguage)
                 }
             }
@@ -114,10 +116,10 @@ struct CodePane: View {
 
     private let availability = LanguageServerAvailability()
 
-    private func statusBadge(for entry: LanguageServerConfig) -> some View {
+    private func statusBadge(_ status: LanguageServerAvailability.Status) -> some View {
         let label: String
         let color: Color
-        switch availability.status(for: entry) {
+        switch status {
         case .disabled:
             label = "Disabled"
             color = theme.color("fg-faint")
@@ -135,9 +137,8 @@ struct CodePane: View {
     }
 
     @ViewBuilder
-    private func installAffordance(for entry: LanguageServerConfig) -> some View {
+    private func installAffordance(for entry: LanguageServerConfig, status: LanguageServerAvailability.Status) -> some View {
         let recipes = recipes(for: entry.language)
-        let status = availability.status(for: entry)
         if status == .notInstalled, !recipes.isEmpty {
             InstallSplitButton(
                 recipes: recipes,

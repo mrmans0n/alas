@@ -88,6 +88,7 @@ struct BlockedNudgeBanner: View {
             remediationState = .idle
             // Wake up LSP for any open buffers in this language so
             // diagnostics/hover start without a manual reopen.
+            appState.lsp.invalidateAvailabilityCache(forLanguage: nudge.language)
             appState.tabs.reopenLSPDocuments(forLanguage: nudge.language)
         case .stillBlocked:
             remediationState = .error("Quarantine removed but \(nudge.displayName) is still blocked. Try reinstalling it.")

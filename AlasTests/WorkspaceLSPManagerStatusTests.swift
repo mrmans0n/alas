@@ -155,6 +155,79 @@ struct WorkspaceLSPManagerStatusTests {
         #expect(box.calls == 1)
     }
 
+    @Test func notInstalledStatusIsCachedUntilInvalidated() {
+        final class Box { var calls = 0 }
+        let box = Box()
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: "sourcekit-lsp",
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let mgr = WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: ["PATH": ""],
+                    xcrunFind: { _ in
+                        box.calls += 1
+                        return nil
+                    },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in .allowed }
+                )
+            }
+        )
+
+        _ = mgr.availabilityStatus(forLanguage: "swift")
+        _ = mgr.availabilityStatus(forLanguage: "swift")
+        #expect(box.calls == 1)
+
+        mgr.invalidateAvailabilityCache(forLanguage: "swift")
+        _ = mgr.availabilityStatus(forLanguage: "swift")
+        #expect(box.calls == 2)
+    }
+
+    @Test func nonXcrunNotInstalledStatusIsReprobed() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-lsp-availability-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let executable = dir.appendingPathComponent("rust-analyzer")
+        let registry = LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "rust",
+                extensions: ["rs"],
+                command: "rust-analyzer",
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ])
+        let mgr = WorkspaceLSPManager(
+            registry: registry,
+            makeAvailability: {
+                LanguageServerAvailability(
+                    environment: ["PATH": dir.path],
+                    xcrunFind: { _ in nil },
+                    additionalPathDirectories: [],
+                    gatekeeperAssessor: { _ in .allowed }
+                )
+            }
+        )
+
+        #expect(mgr.availabilityStatus(forLanguage: "rust") == .notInstalled)
+        #expect(FileManager.default.createFile(atPath: executable.path, contents: Data()))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        #expect(mgr.availabilityStatus(forLanguage: "rust") == .available)
+    }
+
     @Test func openDocumentRemediatesGatekeeperBlockBeforeSpawning() async {
         final class Box {
             let path = "/usr/bin/true"
