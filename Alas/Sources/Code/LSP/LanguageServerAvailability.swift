@@ -19,7 +19,7 @@ struct LanguageServerAvailability {
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default,
-        xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.xcrunFind,
+        xcrunFind: @escaping (String) -> String? = LanguageServerAvailability.cachedXcrunFind,
         additionalPathDirectories: [String] = LanguageServerAvailability.defaultAdditionalPathDirectories(),
         gatekeeperAssessor: @escaping (String) -> GatekeeperAssessor.Result = { GatekeeperAssessor.shared.assess(realPath: $0) },
         gatekeeperRemediator: @escaping (String, String) async -> GatekeeperRemediator.Outcome = {
@@ -228,6 +228,45 @@ struct LanguageServerAvailability {
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+    }
+
+    nonisolated private static func cachedXcrunFind(_ tool: String) -> String? {
+        sharedXcrunFindCache.value(for: tool) {
+            xcrunFind(tool)
+        }
+    }
+
+    nonisolated private static let sharedXcrunFindCache = XcrunFindCache()
+
+    nonisolated private final class XcrunFindCache: @unchecked Sendable {
+        private enum Result {
+            case found(String)
+            case missing
+        }
+
+        private let lock = NSLock()
+        private var results: [String: Result] = [:]
+
+        func value(for tool: String, resolve: () -> String?) -> String? {
+            lock.lock()
+            if let cached = results[tool] {
+                lock.unlock()
+                switch cached {
+                case .found(let path):
+                    return path
+                case .missing:
+                    return nil
+                }
+            }
+            lock.unlock()
+
+            let resolved = resolve()
+
+            lock.lock()
+            results[tool] = resolved.map(Result.found) ?? .missing
+            lock.unlock()
+            return resolved
+        }
     }
 
     nonisolated private static func xcrunFind(_ tool: String) -> String? {

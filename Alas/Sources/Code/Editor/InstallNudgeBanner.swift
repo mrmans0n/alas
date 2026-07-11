@@ -39,6 +39,7 @@ struct InstallNudgeBanner: View {
                 // installed language so hover/diagnostics/definitions
                 // wake up without a manual close-and-reopen.
                 if let completedLanguage {
+                    appState.lsp.invalidateAvailabilityCache(forLanguage: completedLanguage)
                     if let package = pendingMasonPackage {
                         let config = LanguageServerConfig.prefilled(from: package)
                         appState.config.code.saveLanguageServerConfig(

@@ -148,25 +148,40 @@ final class WorkspaceLSPManager: DocumentFormatter {
     /// caching the result. Designed for hot-path callers like the status
     /// badge resolver.
     ///
-    /// Only stable results (`.available`, `.disabled`) are cached — those
-    /// don't change without a registry update. `.notInstalled` and
-    /// `.blockedByGatekeeper` are re-probed on every call so runtime user
-    /// actions (install via the install nudge, quarantine removal via the
-    /// blocked nudge) are picked up without an explicit cache invalidation
-    /// hook. The fast-path PATH walk is cheap; the `xcrun --find` fallback
-    /// for `sourcekit-lsp` only fires when the binary isn't on PATH, which
-    /// is uncommon on dev machines.
+    /// Missing Swift `sourcekit-lsp` is cached too: that resolution can fall
+    /// back to `xcrun --find`, so negative results must not be re-probed from
+    /// render-adjacent status badge paths. Other `.notInstalled` statuses
+    /// continue to re-probe so manual installs outside Alas are picked up.
+    /// Runtime installs explicitly invalidate the language below.
+    /// `.blockedByGatekeeper` still re-probes because remediation can flip
+    /// without changing the registry.
     func availabilityStatus(forLanguage language: String) -> LanguageServerAvailability.Status? {
         if let cached = availabilityCache[language] { return cached }
         guard let entry = registry.allEntries().first(where: { $0.language == language }) else { return nil }
         let status = cachedAvailability.status(for: entry)
-        switch status {
-        case .available, .disabled:
+        if shouldCacheAvailabilityStatus(status, for: entry) {
             availabilityCache[language] = status
-        case .notInstalled, .blockedByGatekeeper:
-            break
         }
         return status
+    }
+
+    private func shouldCacheAvailabilityStatus(
+        _ status: LanguageServerAvailability.Status,
+        for entry: LanguageServerConfig
+    ) -> Bool {
+        switch status {
+        case .available, .disabled:
+            return true
+        case .notInstalled:
+            return entry.language == "swift" && entry.command == "sourcekit-lsp"
+        case .blockedByGatekeeper:
+            return false
+        }
+    }
+
+    func invalidateAvailabilityCache(forLanguage language: String) {
+        let languages = Set(RecommendedLanguageCatalog.aliasGroup(forLanguage: language))
+        availabilityCache = availabilityCache.filter { !languages.contains($0.key) }
     }
 
     /// Register an open editor tab for `(worktreeRoot, fileURL)`. Spawns
