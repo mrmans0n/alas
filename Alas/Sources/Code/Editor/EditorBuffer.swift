@@ -58,6 +58,10 @@ final class EditorBuffer {
     @ObservationIgnored
     private static let watchQueue = DispatchQueue(label: "alas.editor.buffer.watch", qos: .utility)
     @ObservationIgnored
+    private var moveLookupTask: Task<MovedFileLookupResult?, Never>?
+    @ObservationIgnored
+    private var moveLookupGeneration = 0
+    @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
     @ObservationIgnored
     private var originalVolumeIdentifier: AnyObject?
@@ -301,24 +305,16 @@ final class EditorBuffer {
         watcherSource?.cancel()
         watcherSource = nil
         watcherFD = -1
+        cancelMoveLookup()
     }
 
     private func handleWatcherEvent() {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if !FileManager.default.fileExists(atPath: url.path) {
-            if let movedPath = findMovedRelativePath() {
-                followMovedFile(to: movedPath)
-                return
-            }
-            if dirty {
-                conflict = .deletedOnDisk
-            }
-            // If the buffer is clean and the file vanished, leave the buffer
-            // contents in place. The next ⌘S will hit `save()`'s
-            // moveItem-when-target-missing branch and recreate the file.
-            // No conflict raised — we have nothing to lose.
+            startMoveLookupForMissingFile(at: url)
             return
         }
+        cancelMoveLookup()
         guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
               onDiskMtime != originalMtime else { return }
         if dirty {
@@ -331,7 +327,102 @@ final class EditorBuffer {
         startWatching()
     }
 
-    private func followMovedFile(to newRelativePath: String) {
+    private func startMoveLookupForMissingFile(at missingURL: URL) {
+        guard moveLookupTask == nil else { return }
+        guard let originalIdentity else {
+            markDeletedConflictIfNeeded()
+            return
+        }
+
+        moveLookupGeneration &+= 1
+        let generation = moveLookupGeneration
+        let requestedRelativePath = relativePath
+        let worktreeRoot = worktreeRoot
+        let lookupTask = Task.detached(priority: .utility) {
+            Self.findMovedRelativePath(
+                worktreeRoot: worktreeRoot,
+                originalIdentity: originalIdentity
+            )
+        }
+        moveLookupTask = lookupTask
+
+        Task { @MainActor [weak self] in
+            let result = await lookupTask.value
+            guard let self,
+                  self.moveLookupGeneration == generation,
+                  !Task.isCancelled else { return }
+            self.moveLookupTask = nil
+            self.finishMoveLookup(
+                result,
+                requestedRelativePath: requestedRelativePath,
+                missingURL: missingURL
+            )
+        }
+    }
+
+    private func finishMoveLookup(_ result: MovedFileLookupResult?, requestedRelativePath: String, missingURL: URL) {
+        guard relativePath == requestedRelativePath else { return }
+        if let result {
+            followMovedFile(to: result.relativePath)
+            return
+        }
+        if FileManager.default.fileExists(atPath: missingURL.path) {
+            handleRecreatedOriginalPath(at: missingURL)
+        } else {
+            markDeletedConflictIfNeeded()
+        }
+    }
+
+    private func handleRecreatedOriginalPath(at url: URL) {
+        if dirty {
+            if Self.movedFileDiffersFromOriginal(at: url, originalMtime: originalMtime, originalText: originalText) {
+                conflict = .changedOnDisk
+            } else {
+                updateOriginalFileIdentity(from: url)
+            }
+            startWatching()
+            return
+        }
+
+        if Self.movedFileDiffersFromOriginal(at: url, originalMtime: originalMtime, originalText: originalText) {
+            revert()
+        } else {
+            updateOriginalFileIdentity(from: url)
+        }
+        startWatching()
+    }
+
+    #if DEBUG
+    func handleRecreatedOriginalPathForTest() {
+        handleRecreatedOriginalPath(at: worktreeRoot.appendingPathComponent(relativePath))
+    }
+
+    func finishMoveLookupForTest(movedRelativePath: String?, missingRelativePath: String? = nil) {
+        finishMoveLookup(
+            movedRelativePath.map(MovedFileLookupResult.init(relativePath:)),
+            requestedRelativePath: relativePath,
+            missingURL: worktreeRoot.appendingPathComponent(missingRelativePath ?? relativePath)
+        )
+    }
+    #endif
+
+    private func markDeletedConflictIfNeeded() {
+        if dirty {
+            conflict = .deletedOnDisk
+        }
+        // If the buffer is clean and the file vanished, leave the buffer
+        // contents in place. The next ⌘S will hit `save()`'s
+        // moveItem-when-target-missing branch and recreate the file.
+        // No conflict raised — we have nothing to lose.
+    }
+
+    private func cancelMoveLookup() {
+        moveLookupGeneration &+= 1
+        moveLookupTask?.cancel()
+        moveLookupTask = nil
+    }
+
+    private func followMovedFile(to newRelativePath: String, movedFileDiffersFromOriginal: Bool? = nil) {
         let oldURL = worktreeRoot.appendingPathComponent(relativePath)
         let oldRelativePath = relativePath
         let newURL = worktreeRoot.appendingPathComponent(newRelativePath)
@@ -352,7 +443,12 @@ final class EditorBuffer {
         language = lsp?.language(forFileExtension: (newRelativePath as NSString).pathExtension)
         if wasDirty {
             updateOriginalFileIdentity(from: newURL)
-            conflict = movedFileDiffersFromOriginal(at: newURL) ? .changedOnDisk : nil
+            let differsFromOriginal = movedFileDiffersFromOriginal ?? Self.movedFileDiffersFromOriginal(
+                at: newURL,
+                originalMtime: originalMtime,
+                originalText: originalText
+            )
+            conflict = differsFromOriginal ? .changedOnDisk : nil
             snapshotNow()
         } else {
             loadFromDisk()
@@ -363,14 +459,6 @@ final class EditorBuffer {
         notifyDidOpen(url: newURL, text: storage.string)
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
-    }
-
-    private func movedFileDiffersFromOriginal(at url: URL) -> Bool {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let mtime = attrs[.modificationDate] as? Date else { return true }
-        if mtime != originalMtime { return true }
-        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return true }
-        return LineEnding.lf.normalize(raw) != originalText
     }
 
     func resolveConflictKeepingMine() {
@@ -487,6 +575,25 @@ final class EditorBuffer {
             && (leftVolume as AnyObject).isEqual(rightVolume)
     }
 
+    private struct FileIdentity: @unchecked Sendable {
+        let file: AnyObject
+        let volume: AnyObject
+
+        func matches(file: Any, volume: Any) -> Bool {
+            (file as AnyObject).isEqual(self.file)
+                && (volume as AnyObject).isEqual(self.volume)
+        }
+    }
+
+    private struct MovedFileLookupResult: Sendable {
+        let relativePath: String
+    }
+
+    private var originalIdentity: FileIdentity? {
+        guard let originalFileIdentifier, let originalVolumeIdentifier else { return nil }
+        return FileIdentity(file: originalFileIdentifier, volume: originalVolumeIdentifier)
+    }
+
     private func renameItem(at oldURL: URL, to newURL: URL) throws {
         guard oldURL.path != newURL.path else { return }
         if Darwin.rename(oldURL.path, newURL.path) != 0 {
@@ -590,8 +697,24 @@ final class EditorBuffer {
         originalVolumeIdentifier = volume as AnyObject
     }
 
-    private func findMovedRelativePath() -> String? {
-        guard let originalFileIdentifier, let originalVolumeIdentifier else { return nil }
+    private static let movedFileSearchSkippedDirectoryNames: Set<String> = [
+        ".build",
+        ".git",
+        ".gradle",
+        ".next",
+        ".pnpm-store",
+        ".swiftpm",
+        ".turbo",
+        ".yarn",
+        "DerivedData",
+        "build",
+        "node_modules"
+    ]
+
+    nonisolated private static func findMovedRelativePath(
+        worktreeRoot: URL,
+        originalIdentity: FileIdentity
+    ) -> MovedFileLookupResult? {
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .fileResourceIdentifierKey, .volumeIdentifierKey]
         guard let enumerator = FileManager.default.enumerator(
             at: worktreeRoot,
@@ -600,22 +723,36 @@ final class EditorBuffer {
         ) else { return nil }
 
         for case let candidate as URL in enumerator {
-            if candidate.lastPathComponent == ".git" {
+            if Task.isCancelled { return nil }
+            guard let values = try? candidate.resourceValues(forKeys: keys) else { continue }
+            if values.isDirectory == true,
+               movedFileSearchSkippedDirectoryNames.contains(candidate.lastPathComponent) {
                 enumerator.skipDescendants()
                 continue
             }
-            guard let values = try? candidate.resourceValues(forKeys: keys),
-                  values.isRegularFile == true,
+            guard values.isRegularFile == true,
                   let file = values.fileResourceIdentifier,
                   let volume = values.volumeIdentifier,
-                  (file as AnyObject).isEqual(originalFileIdentifier),
-                  (volume as AnyObject).isEqual(originalVolumeIdentifier) else { continue }
-            return relativePath(for: candidate)
+                  originalIdentity.matches(file: file, volume: volume),
+                  let relativePath = relativePath(for: candidate, worktreeRoot: worktreeRoot) else { continue }
+            return MovedFileLookupResult(relativePath: relativePath)
         }
         return nil
     }
 
+    nonisolated private static func movedFileDiffersFromOriginal(at url: URL, originalMtime: Date, originalText: String) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let mtime = attrs[.modificationDate] as? Date else { return true }
+        if mtime != originalMtime { return true }
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else { return true }
+        return LineEnding.lf.normalize(raw) != originalText
+    }
+
     private func relativePath(for url: URL) -> String? {
+        Self.relativePath(for: url, worktreeRoot: worktreeRoot)
+    }
+
+    nonisolated private static func relativePath(for url: URL, worktreeRoot: URL) -> String? {
         let root = worktreeRoot.standardizedFileURL.path
         let target = url.standardizedFileURL.path
         let prefix = root.hasSuffix("/") ? root : root + "/"

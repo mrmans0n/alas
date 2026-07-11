@@ -379,6 +379,26 @@ struct EditorBufferTests {
         #expect(buffer.conflict == nil)
     }
 
+    @Test func externalRenameSkipsNodeModulesDescendants() async throws {
+        let root = tempWorktree()
+        let oldURL = try writeFile(root, "a.txt", "v1\n")
+        let newURL = root.appendingPathComponent("node_modules/pkg/a.txt")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 2), with: "mine")
+        buffer.startWatching()
+        defer { buffer.stopWatching() }
+
+        try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+        for _ in 0..<20 where buffer.conflict != .deletedOnDisk {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        #expect(buffer.relativePath == "a.txt")
+        #expect(buffer.storage.string == "mine\n")
+        #expect(buffer.conflict == .deletedOnDisk)
+    }
+
     @Test func externalChangeWhileDirtyRaisesConflict() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "v1\n")
@@ -443,6 +463,55 @@ struct EditorBufferTests {
         try await Task.sleep(nanoseconds: 500_000_000)
         #expect(buffer.conflict == .deletedOnDisk)
         #expect(buffer.dirty == true)
+    }
+
+    @Test func recreatedOriginalPathWhileDirtyRaisesChangedConflict() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 2), with: "mine")
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "external\n".write(to: url, atomically: true, encoding: .utf8)
+
+        buffer.handleRecreatedOriginalPathForTest()
+
+        #expect(buffer.conflict == .changedOnDisk)
+        #expect(buffer.storage.string == "mine\n")
+        #expect(buffer.dirty == true)
+    }
+
+    @Test func recreatedOriginalPathWhileCleanReloadsAndReararmsWatcher() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "v1\n")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "v2\n".write(to: url, atomically: true, encoding: .utf8)
+
+        buffer.handleRecreatedOriginalPathForTest()
+
+        #expect(buffer.storage.string == "v2\n")
+        #expect(buffer.originalText == "v2\n")
+        #expect(buffer.dirty == false)
+        #expect(buffer.conflict == nil)
+        buffer.stopWatching()
+    }
+
+    @Test func movedFileLookupPrefersFoundMoveOverRecreatedOriginalPath() throws {
+        let root = tempWorktree()
+        let originalURL = try writeFile(root, "a.txt", "v1\n")
+        let movedURL = root.appendingPathComponent("b.txt")
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        try FileManager.default.moveItem(at: originalURL, to: movedURL)
+        _ = try writeFile(root, "a.txt", "replacement\n")
+
+        buffer.finishMoveLookupForTest(movedRelativePath: "b.txt", missingRelativePath: "a.txt")
+
+        #expect(buffer.relativePath == "b.txt")
+        #expect(buffer.storage.string == "v1\n")
+        #expect(buffer.originalText == "v1\n")
+        #expect(buffer.dirty == false)
+        #expect(buffer.conflict == nil)
+        buffer.stopWatching()
     }
 
     @Test func snapshotRestoreRoundTrip() async throws {
