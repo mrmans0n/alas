@@ -46,24 +46,28 @@ final class ACPThumbnailImageCache: @unchecked Sendable {
     }
 }
 
-struct ACPCachedThumbnail<Thumbnail: View, Placeholder: View>: View {
+struct ACPCachedThumbnail<Thumbnail: View, Placeholder: View, Failure: View>: View {
     let cacheKey: String
     let loadImage: @Sendable () -> NSImage?
     @ViewBuilder var thumbnail: (NSImage) -> Thumbnail
     @ViewBuilder var placeholder: () -> Placeholder
+    @ViewBuilder var failure: () -> Failure
 
     @State private var image: NSImage?
+    @State private var didFinishLoading = false
 
     init(
         cacheKey: String,
         loadImage: @escaping @Sendable () -> NSImage?,
         @ViewBuilder thumbnail: @escaping (NSImage) -> Thumbnail,
-        @ViewBuilder placeholder: @escaping () -> Placeholder
+        @ViewBuilder placeholder: @escaping () -> Placeholder,
+        @ViewBuilder failure: @escaping () -> Failure
     ) {
         self.cacheKey = cacheKey
         self.loadImage = loadImage
         self.thumbnail = thumbnail
         self.placeholder = placeholder
+        self.failure = failure
         _image = State(initialValue: ACPThumbnailImageCache.shared.cachedImage(for: cacheKey))
     }
 
@@ -71,21 +75,43 @@ struct ACPCachedThumbnail<Thumbnail: View, Placeholder: View>: View {
         Group {
             if let image {
                 thumbnail(image)
+            } else if didFinishLoading {
+                failure()
             } else {
                 placeholder()
             }
         }
         .onChange(of: cacheKey) { _, newValue in
             image = ACPThumbnailImageCache.shared.cachedImage(for: newValue)
+            didFinishLoading = false
         }
         .task(id: cacheKey) {
             if let cached = ACPThumbnailImageCache.shared.cachedImage(for: cacheKey) {
                 image = cached
+                didFinishLoading = false
                 return
             }
             let loaded = await ACPThumbnailImageCache.shared.image(for: cacheKey, load: loadImage)
             guard !Task.isCancelled else { return }
             image = loaded
+            didFinishLoading = true
         }
+    }
+}
+
+extension ACPCachedThumbnail where Failure == Placeholder {
+    init(
+        cacheKey: String,
+        loadImage: @escaping @Sendable () -> NSImage?,
+        @ViewBuilder thumbnail: @escaping (NSImage) -> Thumbnail,
+        @ViewBuilder placeholder: @escaping () -> Placeholder
+    ) {
+        self.init(
+            cacheKey: cacheKey,
+            loadImage: loadImage,
+            thumbnail: thumbnail,
+            placeholder: placeholder,
+            failure: placeholder
+        )
     }
 }

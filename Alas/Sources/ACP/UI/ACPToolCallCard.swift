@@ -229,6 +229,8 @@ private struct ACPToolCallAssetView: View {
         } placeholder: {
             imagePlaceholder
                 .help(asset.displayText)
+        } failure: {
+            compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
         }
     }
 
