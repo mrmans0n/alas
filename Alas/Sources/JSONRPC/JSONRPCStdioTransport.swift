@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum JSONRPCFraming {
@@ -21,7 +22,17 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
 
     private struct DescendantKey: Hashable {
         let pid: pid_t
-        let startedAt: String
+        let startedAt: ProcessStartTime
+    }
+
+    private struct ProcessStartTime: Hashable, Sendable {
+        let seconds: Int64
+        let microseconds: Int64
+    }
+
+    private struct ProcessIdentity: Sendable {
+        let parentPid: pid_t
+        let startedAt: ProcessStartTime
     }
 
     private let process = Process()
@@ -134,7 +145,10 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         // leader. Same pattern as `ACPTerminal`.
         _ = setpgid(process.processIdentifier, process.processIdentifier)
         startDescendantForkObserver(for: process.processIdentifier)
-        refreshOrphanSet()
+        refreshLock.lock()
+        let initialDescendants = Set(Self.collectChildDescendants(of: process.processIdentifier))
+        mergeInitialOrphanSet(initialDescendants)
+        refreshLock.unlock()
         startDescendantTracker()
     }
 
@@ -188,7 +202,7 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     }
 
     private func startDescendantTracker() {
-        descendantTracker = Task { [weak self] in
+        descendantTracker = Task.detached(priority: .utility) { [weak self] in
             // Walk the live process tree every second while the root is
             // alive, accumulating every descendant we observe. The last
             // pre-exit snapshot is what `terminate()` relies on after
@@ -262,6 +276,19 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
         pruneDescendantForkObservers(keeping: watched)
     }
 
+    private func mergeInitialOrphanSet(_ descendants: Set<DescendantKey>) {
+        guard !descendants.isEmpty else { return }
+        lock.lock()
+        let shouldObserve = !rootHasExited
+        if shouldObserve {
+            orphanedDescendants.formUnion(descendants)
+        }
+        lock.unlock()
+        if shouldObserve {
+            observeForks(from: descendants)
+        }
+    }
+
     private func refreshOrphanSet() {
         refreshLock.lock()
         defer { refreshLock.unlock() }
@@ -293,11 +320,9 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
     /// reparents children to init so they become unfindable via a ppid
     /// walk from the original root.
     private static func collectDescendants(of root: pid_t) -> [DescendantKey] {
-        // `lstart` makes the cached PID identity stable across PID reuse
-        // while still surviving exec, where `comm` can legitimately change.
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,ppid=,lstart=", "-ax"]
+        proc.arguments = ["-o", "pid=,ppid=", "-ax"]
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = FileHandle.nullDevice
@@ -310,57 +335,96 @@ final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting
             return []
         }
         guard let s = String(data: data, encoding: .utf8) else { return [] }
-        var childrenOf: [pid_t: [(pid: pid_t, startedAt: String)]] = [:]
+        var childrenOf: [pid_t: [pid_t]] = [:]
         for line in s.split(separator: "\n") {
             let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 6,
+            let parts = trimmed.split(separator: " ", maxSplits: 1,
                                       omittingEmptySubsequences: true)
-            guard parts.count >= 7,
+            guard parts.count >= 2,
                   let pid = pid_t(parts[0]),
                   let ppid = pid_t(parts[1]) else { continue }
-            let startedAt = parts[2...6].joined(separator: " ")
-            childrenOf[ppid, default: []].append((pid, startedAt))
+            childrenOf[ppid, default: []].append(pid)
         }
         var out: [DescendantKey] = []
         var queue: [pid_t] = [root]
         while let p = queue.popLast() {
             for c in childrenOf[p] ?? [] {
-                out.append(DescendantKey(pid: c.pid, startedAt: c.startedAt))
-                queue.append(c.pid)
+                guard let identity = processIdentity(of: c),
+                      identity.parentPid == p else { continue }
+                out.append(DescendantKey(pid: c, startedAt: identity.startedAt))
+                queue.append(c)
             }
         }
         return out
     }
 
+    /// Lightweight startup snapshot. Unlike `collectDescendants`, this
+    /// uses libproc's ppid index instead of spawning `/bin/ps -ax`, so
+    /// `start()` can capture immediate descendants before returning
+    /// without blocking the main actor on a subprocess process-table walk.
+    private static func collectChildDescendants(of root: pid_t) -> [DescendantKey] {
+        var out: [DescendantKey] = []
+        var queue: [pid_t] = [root]
+        while let parent = queue.popLast() {
+            for child in childPids(of: parent) {
+                guard let identity = processIdentity(of: child),
+                      identity.parentPid == parent else { continue }
+                out.append(DescendantKey(pid: child, startedAt: identity.startedAt))
+                queue.append(child)
+            }
+        }
+        return out
+    }
+
+    private static func childPids(of parent: pid_t) -> [pid_t] {
+        var capacity = 16
+        while capacity <= 4096 {
+            var pids = [pid_t](repeating: 0, count: capacity)
+            let pidCount = pids.withUnsafeMutableBufferPointer { buffer in
+                proc_listchildpids(parent, buffer.baseAddress,
+                                   Int32(capacity * MemoryLayout<pid_t>.stride))
+            }
+            guard pidCount > 0 else { return [] }
+            let count = min(capacity, Int(pidCount))
+            if count < capacity {
+                return Array(pids.prefix(count)).filter { $0 > 0 }
+            }
+            capacity *= 2
+        }
+        return []
+    }
+
     private static func currentlyMatching(_ keys: Set<DescendantKey>) -> Set<DescendantKey> {
         guard !keys.isEmpty else { return [] }
-        let pids = Set(keys.map(\.pid))
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/ps")
-        proc.arguments = ["-o", "pid=,lstart=", "-ax"]
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = FileHandle.nullDevice
-        let data: Data
-        do {
-            try proc.run()
-            data = pipe.fileHandleForReading.readDataToEndOfFile()
-            proc.waitUntilExit()
-        } catch {
-            return []
-        }
-        guard let s = String(data: data, encoding: .utf8) else { return [] }
         var current: Set<DescendantKey> = []
-        for line in s.split(separator: "\n") {
-            let trimmed = line.drop(while: { $0 == " " })
-            let parts = trimmed.split(separator: " ", maxSplits: 5,
-                                      omittingEmptySubsequences: true)
-            guard parts.count >= 6,
-                  let pid = pid_t(parts[0]),
-                  pids.contains(pid) else { continue }
-            current.insert(DescendantKey(pid: pid,
-                                         startedAt: parts[1...5].joined(separator: " ")))
+        for key in keys {
+            guard processStartTime(of: key.pid) == key.startedAt else { continue }
+            current.insert(key)
         }
-        return current.intersection(keys)
+        return current
+    }
+
+    private static func processStartTime(of pid: pid_t) -> ProcessStartTime? {
+        processIdentity(of: pid)?.startedAt
+    }
+
+    /// Kernel process birth time, used as the stable half of cached
+    /// descendant identity. Unlike `ps lstart`, this is raw timeval
+    /// data rather than a locale/timezone-formatted, second-precision
+    /// wall-clock string.
+    private static func processIdentity(of pid: pid_t) -> ProcessIdentity? {
+        var info = proc_bsdinfo()
+        let size = MemoryLayout<proc_bsdinfo>.stride
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: UInt8.self, capacity: size) { rebound in
+                proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, rebound, Int32(size))
+            }
+        }
+        guard result == Int32(size) else { return nil }
+        return ProcessIdentity(
+            parentPid: pid_t(info.pbi_ppid),
+            startedAt: ProcessStartTime(seconds: Int64(info.pbi_start_tvsec),
+                                        microseconds: Int64(info.pbi_start_tvusec))
+        )
     }
 }

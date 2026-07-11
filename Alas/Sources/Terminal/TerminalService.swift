@@ -92,7 +92,8 @@ final class TerminalService {
         environmentOverrides: [String: String] = [:],
         environmentRemovals: Set<String> = [],
         leafId: String = UUID().uuidString,
-        allowLegacyAttach: Bool = false
+        allowLegacyAttach: Bool = false,
+        preResolvedZmxSessionName: String? = nil
     ) throws -> TerminalSession {
         try ensureApp(cfg: cfg, theme: theme)
         guard let app else { throw NSError(domain: "TerminalService", code: 1) }
@@ -134,7 +135,7 @@ final class TerminalService {
             startupScript: effectiveScript,
             sessionId: sessionId
         )
-        let zmxSessionName = sessionNameForAttach(
+        let zmxSessionName = preResolvedZmxSessionName ?? sessionNameForAttach(
             worktree: worktree,
             project: project,
             leafId: sessionId,
@@ -452,15 +453,13 @@ final class TerminalService {
     ) -> String {
         let scoped = ZmxSessionName.derive(worktreeId: worktree.id, leafId: leafId)
         guard allowLegacy else { return scoped }
-        let legacy = ZmxSessionName.legacy(leafId: leafId)
-        guard Self.legacySessionBelongsToKnownRoot(
-            legacy,
-            roots: [worktree.id, project.path],
-            zmxClient: zmxClient
-        ) else {
-            return scoped
-        }
-        return legacy
+        return Self.resolveSessionNameForAttach(
+            worktreeId: worktree.id,
+            projectPath: project.path,
+            leafId: leafId,
+            allowLegacy: allowLegacy,
+            legacySessionInfos: zmxClient.listSessionInfos()
+        )
     }
 
     nonisolated private static func sessionNamesForCleanup(
@@ -478,13 +477,45 @@ final class TerminalService {
         return [scoped, legacy]
     }
 
+    nonisolated static func resolveSessionNameForAttach(
+        worktreeId: String,
+        projectPath: String,
+        leafId: String,
+        allowLegacy: Bool,
+        legacySessionInfos: [ZmxSessionInfo]
+    ) -> String {
+        let scoped = ZmxSessionName.derive(worktreeId: worktreeId, leafId: leafId)
+        guard allowLegacy else { return scoped }
+        let legacy = ZmxSessionName.legacy(leafId: leafId)
+        guard legacySessionBelongsToKnownRoot(
+            legacy,
+            roots: [worktreeId, projectPath],
+            sessionInfos: legacySessionInfos
+        ) else {
+            return scoped
+        }
+        return legacy
+    }
+
     nonisolated static func legacySessionBelongsToKnownRoot(
         _ name: String,
         roots: [String],
         zmxClient: ZmxClient
     ) -> Bool {
+        legacySessionBelongsToKnownRoot(
+            name,
+            roots: roots,
+            sessionInfos: zmxClient.listSessionInfos()
+        )
+    }
+
+    nonisolated static func legacySessionBelongsToKnownRoot(
+        _ name: String,
+        roots: [String],
+        sessionInfos: [ZmxSessionInfo]
+    ) -> Bool {
         let roots = Set(roots.map { URL(fileURLWithPath: $0).standardizedFileURL.path })
-        return zmxClient.listSessionInfos().contains { info in
+        return sessionInfos.contains { info in
             info.name == name && startDir(info.startDir, belongsToAnyOf: roots)
         }
     }

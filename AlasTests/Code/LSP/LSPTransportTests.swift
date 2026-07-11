@@ -76,15 +76,14 @@ struct ProcessTransportTerminationTests {
         #expect(source.validatesCachedDescendantsBeforeKilling())
         #expect(source.signalsProcessGroupFromTerminationHandler())
         #expect(source.signalsCachedDescendantsFromTerminationHandler())
-        #expect(source.attemptsSetpgidBeforeBlockingDescendantSnapshot())
+        #expect(source.startsDescendantTrackerWithoutBlockingStart())
         #expect(source.refreshesDescendantsOnFork())
         #expect(source.drainsPsOutputBeforeWaiting())
-        #expect(source.validatesCachedDescendantsWithStableIdentity())
+        #expect(source.validatesCachedDescendantsWithProcessStartTime())
         #expect(source.checksRootExitBeforeTrackerRefresh())
         #expect(source.prunesCachedDescendantsWithBatchedLookup())
         #expect(source.tracksForksFromObservedDescendants())
         #expect(source.mergesDescendantRefreshesWithoutOverwritingCache())
-        #expect(source.preservesCachedDescendantsAcrossExec())
         #expect(source.serializesRootExitWithDescendantRefresh())
     }
 
@@ -151,6 +150,30 @@ private extension String {
             refresh.lowerBound < tracker.lowerBound
     }
 
+    func startsDescendantTrackerWithoutBlockingStart() -> Bool {
+        guard let run = range(of: "try process.run()"),
+              let setpgid = range(of: "setpgid(process.processIdentifier", range: run.upperBound..<endIndex),
+              let observer = range(of: "startDescendantForkObserver(for: process.processIdentifier)",
+                                   range: setpgid.upperBound..<endIndex),
+              let initial = range(of: "let initialDescendants = Set(Self.collectChildDescendants(of: process.processIdentifier))",
+                                  range: observer.upperBound..<endIndex),
+              let merge = range(of: "mergeInitialOrphanSet(initialDescendants)",
+                                range: initial.upperBound..<endIndex),
+              let tracker = range(of: "startDescendantTracker()", range: merge.upperBound..<endIndex),
+              let detached = range(of: "descendantTracker = Task.detached(priority: .utility)") else {
+            return false
+        }
+        let startTail = self[observer.upperBound..<tracker.lowerBound]
+        return run.lowerBound < setpgid.lowerBound &&
+            setpgid.lowerBound < observer.lowerBound &&
+            observer.lowerBound < initial.lowerBound &&
+            initial.lowerBound < merge.lowerBound &&
+            merge.lowerBound < tracker.lowerBound &&
+            detached.lowerBound > tracker.lowerBound &&
+            !startTail.contains("refreshOrphanSet()") &&
+            !startTail.contains("collectDescendants(of:")
+    }
+
     func drainsPsOutputBeforeWaiting() -> Bool {
         guard let collect = range(of: "private static func collectDescendants"),
               let read = range(
@@ -169,6 +192,21 @@ private extension String {
             contains(#""pid=,lstart=""#) &&
             !contains("current.pgid == key.pgid") &&
             contains("return current.intersection(keys)")
+    }
+
+    func validatesCachedDescendantsWithProcessStartTime() -> Bool {
+        contains("let startedAt: ProcessStartTime") &&
+            contains("private static func collectChildDescendants(of root: pid_t) -> [DescendantKey]") &&
+            contains("proc_listchildpids(parent") &&
+            contains("private static func processStartTime(of pid: pid_t) -> ProcessStartTime?") &&
+            contains("private static func processIdentity(of pid: pid_t) -> ProcessIdentity?") &&
+            contains("proc_pidinfo(pid, PROC_PIDTBSDINFO") &&
+            contains("parentPid: pid_t(info.pbi_ppid)") &&
+            contains("identity.parentPid == p") &&
+            contains("identity.parentPid == parent") &&
+            contains(#""pid=,ppid=""#) &&
+            !contains(#""pid=,ppid=,lstart=""#) &&
+            !contains(#""pid=,lstart=""#)
     }
 
     func checksRootExitBeforeTrackerRefresh() -> Bool {
