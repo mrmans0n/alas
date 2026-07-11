@@ -20,7 +20,7 @@ struct MCPAttachmentPlannerTests {
             ))
 
             #expect(plan.wireServers == [.stdio(name: "local", command: "npx", args: [], env: [])])
-            #expect(plan.statuses == [.init(name: "local", transport: .stdio, disposition: .requested)])
+            #expect(plan.statuses == [.init(id: "0", name: "local", transport: .stdio, disposition: .requested)])
         }
     }
 
@@ -131,8 +131,8 @@ struct MCPAttachmentPlannerTests {
 
         #expect(result.wireServers == [.stdio(name: "good", command: "node", args: [], env: [])])
         #expect(result.statuses == [
-            .init(name: "bad", transport: .stdio, disposition: .skipped(.missingVariable("MISSING"))),
-            .init(name: "good", transport: .stdio, disposition: .requested),
+            .init(id: "0", name: "bad", transport: .stdio, disposition: .skipped(.missingVariable("MISSING"))),
+            .init(id: "1", name: "good", transport: .stdio, disposition: .requested),
         ])
         #expect(!String(describing: result.statuses).contains(secret))
     }
@@ -158,6 +158,19 @@ struct MCPAttachmentPlannerTests {
         #expect(result.wireServers == [.stdio(name: "good", command: "node", args: [], env: [])])
         #expect(result.statuses[0].disposition == .skipped(.invalidConfiguration("The server configuration is invalid.")))
         #expect(!String(describing: result.statuses[0]).contains("not a URL"))
+    }
+
+    @Test("duplicate invalid server names retain unique status identities")
+    func duplicateServerStatusesHaveUniqueIDs() {
+        let result = plan([
+            .init(id: "first", name: "duplicate", transport: .stdio(command: "", args: [], environment: [])),
+            .init(id: "second", name: "duplicate", transport: .stdio(command: "", args: [], environment: [])),
+        ])
+
+        #expect(result.statuses.map(\.id) == ["0", "1"])
+        #expect(result.statuses.allSatisfy {
+            $0.disposition == .skipped(.invalidConfiguration("The server configuration is invalid."))
+        })
     }
 
     @Test("configuration fingerprints exclude edit IDs and include persisted values")

@@ -12,9 +12,9 @@ struct ACPMCPStatusPolicyTests {
     func summarizesRequestedAndSkippedServers() {
         let token = "never-display-this"
         let summary = MCPAttachmentSummary(statuses: [
-            .init(name: "filesystem", transport: .stdio, disposition: .requested),
-            .init(name: "remote", transport: .http, disposition: .skipped(.missingVariable("MCP_TOKEN"))),
-            .init(name: "legacy", transport: .sse, disposition: .skipped(.unsupportedTransport))
+            .init(id: "0", name: "filesystem", transport: .stdio, disposition: .requested),
+            .init(id: "1", name: "remote", transport: .http, disposition: .skipped(.missingVariable("MCP_TOKEN"))),
+            .init(id: "2", name: "legacy", transport: .sse, disposition: .skipped(.unsupportedTransport))
         ], configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: []))
 
         let state = ACPMCPStatusState(summary: summary, currentServers: [])
@@ -35,7 +35,7 @@ struct ACPMCPStatusPolicyTests {
         let attached = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files")]
         let changed = [ProjectMCPServer.stdio(name: "filesystem", command: "mcp-files-v2")]
         let summary = MCPAttachmentSummary(
-            statuses: [.init(name: "filesystem", transport: .stdio, disposition: .requested)],
+            statuses: [.init(id: "0", name: "filesystem", transport: .stdio, disposition: .requested)],
             configurationFingerprint: MCPAttachmentPlanner.configurationFingerprint(for: attached)
         )
 

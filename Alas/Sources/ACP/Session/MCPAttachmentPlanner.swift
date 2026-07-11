@@ -27,11 +27,22 @@ struct MCPProjectContext: Equatable {
 }
 
 struct MCPAttachmentServerStatus: Equatable, Identifiable {
+    let id: String
     let name: String
     let transport: MCPTransportKind
     let disposition: MCPAttachmentDisposition
 
-    var id: String { "\(transport.rawValue):\(name)" }
+    init(
+        id: String,
+        name: String,
+        transport: MCPTransportKind,
+        disposition: MCPAttachmentDisposition
+    ) {
+        self.id = id
+        self.name = name
+        self.transport = transport
+        self.disposition = disposition
+    }
 }
 
 struct MCPAttachmentPlan: Equatable {
@@ -77,7 +88,7 @@ enum MCPAttachmentPlanner {
         var wireServers: [ACPMCPServer] = []
         var statuses: [MCPAttachmentServerStatus] = []
 
-        for server in input.configuredServers {
+        for (index, server) in input.configuredServers.enumerated() {
             let transport = transportKind(for: server.transport)
             let disposition: MCPAttachmentDisposition
 
@@ -99,7 +110,14 @@ enum MCPAttachmentPlanner {
                 }
             }
 
-            statuses.append(.init(name: server.name, transport: transport, disposition: disposition))
+            // Configuration can be edited externally and contain duplicate names.
+            // Keep the presentation identity unique without retaining sensitive values.
+            statuses.append(.init(
+                id: String(index),
+                name: server.name,
+                transport: transport,
+                disposition: disposition
+            ))
         }
 
         return .init(

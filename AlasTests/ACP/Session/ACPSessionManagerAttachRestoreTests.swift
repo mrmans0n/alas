@@ -22,7 +22,7 @@ struct ACPSessionManagerAttachRestoreTests {
         let params = try #require(client.sent.last?.params as? ACPSessionNewParams)
         #expect(params.mcpServers == [.stdio(name: "filesystem", command: "mcp-files", args: [], env: [])])
         let summary = try #require(session.mcpAttachmentSummary)
-        #expect(summary.statuses == [.init(name: "filesystem", transport: .stdio, disposition: .requested)])
+        #expect(summary.statuses == [.init(id: "0", name: "filesystem", transport: .stdio, disposition: .requested)])
         #expect(summary.configurationFingerprint == MCPAttachmentPlanner.configurationFingerprint(for: configuredServers))
     }
 
