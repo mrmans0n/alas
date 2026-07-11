@@ -21,6 +21,25 @@ actor ACPSessionHydrator {
     }
 
     func hydrate(sessionId: String) async throws -> HydrationResult {
+        var result = try loadSnapshot(sessionId: sessionId, includeDraft: true)
+        // Post-load side effect: bump `last_opened_at` so the recents
+        // list orders this session to the top. Use the narrow UPDATE
+        // helper instead of `upsertSession` — the latter would resurrect
+        // a row the user deleted between our `loadSession` read and now,
+        // and would also rewrite `archived` back to whatever we captured.
+        let now = Int64(Date().timeIntervalSince1970)
+        try? store.touchLastOpenedAt(id: sessionId, at: now)
+        result = result.replacingRowLastOpenedAt(now)
+        return result.replacingRecent((try? store.recentSessions()) ?? [])
+    }
+
+    /// Passive refresh snapshot for read-only mirrors. Unlike `hydrate`,
+    /// this does not touch `last_opened_at` or restore composer drafts.
+    func mirrorSnapshot(sessionId: String) async throws -> HydrationResult {
+        try loadSnapshot(sessionId: sessionId, includeDraft: false)
+    }
+
+    private func loadSnapshot(sessionId: String, includeDraft: Bool) throws -> HydrationResult {
         guard let row = try store.loadSession(id: sessionId) else {
             throw Error.sessionNotFound(sessionId)
         }
@@ -29,7 +48,7 @@ actor ACPSessionHydrator {
         // Malformed payloads are skipped (matching the legacy try? in
         // openSession) rather than failing the whole hydration.
         let stored = try store.loadMessages(sessionId: sessionId)
-        let storedDraft = try? store.loadComposerDraftRecord(sessionId: sessionId)
+        let storedDraft = includeDraft ? try? store.loadComposerDraftRecord(sessionId: sessionId) : nil
         let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
         var staleSubmittedDraft = false
         var sawRecordedSubmittedDraft = false
@@ -68,28 +87,10 @@ actor ACPSessionHydrator {
         } else {
             draft = storedDraft?.draft
         }
-
-        // Post-load side effect: bump `last_opened_at` so the recents
-        // list orders this session to the top. Use the narrow UPDATE
-        // helper instead of `upsertSession` — the latter would resurrect
-        // a row the user deleted between our `loadSession` read and now,
-        // and would also rewrite `archived` back to whatever we captured.
-        let now = Int64(Date().timeIntervalSince1970)
-        try? store.touchLastOpenedAt(id: sessionId, at: now)
-        let touched = ACPSessionRow(
-            id: row.id, agentId: row.agentId, title: row.title,
-            titleSource: row.titleSource,
-            remoteSessionId: row.remoteSessionId,
-            contextRecoveryPending: row.contextRecoveryPending,
-            currentModel: row.currentModel, currentMode: row.currentMode,
-            autoRun: row.autoRun,
-            createdAt: row.createdAt, updatedAt: row.updatedAt,
-            lastOpenedAt: now,
-            archived: row.archived)
         let recent = (try? store.recentSessions()) ?? []
 
         return HydrationResult(
-            row: touched,
+            row: row,
             wireMessages: wire,
             queue: queue,
             draft: draft,
@@ -106,4 +107,32 @@ struct HydrationResult: Sendable {
     let queue: [QueuedPrompt]
     let draft: ACPComposerDraft?
     let recent: [ACPSessionRow]
+
+    func replacingRowLastOpenedAt(_ lastOpenedAt: Int64) -> HydrationResult {
+        HydrationResult(
+            row: ACPSessionRow(
+                id: row.id, agentId: row.agentId, title: row.title,
+                titleSource: row.titleSource,
+                remoteSessionId: row.remoteSessionId,
+                origin: row.origin,
+                contextRecoveryPending: row.contextRecoveryPending,
+                currentModel: row.currentModel, currentMode: row.currentMode,
+                autoRun: row.autoRun,
+                createdAt: row.createdAt, updatedAt: row.updatedAt,
+                lastOpenedAt: lastOpenedAt,
+                archived: row.archived),
+            wireMessages: wireMessages,
+            queue: queue,
+            draft: draft,
+            recent: recent)
+    }
+
+    func replacingRecent(_ recent: [ACPSessionRow]) -> HydrationResult {
+        HydrationResult(
+            row: row,
+            wireMessages: wireMessages,
+            queue: queue,
+            draft: draft,
+            recent: recent)
+    }
 }

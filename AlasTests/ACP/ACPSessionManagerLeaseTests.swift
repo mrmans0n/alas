@@ -3,9 +3,14 @@ import Foundation
 @testable import Alas
 
 @Suite @MainActor struct ACPSessionManagerLeaseTests {
-    private func tempManager(instanceId: String, store: ACPSessionStore) -> ACPSessionManager {
+    private func tempManager(
+        instanceId: String,
+        store: ACPSessionStore,
+        hydratorPath: String? = nil
+    ) -> ACPSessionManager {
         ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt",
-                          store: store, instanceId: instanceId, pid: Int64(getpid()))
+                          store: store, instanceId: instanceId, pid: Int64(getpid()),
+                          hydratorPath: hydratorPath)
     }
 
     @Test("manager exposes its instanceId")
@@ -509,6 +514,119 @@ import Foundation
         await mgrB.refreshMirror(sessionId: session.id)
         #expect(mgrB.sessions[session.id]?.queue.isEmpty == true,
                 "mirror must reflect an empty queue after the writer clears it (no transcript messages)")
+    }
+
+    @Test("refreshMirror applies a hydrator snapshot tail-first")
+    func mirrorRefreshAppliesHydratorSnapshotTailFirst() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-tail-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        try storeA.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        let total = ACPTranscript.tailWindow * 3
+        for index in 0..<total {
+            let message: ACPMessage = .user(id: UUID(), text: "m\(index)", attachments: [])
+            let payload = try ACPMessageCodec.encode(message)
+            try storeA.appendMessage(
+                sessionId: "s",
+                id: "m\(index)",
+                kind: message.kind,
+                seq: Int64(index),
+                payload: payload,
+                createdAt: Int64(index))
+        }
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        let mirrorSession = try #require(mgrB.placeholderSession(id: "s"))
+
+        await mgrB.refreshMirror(sessionId: "s")
+
+        #expect(mirrorSession.transcript.messages.count == ACPTranscript.tailWindow)
+        if case .user(_, _, let text, _) = mirrorSession.transcript.messages.first {
+            #expect(text == "m\(total - ACPTranscript.tailWindow)")
+        } else {
+            Issue.record("expected first tail message")
+        }
+
+        await mgrB.awaitBackfill(id: "s")
+        #expect(mirrorSession.transcript.messages.count == total)
+        if case .user(_, _, let text, _) = mirrorSession.transcript.messages.first {
+            #expect(text == "m0")
+        } else {
+            Issue.record("expected first backfilled message")
+        }
+    }
+
+    @Test("refreshMirror through hydrator does not touch lastOpenedAt")
+    func mirrorRefreshDoesNotTouchLastOpenedAt() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-passive-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        try storeA.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 42, archived: false))
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        _ = try #require(mgrB.placeholderSession(id: "s"))
+
+        await mgrB.refreshMirror(sessionId: "s")
+
+        #expect(try storeA.loadSession(id: "s")?.lastOpenedAt == 42)
+    }
+
+    @Test("mirror poll slows when the session tab is not visible")
+    func mirrorPollIntervalTracksVisibleTab() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-interval-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let mgr = tempManager(instanceId: "A", store: store)
+        let session = mgr.createSession(agentId: "claude")
+
+        #expect(mgr.mirrorPollIntervalNanosForTest(sessionId: session.id) == 30_000_000_000)
+        mgr.markSessionVisible(id: session.id)
+        #expect(mgr.mirrorPollIntervalNanosForTest(sessionId: session.id) == 2_500_000_000)
+        mgr.unmarkSessionVisible(id: session.id)
+        #expect(mgr.mirrorPollIntervalNanosForTest(sessionId: session.id) == 30_000_000_000)
+    }
+
+    @Test("markSessionVisible refreshes a mirrored session immediately")
+    func markVisibleRefreshesMirrorImmediately() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mirror-visible-refresh-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
+        let mirrorSession = try #require(mgrB.placeholderSession(id: session.id))
+        mgrB.beginMirroring(sessionId: session.id)
+        await mgrB.refreshMirror(sessionId: session.id)
+        #expect(mirrorSession.transcript.messages.isEmpty)
+
+        let message: ACPMessage = .user(id: UUID(), text: "visible now", attachments: [])
+        let payload = try ACPMessageCodec.encode(message)
+        try storeA.appendMessage(
+            sessionId: session.id,
+            id: "m0",
+            kind: message.kind,
+            seq: 0,
+            payload: payload,
+            createdAt: 0)
+
+        mgrB.markSessionVisible(id: session.id)
+        for _ in 0..<20 where mirrorSession.transcript.messages.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(mirrorSession.transcript.messages.count == 1)
     }
 
     // MARK: - Fix 2 (P2): standDown on closed session doesn't start mirroring

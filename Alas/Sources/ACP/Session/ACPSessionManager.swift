@@ -8,6 +8,12 @@ private struct ACPTranscriptScrollMemory: Equatable {
     var followsTail: Bool
 }
 
+private enum ACPMirrorRefreshPolicy {
+    static let debounceNanos: UInt64 = 100_000_000
+    static let activePollNanos: UInt64 = 2_500_000_000
+    static let inactivePollNanos: UInt64 = 30_000_000_000
+}
+
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
@@ -182,16 +188,23 @@ final class ACPSessionManager: ObservableObject {
     /// tail-only paint applied by `applyHydration`. Tracked so tests (and
     /// teardown) can wait for it; production UI does not.
     private var inFlightBackfills: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var pendingBackfillOlderWires: [ACPSession.ID: [ACPMessageWire]] = [:]
 
     /// Per-session UI refcount. When this drops to zero AND the session is
     /// not `attached`, the cached `ACPSession` is evicted from `sessions`.
     /// Re-opening through `placeholderSession` + `hydrateIfNeeded` recreates
     /// it cleanly from SQLite.
     private var sessionRefCounts: [ACPSession.ID: Int] = [:]
+    /// Per-session active tab count. Other surfaces may retain a cached
+    /// session without making its transcript visible; mirror polling uses
+    /// this narrower signal to back off when the ACP tab is not on screen.
+    private var visibleSessionCounts: [ACPSession.ID: Int] = [:]
     // MARK: Mirror state (read-only follower when another instance holds the lease)
     private var mirrorTokens: [ACPSession.ID: Int32] = [:]
     private var mirrorDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
     private var mirrorPoll: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var inFlightMirrorRefreshes: [ACPSession.ID: Task<Void, Never>] = [:]
+    private var dirtyMirrorRefreshes: Set<ACPSession.ID> = []
     // MARK: Writer-watch state (prompt stand-down when a takeover ping arrives)
     private var writerWatchTokens: [ACPSession.ID: Int32] = [:]
     private var writerWatchDebounce: [ACPSession.ID: Task<Void, Never>] = [:]
@@ -312,7 +325,9 @@ final class ACPSessionManager: ObservableObject {
     /// to wait for it (the UI is happy with the tail), but tests use this to
     /// observe the fully-materialised transcript.
     func awaitBackfill(id: ACPSession.ID) async {
-        if let task = inFlightBackfills[id] { await task.value }
+        while let task = inFlightBackfills[id] {
+            await task.value
+        }
     }
 
     /// Drives a session from `.loading` to `.ready` (or `.failed`). Safe to
@@ -451,22 +466,7 @@ final class ACPSessionManager: ObservableObject {
         // the prepended count so the same tail messages stay on screen
         // without a layout jump.
         let wires = result.wireMessages
-        let total = wires.count
-        let tailWindow = ACPTranscript.tailWindow
-        let tailStart = max(0, total - tailWindow)
-
-        var tail: [ACPMessage] = []
-        tail.reserveCapacity(total - tailStart)
-        for i in tailStart..<total {
-            tail.append(wires[i].toMessage())
-        }
-        session.replaceTranscriptMessages(tail)
-        session.transcript.visibleHead = 0
-        // Seed completedOutputBoundaryMessageIds from the loaded messages so
-        // that the load-replay guard in ACPSessionRunner can detect a completed
-        // previous turn even after app restart (when the runtime set would
-        // otherwise be empty). The runner clears the guard at the next prompt.
-        session.markCompletedOutputBoundary()
+        let tailStart = replaceTranscriptWithTail(wires, in: session, markCompletedBoundary: true)
         applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
         session.restoreQueue(result.queue)
         // The composer is rendered (and focused) the moment the placeholder
@@ -511,6 +511,34 @@ final class ACPSessionManager: ObservableObject {
                                  sessionId: session.id, session: session)
     }
 
+    /// Apply only the visible tail of a wire transcript on the main actor.
+    /// The caller can schedule older-message backfill after it has applied
+    /// any surrounding session state.
+    @discardableResult
+    private func replaceTranscriptWithTail(
+        _ wires: [ACPMessageWire],
+        in session: ACPSession,
+        markCompletedBoundary: Bool
+    ) -> Int {
+        let total = wires.count
+        let tailWindow = ACPTranscript.tailWindow
+        let tailStart = max(0, total - tailWindow)
+
+        var tail: [ACPMessage] = []
+        tail.reserveCapacity(total - tailStart)
+        for i in tailStart..<total {
+            tail.append(wires[i].toMessage())
+        }
+        session.replaceTranscriptMessages(tail)
+        session.transcript.visibleHead = 0
+        if markCompletedBoundary {
+            // Seed completedOutputBoundaryMessageIds from loaded history so
+            // replay guards can detect a completed previous turn after restart.
+            session.markCompletedOutputBoundary()
+        }
+        return tailStart
+    }
+
     /// Mirror of `ACPSession.hasConversationTranscript` that operates on the
     /// wire (Sendable) representation, so callers can ask the question
     /// before the in-memory transcript has been fully reassembled — i.e.
@@ -544,11 +572,21 @@ final class ACPSessionManager: ObservableObject {
         sessionId: ACPSession.ID,
         session: ACPSession
     ) {
-        // Replace any prior pending backfill for this id — a re-hydration
-        // (close + reopen) supersedes an older run.
-        inFlightBackfills[sessionId]?.cancel()
-        inFlightBackfills[sessionId] = nil
+        if let existing = inFlightBackfills[sessionId], !existing.isCancelled {
+            if olderWires.isEmpty {
+                existing.cancel()
+                inFlightBackfills[sessionId] = nil
+                pendingBackfillOlderWires[sessionId] = nil
+                session.transcript.isBackfillingOlderMessages = false
+            } else {
+                pendingBackfillOlderWires[sessionId] = olderWires
+                session.transcript.isBackfillingOlderMessages = true
+            }
+            return
+        }
 
+        inFlightBackfills[sessionId] = nil
+        pendingBackfillOlderWires[sessionId] = nil
         guard !olderWires.isEmpty else { return }
         session.transcript.isBackfillingOlderMessages = true
 
@@ -591,8 +629,18 @@ final class ACPSessionManager: ObservableObject {
                 }
             }
             guard let self, let session,
+                  let me = handle.task,
+                  self.inFlightBackfills[sessionId] == me,
                   self.sessions[sessionId] === session
             else { return }
+            if let newerWires = self.pendingBackfillOlderWires.removeValue(forKey: sessionId) {
+                self.inFlightBackfills[sessionId] = nil
+                self.scheduleBackfillIfNeeded(
+                    olderWires: newerWires,
+                    sessionId: sessionId,
+                    session: session)
+                return
+            }
             session.prependTranscriptMessages(older)
             self.applyRememberedTranscriptScrollWindow(to: session)
         }
@@ -607,9 +655,11 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
+        pendingBackfillOlderWires[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
+        visibleSessionCounts.removeValue(forKey: id)
         planSidebarVisibility.removeValue(forKey: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
@@ -620,9 +670,11 @@ final class ACPSessionManager: ObservableObject {
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
+        pendingBackfillOlderWires[id] = nil
         sessions[id]?.transcript.resetMarkdownCaches()
         sessions[id] = nil
         sessionRefCounts.removeValue(forKey: id)
+        visibleSessionCounts.removeValue(forKey: id)
         planSidebarVisibility.removeValue(forKey: id)
         transcriptScrollMemory.removeValue(forKey: id)
         pendingModel.removeValue(forKey: id)
@@ -637,6 +689,28 @@ final class ACPSessionManager: ObservableObject {
     func retainSession(id: ACPSession.ID) {
         guard sessions[id] != nil else { return }
         sessionRefCounts[id, default: 0] += 1
+    }
+
+    /// Marks an ACP tab as actively visible for `id`. This is intentionally
+    /// separate from `retainSession`: sidebars can retain rows for cache
+    /// lifetime without needing the mirror poller to stay hot.
+    func markSessionVisible(id: ACPSession.ID) {
+        guard sessions[id] != nil else { return }
+        let wasHidden = (visibleSessionCounts[id] ?? 0) == 0
+        visibleSessionCounts[id, default: 0] += 1
+        if wasHidden {
+            wakeVisibleMirror(sessionId: id)
+        }
+    }
+
+    func unmarkSessionVisible(id: ACPSession.ID) {
+        guard let current = visibleSessionCounts[id], current > 0 else { return }
+        let next = current - 1
+        if next == 0 {
+            visibleSessionCounts.removeValue(forKey: id)
+        } else {
+            visibleSessionCounts[id] = next
+        }
     }
 
     /// Decrement the UI refcount for `id`. When it reaches zero AND the
@@ -725,12 +799,14 @@ final class ACPSessionManager: ObservableObject {
         flushPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
+        pendingBackfillOlderWires[id] = nil
         // Stop any active mirror poll/subscription so the 2.5s poll task
         // doesn't keep waking after a mirrored tab closes. Idempotent —
         // no-op for writer sessions.
         endMirroring(sessionId: id)
         session.transcript.resetMarkdownCaches()
         sessions[id] = nil
+        visibleSessionCounts.removeValue(forKey: id)
     }
 
     func setArchived(id: ACPSession.ID, archived: Bool) {
@@ -1237,7 +1313,6 @@ extension ACPSessionManager {
         try? store.seizeLease(sessionId: sessionId, instanceId: instanceId, pid: pid, now: now)
         _ownedLeases.insert(sessionId)
         changeNotifier.post()
-        endMirroring(sessionId: sessionId)
         startHeartbeat(sessionId: sessionId)
         startWriterWatch(sessionId: sessionId)
         if let session = sessions[sessionId] {
@@ -1260,8 +1335,19 @@ extension ACPSessionManager {
             // queue can be stale at takeover time.
             let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
             session.restoreQueue(queue)
-            session.agentState = .idle   // allow attach's agentState guard to proceed
-            Task { await attach(to: sessionId, freshlyCreated: false) }
+            // Block immediate sends while the final mirror snapshot catches
+            // the cached transcript up to the store before writer attach.
+            session.agentState = .spawning
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await self.refreshMirror(sessionId: sessionId)
+                self.endMirroring(sessionId: sessionId)
+                guard self.sessions[sessionId] === session else { return }
+                session.agentState = .idle
+                await self.attach(to: sessionId, freshlyCreated: false)
+            }
+        } else {
+            endMirroring(sessionId: sessionId)
         }
     }
 
@@ -1322,6 +1408,10 @@ extension ACPSessionManager {
     func mirrorPollActiveForTest(sessionId: ACPSession.ID) -> Bool {
         mirrorPoll[sessionId] != nil
     }
+
+    func mirrorPollIntervalNanosForTest(sessionId: ACPSession.ID) -> UInt64 {
+        mirrorPollIntervalNanos(sessionId: sessionId)
+    }
 }
 
 // MARK: - Mirror (read-only follower)
@@ -1340,12 +1430,7 @@ extension ACPSessionManager {
             }
         }
         mirrorTokens[sessionId] = token
-        mirrorPoll[sessionId] = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_500_000_000)   // 2.5s backstop
-                await self?.refreshMirror(sessionId: sessionId)
-            }
-        }
+        startMirrorPoll(sessionId: sessionId)
         mirrorDebounce[sessionId]?.cancel()
         mirrorDebounce[sessionId] = Task { [weak self] in await self?.refreshMirror(sessionId: sessionId) }
     }
@@ -1354,6 +1439,8 @@ extension ACPSessionManager {
         if let t = mirrorTokens.removeValue(forKey: sessionId) { changeNotifier.unsubscribe(t) }
         mirrorDebounce.removeValue(forKey: sessionId)?.cancel()
         mirrorPoll.removeValue(forKey: sessionId)?.cancel()
+        inFlightMirrorRefreshes.removeValue(forKey: sessionId)?.cancel()
+        dirtyMirrorRefreshes.remove(sessionId)
     }
 
     /// Cancel every background task owned by this manager — mirror
@@ -1392,47 +1479,121 @@ extension ACPSessionManager {
     private func scheduleMirrorRefresh(sessionId: ACPSession.ID) {
         mirrorDebounce[sessionId]?.cancel()
         mirrorDebounce[sessionId] = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 100_000_000)   // 100ms coalesce
+            try? await Task.sleep(nanoseconds: ACPMirrorRefreshPolicy.debounceNanos)
             guard !Task.isCancelled else { return }
             await self?.refreshMirror(sessionId: sessionId)
         }
     }
 
-    /// Re-read the transcript from SQLite and apply it into the cached
-    /// mirror session. Performs a full rebuild using `replaceTranscriptMessages`
-    /// so `toolCallIndices` and the render window stay consistent — bypassing
-    /// by-index mutation avoids violating those invariants.
-    func refreshMirror(sessionId: ACPSession.ID) async {
-        guard let session = sessions[sessionId] else { return }
-        if let row = try? store.loadSession(id: sessionId) {
-            syncMirrorSessionMetadata(row, to: session)
-        }
-        // Always sync the queue — it can change (drain/clear) with no new
-        // transcript rows, so this must run before any early-return below.
-        let queue = (try? store.loadQueue(sessionId: sessionId)) ?? []
-        session.restoreQueue(queue)
-        // Sync transcript messages; early-return when nothing new to apply.
-        let stored = (try? store.loadMessages(sessionId: sessionId)) ?? []
-        guard !stored.isEmpty else { return }
-        let decoder = JSONDecoder()
-        var messages: [ACPMessage] = []
-        messages.reserveCapacity(stored.count)
-        for m in stored {
-            guard let wire = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder)
-            else { continue }
-            messages.append(wire.toMessage())
-        }
-        session.replaceTranscriptMessages(messages)
-        // Anchor the visible window to the tail so new content is visible,
-        // but only when the session is following the tail (user hasn't scrolled up).
-        if session.followsTranscriptTail {
-            session.transcript.resetWindowToTail()
-        } else {
-            applyRememberedTranscriptScrollWindow(to: session)
+    private func wakeVisibleMirror(sessionId: ACPSession.ID) {
+        guard mirrorTokens[sessionId] != nil else { return }
+        startMirrorPoll(sessionId: sessionId)
+        mirrorDebounce[sessionId]?.cancel()
+        mirrorDebounce[sessionId] = Task { [weak self] in await self?.refreshMirror(sessionId: sessionId) }
+    }
+
+    private func startMirrorPoll(sessionId: ACPSession.ID) {
+        mirrorPoll[sessionId]?.cancel()
+        mirrorPoll[sessionId] = Task { [weak self] in
+            while !Task.isCancelled {
+                let interval = await self?.mirrorPollIntervalNanos(sessionId: sessionId)
+                    ?? ACPMirrorRefreshPolicy.inactivePollNanos
+                try? await Task.sleep(nanoseconds: interval)
+                guard !Task.isCancelled else { return }
+                await self?.refreshMirror(sessionId: sessionId)
+            }
         }
     }
 
-    private func syncMirrorSessionMetadata(_ row: ACPSessionRow, to session: ACPSession) {
+    private func mirrorPollIntervalNanos(sessionId: ACPSession.ID) -> UInt64 {
+        (visibleSessionCounts[sessionId] ?? 0) > 0
+            ? ACPMirrorRefreshPolicy.activePollNanos
+            : ACPMirrorRefreshPolicy.inactivePollNanos
+    }
+
+    /// Re-read mirror state from SQLite and apply it into the cached mirror
+    /// session. SQLite reads and JSON decode run through the hydrator actor
+    /// when available; the main actor only materialises the visible tail.
+    func refreshMirror(sessionId: ACPSession.ID) async {
+        if let existing = inFlightMirrorRefreshes[sessionId] {
+            dirtyMirrorRefreshes.insert(sessionId)
+            await existing.value
+            return
+        }
+        final class TaskHandle { var task: Task<Void, Never>? }
+        let handle = TaskHandle()
+        let task = Task { @MainActor [weak self] in
+            defer {
+                if let self, let me = handle.task, self.inFlightMirrorRefreshes[sessionId] == me {
+                    self.inFlightMirrorRefreshes[sessionId] = nil
+                    self.dirtyMirrorRefreshes.remove(sessionId)
+                }
+            }
+            guard let self else { return }
+            repeat {
+                self.dirtyMirrorRefreshes.remove(sessionId)
+                await self.runMirrorRefresh(sessionId: sessionId)
+            } while self.dirtyMirrorRefreshes.remove(sessionId) != nil
+                && self.sessions[sessionId] != nil
+                && !Task.isCancelled
+        }
+        handle.task = task
+        inFlightMirrorRefreshes[sessionId] = task
+        await task.value
+    }
+
+    private func runMirrorRefresh(sessionId: ACPSession.ID) async {
+        guard let session = sessions[sessionId] else { return }
+        let result: HydrationResult
+        do {
+            if let hydrator {
+                result = try await hydrator.mirrorSnapshot(sessionId: sessionId)
+            } else {
+                result = try synchronousMirrorSnapshot(id: sessionId)
+            }
+        } catch {
+            return
+        }
+        guard !Task.isCancelled, sessions[sessionId] === session else { return }
+        syncMirrorSessionMetadata(result.row, to: session, recentRows: result.recent)
+        // Always sync the queue — it can change (drain/clear) with no new
+        // transcript rows, so this must run before any early-return below.
+        session.restoreQueue(result.queue)
+        guard !result.wireMessages.isEmpty else { return }
+        let tailStart = replaceTranscriptWithTail(
+            result.wireMessages,
+            in: session,
+            markCompletedBoundary: false)
+        applyRememberedTranscriptScrollWindow(to: session, messageIndexOffset: tailStart)
+        scheduleBackfillIfNeeded(
+            olderWires: Array(result.wireMessages.prefix(tailStart)),
+            sessionId: sessionId,
+            session: session)
+    }
+
+    private func synchronousMirrorSnapshot(id: ACPSession.ID) throws -> HydrationResult {
+        guard let row = try store.loadSession(id: id) else {
+            throw ACPSessionHydrator.Error.sessionNotFound(id)
+        }
+        let stored = (try? store.loadMessages(sessionId: id)) ?? []
+        var wire: [ACPMessageWire] = []
+        wire.reserveCapacity(stored.count)
+        let decoder = JSONDecoder()
+        for m in stored {
+            if let w = try? ACPMessageWire.decode(kind: m.kind, payload: m.payload, decoder: decoder) {
+                wire.append(w)
+            }
+        }
+        let queue = (try? store.loadQueue(sessionId: id)) ?? []
+        let recent = (try? store.recentSessions()) ?? []
+        return HydrationResult(row: row, wireMessages: wire, queue: queue, draft: nil, recent: recent)
+    }
+
+    private func syncMirrorSessionMetadata(
+        _ row: ACPSessionRow,
+        to session: ACPSession,
+        recentRows: [ACPSessionRow]? = nil
+    ) {
         let titleChanged = session.title != row.title || session.titleSource != row.titleSource
         session.title = row.title
         session.titleSource = row.titleSource
@@ -1442,7 +1603,7 @@ extension ACPSessionManager {
         if session.remoteSessionId == nil || session.remoteSessionId == row.remoteSessionId {
             session.remoteSessionId = row.remoteSessionId
         }
-        recent = (try? store.recentSessions()) ?? []
+        recent = recentRows ?? (try? store.recentSessions()) ?? []
         if titleChanged {
             onSessionTitleUpdated?(row.id, row.title)
         }
