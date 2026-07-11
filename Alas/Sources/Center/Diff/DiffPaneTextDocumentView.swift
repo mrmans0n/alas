@@ -976,7 +976,7 @@ final class DiffPaneCodeTextView: NSTextView {
     /// the default when the mouse leaves the view.
     private var didSetPointerCursor = false
 
-    static func expandPillFillAlpha(hovered: Bool, pressed: Bool) -> CGFloat {
+    nonisolated static func expandPillFillAlpha(hovered: Bool, pressed: Bool) -> CGFloat {
         if pressed { return 0.36 }
         if hovered { return 0.28 }
         return 0.18
@@ -1644,6 +1644,12 @@ final class DiffPaneCodeTextView: NSTextView {
 
         let range = lineMetadata[row].range
         guard range.length > 0 else { return }
+
+        // In split mode the opposite column keeps the expandable-context metadata
+        // on a blank " " placeholder. Only the column holding the real label
+        // should render the button, so skip rows whose text is empty.
+        let label = (string as NSString).substring(with: range)
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         guard glyphRange.length > 0 else { return }
