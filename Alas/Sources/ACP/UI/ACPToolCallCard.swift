@@ -205,19 +205,30 @@ private struct ACPToolCallAssetView: View {
     var body: some View {
         switch asset.kind {
         case .image:
-            if let image = asset.loadedImage(trustedRoot: trustedImageRoot) {
-                imageThumbnail(image)
-                    .help(asset.displayText)
+            if asset.canLoadImage(trustedRoot: trustedImageRoot) {
+                cachedImageThumbnail
             } else {
                 compactRow(iconSystemName: "photo", title: asset.displayTitle, detail: asset.displayDetail)
             }
         case .resource:
-            if asset.looksLikeImage, let image = asset.loadedImage(trustedRoot: trustedImageRoot) {
-                imageThumbnail(image)
-                    .help(asset.displayText)
+            if asset.looksLikeImage, asset.canLoadImage(trustedRoot: trustedImageRoot) {
+                cachedImageThumbnail
             } else {
                 compactRow(iconSystemName: "doc.text", title: asset.displayTitle, detail: asset.displayDetail)
             }
+        }
+    }
+
+    private var cachedImageThumbnail: some View {
+        ACPCachedThumbnail(
+            cacheKey: asset.thumbnailCacheKey(trustedRoot: trustedImageRoot),
+            loadImage: { asset.loadedImage(trustedRoot: trustedImageRoot) }
+        ) { image in
+            imageThumbnail(image)
+                .help(asset.displayText)
+        } placeholder: {
+            imagePlaceholder
+                .help(asset.displayText)
         }
     }
 
@@ -232,6 +243,18 @@ private struct ACPToolCallAssetView: View {
         }
             .frame(width: 160, height: 120)
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+    }
+
+    private var imagePlaceholder: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(theme.color("bg-1").opacity(0.7))
+            Image(systemName: "photo")
+                .font(.system(size: 20))
+                .foregroundStyle(theme.color("fg-faint"))
+        }
+        .frame(width: 160, height: 120)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
     }
 
     private func compactRow(iconSystemName: String, title: String, detail: String?) -> some View {
@@ -278,6 +301,17 @@ extension ACPMessage.ToolCallAsset {
         }
     }
 
+    func canLoadImage(trustedRoot: URL?) -> Bool {
+        if data != nil {
+            return true
+        }
+        guard let uri = nonEmpty(uri) else { return false }
+        if Self.isDataURI(uri) {
+            return true
+        }
+        return Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) != nil
+    }
+
     func loadedImage(trustedRoot: URL?) -> NSImage? {
         if let data, let decoded = Self.decodeBase64ImageData(data), let image = NSImage(data: decoded) {
             return image
@@ -290,6 +324,19 @@ extension ACPMessage.ToolCallAsset {
         }
         guard let url = Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) else { return nil }
         return NSImage(contentsOf: url)
+    }
+
+    func thumbnailCacheKey(trustedRoot: URL?) -> String {
+        if let data = nonEmpty(data) {
+            return "data:\(data.hashValue)"
+        }
+        if let uri = nonEmpty(uri), Self.isDataURI(uri) {
+            return "data-uri:\(uri.hashValue)"
+        }
+        if let uri = nonEmpty(uri), let url = Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) {
+            return "file:\(url.standardizedFileURL.path)"
+        }
+        return "asset:\(hashValue)"
     }
 
     var displayTitle: String {
