@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Observation
 import os
+import SQLite3
 
 @Observable
 @MainActor
@@ -3466,7 +3467,7 @@ final class AppState {
     /// debounce window.
     func flushAllACPComposerDrafts() {
         for manager in acpManagers.values {
-            manager.flushPendingDraftWrites()
+            manager.flushPendingDraftWritesForTermination()
         }
     }
 
@@ -3522,11 +3523,20 @@ final class AppState {
         if let existing = acpManagers[worktree.id] { return existing }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
         do {
-            let store = try ACPSessionStore(path: dbURL.path)
+            let store = try openACPStore(
+                path: dbURL.path,
+                busyTimeoutMilliseconds: ACPSessionStore.mainActorBusyTimeoutMilliseconds,
+                runtimeBusyTimeoutMilliseconds: ACPSessionStore.mainActorBusyTimeoutMilliseconds,
+                backgroundBusyRetryMilliseconds: ACPSessionStore.defaultBusyTimeoutMilliseconds)
+            let leaseStore = try openACPStore(
+                path: dbURL.path,
+                busyTimeoutMilliseconds: ACPSessionStore.mainActorBusyTimeoutMilliseconds,
+                runtimeBusyTimeoutMilliseconds: ACPSessionStore.mainActorBusyTimeoutMilliseconds)
             let mgr = ACPSessionManager(
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 store: store,
+                leaseStore: leaseStore,
                 instanceId: instanceId,
                 pid: Int64(ProcessInfo.processInfo.processIdentifier),
                 hydratorPath: dbURL.path,
@@ -3564,6 +3574,24 @@ final class AppState {
         }
     }
 
+    private func openACPStore(
+        path: String,
+        busyTimeoutMilliseconds: Int32 = ACPSessionStore.defaultBusyTimeoutMilliseconds,
+        runtimeBusyTimeoutMilliseconds: Int32? = nil,
+        backgroundBusyRetryMilliseconds: Int32? = nil
+    ) throws -> ACPSessionStore {
+        try ACPSessionStore(
+            path: path,
+            busyTimeoutMilliseconds: busyTimeoutMilliseconds,
+            runtimeBusyTimeoutMilliseconds: runtimeBusyTimeoutMilliseconds,
+            backgroundBusyRetryMilliseconds: backgroundBusyRetryMilliseconds)
+    }
+
+    private func isSQLiteBusy(_ error: Error) -> Bool {
+        guard case SQLiteError.stepFailed(let code, _, _) = error else { return false }
+        return code == SQLITE_BUSY || code == SQLITE_LOCKED
+    }
+
     /// Release the ACP session manager for the given worktree id.
     /// Called from `cleanupWorktreeState` when a worktree is
     /// removed/archived. Stops every attached runner (which cancels
@@ -3573,10 +3601,10 @@ final class AppState {
     /// after the UI was torn down.
     func disposeACPManager(for worktreeId: String) {
         guard let manager = acpManagers.removeValue(forKey: worktreeId) else { return }
-        // Flush any pending debounced draft writes before tearing the
-        // manager down — otherwise the last ~300ms of typing in any
-        // composer for this worktree never reaches SQLite.
-        manager.flushPendingDraftWrites()
+        // Flush pending draft writes through a default-timeout store before
+        // dropping the manager; otherwise a short-timeout busy failure can
+        // leave only a weak background retry behind as the store deallocates.
+        manager.flushPendingDraftWritesForTermination()
         #if DEBUG
         memoryDiagnostics.detach(worktreeId: worktreeId)
         #endif
@@ -4188,11 +4216,11 @@ extension AppState: RemoteSessionsProvider {
         return false
     }
 
-    func takeOver(for id: String) {
+    func takeOver(for id: String) async -> Bool {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.takeOver(sessionId: id)
-            return
+            return await mgr.takeOver(sessionId: id)
         }
+        return false
     }
 
     /// `onResult` fires once (false when no manager owns the id, the manager

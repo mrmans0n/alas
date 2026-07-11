@@ -15,7 +15,7 @@ protocol RemoteSessionsProvider: AnyObject {
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
     func fullToolCallContent(sessionId: String, toolCallId: String) -> String?
     func isWriter(for id: String) -> Bool
-    func takeOver(for id: String)
+    func takeOver(for id: String) async -> Bool
     /// `onResult` fires once with the final outcome (false = refused now or
     /// failed delivery later); the gateway emits `promptRejected` on false so
     /// the client can restore the text instead of losing it.

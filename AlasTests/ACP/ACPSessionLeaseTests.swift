@@ -15,6 +15,19 @@ import Foundation
         #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
     }
 
+    @Test("v11 lease token migration is idempotent")
+    func v11LeaseTokenMigrationIsIdempotent() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lease-migration-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.db.exec("UPDATE schema_version SET version = ?", bindings: [Int64(10)])
+
+        let reopened = try ACPSessionStore(path: url.path)
+        #expect(try reopened.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
+        let columns = try reopened.db.query("PRAGMA table_info(session_leases)")
+        #expect(columns.filter { $0["name"] as? String == "lease_token" }.count == 1)
+    }
+
     @Test("session_leases table exists and is empty")
     func leaseTableExists() throws {
         let store = try tempStore()
@@ -90,6 +103,31 @@ import Foundation
         _ = try store.claimLease(sessionId: "s1", instanceId: "A", pid: Int64(getpid()), now: now, staleAfter: 15)
         try store.releaseLease(sessionId: "s1", instanceId: "A")
         #expect(try store.loadLease(sessionId: "s1") == nil)
+    }
+
+    @Test("same-owner lease refresh preserves token")
+    func sameOwnerLeaseRefreshPreservesToken() throws {
+        let store = try tempStore()
+        try seedSession(store, id: "s1")
+        let now = Int64(Date().timeIntervalSince1970)
+        #expect(try store.claimLease(
+            sessionId: "s1",
+            instanceId: "A",
+            pid: Int64(getpid()),
+            now: now,
+            staleAfter: 15,
+            leaseToken: "old-token") == true)
+        #expect(try store.claimLease(
+            sessionId: "s1",
+            instanceId: "A",
+            pid: Int64(getpid()),
+            now: now + 1,
+            staleAfter: 15,
+            leaseToken: "new-token") == true)
+
+        let lease = try #require(try store.loadLease(sessionId: "s1"))
+        #expect(lease.ownerInstance == "A")
+        #expect(lease.token == "old-token")
     }
 
     @Test("seize wins over a live, fresh lease")

@@ -579,7 +579,9 @@ private struct ACPSessionView: View {
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) {
-            Button("Take over here") { manager.takeOver(sessionId: sessionId) }
+            Button("Take over here") {
+                Task { _ = await manager.takeOver(sessionId: sessionId) }
+            }
                 .controlSize(.small)
                 .padding(.trailing, 12)
         }

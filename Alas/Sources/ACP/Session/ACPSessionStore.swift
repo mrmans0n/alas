@@ -1,20 +1,43 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 10
+    static let targetSchemaVersion = 11
+    static let defaultBusyTimeoutMilliseconds: Int32 = 5_000
+    static let mainActorBusyTimeoutMilliseconds: Int32 = 100
+    let path: String
     let db: SQLiteDatabase
 
-    init(path: String) throws {
+    init(
+        path: String,
+        busyTimeoutMilliseconds: Int32 = ACPSessionStore.defaultBusyTimeoutMilliseconds,
+        runtimeBusyTimeoutMilliseconds: Int32? = nil,
+        backgroundBusyRetryMilliseconds: Int32? = nil
+    ) throws {
+        self.path = path
         try? FileManager.default.createDirectory(
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        self.db = try SQLiteDatabase(path: path)
+        self.db = try SQLiteDatabase(
+            path: path,
+            busyTimeoutMilliseconds: busyTimeoutMilliseconds)
         try migrate()
+        if let runtimeBusyTimeoutMilliseconds {
+            db.setBusyTimeout(milliseconds: runtimeBusyTimeoutMilliseconds)
+        }
+        db.setBusyRetryTimeout(milliseconds: backgroundBusyRetryMilliseconds)
     }
 
     func currentSchemaVersion() throws -> Int {
         let rows = try db.query("SELECT version FROM schema_version LIMIT 1")
         return (rows.first?["version"] as? Int64).map(Int.init) ?? 0
+    }
+
+    func setBackgroundBusyRetryOwnerInstanceId(_ ownerInstanceId: String?) {
+        db.setBusyRetryOwnerInstanceId(ownerInstanceId)
+    }
+
+    func invalidatePendingComposerDraftRetry(sessionId: String) {
+        db.invalidateBusyRetry(generationKey: "composer_drafts:\(sessionId)")
     }
 
     private func migrate() throws {
@@ -35,6 +58,7 @@ final class ACPSessionStore {
         if current < 8 { try migrate_to_v8() }
         if current < 9 { try migrate_to_v9() }
         if current < 10 { try migrate_to_v10() }
+        if current < 11 { try migrate_to_v11() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -183,6 +207,16 @@ final class ACPSessionStore {
     private func migrate_to_v10() throws {
         try db.exec("ALTER TABLE composer_drafts ADD COLUMN submitted_after_seq INTEGER")
     }
+
+    private func migrate_to_v11() throws {
+        guard try !table("session_leases", hasColumn: "lease_token") else { return }
+        try db.exec("ALTER TABLE session_leases ADD COLUMN lease_token TEXT NOT NULL DEFAULT ''")
+    }
+
+    private func table(_ tableName: String, hasColumn columnName: String) throws -> Bool {
+        let rows = try db.query("PRAGMA table_info(\(tableName))")
+        return rows.contains { $0["name"] as? String == columnName }
+    }
 }
 
 struct ACPSessionLease: Equatable {
@@ -191,6 +225,7 @@ struct ACPSessionLease: Equatable {
     let pid: Int64
     let heartbeatAt: Int64
     let status: String   // "idle" | "busy"
+    let token: String
 }
 
 enum ACPSessionOrigin: String, Codable, Equatable {
@@ -250,7 +285,7 @@ extension ACPSessionStore {
             auto_run = excluded.auto_run,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
-            archived = excluded.archived
+            archived = CASE WHEN sessions.archived = 1 THEN 1 ELSE excluded.archived END
         """, bindings: [
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0,
@@ -389,7 +424,8 @@ extension ACPSessionStore {
         SET title = ?, title_source = ?, updated_at = ?
         WHERE id = ? AND archived = 0 AND title_source = ?
         """, bindings: [title, ACPSessionTitleSource.generated.rawValue, updatedAt, id,
-                         ACPSessionTitleSource.placeholder.rawValue]) > 0
+                         ACPSessionTitleSource.placeholder.rawValue],
+            retryOnBusy: true) > 0
     }
 
     func updateGeneratedTitleIfNotManual(id: String, title: String, updatedAt: Int64) throws -> Bool {
@@ -398,7 +434,8 @@ extension ACPSessionStore {
         SET title = ?, title_source = ?, updated_at = ?
         WHERE id = ? AND archived = 0 AND title_source != ?
         """, bindings: [title, ACPSessionTitleSource.generated.rawValue, updatedAt, id,
-                         ACPSessionTitleSource.manual.rawValue]) > 0
+                         ACPSessionTitleSource.manual.rawValue],
+            retryOnBusy: true) > 0
     }
 
     func clearGeneratedTitleIfNotManual(id: String, updatedAt: Int64) throws -> Bool {
@@ -407,7 +444,8 @@ extension ACPSessionStore {
         SET title = ?, title_source = ?, updated_at = ?
         WHERE id = ? AND archived = 0 AND title_source != ?
         """, bindings: ["New session", ACPSessionTitleSource.placeholder.rawValue, updatedAt, id,
-                         ACPSessionTitleSource.manual.rawValue]) > 0
+                         ACPSessionTitleSource.manual.rawValue],
+            retryOnBusy: true) > 0
     }
 
     func appendMessage(sessionId: String, id: String, kind: String, seq: Int64, payload: Data, createdAt: Int64) throws {
@@ -424,7 +462,8 @@ extension ACPSessionStore {
     func updateMessageRow(id: String, kind: String, seq: Int64, payload: Data) throws -> Bool {
         try db.execChanges(
             "UPDATE messages SET kind = ?, seq = ?, payload = ? WHERE id = ?",
-            bindings: [kind, seq, payload, id]
+            bindings: [kind, seq, payload, id],
+            retryOnBusy: true
         ) > 0
     }
 
@@ -433,7 +472,7 @@ extension ACPSessionStore {
         UPDATE messages
         SET payload = ?
         WHERE id = ? AND payload = ?
-        """, bindings: [payload, id, expectedPayload]) > 0
+        """, bindings: [payload, id, expectedPayload], retryOnBusy: true) > 0
     }
 
     func loadMessagePayload(id: String) throws -> Data? {
@@ -549,7 +588,8 @@ extension ACPSessionStore {
             ownerInstance: r["owner_instance"] as? String ?? "",
             pid: (r["pid"] as? Int64) ?? 0,
             heartbeatAt: (r["heartbeat_at"] as? Int64) ?? 0,
-            status: r["status"] as? String ?? "idle")
+            status: r["status"] as? String ?? "idle",
+            token: r["lease_token"] as? String ?? "")
     }
 
     /// Atomically claim the writer role for `sessionId`. Returns true if
@@ -565,7 +605,8 @@ extension ACPSessionStore {
     /// same dead-owner lease can't both delete-then-insert and both win.
     /// A plain `BEGIN` (WAL) would defer the write lock and still race.
     func claimLease(sessionId: String, instanceId: String, pid: Int64,
-                    now: Int64, staleAfter: Int64) throws -> Bool {
+                    now: Int64, staleAfter: Int64,
+                    leaseToken: String = UUID().uuidString) throws -> Bool {
         let staleCutoff = now - staleAfter
         try db.exec("BEGIN IMMEDIATE")
         do {
@@ -579,16 +620,21 @@ extension ACPSessionStore {
                     bindings: [sessionId, existing.ownerInstance])
             }
             try db.exec("""
-            INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status)
-            VALUES (?,?,?,?,'idle')
+            INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
+            VALUES (?,?,?,?,'idle',?)
             ON CONFLICT(session_id) DO UPDATE SET
                 owner_instance = excluded.owner_instance,
                 pid = excluded.pid,
                 heartbeat_at = excluded.heartbeat_at,
-                status = 'idle'
+                status = 'idle',
+                lease_token = CASE
+                    WHEN session_leases.owner_instance = excluded.owner_instance
+                    THEN session_leases.lease_token
+                    ELSE excluded.lease_token
+                END
             WHERE session_leases.owner_instance = excluded.owner_instance
                OR session_leases.heartbeat_at < ?
-            """, bindings: [sessionId, instanceId, pid, now, staleCutoff])
+            """, bindings: [sessionId, instanceId, pid, now, leaseToken, staleCutoff])
             let won = try loadLease(sessionId: sessionId)?.ownerInstance == instanceId
             try db.exec("COMMIT")
             return won
@@ -608,23 +654,36 @@ extension ACPSessionStore {
         """, bindings: [now, status, sessionId, instanceId])
     }
 
-    func releaseLease(sessionId: String, instanceId: String) throws {
-        try db.exec(
-            "DELETE FROM session_leases WHERE session_id = ? AND owner_instance = ?",
-            bindings: [sessionId, instanceId])
+    func releaseLease(sessionId: String, instanceId: String, leaseToken: String? = nil) throws {
+        if let leaseToken {
+            try db.exec(
+                "DELETE FROM session_leases WHERE session_id = ? AND owner_instance = ? AND lease_token = ?",
+                bindings: [sessionId, instanceId, leaseToken])
+        } else {
+            try db.exec(
+                "DELETE FROM session_leases WHERE session_id = ? AND owner_instance = ?",
+                bindings: [sessionId, instanceId])
+        }
     }
 
     /// Forcibly seize the lease (explicit user takeover) regardless of
     /// the current owner's liveness.
-    func seizeLease(sessionId: String, instanceId: String, pid: Int64, now: Int64) throws {
+    func seizeLease(
+        sessionId: String,
+        instanceId: String,
+        pid: Int64,
+        now: Int64,
+        leaseToken: String = UUID().uuidString
+    ) throws {
         try db.exec("""
-        INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status)
-        VALUES (?,?,?,?,'idle')
+        INSERT INTO session_leases (session_id, owner_instance, pid, heartbeat_at, status, lease_token)
+        VALUES (?,?,?,?,'idle',?)
         ON CONFLICT(session_id) DO UPDATE SET
             owner_instance = excluded.owner_instance,
             pid = excluded.pid,
             heartbeat_at = excluded.heartbeat_at,
-            status = 'idle'
-        """, bindings: [sessionId, instanceId, pid, now])
+            status = 'idle',
+            lease_token = excluded.lease_token
+        """, bindings: [sessionId, instanceId, pid, now, leaseToken])
     }
 }

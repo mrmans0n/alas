@@ -82,9 +82,10 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
-    func takeOver(for id: String) {
+    func takeOver(for id: String) async -> Bool {
         tookOver.append(id)
         writers.insert(id)
+        return true
     }
 
     var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
@@ -436,7 +437,7 @@ struct RemoteSessionGatewayTests {
     }
 
     @Test func takeOverPushesSnapshotWithCanDrive() async throws {
-        // Regression: takeover seizes the writer lease synchronously but mutates
+        // Regression: takeover seizes the writer lease before returning but mutates
         // lease/agent state rather than the transcript, so the objectWillChange
         // delta may never fire on an idle session. The gateway must push a
         // snapshot itself so the client learns canDrive=true and unlocks the

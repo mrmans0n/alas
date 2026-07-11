@@ -241,10 +241,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     // MARK: - Outbound
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
-        stateLock.lock()
-        nextId += 1
-        let id = JSONRPCID.number(nextId)
-        stateLock.unlock()
+        let id = stateLock.withLock {
+            nextId += 1
+            return JSONRPCID.number(nextId)
+        }
 
         let body = try Self.encode(envelopeFor: request, id: id)
         let data: Data = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in

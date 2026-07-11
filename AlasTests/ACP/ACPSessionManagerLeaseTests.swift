@@ -55,6 +55,49 @@ import Foundation
         #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
     }
 
+    @Test("busy first lease claim waits for transient writer lock")
+    func busyFirstLeaseClaimWaitsForTransientWriterLock() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-claim-busy-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(
+            path: url.path,
+            busyTimeoutMilliseconds: ACPSessionStore.mainActorBusyTimeoutMilliseconds)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            try? blocker.db.exec("ROLLBACK")
+        }
+
+        #expect(mgrA.acquireWriterLease(sessionId: session.id))
+        #expect(mgrA.tracksOwnedLeaseForTest(sessionId: session.id))
+    }
+
+    @Test("failed lease release keeps local ownership tracked")
+    func failedReleaseKeepsOwnershipTracked() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-release-busy-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        defer { try? blocker.db.exec("ROLLBACK") }
+
+        mgrA.releaseWriterLease(sessionId: session.id)
+        #expect(mgrA.tracksOwnedLeaseForTest(sessionId: session.id),
+                "local ownership must remain tracked when the lease row was not removed")
+
+        try blocker.db.exec("ROLLBACK")
+        mgrA.releaseWriterLease(sessionId: session.id)
+        #expect(!mgrA.tracksOwnedLeaseForTest(sessionId: session.id))
+        #expect(try storeA.loadLease(sessionId: session.id)?.ownerInstance == nil)
+    }
+
     @Test("mirror re-read applies appended messages from another writer")
     func mirrorReReads() async throws {
         let url = FileManager.default.temporaryDirectory
@@ -94,12 +137,129 @@ import Foundation
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
         _ = mgrB.placeholderSession(id: session.id)
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
 
-        // The synchronous parts (seizeLease + _ownedLeases insert) must have
-        // completed before takeOver returns; the async attach kicks off later.
+        try await waitUntil {
+            try storeB.loadLease(sessionId: session.id)?.ownerInstance == "B"
+        }
         #expect(try storeB.loadLease(sessionId: session.id)?.ownerInstance == "B")
         #expect(mgrA.ownsLeaseForTest(sessionId: session.id) == false)
+    }
+
+    @Test("takeover invalidates stale lease release retries")
+    func takeOverInvalidatesStaleReleaseRetry() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("takeover-stale-release-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        _ = mgrA.acquireWriterLease(sessionId: session.id)
+
+        let storeB = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        _ = mgrB.placeholderSession(id: session.id)
+        await mgrB.takeOver(sessionId: session.id)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        defer { try? blocker.db.exec("ROLLBACK") }
+        mgrB.releaseWriterLease(sessionId: session.id)
+
+        let staleGeneration = try #require(mgrB.leaseReleaseGenerationForTest(sessionId: session.id))
+        try blocker.db.exec("ROLLBACK")
+        try storeA.seizeLease(
+            sessionId: session.id,
+            instanceId: "A",
+            pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970)
+        )
+
+        await mgrB.takeOver(sessionId: session.id)
+        #expect(mgrB.tracksOwnedLeaseForTest(sessionId: session.id))
+
+        mgrB.clearLocalLeaseOwnershipAfterReleaseAttemptForTest(
+            sessionId: session.id,
+            generation: staleGeneration
+        )
+        #expect(mgrB.tracksOwnedLeaseForTest(sessionId: session.id),
+                "stale release retry must not clear ownership acquired by takeover")
+    }
+
+    @Test("busy takeover waits for a transient writer lock")
+    func busyTakeoverWaitsForTransientWriterLock() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("takeover-busy-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        _ = mgrB.placeholderSession(id: session.id)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        defer { try? blocker.db.exec("ROLLBACK") }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            try? blocker.db.exec("ROLLBACK")
+        }
+
+        await mgrB.takeOver(sessionId: session.id)
+
+        #expect(mgrB.tracksOwnedLeaseForTest(sessionId: session.id),
+                "takeover must claim local ownership after a transient busy lock clears")
+        #expect(try storeA.loadLease(sessionId: session.id)?.ownerInstance == "B")
+    }
+
+    @Test("takeover releases the seized lease when the tab closes while waiting")
+    func takeOverReleasesLeaseWhenSessionClosesWhileWaiting() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("takeover-close-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        let storeB = try ACPSessionStore(path: url.path)
+        let mgrB = tempManager(instanceId: "B", store: storeB)
+        _ = mgrB.placeholderSession(id: session.id)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        defer { try? blocker.db.exec("ROLLBACK") }
+
+        let takeover = Task { @MainActor in
+            await mgrB.takeOver(sessionId: session.id)
+        }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        mgrB.closeSession(id: session.id)
+
+        try blocker.db.exec("ROLLBACK")
+        #expect(await takeover.value == false)
+        #expect(!mgrB.tracksOwnedLeaseForTest(sessionId: session.id))
+        #expect(try storeA.loadLease(sessionId: session.id) == nil)
+    }
+
+    @Test("busy claim after takeover does not trust stale local ownership")
+    func busyClaimAfterTakeoverFailsClosed() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("claim-busy-stale-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        let now = Int64(Date().timeIntervalSince1970)
+        try storeA.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: now)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        defer { try? blocker.db.exec("ROLLBACK") }
+
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == false,
+                "busy claim must not return true solely from stale _ownedLeases")
+        #expect(!mgrA.tracksOwnedLeaseForTest(sessionId: session.id))
     }
 
     @Test("heartbeat re-asserts ownership when the lease row went missing")
@@ -219,6 +379,30 @@ import Foundation
                 "former owner must not write queue when another live instance owns the store lease")
     }
 
+    @Test("former owner is not a writer when the lease cannot be read")
+    func unreadableLeaseFailsWriterGateClosed() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("handoff-unreadable-\(UUID()).sqlite")
+        let storeA = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgrA = tempManager(instanceId: "A", store: storeA)
+        let session = mgrA.createSession(agentId: "claude")
+        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+
+        let now = Int64(Date().timeIntervalSince1970)
+        try storeA.seizeLease(sessionId: session.id, instanceId: "B",
+                              pid: Int64(getpid()), now: now)
+
+        try storeA.db.exec("DROP TABLE session_leases")
+
+        do {
+            _ = try storeA.loadLease(sessionId: session.id)
+            Issue.record("precondition failed: missing lease table should make the lease read fail")
+        } catch {
+            #expect(mgrA.isWriter(for: session.id) == false,
+                    "writer gate must fail closed when the store lease cannot be read")
+        }
+    }
+
     // MARK: - P2: Mirror poll teardown on eviction
 
     @Test("endMirroring is idempotent and evictIfIdle cancels the mirror poll")
@@ -334,7 +518,7 @@ import Foundation
     }
 
     @Test("shutdownBackgroundTasks cancels writer-watch tokens")
-    func shutdownCancelsWriterWatch() throws {
+    func shutdownCancelsWriterWatch() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ww-shutdown-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
@@ -348,7 +532,10 @@ import Foundation
         let mgrB = tempManager(instanceId: "B", store: storeB)
         _ = mgrB.placeholderSession(id: session.id)
         // B takes over — it calls startWriterWatch on B's manager.
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
+        try await waitUntil {
+            mgrB.writerWatchActiveForTest(sessionId: session.id)
+        }
         #expect(mgrB.writerWatchActiveForTest(sessionId: session.id) == true,
                 "takeOver must activate the writer-watch subscription")
 
@@ -397,7 +584,7 @@ import Foundation
     // MARK: - Fix 2 (P1): takeOver refreshes remoteSessionId from store
 
     @Test("takeOver refreshes remoteSessionId from store when cached value is nil")
-    func takeOverRefreshesRemoteSessionId() throws {
+    func takeOverRefreshesRemoteSessionId() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("takeover-remote-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
@@ -425,9 +612,11 @@ import Foundation
         mirrorSession!.remoteSessionId = nil   // simulate stale mirror
 
         // B takes over — must refresh from the store before spawning attach.
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
 
-        // The synchronous refresh inside takeOver must have restored the stored value.
+        try await waitUntil {
+            mgrB.sessions[session.id]?.remoteSessionId == remoteId
+        }
         #expect(mgrB.sessions[session.id]?.remoteSessionId == remoteId,
                 "takeOver must refresh remoteSessionId from the store so attach uses session/load")
     }
@@ -789,7 +978,7 @@ import Foundation
     // MARK: - Fix 2: takeOver refreshes queue from store
 
     @Test("takeOver restores queue from store into the taking-over session")
-    func takeOverRestoresQueueFromStore() throws {
+    func takeOverRestoresQueueFromStore() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("takeover-queue-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
@@ -811,12 +1000,12 @@ import Foundation
         #expect(mirrorSession!.queue.isEmpty,
                 "precondition: mirror placeholder queue is empty before takeOver")
 
-        // B takes over — must refresh the queue from the store synchronously.
-        mgrB.takeOver(sessionId: session.id)
+        // B takes over — must refresh the queue from the store before attach resumes.
+        await mgrB.takeOver(sessionId: session.id)
 
-        // The synchronous queue refresh inside takeOver must have restored
-        // the persisted queue so the taking-over instance starts from the
-        // current state (not the mirror's stale/empty cached queue).
+        try await waitUntil {
+            mgrB.sessions[session.id]?.queue.count == 1
+        }
         #expect(mgrB.sessions[session.id]?.queue.count == 1,
                 "takeOver must refresh queue from the store before spawning attach")
     }
@@ -992,6 +1181,21 @@ import Foundation
 }
 
 // MARK: - Helpers
+
+private func waitUntil(
+    timeoutNanos: UInt64 = 500_000_000,
+    _ predicate: () throws -> Bool
+) async throws {
+    let start = DispatchTime.now().uptimeNanoseconds
+    while true {
+        if try predicate() { return }
+        if DispatchTime.now().uptimeNanoseconds - start >= timeoutNanos {
+            Issue.record("Timed out waiting for condition")
+            return
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+    }
+}
 
 /// Simple async gate used by lease tests to suspend an in-flight `attach`
 /// at the setupEvaluator await so we can inspect and manipulate state while

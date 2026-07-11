@@ -85,15 +85,15 @@ final class RemoteSessionGateway {
                 content: content
             )
         case .takeOver(let id):
-            provider.takeOver(for: id)
-            // Takeover seizes the writer lease synchronously but mostly mutates
+            let tookOver = await provider.takeOver(for: id)
+            // Takeover seizes the writer lease before returning but mostly mutates
             // lease/agent state, not the transcript — so the objectWillChange
             // delta that normally carries `canDrive` may never fire on an idle
             // session. Push a snapshot now so the client learns canDrive=true
             // immediately and the composer unlocks (otherwise the take-over
             // button stays up and sendPrompt stays blocked until some unrelated
             // transcript mutation happens to occur).
-            if let session = provider.session(for: id) {
+            if tookOver, let session = provider.session(for: id) {
                 sendSnapshot(id: id, session: session)
             }
         case .sendPrompt(let id, let text, let attachments):

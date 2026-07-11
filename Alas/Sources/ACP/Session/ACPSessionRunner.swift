@@ -154,7 +154,10 @@ final class ACPSessionRunner {
             session: session,
             log: ACPPermissionDecisionLog(store: store, canWrite: {
                 guard let id = _ownerInstanceId else { return true }
-                return (try? _store.loadLease(sessionId: _sessionId))?.ownerInstance == id
+                return Self.leaseReadAllowsWrite(
+                    store: _store,
+                    sessionId: _sessionId,
+                    ownerInstanceId: id)
             })
         )
     }
@@ -1579,7 +1582,22 @@ extension ACPSessionRunner {
     /// without a lease), gating is disabled and writes always proceed.
     private func holdsLeaseForWrite() -> Bool {
         guard let ownerInstanceId else { return true }
-        return (try? store.loadLease(sessionId: sessionId))?.ownerInstance == ownerInstanceId
+        return Self.leaseReadAllowsWrite(
+            store: store,
+            sessionId: sessionId,
+            ownerInstanceId: ownerInstanceId)
+    }
+
+    private static func leaseReadAllowsWrite(
+        store: ACPSessionStore,
+        sessionId: String,
+        ownerInstanceId: String
+    ) -> Bool {
+        do {
+            return try store.loadLease(sessionId: sessionId)?.ownerInstance == ownerInstanceId
+        } catch {
+            return false
+        }
     }
 
     private func shouldBatchStreamingPersist(

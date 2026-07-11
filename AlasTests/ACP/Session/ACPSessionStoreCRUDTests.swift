@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import Alas
 
@@ -89,6 +90,42 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.currentModel == "opus")
     }
 
+    @Test("session upsert does not unarchive archived rows")
+    func sessionUpsertDoesNotUnarchiveArchivedRows() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Archived",
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+        try store.setArchived(id: "local-1", archived: true)
+
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Stale retry",
+            currentModel: "opus",
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 4,
+            lastOpenedAt: 5,
+            archived: false
+        ))
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.archived)
+        #expect(row.title == "Stale retry")
+        #expect(row.currentModel == "opus")
+    }
+
     @Test("metadata-only upsert can preserve stored title")
     func sessionMetadataUpsertPreservesStoredTitleWhenRequested() throws {
         let store = try tmp()
@@ -154,6 +191,53 @@ struct ACPSessionStoreCRUDTests {
         let row = try #require(try store.loadSession(id: "local-1"))
         #expect(!renamed)
         #expect(row.title == "Archived")
+        #expect(row.titleSource == .placeholder)
+    }
+
+    @Test("rename session busy failure does not retry after returning")
+    func renameSessionBusyFailureDoesNotRetryAfterReturning() async throws {
+        let url = tmpURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try ACPSessionStore(
+            path: url.path,
+            busyTimeoutMilliseconds: 0,
+            backgroundBusyRetryMilliseconds: 1_000
+        )
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Original",
+            titleSource: .placeholder,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        let writer = try SQLiteDatabase(path: url.path)
+        try writer.exec("BEGIN IMMEDIATE")
+        do {
+            _ = try store.renameSession(
+                id: "local-1",
+                title: "Remote Title",
+                titleSource: .manual,
+                updatedAt: 4
+            )
+            Issue.record("Expected the blocked rename to hit SQLITE_BUSY")
+        } catch SQLiteError.stepFailed(let code, _, _) {
+            #expect(code == SQLITE_BUSY)
+        } catch {
+            Issue.record("Expected SQLITE_BUSY, got \(error)")
+        }
+
+        try writer.exec("ROLLBACK")
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.title == "Original")
         #expect(row.titleSource == .placeholder)
     }
 

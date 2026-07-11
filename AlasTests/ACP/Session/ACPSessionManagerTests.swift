@@ -122,6 +122,86 @@ struct ACPSessionManagerTests {
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
+    @Test("termination flush persists draft after a failed debounce write")
+    func terminationFlushPersistsDraftAfterFailedDebounceWrite() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-terminate-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let draft = ACPComposerDraft(segments: [.text("survive termination")])
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        mgr.persistComposerDraft(draft, for: session)
+        mgr.flushPendingDraftWrites()
+        #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
+
+        try blocker.db.exec("ROLLBACK")
+        mgr.flushPendingDraftWritesForTermination()
+        #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
+    }
+
+    @Test("termination flush persists failed draft after session eviction")
+    func terminationFlushPersistsFailedDraftAfterSessionEviction() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-evicted-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let draft = ACPComposerDraft(segments: [.text("survive eviction")])
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        mgr.persistComposerDraft(draft, for: session)
+        mgr.flushPendingDraftWrites()
+        mgr.closeSession(id: session.id)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
+
+        try blocker.db.exec("ROLLBACK")
+        mgr.flushPendingDraftWritesForTermination()
+        #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
+    }
+
+    @Test("termination flush persists submitted recovery after a busy suspend write")
+    func terminationFlushPersistsSubmittedRecoveryAfterBusySuspendWrite() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-submit-terminate-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("submitted while locked")])
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        mgr.persistComposerDraft(submitted, for: session)
+        _ = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        #expect(session.composerDraft == .empty)
+
+        try blocker.db.exec("ROLLBACK")
+        mgr.flushPendingDraftWritesForTermination()
+        let stored = try #require(try store.loadComposerDraftRecord(sessionId: session.id))
+        #expect(stored.draft == submitted)
+        #expect(stored.submittedRecovery)
+    }
+
+    @Test("regular flush persists submitted recovery after a busy suspend write")
+    func regularFlushPersistsSubmittedRecoveryAfterBusySuspendWrite() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-submit-dispose-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("submitted before dispose")])
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        mgr.persistComposerDraft(submitted, for: session)
+        _ = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+
+        try blocker.db.exec("ROLLBACK")
+        mgr.flushPendingDraftWrites()
+        let stored = try #require(try store.loadComposerDraftRecord(sessionId: session.id))
+        #expect(stored.draft == submitted)
+        #expect(stored.submittedRecovery)
+    }
+
     @Test("persisting composer drafts does not publish the whole session")
     func persistingComposerDraftDoesNotPublishWholeSession() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-observation-\(UUID()).sqlite")
@@ -216,6 +296,49 @@ struct ACPSessionManagerTests {
         #expect(session.composerDraft == newer)
         mgr.flushPendingDraftWrites()
         #expect(try store.loadComposerDraft(sessionId: session.id) == newer)
+    }
+
+    @Test("termination flush retries failed suspended draft purge")
+    func terminationFlushRetriesFailedSuspendedDraftPurge() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-purge-terminate-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let submitted = ACPComposerDraft(segments: [.text("sent")])
+        mgr.persistComposerDraft(submitted, for: session)
+        let suspendedRevision = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        mgr.purgeSuspendedComposerDraft(for: session, suspendedRevision: suspendedRevision)
+
+        try blocker.db.exec("ROLLBACK")
+        mgr.flushPendingDraftWritesForTermination()
+        #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
+    }
+
+    @Test("termination flush retries failed explicit draft clear after eviction")
+    func terminationFlushRetriesFailedExplicitDraftClearAfterEviction() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mgr-draft-clear-terminate-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path, busyTimeoutMilliseconds: 0)
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let session = mgr.createSession(agentId: "claude")
+        let draft = ACPComposerDraft(segments: [.text("clear me")])
+        mgr.persistComposerDraft(draft, for: session)
+        mgr.flushPendingDraftWrites()
+        #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
+
+        let blocker = try ACPSessionStore(path: url.path)
+        try blocker.db.exec("BEGIN IMMEDIATE")
+        mgr.clearComposerDraft(for: session)
+        #expect(session.composerDraft == .empty)
+        mgr.closeSession(id: session.id)
+        #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
+
+        try blocker.db.exec("ROLLBACK")
+        mgr.flushPendingDraftWritesForTermination()
+        #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
     @Test("reinstateSuspendedComposerDraft restores memory only when revision matches")
