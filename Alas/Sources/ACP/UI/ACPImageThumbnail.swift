@@ -20,7 +20,7 @@ struct ACPImageThumbnail: View {
 
     @ViewBuilder private var thumbnail: some View {
         ACPCachedThumbnail(
-            cacheKey: "file:\(fileURL.standardizedFileURL.path)",
+            cacheKey: ACPThumbnailImageCache.fileCacheKey(for: fileURL),
             loadImage: { NSImage(contentsOf: fileURL) }
         ) { image in
             Image(nsImage: image)

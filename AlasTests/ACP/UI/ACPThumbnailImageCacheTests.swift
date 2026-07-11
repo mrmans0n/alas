@@ -23,6 +23,27 @@ struct ACPThumbnailImageCacheTests {
         #expect(second === image)
         #expect(counter.value == 1)
     }
+
+    @Test("file cache key changes when file contents are replaced")
+    func fileCacheKeyChangesWhenFileContentsAreReplaced() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fileURL = directory.appendingPathComponent("screenshot.png")
+        try Data([1]).write(to: fileURL)
+        let firstKey = ACPThumbnailImageCache.fileCacheKey(for: fileURL)
+
+        try Data([1, 2, 3]).write(to: fileURL)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSince1970: 2_000_000_000)],
+            ofItemAtPath: fileURL.path
+        )
+        let secondKey = ACPThumbnailImageCache.fileCacheKey(for: fileURL)
+
+        #expect(secondKey != firstKey)
+    }
 }
 
 private final class LoadCounter: @unchecked Sendable {

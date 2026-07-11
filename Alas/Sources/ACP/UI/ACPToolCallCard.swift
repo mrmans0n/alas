@@ -334,7 +334,7 @@ extension ACPMessage.ToolCallAsset {
             return "data-uri:\(uri.hashValue)"
         }
         if let uri = nonEmpty(uri), let url = Self.trustedLocalURL(from: uri, trustedRoot: trustedRoot) {
-            return "file:\(url.standardizedFileURL.path)"
+            return ACPThumbnailImageCache.fileCacheKey(for: url)
         }
         return "asset:\(hashValue)"
     }

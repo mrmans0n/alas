@@ -19,6 +19,14 @@ final class ACPThumbnailImageCache: @unchecked Sendable {
         cache.setObject(image, forKey: key as NSString)
     }
 
+    static func fileCacheKey(for fileURL: URL) -> String {
+        let standardizedURL = fileURL.standardizedFileURL
+        let attributes = try? FileManager.default.attributesOfItem(atPath: standardizedURL.path)
+        let size = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        let modified = (attributes?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        return "file:\(standardizedURL.path):\(size):\(modified)"
+    }
+
     func image(
         for key: String,
         load: @escaping @Sendable () -> NSImage?
