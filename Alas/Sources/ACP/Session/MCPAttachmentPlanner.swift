@@ -46,9 +46,16 @@ struct MCPAttachmentSummary: Equatable {
     let statuses: [MCPAttachmentServerStatus]
     let configurationFingerprint: String
 
+    init(statuses: [MCPAttachmentServerStatus], configurationFingerprint: String) {
+        self.statuses = statuses
+        self.configurationFingerprint = configurationFingerprint
+    }
+
     init(plan: MCPAttachmentPlan) {
-        statuses = plan.statuses
-        configurationFingerprint = plan.configurationFingerprint
+        self.init(
+            statuses: plan.statuses,
+            configurationFingerprint: plan.configurationFingerprint
+        )
     }
 }
 
