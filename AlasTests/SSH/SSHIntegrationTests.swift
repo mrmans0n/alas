@@ -51,4 +51,27 @@ struct SSHIntegrationTests {
         #expect(capabilities?.os == .macos)
         #expect(capabilities?.gitVersion != nil)
     }
+
+    @Test func remoteFileAccessRoundTripAndConflictGate() async throws {
+        try #require(enabled, "set ALAS_SSH_INTEGRATION=1 to run")
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-ssh-file-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("run.sh")
+        try Data("one\n".utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+
+        let initial = try await RemoteFileAccess.read(host: "localhost", path: file.path)
+        guard case let .file(data, mtime) = initial else { Issue.record("expected readable file"); return }
+        #expect(String(data: data, encoding: .utf8) == "one\n")
+        #expect(RemoteSaveGate.decision(originalMtime: mtime, remoteMtime: mtime) == .proceed)
+        _ = try await RemoteFileAccess.write(host: "localhost", path: file.path, content: "two\n")
+        let updated = try await RemoteFileAccess.read(host: "localhost", path: file.path)
+        guard case let .file(updatedData, updatedMtime) = updated else { Issue.record("expected updated file"); return }
+        #expect(String(data: updatedData, encoding: .utf8) == "two\n")
+        #expect(RemoteSaveGate.decision(originalMtime: mtime, remoteMtime: updatedMtime) == .conflict)
+        let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
+        #expect(mode?.intValue == 0o755)
+    }
 }
