@@ -78,34 +78,58 @@ struct MergeResultPane: NSViewRepresentable {
             hunkPairs: hunkPairs.map { "\($0.local)\u{0}\($0.remote)" },
             wordDiffMode: wordDiffMode,
             endsWithNewline: endsWithNewline,
+            fileExtension: fileExtension,
             fontFamily: codeFontFamily,
             fontSize: codeFontSize,
+            theme: theme,
             fg: fg,
             fgDim: fgDim
         )
         if context.coordinator.lastKey != key, let textStorage = textView.textStorage {
-            let newAttr = buildAttributedString(theme: theme)
-            // When only the attributes changed — the typing case
-            // where model.applyEditedFullText echoes the buffer back
-            // verbatim — refresh attributes in place instead of
-            // replacing the storage. setAttributedString resets the
-            // cursor and clobbers undo grouping, both noticeable on
-            // every keystroke. Falls through to setAttributedString
-            // only when the actual text differs (accept/reject taps,
-            // file switches).
-            if textStorage.string == newAttr.string {
-                let fullRange = NSRange(location: 0, length: textStorage.length)
-                textStorage.beginEditing()
-                textStorage.setAttributes([:], range: fullRange)
-                newAttr.enumerateAttributes(in: fullRange) { attrs, range, _ in
-                    textStorage.setAttributes(attrs, range: range)
-                }
-                textStorage.endEditing()
+            let renderedText = MergeResultPaneRenderPlan.renderedText(
+                rows: rows,
+                endsWithNewline: endsWithNewline
+            )
+            // When the model echoes the user's buffer back verbatim,
+            // keep typing synchronous work to text comparison only.
+            // Syntax + overlay attributes are recomputed after the
+            // highlight debounce below, preserving cursor/undo state.
+            if textStorage.string == renderedText.text {
+                context.coordinator.scheduleHighlight(
+                    text: renderedText.text,
+                    key: key,
+                    theme: theme,
+                    fileExtension: fileExtension,
+                    fontFamily: codeFontFamily,
+                    fontSize: codeFontSize,
+                    rows: rows,
+                    conflictRanges: conflictRanges,
+                    hunkPairs: hunkPairs,
+                    wordDiffMode: wordDiffMode,
+                    endsWithNewline: endsWithNewline,
+                    debounce: true
+                )
             } else {
+                let newAttr = buildAttributedString(theme: theme, syntaxSpans: [])
                 let oldSelection = textView.selectedRange()
-                textStorage.setAttributedString(newAttr)
+                context.coordinator.replaceTextStorage(with: newAttr)
                 let clampedLocation = min(oldSelection.location, textStorage.length)
                 textView.setSelectedRange(NSRange(location: clampedLocation, length: 0))
+                context.coordinator.resetHighlightSession()
+                context.coordinator.scheduleHighlight(
+                    text: newAttr.string,
+                    key: key,
+                    theme: theme,
+                    fileExtension: fileExtension,
+                    fontFamily: codeFontFamily,
+                    fontSize: codeFontSize,
+                    rows: rows,
+                    conflictRanges: conflictRanges,
+                    hunkPairs: hunkPairs,
+                    wordDiffMode: wordDiffMode,
+                    endsWithNewline: endsWithNewline,
+                    debounce: false
+                )
             }
             context.coordinator.lastKey = key
         }
@@ -123,8 +147,10 @@ struct MergeResultPane: NSViewRepresentable {
             let hunkPairs: [String]
             let wordDiffMode: MergeWordDiff.Mode
             let endsWithNewline: Bool
+            let fileExtension: String
             let fontFamily: String
             let fontSize: CGFloat
+            let theme: Theme
             let fg: NSColor
             let fgDim: NSColor
         }
@@ -134,6 +160,12 @@ struct MergeResultPane: NSViewRepresentable {
         var lastKey: CacheKey?
         private var coordinator: MergeScrollCoordinator?
         private var token: NSObjectProtocol?
+        private var pendingTextEdits: [EditorTextEdit] = []
+        private var highlightTask: Task<Void, Never>?
+        private var highlightGeneration = 0
+        private let highlightSession = TreeSitterHighlighter.Session()
+        private var isReplacingTextStorage = false
+        private var needsHighlightSessionReset = false
 
         func observeScroll(_ scroll: NSScrollView, into coord: MergeScrollCoordinator) {
             self.coordinator = coord
@@ -166,8 +198,102 @@ struct MergeResultPane: NSViewRepresentable {
             onEditFullText?(tv.string)
         }
 
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            if !isReplacingTextStorage {
+                pendingTextEdits.append(EditorTextEdit(
+                    location: affectedCharRange.location,
+                    oldLength: affectedCharRange.length,
+                    replacementText: replacementString ?? ""
+                ))
+            }
+            return true
+        }
+
+        func replaceTextStorage(with attributedString: NSAttributedString) {
+            isReplacingTextStorage = true
+            textView?.textStorage?.setAttributedString(attributedString)
+            isReplacingTextStorage = false
+        }
+
+        func resetHighlightSession() {
+            highlightTask?.cancel()
+            pendingTextEdits.removeAll()
+            highlightGeneration += 1
+            needsHighlightSessionReset = true
+        }
+
+        func scheduleHighlight(
+            text: String,
+            key: CacheKey,
+            theme: Theme,
+            fileExtension: String,
+            fontFamily: String,
+            fontSize: CGFloat,
+            rows: [MergeRegionVisualLayout.VisualRow],
+            conflictRanges: [MergeRegionVisualLayout.VisualConflictRange],
+            hunkPairs: [(local: String, remote: String)],
+            wordDiffMode: MergeWordDiff.Mode,
+            endsWithNewline: Bool,
+            debounce: Bool
+        ) {
+            highlightTask?.cancel()
+            highlightGeneration += 1
+            let generation = highlightGeneration
+            let session = highlightSession
+            let edits = pendingTextEdits
+            let editCount = edits.count
+            let resetSession = needsHighlightSessionReset
+            highlightTask = Task(priority: .userInitiated) { [weak self] in
+                if debounce {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                }
+                guard !Task.isCancelled else { return }
+                if resetSession {
+                    await session.reset()
+                    await MainActor.run {
+                        guard let self, self.highlightGeneration == generation else { return }
+                        self.needsHighlightSessionReset = false
+                    }
+                }
+                let spans = await session.highlight(source: text, fileExtension: fileExtension, edits: edits)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    guard let self,
+                          self.highlightGeneration == generation,
+                          self.lastKey == key,
+                          let textStorage = self.textView?.textStorage,
+                          textStorage.string == text else { return }
+                    let highlighted = MergeResultPane.buildAttributedString(
+                        rows: rows,
+                        conflictRanges: conflictRanges,
+                        hunkPairs: hunkPairs,
+                        wordDiffMode: wordDiffMode,
+                        codeFontFamily: fontFamily,
+                        codeFontSize: fontSize,
+                        endsWithNewline: endsWithNewline,
+                        theme: theme,
+                        syntaxSpans: spans
+                    )
+                    let fullRange = NSRange(location: 0, length: textStorage.length)
+                    textStorage.beginEditing()
+                    highlighted.enumerateAttributes(in: fullRange) { attrs, range, _ in
+                        textStorage.setAttributes(attrs, range: range)
+                    }
+                    textStorage.endEditing()
+                    if editCount > 0 {
+                        self.pendingTextEdits.removeFirst(min(editCount, self.pendingTextEdits.count))
+                    }
+                }
+            }
+        }
+
         deinit {
             if let token { NotificationCenter.default.removeObserver(token) }
+            highlightTask?.cancel()
         }
     }
 
@@ -176,89 +302,147 @@ struct MergeResultPane: NSViewRepresentable {
         return ceil(font.ascender + abs(font.descender) + font.leading)
     }
 
-    private func buildAttributedString(theme: Theme) -> NSAttributedString {
+    private func buildAttributedString(theme: Theme, syntaxSpans: [HighlightSpan]) -> NSAttributedString {
+        Self.buildAttributedString(
+            rows: rows,
+            conflictRanges: conflictRanges,
+            hunkPairs: hunkPairs,
+            wordDiffMode: wordDiffMode,
+            codeFontFamily: codeFontFamily,
+            codeFontSize: codeFontSize,
+            endsWithNewline: endsWithNewline,
+            theme: theme,
+            syntaxSpans: syntaxSpans
+        )
+    }
+
+    fileprivate static func buildAttributedString(
+        rows: [MergeRegionVisualLayout.VisualRow],
+        conflictRanges: [MergeRegionVisualLayout.VisualConflictRange],
+        hunkPairs: [(local: String, remote: String)],
+        wordDiffMode: MergeWordDiff.Mode,
+        codeFontFamily: String,
+        codeFontSize: CGFloat,
+        endsWithNewline: Bool,
+        theme: Theme,
+        syntaxSpans: [HighlightSpan]
+    ) -> NSMutableAttributedString {
         let localTint = NSColor.systemGreen.withAlphaComponent(0.14)
         let remoteTint = NSColor.systemBlue.withAlphaComponent(0.14)
         let wordLocalTint = NSColor.systemGreen.withAlphaComponent(0.35)
         let wordRemoteTint = NSColor.systemBlue.withAlphaComponent(0.35)
-        // Build the plain text first, tracking per-row UTF-16 ranges
-        // so we can apply tints and word-diff overlays after
-        // syntax highlighting paints the base layer.
-        var plain = ""
-        var rowRanges: [NSRange] = []
-        for (i, row) in rows.enumerated() {
-            let isLastRow = i == rows.count - 1
-            let suffix = (isLastRow && !endsWithNewline) ? "" : "\n"
-            let start = (plain as NSString).length
-            plain += row.content + suffix
-            let length = (plain as NSString).length - start
-            rowRanges.append(NSRange(location: start, length: length))
-        }
-        // Syntax-highlighted base — same path used by the read-only
-        // merge editor, so the RESULT pane no longer drops back to
-        // monochrome plain text on code conflicts.
-        let result = MergeConflictTextStorage.highlightedAttributedString(
-            text: plain,
-            fileExtension: fileExtension,
-            fontFamily: codeFontFamily,
-            fontSize: codeFontSize,
-            theme: theme
+        let renderedText = MergeResultPaneRenderPlan.renderedText(rows: rows, endsWithNewline: endsWithNewline)
+        let font = CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize)
+        let editorTheme = EditorTheme(theme: theme)
+        let result = NSMutableAttributedString(
+            string: renderedText.text,
+            attributes: [
+                .font: font,
+                .foregroundColor: editorTheme.defaultFG,
+                .paragraphStyle: CenterTypography.paragraphStyle()
+            ]
         )
-        // Map row index to (isLocal, ordinal, withinIndex) for tints
-        // and word-diff. BASE rows are intentionally left out so the
-        // BASE styling branch below applies dim+italic.
-        var rowKind: [Int: (isLocal: Bool, ordinal: Int, withinIndex: Int)] = [:]
-        for range in conflictRanges {
-            let local = hunkPairs[range.conflictOrdinal].local
-            let localLineCount = local.isEmpty
-                ? 0
-                : (local.components(separatedBy: "\n").last == ""
-                    ? local.components(separatedBy: "\n").count - 1
-                    : local.components(separatedBy: "\n").count)
-            let baseLineCount = range.baseRows.count
-            for (offset, row) in range.resultRows.enumerated() {
-                if offset < localLineCount {
-                    rowKind[row] = (true, range.conflictOrdinal, offset)
-                } else if offset < localLineCount + baseLineCount {
-                    continue
-                } else {
-                    rowKind[row] = (false, range.conflictOrdinal, offset - localLineCount - baseLineCount)
-                }
-            }
+        for span in syntaxSpans {
+            guard NSMaxRange(span.range) <= result.length else { continue }
+            result.addAttributes(editorTheme.attributes(for: span.capture), range: span.range)
         }
+        let rowKinds = MergeResultPaneRenderPlan.rowKinds(conflictRanges: conflictRanges)
         let italicFont = CenterTypography
             .resolveCodeFont(family: codeFontFamily, size: codeFontSize)
             .italicVariant()
         for (i, row) in rows.enumerated() {
-            let range = rowRanges[i]
-            if let kind = rowKind[i] {
-                let tint = kind.isLocal ? localTint : remoteTint
+            let range = renderedText.rowRanges[i]
+            switch rowKinds[i] {
+            case .local(let ordinal, let withinIndex), .remote(let ordinal, let withinIndex):
+                let isLocal: Bool
+                if case .local = rowKinds[i] {
+                    isLocal = true
+                } else {
+                    isLocal = false
+                }
+                let tint = isLocal ? localTint : remoteTint
                 result.addAttribute(.backgroundColor, value: tint, range: range)
-                if wordDiffMode != .off {
-                    let pair = hunkPairs[kind.ordinal]
-                    let pairLines = (kind.isLocal ? pair.local : pair.remote).components(separatedBy: "\n")
-                    let otherLines = (kind.isLocal ? pair.remote : pair.local).components(separatedBy: "\n")
-                    let mine = kind.withinIndex < pairLines.count ? pairLines[kind.withinIndex] : ""
-                    let other = kind.withinIndex < otherLines.count ? otherLines[kind.withinIndex] : ""
-                    let diff = MergeWordDiff.diff(local: kind.isLocal ? mine : other,
-                                                  remote: kind.isLocal ? other : mine,
+                if wordDiffMode != .off, ordinal < hunkPairs.count {
+                    let pair = hunkPairs[ordinal]
+                    let pairLines = (isLocal ? pair.local : pair.remote).components(separatedBy: "\n")
+                    let otherLines = (isLocal ? pair.remote : pair.local).components(separatedBy: "\n")
+                    let mine = withinIndex < pairLines.count ? pairLines[withinIndex] : ""
+                    let other = withinIndex < otherLines.count ? otherLines[withinIndex] : ""
+                    let diff = MergeWordDiff.diff(local: isLocal ? mine : other,
+                                                  remote: isLocal ? other : mine,
                                                   mode: wordDiffMode)
-                    let changed = kind.isLocal ? diff.localChanged : diff.remoteChanged
-                    let wordTint = kind.isLocal ? wordLocalTint : wordRemoteTint
+                    let changed = isLocal ? diff.localChanged : diff.remoteChanged
+                    let wordTint = isLocal ? wordLocalTint : wordRemoteTint
                     let rowContentLen = (row.content as NSString).length
                     for r in changed where NSMaxRange(r) <= rowContentLen {
                         let abs = NSRange(location: range.location + r.location, length: r.length)
                         result.addAttribute(.backgroundColor, value: wordTint, range: abs)
                     }
                 }
-            } else if conflictRanges.first(where: { $0.baseRows.contains(i) }) != nil {
+            case .base:
                 let baseTint = NSColor(theme.color("fg-dim")).withAlphaComponent(0.10)
                 result.addAttribute(.backgroundColor, value: baseTint, range: range)
                 result.addAttribute(.foregroundColor, value: NSColor(theme.color("fg-dim")), range: range)
                 result.addAttribute(.font, value: italicFont, range: range)
+            case nil:
+                break
             }
         }
         return result
+    }
+}
+
+enum MergeResultPaneRenderPlan {
+    enum RowKind: Equatable {
+        case local(ordinal: Int, withinIndex: Int)
+        case base
+        case remote(ordinal: Int, withinIndex: Int)
+    }
+
+    struct RenderedText: Equatable {
+        let text: String
+        let rowRanges: [NSRange]
+    }
+
+    static func renderedText(
+        rows: [MergeRegionVisualLayout.VisualRow],
+        endsWithNewline: Bool
+    ) -> RenderedText {
+        var text = ""
+        var rowRanges: [NSRange] = []
+        for (i, row) in rows.enumerated() {
+            let isLastRow = i == rows.count - 1
+            let suffix = (isLastRow && !endsWithNewline) ? "" : "\n"
+            let start = (text as NSString).length
+            text += row.content + suffix
+            let length = (text as NSString).length - start
+            rowRanges.append(NSRange(location: start, length: length))
+        }
+        return RenderedText(text: text, rowRanges: rowRanges)
+    }
+
+    static func rowKinds(
+        conflictRanges: [MergeRegionVisualLayout.VisualConflictRange]
+    ) -> [Int: RowKind] {
+        var kinds: [Int: RowKind] = [:]
+        for range in conflictRanges {
+            for row in range.resultLocalRows {
+                kinds[row] = .local(
+                    ordinal: range.conflictOrdinal,
+                    withinIndex: row - range.resultLocalRows.lowerBound
+                )
+            }
+            for row in range.baseRows {
+                kinds[row] = .base
+            }
+            for row in range.resultRemoteRows {
+                kinds[row] = .remote(
+                    ordinal: range.conflictOrdinal,
+                    withinIndex: row - range.resultRemoteRows.lowerBound
+                )
+            }
+        }
+        return kinds
     }
 }
 
