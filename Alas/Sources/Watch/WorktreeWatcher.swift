@@ -2,10 +2,21 @@ import Foundation
 import CoreServices
 
 final class WorktreeWatcher {
+    private final class StreamContext {
+        weak var watcher: WorktreeWatcher?
+
+        init(watcher: WorktreeWatcher) {
+            self.watcher = watcher
+        }
+    }
+
     var onChange: (() -> Void)?
     private let path: URL
     private var stream: FSEventStreamRef?
     private var gitDirStream: FSEventStreamRef?
+    private var isRunning = false
+    private let eventQueueKey = DispatchSpecificKey<Void>()
+    private let eventQueue = DispatchQueue(label: "io.nlopez.alas.worktree-watcher", qos: .utility)
     // `maxWait: 2.0` guarantees a refresh fires within 2s of the first event
     // in a burst, even when something (agent, build, LSP) keeps poking faster
     // than the 0.5s trailing window. Without the ceiling the trailing timer
@@ -15,6 +26,7 @@ final class WorktreeWatcher {
 
     init(path: URL) {
         self.path = path
+        self.eventQueue.setSpecific(key: eventQueueKey, value: ())
         self.debouncer.onFire = { [weak self] in
             self?.onChange?()
         }
@@ -22,9 +34,10 @@ final class WorktreeWatcher {
 
     func start() {
         stop()
-        stream = makeStream(paths: [path.path])
+        isRunning = true
+        stream = makeStream(paths: [path.path], includeFileEvents: true)
         if let stream {
-            FSEventStreamSetDispatchQueue(stream, .main)
+            FSEventStreamSetDispatchQueue(stream, eventQueue)
             FSEventStreamStart(stream)
         }
         // Resolve git-dir asynchronously so a slow or hung git invocation
@@ -34,9 +47,9 @@ final class WorktreeWatcher {
             guard let gitDir = await Self.resolveGitDir(at: self.path) else { return }
             await MainActor.run {
                 guard self.stream != nil else { return }  // already stopped
-                self.gitDirStream = self.makeStream(paths: [gitDir.path])
+                self.gitDirStream = self.makeStream(paths: [gitDir.path], includeFileEvents: true)
                 if let s = self.gitDirStream {
-                    FSEventStreamSetDispatchQueue(s, .main)
+                    FSEventStreamSetDispatchQueue(s, self.eventQueue)
                     FSEventStreamStart(s)
                 }
             }
@@ -44,32 +57,49 @@ final class WorktreeWatcher {
     }
 
     func stop() {
+        isRunning = false
         if let stream {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
             self.stream = nil
+            releaseStream(stream)
         }
         if let gitDirStream {
-            FSEventStreamStop(gitDirStream)
-            FSEventStreamInvalidate(gitDirStream)
-            FSEventStreamRelease(gitDirStream)
             self.gitDirStream = nil
+            releaseStream(gitDirStream)
         }
         debouncer.cancel()
     }
 
     deinit { stop() }
 
-    private func makeStream(paths: [String]) -> FSEventStreamRef? {
+    private func releaseStream(_ stream: FSEventStreamRef) {
+        let release = {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        if DispatchQueue.getSpecific(key: eventQueueKey) != nil {
+            release()
+        } else {
+            eventQueue.sync(execute: release)
+        }
+    }
+
+    private func makeStream(paths: [String], includeFileEvents: Bool) -> FSEventStreamRef? {
+        let streamContext = StreamContext(watcher: self)
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil, release: nil, copyDescription: nil
+            info: Unmanaged.passRetained(streamContext).toOpaque(),
+            retain: nil,
+            release: { info in
+                guard let info else { return }
+                Unmanaged<StreamContext>.fromOpaque(info).release()
+            },
+            copyDescription: nil
         )
         let cb: FSEventStreamCallback = { _, ctx, numEvents, eventPaths, _, _ in
             guard let ctx else { return }
-            let watcher = Unmanaged<WorktreeWatcher>.fromOpaque(ctx).takeUnretainedValue()
+            let streamContext = Unmanaged<StreamContext>.fromOpaque(ctx).takeUnretainedValue()
+            guard let watcher = streamContext.watcher else { return }
 
             // With `kFSEventStreamCreateFlagUseCFTypes` set on the stream,
             // `eventPaths` is a `CFArrayRef` of `CFStringRef`. Bridge to
@@ -80,27 +110,41 @@ final class WorktreeWatcher {
             // change events.
             let cfArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
             guard let paths = cfArray as? [String], paths.count == numEvents else {
-                watcher.debouncer.poke()
+                watcher.pokeDebouncerFromStream()
                 return
             }
 
             if WorktreeWatcher.shouldRefresh(forEventPaths: paths) {
-                watcher.debouncer.poke()
+                watcher.pokeDebouncerFromStream()
             }
         }
-        return FSEventStreamCreate(
+        var flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagNoDefer
+            | kFSEventStreamCreateFlagUseCFTypes
+        )
+        if includeFileEvents {
+            flags |= FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents)
+        }
+        guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault,
             cb,
             &context,
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.5,
-            FSEventStreamCreateFlags(
-                kFSEventStreamCreateFlagFileEvents
-                | kFSEventStreamCreateFlagNoDefer
-                | kFSEventStreamCreateFlagUseCFTypes
-            )
-        )
+            flags
+        ) else {
+            Unmanaged<StreamContext>.fromOpaque(context.info!).release()
+            return nil
+        }
+        return stream
+    }
+
+    private func pokeDebouncerFromStream() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.debouncer.poke()
+        }
     }
 
     /// Returns `true` iff at least one event path represents a change we want
