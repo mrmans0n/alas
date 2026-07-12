@@ -107,32 +107,52 @@ private struct ACPSessionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: isFirstRunConnecting) {
-                ACPToolbar(
-                    session: session,
-                    manager: manager,
-                    agentLookup: { state.agent(id: $0) },
-                    state: state,
-                    worktree: worktree,
-                    planSidebarUserMinimized: session.planSidebarMinimized,
-                    onRestorePlanSidebar: {
-                        session.planSidebarMinimized = false
+        // Keep sidebar visibility tied to the full pane, outside the subtree
+        // whose width changes when the sidebar is inserted or removed.
+        GeometryReader { paneProxy in
+            VStack(spacing: 0) {
+                if ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: isFirstRunConnecting) {
+                    ACPToolbar(
+                        session: session,
+                        manager: manager,
+                        agentLookup: { state.agent(id: $0) },
+                        state: state,
+                        worktree: worktree,
+                        planSidebarUserMinimized: session.planSidebarMinimized,
+                        onRestorePlanSidebar: {
+                            session.planSidebarMinimized = false
+                        }
+                    )
+                    adapterBanner()
+                    contextRestoreBanner()
+                    if isMirror {
+                        mirrorBanner()
                     }
-                )
-                adapterBanner()
-                contextRestoreBanner()
-                if isMirror {
-                    mirrorBanner()
+                    if let err = session.lastError {
+                        errorBanner(err)
+                    }
+                    if case .failed(let msg) = session.hydrationState {
+                        hydrationFailureBanner(message: msg)
+                    }
                 }
-                if let err = session.lastError {
-                    errorBanner(err)
-                }
-                if case .failed(let msg) = session.hydrationState {
-                    hydrationFailureBanner(message: msg)
-                }
+                transcriptAndComposer
             }
-            transcriptAndComposer
+            .frame(width: paneProxy.size.width, height: paneProxy.size.height)
+            .onAppear { restoreOrInitializePlanSidebar(paneWidth: paneProxy.size.width) }
+            .onChange(of: paneProxy.size.width) { _, newWidth in
+                updatePlanSidebar(paneWidth: newWidth)
+            }
+            .onChange(of: session.transcript.latestPlan) { _, _ in
+                if suppressRestoredPlanSidebarPlanChange {
+                    suppressRestoredPlanSidebarPlanChange = false
+                    manager.rememberPlanSidebarVisibility(showPlanSidebar, for: sessionId)
+                    return
+                }
+                updatePlanSidebar(paneWidth: paneProxy.size.width)
+            }
+            .onChange(of: session.planSidebarMinimized) { _, _ in
+                updatePlanSidebar(paneWidth: paneProxy.size.width)
+            }
         }
         .environment(\.acpPlanSidebarVisible, showPlanSidebar)
         .task(id: sessionId) {
@@ -217,44 +237,27 @@ private struct ACPSessionView: View {
     }
 
     private var transcriptAndComposer: some View {
-        GeometryReader { proxy in
-            HStack(spacing: 0) {
-                GeometryReader { chatProxy in
-                    let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
-                        forChatColumnWidth: chatProxy.size.width
-                    )
-                    chatSurface(contentMaxWidth: chatContentMaxWidth)
-                        .frame(width: chatProxy.size.width, height: chatProxy.size.height)
-                        .animation(emptyStateAnimation, value: isNewEmptySession)
-                        .animation(emptyStateAnimation, value: isFirstRunConnecting)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        HStack(spacing: 0) {
+            GeometryReader { chatProxy in
+                let chatContentMaxWidth = ACPChatLayout.contentMaxWidth(
+                    forChatColumnWidth: chatProxy.size.width
+                )
+                chatSurface(contentMaxWidth: chatContentMaxWidth)
+                    .frame(width: chatProxy.size.width, height: chatProxy.size.height)
+                    .animation(emptyStateAnimation, value: isNewEmptySession)
+                    .animation(emptyStateAnimation, value: isFirstRunConnecting)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if showPlanSidebar {
-                    ACPPlanSidebar(
-                        transcript: session.transcript,
-                        onMinimize: { session.planSidebarMinimized = true }
-                    )
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .frame(width: proxy.size.width, height: proxy.size.height)
-            .onAppear { restoreOrInitializePlanSidebar(paneWidth: proxy.size.width) }
-            .onChange(of: proxy.size.width) { _, newWidth in
-                updatePlanSidebar(paneWidth: newWidth)
-            }
-            .onChange(of: session.transcript.latestPlan) { _, _ in
-                if suppressRestoredPlanSidebarPlanChange {
-                    suppressRestoredPlanSidebarPlanChange = false
-                    manager.rememberPlanSidebarVisibility(showPlanSidebar, for: sessionId)
-                    return
-                }
-                updatePlanSidebar(paneWidth: proxy.size.width)
-            }
-            .onChange(of: session.planSidebarMinimized) { _, _ in
-                updatePlanSidebar(paneWidth: proxy.size.width)
+            if showPlanSidebar {
+                ACPPlanSidebar(
+                    transcript: session.transcript,
+                    onMinimize: { session.planSidebarMinimized = true }
+                )
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func chatSurface(contentMaxWidth: CGFloat) -> some View {
