@@ -144,6 +144,7 @@ final class ACPTranscript: ObservableObject {
     /// `visibleHead` directly when advancing the window.
     func setVisibleHead(_ newHead: Int) {
         let clamped = max(0, min(newHead, messages.count))
+        guard clamped != visibleHead else { return }
         guard clamped > visibleHead else {
             visibleHead = clamped
             return

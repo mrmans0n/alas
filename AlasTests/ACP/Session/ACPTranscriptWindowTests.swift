@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import Alas
 
@@ -34,6 +35,25 @@ struct ACPTranscriptWindowTests {
         }
         t.resetWindowToTail()
         #expect(t.visibleHead == 0)
+    }
+
+    @Test("resetWindowToTail does not publish when head is already current")
+    func resetDoesNotPublishWhenUnchanged() {
+        let t = ACPTranscript()
+        for _ in 0..<50 {
+            t.messages.append(.systemNotice(id: UUID(), text: "x"))
+        }
+        t.resetWindowToTail()
+
+        var changeCount = 0
+        let cancellable = t.objectWillChange.sink {
+            changeCount += 1
+        }
+
+        t.resetWindowToTail()
+
+        #expect(changeCount == 0)
+        cancellable.cancel()
     }
 
     @Test("stepHeadBack decrements by tailWindow, clamped at zero")

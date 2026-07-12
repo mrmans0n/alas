@@ -127,6 +127,12 @@ struct ACPMessageListPaginationTests {
         #expect(!ACPMessageList.shouldRunScheduledTailScroll(followsTranscriptTail: false))
     }
 
+    @Test("tail scroll scheduling coalesces pending work")
+    func tailScrollSchedulingCoalescesPendingWork() {
+        #expect(ACPMessageList.shouldScheduleTailScroll(hasPendingTailScroll: false))
+        #expect(!ACPMessageList.shouldScheduleTailScroll(hasPendingTailScroll: true))
+    }
+
     @Test("viewport width changes restore the tail only while following")
     func viewportWidthChangesRestoreTailOnlyWhileFollowing() {
         #expect(ACPMessageList.shouldRestoreTailAfterViewportWidthChange(
