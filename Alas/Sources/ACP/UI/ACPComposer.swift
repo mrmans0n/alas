@@ -170,6 +170,8 @@ struct ACPInputField: NSViewRepresentable {
         private var lastSyncedDraft: ACPComposerDraft
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
+        private var pendingImageFileInsertions = 0
+        private var imageFileInsertionGeneration = 0
         private var pendingRestyleWork: DispatchWorkItem?
         private var pendingRestyleGeneration = 0
         private var pendingRestyleRange: NSRange?
@@ -277,6 +279,9 @@ struct ACPInputField: NSViewRepresentable {
             else { return }
             guard !restoringDraft else { return }
             pendingSubmitID = nil
+            if storage.string.isEmpty {
+                invalidatePendingImageFileInsertions()
+            }
             if let tv = tv as? ACPNSTextView {
                 tv.reconcileSlashPanel()
             }
@@ -308,6 +313,7 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
+            guard pendingImageFileInsertions == 0 else { return }
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
@@ -336,6 +342,26 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
 
+        func beginPendingImageFileInsertion() -> Int {
+            pendingImageFileInsertions += 1
+            return imageFileInsertionGeneration
+        }
+
+        func finishPendingImageFileInsertion(generation: Int) {
+            if generation == imageFileInsertionGeneration {
+                pendingImageFileInsertions = max(0, pendingImageFileInsertions - 1)
+            }
+        }
+
+        func canCompleteImageFileInsertion(generation: Int) -> Bool {
+            generation == imageFileInsertionGeneration
+        }
+
+        private func invalidatePendingImageFileInsertions() {
+            imageFileInsertionGeneration &+= 1
+            pendingImageFileInsertions = 0
+        }
+
         func restoreInitialDraft(into textView: NSTextView) {
             guard !initialDraft.isEmpty else { return }
             restore(initialDraft, into: textView)
@@ -356,6 +382,7 @@ struct ACPInputField: NSViewRepresentable {
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
             }
+            invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
             ACPMarkdownLiveStyler.restyle(storage, typography: typography)
@@ -368,6 +395,7 @@ struct ACPInputField: NSViewRepresentable {
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
             }
+            invalidatePendingImageFileInsertions()
             restoringDraft = true
             textView.string = ""
             textView.needsDisplay = true
@@ -907,13 +935,22 @@ final class ACPNSTextView: NSTextView {
         guard urls.contains(where: { Self.imageFileCandidate($0) != .unsupported }) else { return false }
         let worktreeId = worktreeIdForStaging
         let insertionRange = selectedRange()
-        Task { @MainActor [weak self] in
+        let coordinator = coordinator
+        let generation = coordinator?.beginPendingImageFileInsertion()
+        Task { @MainActor [weak self, weak coordinator] in
+            defer {
+                if let generation {
+                    coordinator?.finishPendingImageFileInsertion(generation: generation)
+                }
+            }
             var nextLocation = insertionRange.location
             var isFirstImage = true
             for url in urls {
                 switch await Self.readImageFile(url) {
                 case .data(let data):
                     guard let self else { return }
+                    if let generation,
+                       coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
                     let beforeLength = self.textStorage?.length ?? 0
                     let replacementRange = self.asyncImageReplacementRange(
                         capturedRange: insertionRange,
@@ -928,6 +965,8 @@ final class ACPNSTextView: NSTextView {
                         isFirstImage = false
                     }
                 case .tooLarge:
+                    if let generation,
+                       coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
                     self?.coordinator?.reportImageError(.tooLarge)
                 case .unsupported:
                     break

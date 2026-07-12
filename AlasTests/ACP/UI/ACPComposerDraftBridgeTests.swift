@@ -605,6 +605,70 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string.contains("\u{fffc}"))
     }
 
+    @Test("submit waits while async image file paste is pending")
+    func submitWaitsWhileAsyncImageFilePasteIsPending() async throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        var submitCount = 0
+        var submittedAttachments: [ACPMessage.Attachment] = []
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, attachments, _, _, _ in
+            submitCount += 1
+            submittedAttachments = attachments
+            return true
+        }
+        textView.coordinator = coordinator
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString).png")
+        try pngBytes.write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let gate = ACPImageReadGate()
+        ACPNSTextView.imageFileReadGateForTesting = { await gate.wait() }
+        defer { ACPNSTextView.imageFileReadGateForTesting = nil }
+        textView.string = "describe "
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([temp as NSURL])
+
+        textView.paste(nil)
+        coordinator.submit(textView)
+        #expect(submitCount == 0)
+
+        await gate.open()
+        for _ in 0..<20 where (try imageAttachmentData(in: textView)).isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        coordinator.submit(textView)
+
+        #expect(submitCount == 1)
+        #expect(submittedAttachments.count == 1)
+    }
+
+    @Test("async image paste is discarded after draft is cleared")
+    func asyncImagePasteIsDiscardedAfterDraftIsCleared() async throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        textView.coordinator = coordinator
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString).png")
+        try pngBytes.write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let gate = ACPImageReadGate()
+        ACPNSTextView.imageFileReadGateForTesting = { await gate.wait() }
+        defer { ACPNSTextView.imageFileReadGateForTesting = nil }
+        textView.string = "send this"
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([temp as NSURL])
+
+        textView.paste(nil)
+        textView.string = ""
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification, object: textView))
+        #expect(textView.string.isEmpty)
+
+        await gate.open()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(textView.string.isEmpty)
+        #expect(try imageAttachmentData(in: textView).isEmpty)
+    }
+
     @Test("async image paste advances after replacing selected text")
     func asyncImagePasteAdvancesAfterReplacingSelectedText() async throws {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
