@@ -138,6 +138,49 @@ struct EditorBufferTests {
         await buffer.awaitLoadForTesting()
     }
 
+    @Test func saveAsBeforeInitialLoadFinishesThrows() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+
+        #expect(throws: EditorBuffer.SaveError.self) {
+            try buffer.saveAs(relativePath: "copy.txt")
+        }
+        let copyURL = root.appendingPathComponent("copy.txt")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(FileManager.default.fileExists(atPath: copyURL.path) == false)
+        #expect(buffer.relativePath == "a.txt")
+        #expect(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8) == "hello\n")
+    }
+
+    @Test func moveToBeforeInitialLoadFinishesThrows() async throws {
+        let root = tempWorktree()
+        let originalURL = try writeFile(root, "a.txt", "hello\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+
+        #expect(throws: EditorBuffer.SaveError.self) {
+            try buffer.moveTo(relativePath: "moved.txt")
+        }
+        let movedURL = root.appendingPathComponent("moved.txt")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(FileManager.default.fileExists(atPath: movedURL.path) == false)
+        #expect(FileManager.default.fileExists(atPath: originalURL.path))
+        #expect(buffer.relativePath == "a.txt")
+        #expect(try String(contentsOf: originalURL, encoding: .utf8) == "hello\n")
+    }
+
     @Test func saveAsWritesNewPathAndLeavesOriginalFile() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")

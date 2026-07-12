@@ -611,6 +611,7 @@ final class EditorBuffer {
     func saveAs(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        guard !loading else { throw SaveError.loadPending }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -642,6 +643,7 @@ final class EditorBuffer {
     func moveTo(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        guard !loading else { throw SaveError.loadPending }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
