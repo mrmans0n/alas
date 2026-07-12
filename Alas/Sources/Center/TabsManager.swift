@@ -1254,7 +1254,9 @@ final class TabsManager {
             guard let buffer else { return }
             self?.discardSnapshotsForAllTabs(buffer)
         }
-        if let restoredPathChange = buffer.consumeRestoredPathChange() {
+        if restoresToDifferentPath {
+            bufferKeys[tabId] = key
+        } else if let restoredPathChange = buffer.consumeRestoredPathChange() {
             let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: restoredPathChange.newPath)
             buffers[restoredKey] = buffer
             bufferKeys[tabId] = restoredKey

@@ -25,6 +25,25 @@ private actor TabsManagerBufferAsyncGate {
     }
 }
 
+private actor TabsManagerAsyncLoadGate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        opened = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+    }
+}
+
 @MainActor
 @Suite(.serialized)
 struct TabsManagerBufferTests {
@@ -420,6 +439,37 @@ struct TabsManagerBufferTests {
         #expect(restored.relativePath == "b.txt")
         #expect(updatedTab?.title == "b.txt")
         #expect(updatedTab?.relativeFilePath == "b.txt")
+    }
+
+    @Test func pendingAsyncRestoreToDifferentPathDoesNotShareOldPathBuffer() async throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let restoringTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let oldPathTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "edited\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: restoringTab.id)
+        let gate = TabsManagerAsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let restoringBuffer = manager.buffer(worktreeId: "wt", tabId: restoringTab.id, worktreeRoot: root, relativePath: "a.txt")
+        let oldPathBuffer = manager.buffer(worktreeId: "wt", tabId: oldPathTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await gate.open()
+        await restoringBuffer.awaitLoadForTesting()
+        await oldPathBuffer.awaitLoadForTesting()
+
+        #expect(restoringBuffer !== oldPathBuffer)
+        #expect(restoringBuffer.relativePath == "b.txt")
+        #expect(oldPathBuffer.relativePath == "a.txt")
     }
 
     @Test func bufferRestoreChecksConflictAfterAsyncSnapshotRestore() async throws {

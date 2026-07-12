@@ -225,7 +225,7 @@ final class EditorBuffer {
                 checkConflictOnRestore: checkConflictOnRestore
             )
         }
-        if loadSynchronously {
+        if isExternal || loadSynchronously {
             loadFromDiskSync()
             finishLoad()
         } else {
