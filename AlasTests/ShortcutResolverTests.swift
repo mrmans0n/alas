@@ -100,4 +100,21 @@ struct ShortcutResolverTests {
         #expect(conflict == .searchFiles || conflict == .switchRepository,
                 "expected override to participate in conflict detection")
     }
+
+    @Test func shortcutIgnoresUnsupportedPersistedKey() async {
+        let state = makeState()
+        state.config.shortcutOverrides[ShortcutAction.searchFiles.rawValue] =
+            .some(ShortcutBinding(key: "unsupported", modifiers: [.command]))
+
+        #expect(state.binding(for: .searchFiles)?.key == "unsupported")
+        #expect(state.shortcut(for: .searchFiles) == nil)
+    }
+
+    @Test func setShortcutRejectsUnsupportedKeys() async {
+        let state = makeState()
+        state.setShortcut(ShortcutBinding(key: "unsupported", modifiers: [.command]), for: .searchFiles)
+
+        #expect(state.config.shortcutOverrides.isEmpty)
+        #expect(state.binding(for: .searchFiles) == ShortcutAction.searchFiles.defaultBinding)
+    }
 }
