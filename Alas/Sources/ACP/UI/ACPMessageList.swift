@@ -339,6 +339,9 @@ struct ACPMessageList: View {
     }
 
     private func scheduleTailScroll(proxy: ScrollViewProxy, animated: Bool) {
+        guard Self.shouldScheduleTailScroll(hasPendingTailScroll: pendingTailScrollTask != nil) else {
+            return
+        }
         pendingTailScrollTask?.cancel()
         pendingTailScrollTask = Task { @MainActor in
             await Task.yield()
@@ -346,7 +349,10 @@ struct ACPMessageList: View {
                   ACPMessageList.shouldRunScheduledTailScroll(
                     followsTranscriptTail: session.followsTranscriptTail
                   )
-            else { return }
+            else {
+                pendingTailScrollTask = nil
+                return
+            }
             scrollToTail(proxy: proxy, animated: animated)
         }
     }
@@ -581,6 +587,10 @@ struct ACPMessageList: View {
 
     nonisolated static func shouldRunScheduledTailScroll(followsTranscriptTail: Bool) -> Bool {
         followsTranscriptTail
+    }
+
+    nonisolated static func shouldScheduleTailScroll(hasPendingTailScroll: Bool) -> Bool {
+        !hasPendingTailScroll
     }
 
     nonisolated static func shouldRestoreTailAfterViewportWidthChange(
