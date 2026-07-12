@@ -127,53 +127,60 @@ final class ContentSearcher: Sendable {
         // case (thousands of warnings) doesn't balloon memory either.
         process.standardError = errPipe
 
+        let exitGate = ProcessExitGate()
+        process.terminationHandler = { _ in exitGate.didExit() }
+
         let handle = outPipe.fileHandleForReading
         let errHandle = errPipe.fileHandleForReading
         let stderrBuf = StderrBuffer(capBytes: 8192)
-        let drainTask = Task.detached {
+        let stdoutDrain = DispatchGroup()
+        let stderrDrain = DispatchGroup()
+        stdoutDrain.enter()
+        stderrDrain.enter()
+        DispatchQueue.global(qos: .utility).async { [self] in
+            defer { stdoutDrain.leave() }
+            self.readAllLines(handle: handle, worktree: worktree, into: continuation)
+        }
+        DispatchQueue.global(qos: .utility).async {
+            defer { stderrDrain.leave() }
             while true {
                 let data = errHandle.availableData
                 if data.isEmpty { break }
-                await stderrBuf.append(data)
+                stderrBuf.append(data)
             }
         }
 
-        try process.run()
+        do {
+            try process.run()
+            try? outPipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForWriting.close()
+        } catch {
+            try? outPipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForWriting.close()
+            await waitForDispatchGroup(stdoutDrain)
+            await waitForDispatchGroup(stderrDrain)
+            throw error
+        }
 
-        // `availableData` blocks until bytes arrive or EOF; it doesn't
-        // observe `Task.isCancelled`. Wire cancellation to terminate the
-        // child, which closes the pipe → reads return EOF immediately.
         await withTaskCancellationHandler {
-            await self.readAllLines(handle: handle) { lineData in
-                if let hit = self.parseRgLine(lineData, worktree: worktree) {
-                    continuation.yield(hit)
-                }
-            }
+            await exitGate.wait()
         } onCancel: {
             // Called from any thread, possibly during a blocking read.
             process.terminate()
         }
 
         if process.isRunning { process.terminate() }
-        // Wait for the child via `terminationHandler` instead of the
-        // blocking `waitUntilExit()` so the cooperative pool thread is
-        // yielded while we wait.
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            if !process.isRunning {
-                cont.resume()
-            } else {
-                process.terminationHandler = { _ in cont.resume() }
-            }
-        }
-        // Wait for stderr drain so any error text is visible below.
-        _ = await drainTask.value
+        async let stdoutClosed: Void = waitForDispatchGroup(stdoutDrain)
+        async let stderrClosed: Void = waitForDispatchGroup(stderrDrain)
+        _ = await (stdoutClosed, stderrClosed)
+        if Task.isCancelled { throw CancellationError() }
 
         // ripgrep exits 0 on matches, 1 on no matches, 2+ on its own errors.
         // Skip the check if we cancelled the child ourselves.
         if !Task.isCancelled,
            process.terminationReason == .exit,
            process.terminationStatus > 1 {
-            let stderr = await stderrBuf.text
+            let stderr = stderrBuf.text
             // rg's regex parse errors begin with "regex parse error" or
             // mention unsupported look-around / backreference features.
             // Distinguish those from soft I/O errors so the model can
@@ -188,37 +195,33 @@ final class ContentSearcher: Sendable {
         }
     }
 
-    /// Read newline-delimited output from `handle`, calling `onLine` for
-    /// each complete line. Returns when the pipe reports EOF. Uses
-    /// `readabilityHandler` so the cooperative pool thread is yielded
-    /// between chunks instead of blocking on `availableData`.
+    /// Read newline-delimited output from `handle`, yielding hits as soon as
+    /// complete rg JSON lines arrive. This runs on a background GCD queue so
+    /// the blocking `availableData` calls cannot occupy Swift's cooperative
+    /// executor, and it starts before `process.run()` so pipe output is drained
+    /// concurrently with the child.
     private func readAllLines(
         handle: FileHandle,
-        onLine: @escaping (Data) -> Void
-    ) async {
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            var leftover = Data()
-            var didResume = false
-            let resume: () -> Void = {
-                if !didResume {
-                    didResume = true
-                    cont.resume()
-                }
+        worktree: SearchWorktree,
+        into continuation: AsyncThrowingStream<ContentSearchHit, Error>.Continuation
+    ) {
+        var leftover = Data()
+        let appendLine: (Data) -> Void = { line in
+            if let hit = self.parseRgLine(line, worktree: worktree) {
+                continuation.yield(hit)
             }
-            handle.readabilityHandler = { fh in
-                let chunk = fh.availableData
-                if chunk.isEmpty {
-                    fh.readabilityHandler = nil
-                    if !leftover.isEmpty { onLine(leftover) }
-                    resume()
-                    return
-                }
-                leftover.append(chunk)
-                while let nl = leftover.firstIndex(of: 0x0A) {
-                    let line = leftover[..<nl]
-                    leftover.removeSubrange(...nl)
-                    onLine(Data(line))
-                }
+        }
+        while true {
+            let chunk = handle.availableData
+            if chunk.isEmpty {
+                if !leftover.isEmpty { appendLine(leftover) }
+                break
+            }
+            leftover.append(chunk)
+            while let nl = leftover.firstIndex(of: 0x0A) {
+                let line = leftover[..<nl]
+                leftover.removeSubrange(...nl)
+                appendLine(Data(line))
             }
         }
     }
@@ -344,20 +347,72 @@ final class ContentSearcher: Sendable {
     }
 }
 
+private func waitForDispatchGroup(_ group: DispatchGroup) async {
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        group.notify(queue: .global(qos: .utility)) {
+            cont.resume()
+        }
+    }
+}
+
+private final class ProcessExitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var exited = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func didExit() {
+        lock.lock()
+        guard !exited else {
+            lock.unlock()
+            return
+        }
+        exited = true
+        let continuations = waiters
+        waiters.removeAll()
+        lock.unlock()
+
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if exited {
+                lock.unlock()
+                continuation.resume()
+            } else {
+                waiters.append(continuation)
+                lock.unlock()
+            }
+        }
+    }
+}
+
 /// Bounded accumulator for an rg child's stderr. The pipe drain task
 /// appends chunks until the cap is reached, then silently drops the rest
 /// — enough to detect known regex-error markers without ballooning
 /// memory if rg emits thousands of warnings.
-private actor StderrBuffer {
+private final class StderrBuffer: @unchecked Sendable {
+    private let lock = NSLock()
     private var data = Data()
     private let cap: Int
     init(capBytes: Int) { self.cap = capBytes }
+
     func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
         guard data.count < cap else { return }
         let room = cap - data.count
         data.append(chunk.prefix(room))
     }
-    var text: String { String(data: data, encoding: .utf8) ?? "" }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
 }
 
 /// Locate `name` on PATH via `which`. Uses the async `Process.run` helper

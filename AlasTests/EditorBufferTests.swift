@@ -372,7 +372,7 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: url, encoding: .utf8) == "external\n")
     }
 
-    @Test func editBeforeAsyncLoadFinishesCannotSavePartialTextAfterLoad() async throws {
+    @Test func editBeforeAsyncLoadFinishesCanSaveAfterLoadWhenDiskUnchanged() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "disk\n")
         let gate = AsyncLoadGate()
@@ -384,10 +384,9 @@ struct EditorBufferTests {
         await gate.open()
         await buffer.awaitLoadForTesting()
 
-        #expect(throws: (any Error).self) {
-            try buffer.save()
-        }
-        #expect(try String(contentsOf: url, encoding: .utf8) == "disk\n")
+        try buffer.save()
+
+        #expect(try String(contentsOf: url, encoding: .utf8) == "typed")
     }
 
     @Test func watcherEventDuringInitialLoadTriggersReloadAfterLoadFinishes() async throws {

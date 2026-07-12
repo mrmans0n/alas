@@ -597,7 +597,7 @@ final class EditorBuffer {
             conflict = .changedOnDisk
             throw SaveError.loadPending
         }
-        if preservedPreloadEditsFromAsyncLoad { throw SaveError.loadPending }
+        if preservedPreloadEditsFromAsyncLoad, loadTask != nil { throw SaveError.loadPending }
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)
         originalText = canonical
@@ -1254,6 +1254,7 @@ final class EditorBuffer {
             await MainActor.run {
                 guard let self, self.loadGeneration == generation, !self.closed else { return }
                 self.loading = false
+                self.loadTask = nil
                 if preservePendingEdits, self.dirty {
                     if case .loaded(let raw, let resolvedURL, _, _) = result {
                         self.originalText = LineEnding.lf.normalize(raw)
