@@ -123,7 +123,7 @@ final class ShortcutRecorderSession {
         case 126: key = "upArrow"
         default:
             let raw = (event.charactersIgnoringModifiers ?? "").lowercased()
-            guard !raw.isEmpty, raw.first?.isLetter == true || "0123456789-=,.;'/[]\\`".contains(raw) else {
+            guard ShortcutBinding.isSupportedLiteralKey(raw) else {
                 return nil
             }
             key = raw

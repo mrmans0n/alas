@@ -40,16 +40,23 @@ struct ShortcutBindingTests {
         #expect(b.displayString == "⌃ ⇧ ⌘ K")
     }
 
-    @Test func asKeyboardShortcutLetter() {
+    @Test func asKeyboardShortcutLetter() throws {
         let b = ShortcutBinding(key: "p", modifiers: [.command])
-        let ks = b.asKeyboardShortcut()
+        let ks = try #require(b.asKeyboardShortcut())
         #expect(ks.key == KeyEquivalent("p"))
         #expect(ks.modifiers == .command)
     }
 
-    @Test func asKeyboardShortcutReturn() {
+    @Test func asKeyboardShortcutReturn() throws {
         let b = ShortcutBinding(key: "return", modifiers: [.command])
-        let ks = b.asKeyboardShortcut()
+        let ks = try #require(b.asKeyboardShortcut())
         #expect(ks.key == .return)
+    }
+
+    @Test func asKeyboardShortcutRejectsUnsupportedKeys() {
+        #expect(ShortcutBinding(key: "", modifiers: [.command]).asKeyboardShortcut() == nil)
+        #expect(ShortcutBinding(key: "ab", modifiers: [.command]).asKeyboardShortcut() == nil)
+        #expect(ShortcutBinding(key: "f13", modifiers: [.command]).asKeyboardShortcut() == nil)
+        #expect(ShortcutBinding(key: "🙂", modifiers: [.command]).asKeyboardShortcut() == nil)
     }
 }

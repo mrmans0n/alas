@@ -15,7 +15,8 @@ extension AppState {
 
     /// SwiftUI-ready form. Pass directly into `.keyboardShortcut(_:)`.
     func shortcut(for action: ShortcutAction) -> KeyboardShortcut? {
-        binding(for: action)?.asKeyboardShortcut()
+        guard let binding = binding(for: action) else { return nil }
+        return binding.asKeyboardShortcut()
     }
 
     /// Assign or unbind a shortcut.
@@ -25,6 +26,7 @@ extension AppState {
     ///   the action will have no shortcut).
     /// - Use `resetShortcut(for:)` instead if you want the default restored.
     func setShortcut(_ binding: ShortcutBinding?, for action: ShortcutAction) {
+        guard binding?.hasSupportedKey != false else { return }
         config.shortcutOverrides[action.rawValue] = .some(binding)
         _ = saveConfig()
         ShortcutReservations.update(from: config)

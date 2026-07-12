@@ -41,11 +41,21 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
         }
     }
 
-    func asKeyboardShortcut() -> KeyboardShortcut {
-        KeyboardShortcut(keyEquivalent, modifiers: eventModifiers)
+    var hasSupportedKey: Bool {
+        keyEquivalent != nil
     }
 
-    private var keyEquivalent: KeyEquivalent {
+    func asKeyboardShortcut() -> KeyboardShortcut? {
+        guard let keyEquivalent else { return nil }
+        return KeyboardShortcut(keyEquivalent, modifiers: eventModifiers)
+    }
+
+    static func isSupportedLiteralKey(_ key: String) -> Bool {
+        guard key.count == 1, let first = key.first else { return false }
+        return first.isLetter || first.isNumber || "0123456789-=,.;'/[]\\`".contains(first)
+    }
+
+    private var keyEquivalent: KeyEquivalent? {
         switch key {
         case "return":     return .return
         case "leftArrow":  return .leftArrow
@@ -57,7 +67,8 @@ struct ShortcutBinding: Codable, Equatable, Hashable, Sendable {
         case "tab":        return .tab
         case "space":      return .space
         default:
-            return key.count == 1 ? KeyEquivalent(key.first!) : KeyEquivalent(" ")
+            guard Self.isSupportedLiteralKey(key), let first = key.first else { return nil }
+            return KeyEquivalent(first)
         }
     }
 
