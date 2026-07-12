@@ -598,7 +598,7 @@ final class EditorBuffer {
             conflict = .changedOnDisk
             throw SaveError.loadPending
         }
-        if preservedPreloadEditsFromAsyncLoad, loadTask != nil { throw SaveError.loadPending }
+        if preservedPreloadEditsFromAsyncLoad { throw SaveError.loadPending }
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)
         originalText = canonical
@@ -1269,6 +1269,7 @@ final class EditorBuffer {
                     completion()
                     if shouldReload {
                         self.revert()
+                        self.startWatching()
                     }
                     return
                 }
