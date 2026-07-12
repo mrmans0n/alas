@@ -3,6 +3,28 @@ import Foundation
 import Darwin
 @testable import Alas
 
+private actor TabsManagerBufferAsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let continuations = waiters
+        waiters.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+}
+
 @MainActor
 @Suite(.serialized)
 struct TabsManagerBufferTests {
@@ -29,6 +51,36 @@ struct TabsManagerBufferTests {
         let b2 = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
         await b2.awaitLoadForTesting()
         #expect(b1 === b2)
+    }
+
+    @Test func asyncSnapshotRestoreRemovesOriginalBufferKey() async throws {
+        let root = tempWorktree()
+        try "a\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "b\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let gate = TabsManagerBufferAsyncGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let (manager, store, _) = makeManager()
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "dirty b\n",
+            originalText: "b\n",
+            originalMtime: Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: "t1")
+
+        let restored = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await gate.open()
+        await restored.awaitLoadForTesting()
+        let original = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
+        await original.awaitLoadForTesting()
+
+        #expect(restored.relativePath == "b.txt")
+        #expect(restored.storage.string == "dirty b\n")
+        #expect(original !== restored)
+        #expect(original.relativePath == "a.txt")
+        #expect(original.storage.string == "a\n")
     }
 
     @Test func buffersForSamePathShareOneInstanceAcrossTabs() async throws {

@@ -99,6 +99,25 @@ struct EditorBufferTests {
         #expect(buffer.originalText == "HELLO\n")
     }
 
+    @Test func saveBeforeInitialLoadFinishesDoesNotOverwriteFile() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+
+        try buffer.save()
+        let onDiskBeforeLoad = try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8)
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(onDiskBeforeLoad == "hello\n")
+        #expect(buffer.storage.string == "hello\n")
+        #expect(buffer.dirty == false)
+    }
+
     @Test func saveAsWritesNewPathAndLeavesOriginalFile() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")

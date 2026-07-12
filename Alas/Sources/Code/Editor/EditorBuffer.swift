@@ -549,6 +549,7 @@ final class EditorBuffer {
     func save() throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        if loading { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)

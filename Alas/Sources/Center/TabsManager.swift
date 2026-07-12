@@ -1234,9 +1234,13 @@ final class TabsManager {
         buffer.onPathChanged = { [weak self] oldPath, newPath in
             self?.handleBufferPathChanged(worktreeId: worktreeId, oldPath: oldPath, newPath: newPath)
         }
-        buffer.onRestoredPathChanged = { [weak self, weak buffer] _, newPath in
+        buffer.onRestoredPathChanged = { [weak self, weak buffer] oldPath, newPath in
             guard let self, let buffer else { return }
+            let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
             let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+            if self.buffers[oldKey] === buffer {
+                self.buffers.removeValue(forKey: oldKey)
+            }
             self.buffers[restoredKey] = buffer
             self.bufferKeys[tabId] = restoredKey
             _ = self.updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
