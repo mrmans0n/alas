@@ -828,19 +828,11 @@ final class ACPNSTextView: NSTextView {
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         panel.begin { [weak self] response in
             guard let self, response == .OK else { return }
-            let worktreeId = self.worktreeIdForStaging
-            Task { @MainActor [weak self] in
-                for url in panel.urls {
-                    switch await Self.readImageFile(url) {
-                    case .data(let data):
-                        _ = self?.insertImage(data: data, worktreeId: worktreeId)
-                    case .tooLarge:
-                        self?.coordinator?.reportImageError(.tooLarge)
-                    case .unsupported:
-                        break
-                    }
-                }
-            }
+            self.insertImageFiles(
+                panel.urls,
+                worktreeId: self.worktreeIdForStaging,
+                insertionRange: self.selectedRange()
+            )
         }
     }
 
@@ -933,8 +925,11 @@ final class ACPNSTextView: NSTextView {
         else { return false }
         guard !urls.isEmpty else { return false }
         guard urls.contains(where: { Self.imageFileCandidate($0) != .unsupported }) else { return false }
-        let worktreeId = worktreeIdForStaging
-        let insertionRange = selectedRange()
+        insertImageFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+        return true
+    }
+
+    private func insertImageFiles(_ urls: [URL], worktreeId: String, insertionRange: NSRange) {
         let coordinator = coordinator
         let generation = coordinator?.beginPendingImageFileInsertion()
         Task { @MainActor [weak self, weak coordinator] in
@@ -973,8 +968,13 @@ final class ACPNSTextView: NSTextView {
                 }
             }
         }
-        return true
     }
+
+    #if DEBUG
+    func insertPickedImageFilesForTesting(_ urls: [URL]) {
+        insertImageFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+    }
+    #endif
 
     private func asyncImageReplacementRange(
         capturedRange: NSRange,
