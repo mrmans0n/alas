@@ -22,13 +22,13 @@ struct ACPMarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(currentBlocks().enumerated()), id: \.offset) { _, block in
-                view(for: block)
+            ForEach(Array(currentRenderBlocks().enumerated()), id: \.offset) { _, renderBlock in
+                view(for: renderBlock)
             }
         }
     }
 
-    private func currentBlocks() -> [Block] {
+    private func currentRenderBlocks() -> [RenderBlock] {
         if let cache {
             cache.update(
                 with: raw,
@@ -37,27 +37,46 @@ struct ACPMarkdownText: View {
                 sourceID: updateSourceID
             )
             let tailBlocks = ACPMarkdownText.parse(cache.tailUnparsed)
-            return cache.stableBlocks + tailBlocks
+            return cache.stableBlocks.map { RenderBlock(block: $0, memoizesInlineMarkdown: true) }
+                + tailBlocks.map { RenderBlock(block: $0, memoizesInlineMarkdown: false) }
         }
-        return ACPMarkdownText.parse(raw)
+        return ACPMarkdownText.parse(raw).map { RenderBlock(block: $0, memoizesInlineMarkdown: true) }
     }
 
     @ViewBuilder
-    private func view(for block: Block) -> some View {
-        switch block {
+    private func view(for renderBlock: RenderBlock) -> some View {
+        switch renderBlock.block {
         case .heading(let level, let text):
-            ACPMarkdownInlineTextView(source: text, typography: typography, role: .heading(level: level), theme: theme)
+            ACPMarkdownInlineTextView(
+                source: text,
+                typography: typography,
+                role: .heading(level: level),
+                theme: theme,
+                memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
+            )
                 .padding(.top, level == 1 ? 4 : 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph(let text):
-            ACPMarkdownInlineTextView(source: text, typography: typography, role: .body, theme: theme)
+            ACPMarkdownInlineTextView(
+                source: text,
+                typography: typography,
+                role: .body,
+                theme: theme,
+                memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
+            )
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .quote(let text):
             HStack(alignment: .top, spacing: 10) {
                 Rectangle()
                     .fill(theme.color("accent").opacity(0.55))
                     .frame(width: 2)
-                ACPMarkdownInlineTextView(source: text, typography: typography, role: .quote, theme: theme)
+                ACPMarkdownInlineTextView(
+                    source: text,
+                    typography: typography,
+                    role: .quote,
+                    theme: theme,
+                    memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
+                )
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
@@ -78,18 +97,36 @@ struct ACPMarkdownText: View {
                 highlightsSyntax: false
             )
         case .table(let header, let rows):
-            tableView(header: header, rows: rows)
+            tableView(
+                header: header,
+                rows: rows,
+                memoizesInlineMarkdown: renderBlock.memoizesInlineMarkdown
+            )
         }
     }
 
-    private func tableView(header: [String], rows: [[String]]) -> some View {
+    private func tableView(
+        header: [String],
+        rows: [[String]],
+        memoizesInlineMarkdown: Bool
+    ) -> some View {
         let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
         return ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 0) {
-                tableRow(cells: header, isHeader: true, columnCount: columnCount)
+                tableRow(
+                    cells: header,
+                    isHeader: true,
+                    columnCount: columnCount,
+                    memoizesInlineMarkdown: memoizesInlineMarkdown
+                )
                 Rectangle().fill(theme.color("line")).frame(height: 0.5)
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
-                    tableRow(cells: r, isHeader: false, columnCount: columnCount)
+                    tableRow(
+                        cells: r,
+                        isHeader: false,
+                        columnCount: columnCount,
+                        memoizesInlineMarkdown: memoizesInlineMarkdown
+                    )
                     if r != rows.last {
                         Rectangle().fill(theme.color("line-soft")).frame(height: 0.5)
                     }
@@ -101,7 +138,12 @@ struct ACPMarkdownText: View {
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
-    private func tableRow(cells: [String], isHeader: Bool, columnCount: Int) -> some View {
+    private func tableRow(
+        cells: [String],
+        isHeader: Bool,
+        columnCount: Int,
+        memoizesInlineMarkdown: Bool
+    ) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(0..<columnCount, id: \.self) { i in
                 let value = i < cells.count ? cells[i] : ""
@@ -109,7 +151,8 @@ struct ACPMarkdownText: View {
                     source: value,
                     typography: typography,
                     role: .tableCell(isHeader: isHeader),
-                    theme: theme
+                    theme: theme,
+                    memoizesInlineMarkdown: memoizesInlineMarkdown
                 )
                     .frame(minWidth: 80, alignment: .leading)
                     .padding(.horizontal, 10).padding(.vertical, 6)
@@ -129,12 +172,28 @@ struct ACPMarkdownText: View {
         return c
     }()
 
+    private static let inlineCacheStatsLock = NSLock()
+    nonisolated(unsafe) private static var inlineCacheInsertionCount = 0
+
+    static var inlineCacheInsertionCountForTesting: Int {
+        inlineCacheStatsLock.lock()
+        defer { inlineCacheStatsLock.unlock() }
+        return inlineCacheInsertionCount
+    }
+
+    static func removeAllInlineCacheObjectsForTesting() {
+        inlineCache.removeAllObjects()
+        inlineCacheStatsLock.lock()
+        defer { inlineCacheStatsLock.unlock() }
+        inlineCacheInsertionCount = 0
+    }
+
     /// Inline parser: bold / italic / inline code / links via the
     /// system AttributedString initializer. Results are memoized in a
     /// process-static NSCache; stable blocks stay warm across chunks.
-    static func inlineMarkdown(_ s: String) -> AttributedString {
+    static func inlineMarkdown(_ s: String, memoize: Bool = true) -> AttributedString {
         let key = s as NSString
-        if let hit = inlineCache.object(forKey: key) {
+        if memoize, let hit = inlineCache.object(forKey: key) {
             return AttributedString(hit)
         }
         let renderSource = ACPBareURLLinkifier.markdownAutolinkingBareURLs(
@@ -152,7 +211,12 @@ struct ACPMarkdownText: View {
         } else {
             attr = AttributedString(s)
         }
-        inlineCache.setObject(NSAttributedString(attr), forKey: key)
+        if memoize {
+            inlineCache.setObject(NSAttributedString(attr), forKey: key)
+            inlineCacheStatsLock.lock()
+            inlineCacheInsertionCount += 1
+            inlineCacheStatsLock.unlock()
+        }
         return attr
     }
 
@@ -165,6 +229,11 @@ struct ACPMarkdownText: View {
         case code(language: String?, body: String)
         case streamingCode(language: String?, body: String)
         case table(header: [String], rows: [[String]])
+    }
+
+    private struct RenderBlock {
+        let block: Block
+        let memoizesInlineMarkdown: Bool
     }
 
     /// Detect a GitHub-flavoured markdown table starting at `start`:

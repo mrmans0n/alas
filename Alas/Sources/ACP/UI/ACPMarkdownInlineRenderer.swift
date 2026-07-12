@@ -91,10 +91,13 @@ enum ACPMarkdownInlineRenderer {
         source: String,
         theme: Theme,
         typography: ACPChatTypography,
-        role: ACPMarkdownInlineRole
+        role: ACPMarkdownInlineRole,
+        memoizeInlineMarkdown: Bool = true
     ) -> NSMutableAttributedString {
         let plan = makePlan(source)
-        let attributed = NSMutableAttributedString(ACPMarkdownText.inlineMarkdown(plan.markdownSource))
+        let attributed = NSMutableAttributedString(
+            ACPMarkdownText.inlineMarkdown(plan.markdownSource, memoize: memoizeInlineMarkdown)
+        )
         applyBaseAttributes(to: attributed, theme: theme, typography: typography, role: role)
         applySubscriptRanges(to: attributed, markers: plan.subscriptMarkers, typography: typography, role: role)
         replaceImages(in: attributed, images: plan.images, theme: theme)

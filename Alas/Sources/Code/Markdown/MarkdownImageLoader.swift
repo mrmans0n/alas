@@ -7,9 +7,11 @@ import Foundation
 /// fetched image to the placeholder attachment and invalidating layout.
 ///
 /// `@unchecked Sendable` is sound because the only mutable state is
-/// `NSCache`, which is documented thread-safe, and `URLSession`, which is
-/// itself `Sendable`. The class has no other writable storage.
+/// `NSCache`, which is documented thread-safe, and the main-actor-confined
+/// remote-load coalescing table. `URLSession` is itself `Sendable`.
 final class MarkdownImageLoader: @unchecked Sendable {
+    static let shared = MarkdownImageLoader()
+
     enum Source: Equatable {
         case local(String)
         case remote(URL)
@@ -30,6 +32,7 @@ final class MarkdownImageLoader: @unchecked Sendable {
 
     private let cache = NSCache<NSURL, NSImage>()
     private let session: URLSession
+    private var inFlightRemoteCompletions: [URL: [@MainActor (NSImage?) -> Void]] = [:]
 
     init(session: URLSession = .shared) {
         self.session = session
@@ -51,12 +54,27 @@ final class MarkdownImageLoader: @unchecked Sendable {
         if let cached = cache.object(forKey: url as NSURL) {
             return cached
         }
+        if inFlightRemoteCompletions[url] != nil {
+            inFlightRemoteCompletions[url, default: []].append(completion)
+            return nil
+        }
+        inFlightRemoteCompletions[url] = [completion]
+
         let task = session.dataTask(with: url) { [weak self] data, _, _ in
             let image = data.flatMap { NSImage(data: $0) }
-            if let image, let self {
-                self.cache.setObject(image, forKey: url as NSURL)
+            Task { @MainActor in
+                guard let self else {
+                    completion(image)
+                    return
+                }
+                if let image {
+                    self.cache.setObject(image, forKey: url as NSURL)
+                }
+                let completions = self.inFlightRemoteCompletions.removeValue(forKey: url) ?? [completion]
+                for completion in completions {
+                    completion(image)
+                }
             }
-            Task { @MainActor in completion(image) }
         }
         task.resume()
         return nil

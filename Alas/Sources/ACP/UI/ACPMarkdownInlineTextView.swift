@@ -8,6 +8,7 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
     let typography: ACPChatTypography
     let role: ACPMarkdownInlineRole
     let theme: Theme
+    var memoizesInlineMarkdown: Bool = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -24,15 +25,26 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
         textView.backgroundColor = .clear
+        context.coordinator.resetRenderedState()
         return textView
     }
 
     func updateNSView(_ textView: NSTextView, context: Context) {
+        let renderState = RenderState(
+            source: source,
+            typography: typography,
+            role: role,
+            theme: theme,
+            memoizesInlineMarkdown: memoizesInlineMarkdown
+        )
+        guard context.coordinator.shouldRender(renderState) else { return }
+
         let rendered = ACPMarkdownInlineRenderer.makeAttributedString(
             source: source,
             theme: theme,
             typography: typography,
-            role: role
+            role: role,
+            memoizeInlineMarkdown: memoizesInlineMarkdown
         )
         textView.textStorage?.setAttributedString(rendered)
         context.coordinator.loadRemoteImages(in: textView, attributedString: rendered)
@@ -55,10 +67,25 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator {
-        private let imageLoader = MarkdownImageLoader()
+        private let imageLoader: MarkdownImageLoader
+        private var lastRenderedState: RenderState?
         private var generation = 0
         private var inFlightImageURLs: Set<URL> = []
         private var currentRemoteImageTargets: [URL: RemoteImageRenderTargets] = [:]
+
+        init(imageLoader: MarkdownImageLoader = .shared) {
+            self.imageLoader = imageLoader
+        }
+
+        func resetRenderedState() {
+            lastRenderedState = nil
+        }
+
+        func shouldRender(_ state: RenderState) -> Bool {
+            guard lastRenderedState != state else { return false }
+            lastRenderedState = state
+            return true
+        }
 
         func loadRemoteImages(in textView: NSTextView, attributedString: NSAttributedString) {
             generation += 1
@@ -170,6 +197,14 @@ struct ACPMarkdownInlineTextView: NSViewRepresentable {
             }
             return foundRange
         }
+    }
+
+    struct RenderState: Equatable {
+        let source: String
+        let typography: ACPChatTypography
+        let role: ACPMarkdownInlineRole
+        let theme: Theme
+        let memoizesInlineMarkdown: Bool
     }
 }
 
