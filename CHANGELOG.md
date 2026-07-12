@@ -6,6 +6,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-12
+
+### ✨ Features
+
+- Browse and resume ACP agent sessions (#663).
+- Support standardized ACP elicitation prompts (#702).
+- Attach project MCP servers to ACP sessions (#722).
+- Collapse the stashes section by default (#662).
+- Redesign the diff expand-context button (#734).
+
+### 🐛 Fixes
+
+- Surface slash-command argument hints in the picker (#661).
+- Filter the ACP model picker by visible names (#664).
+- Prevent duplicate diff comment composers (#704).
+- Fix terminal split drag and pane width persistence churn (#706, #707).
+- Avoid persisting pane focus churn (#708).
+- Stop highlighting streaming ACP code fences (#709).
+- Fix transcript render scaling and refresh mirrored transcripts off the main actor (#717, #726).
+- Cache missing LSP availability and moved-file lookups (#720, #721).
+- Avoid main-thread hangs during session restore (#723).
+- Clear sent composer drafts on restore (#724).
+- Merge result pane edit highlighting correctly (#730).
+- Avoid full diff row height rewrites (#735).
+- Cache transcript image thumbnails (#736).
+- Deliver FSEvents off the main queue (#744).
+- Stabilize task sidebar placement and ignore unsupported menu shortcuts (#745, #746).
+
+### 🏗️ Internal
+
+- Start tier 1 performance fixes (#703).
+- Move ACPTerminal process tracking off the main actor (#705).
+- Reduce ACP streaming invalidation and persistence work (#710, #711).
+- Serve agent file-system reads off the main actor (#712).
+- Coalesce incoming ACP updates (#713).
+- Optimize diff syntax highlighting and precompute diff render signatures (#714, #715, #716).
+- Gate row frame tracking to legacy scroll views (#718).
+- Cap per-file diff rendering with a Show full diff escape hatch (#719).
+- Preserve sync fetch throttling (#728).
+- Cache theme colors, formatters, line-number ruler geometry, and tool-output syntax resolution (#731, #733, #743).
+- Add low-severity diff rendering cleanups and trim markdown transcript rendering churn (#739, #741).
+- Update the tree-sitter Swift grammar (#725).
+
 ## [0.8.20] - 2026-07-09
 
 ### ✨ Features
