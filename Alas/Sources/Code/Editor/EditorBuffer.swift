@@ -14,6 +14,17 @@ import Observation
 @Observable
 @MainActor
 final class EditorBuffer {
+    enum SaveError: LocalizedError {
+        case loadPending
+
+        var errorDescription: String? {
+            switch self {
+            case .loadPending:
+                "File is still loading. Try saving again after it finishes."
+            }
+        }
+    }
+
     let worktreeRoot: URL
     private(set) var relativePath: String
 
@@ -551,7 +562,10 @@ final class EditorBuffer {
     func save() throws {
         lastSaveError = nil
         guard !readOnly else { return }
-        if loading { return }
+        if loading {
+            if dirty { throw SaveError.loadPending }
+            return
+        }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)

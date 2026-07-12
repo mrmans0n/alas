@@ -472,6 +472,35 @@ struct TabsManagerBufferTests {
         #expect(oldPathBuffer.relativePath == "a.txt")
     }
 
+    @Test func pendingAsyncRestoreToDifferentPathReusesSameTabBuffer() async throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "edited\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+        let gate = TabsManagerAsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let first = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "a.txt")
+        let second = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "a.txt")
+        await gate.open()
+        await first.awaitLoadForTesting()
+        await second.awaitLoadForTesting()
+
+        #expect(first === second)
+        #expect(first.relativePath == "b.txt")
+    }
+
     @Test func bufferRestoreChecksConflictAfterAsyncSnapshotRestore() async throws {
         let root = tempWorktree()
         try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)

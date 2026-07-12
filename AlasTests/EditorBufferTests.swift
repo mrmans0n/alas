@@ -118,6 +118,23 @@ struct EditorBufferTests {
         #expect(buffer.dirty == false)
     }
 
+    @Test func saveDirtyBufferBeforeInitialLoadFinishesThrows() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "hello\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        #expect(throws: (any Error).self) {
+            try buffer.save()
+        }
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+    }
+
     @Test func saveAsWritesNewPathAndLeavesOriginalFile() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "hello\n")

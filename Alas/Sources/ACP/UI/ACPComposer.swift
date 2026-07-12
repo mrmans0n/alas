@@ -748,6 +748,11 @@ final class ACPNSTextView: NSTextView {
 
     @discardableResult
     func insertImage(data: Data, worktreeId: String) -> Bool {
+        insertImage(data: data, worktreeId: worktreeId, replacementRange: selectedRange())
+    }
+
+    @discardableResult
+    private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
             coordinator?.reportImageError(.tooManyImages)
             return false
@@ -767,7 +772,9 @@ final class ACPNSTextView: NSTextView {
             // renders black until the debounced restyler repaints the line.
             let baseAttrs = baseTypingAttributes
             chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
-            let insertAt = selectedRange()
+            let storageLength = textStorage?.length ?? 0
+            let location = min(replacementRange.location, storageLength)
+            let insertAt = NSRange(location: location, length: min(replacementRange.length, storageLength - location))
             textStorage?.replaceCharacters(in: insertAt, with: chipString)
             setSelectedRange(NSRange(location: insertAt.location + chipString.length, length: 0))
             typingAttributes = baseAttrs
@@ -890,11 +897,17 @@ final class ACPNSTextView: NSTextView {
         guard !urls.isEmpty else { return false }
         guard urls.contains(where: { Self.imageFileCandidate($0) != .unsupported }) else { return false }
         let worktreeId = worktreeIdForStaging
+        let insertionRange = selectedRange()
         Task { @MainActor [weak self] in
+            var nextLocation = insertionRange.location
             for url in urls {
                 switch await Self.readImageFile(url) {
                 case .data(let data):
-                    _ = self?.insertImage(data: data, worktreeId: worktreeId)
+                    guard let self else { return }
+                    let beforeLength = self.textStorage?.length ?? 0
+                    if self.insertImage(data: data, worktreeId: worktreeId, replacementRange: NSRange(location: nextLocation, length: nextLocation == insertionRange.location ? insertionRange.length : 0)) {
+                        nextLocation += max(0, (self.textStorage?.length ?? 0) - beforeLength)
+                    }
                 case .tooLarge:
                     self?.coordinator?.reportImageError(.tooLarge)
                 case .unsupported:

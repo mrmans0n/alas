@@ -46,6 +46,7 @@ final class TabsManager {
     private let bufferStore: EditorBufferStore
     private var buffers: [BufferKey: EditorBuffer] = [:]
     private var bufferKeys: [TabID: BufferKey] = [:]
+    private var pendingRestoredPathBuffers: [TabID: EditorBuffer] = [:]
     /// Tracks the absolute URL for external (out-of-worktree) tabs so that
     /// `discardBuffer(worktreeId:tabId:)` can tear them down too.
     private var externalTabURLs: [TabID: (worktreeId: String, url: URL)] = [:]
@@ -1202,6 +1203,12 @@ final class TabsManager {
             }
         }
         let key = BufferKey(worktreeId: worktreeId, relativePath: relativePath)
+        if restoresToDifferentPath,
+           let existingKey = bufferKeys[tabId],
+           existingKey == key,
+           let existing = pendingRestoredPathBuffers[tabId] {
+            return existing
+        }
         if !restoresToDifferentPath, let existing = buffers[key] {
             bufferKeys[tabId] = key
             return existing
@@ -1241,6 +1248,7 @@ final class TabsManager {
             if self.buffers[oldKey] === buffer {
                 self.buffers.removeValue(forKey: oldKey)
             }
+            self.pendingRestoredPathBuffers.removeValue(forKey: tabId)
             self.buffers[restoredKey] = buffer
             self.bufferKeys[tabId] = restoredKey
             _ = self.updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
@@ -1256,6 +1264,7 @@ final class TabsManager {
         }
         if restoresToDifferentPath {
             bufferKeys[tabId] = key
+            pendingRestoredPathBuffers[tabId] = buffer
         } else if let restoredPathChange = buffer.consumeRestoredPathChange() {
             let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: restoredPathChange.newPath)
             buffers[restoredKey] = buffer
@@ -1435,6 +1444,7 @@ final class TabsManager {
         // relaunch). Otherwise the early-return below would leave snapshot
         // JSON orphaned under App Support after tab teardown.
         bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
+        pendingRestoredPathBuffers.removeValue(forKey: tabId)?.close(persistDirtySnapshot: false)
         guard let key = bufferKeys.removeValue(forKey: tabId) else { return }
         assert(key.worktreeId == worktreeId, "discardBuffer called with worktreeId=\(worktreeId) but buffer is owned by \(key.worktreeId)")
         guard let buffer = buffers[key] else { return }
