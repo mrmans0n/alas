@@ -42,6 +42,38 @@ struct ACPMessageTests {
         #expect(back == m)
     }
 
+    @Test("tool call content revision advances only when displayed content changes")
+    func toolCallContentRevisionTracksDisplayedContentChanges() {
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "tc-revision",
+            title: "run",
+            kind: "execute",
+            status: "in_progress",
+            content: "first")
+
+        #expect(toolCall.contentRevision == 0)
+        toolCall.replaceContent("first")
+        #expect(toolCall.contentRevision == 0)
+        toolCall.replaceContent("second")
+        #expect(toolCall.content == "second")
+        #expect(toolCall.contentRevision == 1)
+    }
+
+    @Test("tool call truncation advances content revision when displayed content is shortened")
+    func toolCallTruncationAdvancesContentRevisionWhenContentChanges() {
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "tc-truncated-revision",
+            title: "run",
+            kind: "execute",
+            status: "completed",
+            content: String(repeating: "x", count: ACPMessage.ToolCall.truncatedTailBytes + 8))
+
+        toolCall.truncateForOffWindow()
+
+        #expect(toolCall.content.count == ACPMessage.ToolCall.truncatedTailBytes)
+        #expect(toolCall.contentRevision == 1)
+    }
+
     @Test("tool call enriched fields round-trip")
     func toolCallEnrichedRoundtrip() throws {
         let metadata = AnyCodable([

@@ -597,7 +597,7 @@ final class ACPSession: ObservableObject, Identifiable {
         let raw = Self.flatten(items)
         let full = Self.stripWrappingFence(raw,
                                            isFinal: Self.isFinalStatus(payload.status))
-        tc.content = full
+        tc.replaceContent(full)
         tc.isContentTruncated = false
         tc.preview = Self.previewLine(full)
         tc.contentLanguage = Self.wrappingFenceLanguage(raw)
@@ -645,7 +645,7 @@ final class ACPSession: ObservableObject, Identifiable {
             let raw = Self.flatten(content)
             let full = Self.stripWrappingFence(raw,
                                                isFinal: Self.isFinalStatus(tc.status))
-            tc.content = full
+            tc.replaceContent(full)
             tc.isContentTruncated = false
             tc.preview = Self.previewLine(full)
             tc.contentLanguage = Self.wrappingFenceLanguage(raw)
@@ -691,8 +691,32 @@ final class ACPSession: ObservableObject, Identifiable {
     }
 
     func replaceTranscriptMessages(_ messages: [ACPMessage]) {
-        transcript.messages = messages
+        transcript.messages = messagesPreservingToolCallContentRevisions(messages)
         rebuildToolCallIndices()
+    }
+
+    private func messagesPreservingToolCallContentRevisions(_ messages: [ACPMessage]) -> [ACPMessage] {
+        let previousToolCalls = transcript.messages.reduce(into: [String: ACPMessage.ToolCall]()) { result, message in
+            if case .toolCall(let toolCall) = message {
+                result[toolCall.toolCallId] = toolCall
+            }
+        }
+
+        guard !previousToolCalls.isEmpty else {
+            return messages
+        }
+
+        return messages.map { message in
+            guard case .toolCall(var toolCall) = message,
+                  let previous = previousToolCalls[toolCall.toolCallId] else {
+                return message
+            }
+            toolCall.contentRevision = previous.contentRevision
+            if toolCall.content != previous.content {
+                toolCall.contentRevision &+= 1
+            }
+            return .toolCall(toolCall)
+        }
     }
 
     /// Insert `older` at the head of the transcript and shift `visibleHead`

@@ -5,6 +5,61 @@ import Testing
 @MainActor
 @Suite("ACPSession")
 struct ACPSessionTests {
+    @Test("replacement transcript preserves tool call content revision when content is unchanged")
+    func replaceTranscriptPreservesToolCallContentRevisionForSameContent() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        var original = ACPMessage.ToolCall(
+            toolCallId: "tool-1",
+            title: "run",
+            kind: "execute",
+            status: "completed",
+            content: "same output")
+        original.replaceContent("new output")
+        original.replaceContent("same output")
+        session.replaceTranscriptMessages([.toolCall(original)])
+
+        let replacement = ACPMessage.ToolCall(
+            toolCallId: "tool-1",
+            title: "run",
+            kind: "execute",
+            status: "completed",
+            content: "same output")
+        session.replaceTranscriptMessages([.toolCall(replacement)])
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected replacement tool call")
+            return
+        }
+        #expect(toolCall.contentRevision == original.contentRevision)
+    }
+
+    @Test("replacement transcript advances tool call content revision when content changes")
+    func replaceTranscriptAdvancesToolCallContentRevisionForChangedContent() {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        var original = ACPMessage.ToolCall(
+            toolCallId: "tool-1",
+            title: "run",
+            kind: "execute",
+            status: "completed",
+            content: "plain output")
+        original.replaceContent("still plain")
+        session.replaceTranscriptMessages([.toolCall(original)])
+
+        let replacement = ACPMessage.ToolCall(
+            toolCallId: "tool-1",
+            title: "run",
+            kind: "execute",
+            status: "completed",
+            content: "@@ -1 +1 @@\n-old\n+new")
+        session.replaceTranscriptMessages([.toolCall(replacement)])
+
+        guard case .toolCall(let toolCall) = session.transcript.messages.first else {
+            Issue.record("expected replacement tool call")
+            return
+        }
+        #expect(toolCall.contentRevision == original.contentRevision + 1)
+    }
+
     @Test("agent message chunks append to a single agent message")
     func chunksMerge() async {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
