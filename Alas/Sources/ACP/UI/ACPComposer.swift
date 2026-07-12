@@ -170,6 +170,8 @@ struct ACPInputField: NSViewRepresentable {
         private var lastSyncedDraft: ACPComposerDraft
         private var nextSubmitID = 0
         private var pendingSubmitID: Int?
+        private var pendingImageFileInsertions = 0
+        private var imageFileInsertionGeneration = 0
         private var pendingRestyleWork: DispatchWorkItem?
         private var pendingRestyleGeneration = 0
         private var pendingRestyleRange: NSRange?
@@ -277,6 +279,9 @@ struct ACPInputField: NSViewRepresentable {
             else { return }
             guard !restoringDraft else { return }
             pendingSubmitID = nil
+            if storage.string.isEmpty {
+                invalidatePendingImageFileInsertions()
+            }
             if let tv = tv as? ACPNSTextView {
                 tv.reconcileSlashPanel()
             }
@@ -308,6 +313,7 @@ struct ACPInputField: NSViewRepresentable {
         }
 
         func submit(_ textView: NSTextView, intent: ACPSubmitIntent = .auto) {
+            guard pendingImageFileInsertions == 0 else { return }
             flushPendingRestyleNow()
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
@@ -336,6 +342,26 @@ struct ACPInputField: NSViewRepresentable {
             }
         }
 
+        func beginPendingImageFileInsertion() -> Int {
+            pendingImageFileInsertions += 1
+            return imageFileInsertionGeneration
+        }
+
+        func finishPendingImageFileInsertion(generation: Int) {
+            if generation == imageFileInsertionGeneration {
+                pendingImageFileInsertions = max(0, pendingImageFileInsertions - 1)
+            }
+        }
+
+        func canCompleteImageFileInsertion(generation: Int) -> Bool {
+            generation == imageFileInsertionGeneration
+        }
+
+        private func invalidatePendingImageFileInsertions() {
+            imageFileInsertionGeneration &+= 1
+            pendingImageFileInsertions = 0
+        }
+
         func restoreInitialDraft(into textView: NSTextView) {
             guard !initialDraft.isEmpty else { return }
             restore(initialDraft, into: textView)
@@ -356,6 +382,7 @@ struct ACPInputField: NSViewRepresentable {
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
             }
+            invalidatePendingImageFileInsertions()
             restoringDraft = true
             storage.setAttributedString(Self.attributedString(from: draft, typography: typography))
             ACPMarkdownLiveStyler.restyle(storage, typography: typography)
@@ -368,6 +395,7 @@ struct ACPInputField: NSViewRepresentable {
             if let tv = textView as? ACPNSTextView {
                 tv.dismissSlashPanel()
             }
+            invalidatePendingImageFileInsertions()
             restoringDraft = true
             textView.string = ""
             textView.needsDisplay = true
@@ -518,6 +546,10 @@ extension NSAttributedString.Key {
 final class ACPNSTextView: NSTextView {
     weak var coordinator: ACPInputField.Coordinator?
     private var chatTypography: ACPChatTypography = .default
+
+    #if DEBUG
+    nonisolated(unsafe) static var imageFileReadGateForTesting: (@Sendable () async -> Void)?
+    #endif
 
     /// Greyed-out hint drawn when the storage is empty. Matches the Cursor
     /// chat composer's placeholder.
@@ -748,6 +780,11 @@ final class ACPNSTextView: NSTextView {
 
     @discardableResult
     func insertImage(data: Data, worktreeId: String) -> Bool {
+        insertImage(data: data, worktreeId: worktreeId, replacementRange: selectedRange())
+    }
+
+    @discardableResult
+    private func insertImage(data: Data, worktreeId: String, replacementRange: NSRange) -> Bool {
         guard currentImageChipCount() < Self.maxImagesPerMessage else {
             coordinator?.reportImageError(.tooManyImages)
             return false
@@ -767,7 +804,9 @@ final class ACPNSTextView: NSTextView {
             // renders black until the debounced restyler repaints the line.
             let baseAttrs = baseTypingAttributes
             chipString.append(NSAttributedString(string: " ", attributes: baseAttrs))
-            let insertAt = selectedRange()
+            let storageLength = textStorage?.length ?? 0
+            let location = min(replacementRange.location, storageLength)
+            let insertAt = NSRange(location: location, length: min(replacementRange.length, storageLength - location))
             textStorage?.replaceCharacters(in: insertAt, with: chipString)
             setSelectedRange(NSRange(location: insertAt.location + chipString.length, length: 0))
             typingAttributes = baseAttrs
@@ -789,16 +828,11 @@ final class ACPNSTextView: NSTextView {
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         panel.begin { [weak self] response in
             guard let self, response == .OK else { return }
-            for url in panel.urls {
-                switch Self.readImageFile(url) {
-                case .data(let data):
-                    _ = self.insertImage(data: data, worktreeId: self.worktreeIdForStaging)
-                case .tooLarge:
-                    self.coordinator?.reportImageError(.tooLarge)
-                case .unsupported:
-                    break
-                }
-            }
+            self.insertImageFiles(
+                panel.urls,
+                worktreeId: self.worktreeIdForStaging,
+                insertionRange: self.selectedRange()
+            )
         }
     }
 
@@ -832,24 +866,46 @@ final class ACPNSTextView: NSTextView {
         case unsupported
     }
 
-    /// Read a file URL's image bytes, applying the size cap from its metadata
-    /// BEFORE reading the file into memory (so an oversized pick/drop reports
-    /// `.tooLarge` instead of allocating the whole file).
-    static func readImageFile(_ url: URL) -> FileImageRead {
+    private enum FileImageCandidate {
+        case supported
+        case tooLarge
+        case unsupported
+    }
+
+    private static func imageFileCandidate(_ url: URL) -> FileImageCandidate {
         if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
            size > ACPImageStaging.maxBytes { return .tooLarge }
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return .unsupported }
-        let header = (try? handle.read(upToCount: 16)) ?? Data()
-        try? handle.close()
-        guard ACPImageStaging.sniffMIME(header) != nil,
-              let data = try? Data(contentsOf: url) else { return .unsupported }
-        return .data(data)
+        return isSupportedImageFile(url) ? .supported : .unsupported
+    }
+
+    /// Read a file URL's image bytes, applying the size cap from its metadata
+    /// BEFORE reading the file into memory (so an oversized pick/drop reports
+    /// `.tooLarge` instead of allocating the whole file). The file read and
+    /// MIME sniff happen in a `Task.detached` so the main thread isn't blocked.
+    static func readImageFile(_ url: URL) async -> FileImageRead {
+        await Task.detached(priority: .userInitiated) {
+            #if DEBUG
+            if let gate = await ACPNSTextView.imageFileReadGateForTesting {
+                await gate()
+            }
+            #endif
+            if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               size > ACPImageStaging.maxBytes { return .tooLarge }
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return .unsupported }
+            let header = (try? handle.read(upToCount: 16)) ?? Data()
+            try? handle.close()
+            guard ACPImageStaging.sniffMIME(header) != nil,
+                  let data = try? Data(contentsOf: url) else { return .unsupported }
+            return .data(data)
+        }.value
     }
 
     /// Stage and insert every supported image from `pb` — raw bitmap data
     /// (one screenshot) or one-per image file URL (multiple Finder files). Each
     /// `insertImage` enforces the per-message cap; oversized file URLs surface
     /// the `.tooLarge` notice. Returns true if any image source was handled.
+    /// File-URL reads are dispatched off the main thread; pasteboard bitmap
+    /// data (already in memory) is handled inline.
     @discardableResult
     private func insertImages(from pb: NSPasteboard) -> Bool {
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
@@ -867,20 +923,68 @@ final class ACPNSTextView: NSTextView {
         }
         guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
         else { return false }
-        var handled = false
-        for url in urls {
-            switch Self.readImageFile(url) {
-            case .data(let data):
-                handled = true
-                _ = insertImage(data: data, worktreeId: worktreeIdForStaging)
-            case .tooLarge:
-                handled = true
-                coordinator?.reportImageError(.tooLarge)
-            case .unsupported:
-                break
+        guard !urls.isEmpty else { return false }
+        guard urls.contains(where: { Self.imageFileCandidate($0) != .unsupported }) else { return false }
+        insertImageFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+        return true
+    }
+
+    private func insertImageFiles(_ urls: [URL], worktreeId: String, insertionRange: NSRange) {
+        let coordinator = coordinator
+        let generation = coordinator?.beginPendingImageFileInsertion()
+        Task { @MainActor [weak self, weak coordinator] in
+            defer {
+                if let generation {
+                    coordinator?.finishPendingImageFileInsertion(generation: generation)
+                }
+            }
+            var nextLocation = insertionRange.location
+            var isFirstImage = true
+            for url in urls {
+                switch await Self.readImageFile(url) {
+                case .data(let data):
+                    guard let self else { return }
+                    if let generation,
+                       coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
+                    let beforeLength = self.textStorage?.length ?? 0
+                    let replacementRange = self.asyncImageReplacementRange(
+                        capturedRange: insertionRange,
+                        nextLocation: nextLocation,
+                        isFirstImage: isFirstImage
+                    )
+                    if self.insertImage(data: data, worktreeId: worktreeId, replacementRange: replacementRange) {
+                        nextLocation = self.selectedRange().location
+                        if nextLocation == replacementRange.location {
+                            nextLocation += max(0, (self.textStorage?.length ?? 0) - beforeLength)
+                        }
+                        isFirstImage = false
+                    }
+                case .tooLarge:
+                    if let generation,
+                       coordinator?.canCompleteImageFileInsertion(generation: generation) != true { return }
+                    self?.coordinator?.reportImageError(.tooLarge)
+                case .unsupported:
+                    break
+                }
             }
         }
-        return handled
+    }
+
+    #if DEBUG
+    func insertPickedImageFilesForTesting(_ urls: [URL]) {
+        insertImageFiles(urls, worktreeId: worktreeIdForStaging, insertionRange: selectedRange())
+    }
+    #endif
+
+    private func asyncImageReplacementRange(
+        capturedRange: NSRange,
+        nextLocation: Int,
+        isFirstImage: Bool
+    ) -> NSRange {
+        guard isFirstImage else { return NSRange(location: nextLocation, length: 0) }
+        let current = selectedRange()
+        guard current == capturedRange else { return NSRange(location: current.location, length: 0) }
+        return capturedRange
     }
 
     /// True when the general pasteboard currently holds a supported image.

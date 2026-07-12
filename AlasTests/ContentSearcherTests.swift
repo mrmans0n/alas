@@ -4,8 +4,8 @@ import Foundation
 
 @Suite(.serialized)
 struct ContentSearcherTests {
-    private func rgAvailable() -> Bool {
-        ContentSearcher.discoverRg() != nil
+    private func rgAvailable() async -> Bool {
+        await ContentSearcher.discoverRg() != nil
     }
 
     private func makeRepo(files: [(String, String)]) async throws -> URL {
@@ -26,7 +26,7 @@ struct ContentSearcherTests {
     }
 
     @Test func findsMatchesAcrossFiles() async throws {
-        try #require(rgAvailable())
+        try #require(await rgAvailable())
         let repo = try await makeRepo(files: [
             ("a.txt", "hello world\nfoo bar\nneedle here\n"),
             ("nested/b.txt", "nothing\nneedle middle\nneedle end\n"),
@@ -52,7 +52,7 @@ struct ContentSearcherTests {
     }
 
     @Test func cancellationStopsStream() async throws {
-        try #require(rgAvailable())
+        try #require(await rgAvailable())
         // Build a directory big enough that rg takes >50ms.
         var pairs: [(String, String)] = []
         for i in 0..<500 {
@@ -82,7 +82,7 @@ struct ContentSearcherTests {
     }
 
     @Test func caseSensitiveFlag() async throws {
-        try #require(rgAvailable())
+        try #require(await rgAvailable())
         let repo = try await makeRepo(files: [
             ("a.txt", "Needle\nneedle\n"),
         ])
@@ -101,7 +101,7 @@ struct ContentSearcherTests {
     }
 
     @Test func columnsUseCharacterOffsetsForNonASCIIPrefixes() async throws {
-        try #require(rgAvailable())
+        try #require(await rgAvailable())
         let repo = try await makeRepo(files: [
             ("a.txt", "😀needle\n"),
         ])
@@ -127,7 +127,7 @@ struct ContentSearcherTests {
     }
 
     @Test func revealColumnsUseUTF16OffsetsInsideExtendedGraphemeClusters() async throws {
-        try #require(rgAvailable())
+        try #require(await rgAvailable())
         let repo = try await makeRepo(files: [
             ("a.txt", "🇺🇸needle\n"),
         ])

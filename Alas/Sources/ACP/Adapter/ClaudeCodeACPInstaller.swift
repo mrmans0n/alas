@@ -21,16 +21,30 @@ struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
     }
 
     static let defaultRunner: (String, [String]) async throws -> (status: Int32, stderr: String) = { cmd, args in
-        let proc = Process()
+        nonisolated(unsafe) let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         proc.arguments = [cmd] + args
         proc.environment = ACPProcessEnvironment.augmented()
         let err = Pipe()
         proc.standardError = err
         proc.standardOutput = Pipe()
-        try proc.run()
-        proc.waitUntilExit()
-        let data = (try? err.fileHandleForReading.readToEnd()) ?? Data()
-        return (proc.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<(status: Int32, stderr: String), Error>) in
+                proc.terminationHandler = { p in
+                    let data = (try? err.fileHandleForReading.readToEnd()) ?? Data()
+                    let stderr = String(data: data, encoding: .utf8) ?? ""
+                    cont.resume(returning: (p.terminationStatus, stderr))
+                }
+                do {
+                    try proc.run()
+                } catch {
+                    proc.terminationHandler = nil
+                    cont.resume(throwing: error)
+                }
+            }
+        } onCancel: {
+            proc.terminate()
+        }
     }
 }

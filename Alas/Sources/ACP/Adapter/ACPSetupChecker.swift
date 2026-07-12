@@ -36,20 +36,22 @@ struct ACPSetupChecker {
     private func npmPackageInstalled(_ name: String) async -> Bool {
         // `npm root -g` resolves the global node_modules path; look for the package there.
         guard let npm = resolve("npm") else { return false }
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: npm)
-        proc.arguments = ["root", "-g"]
-        proc.environment = ACPProcessEnvironment.augmented(
+        let env = ACPProcessEnvironment.augmented(
             env,
             additionalPathDirectories: additionalPathDirectories)
-        let pipe = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError = Pipe()
-        do { try proc.run() } catch { return false }
-        proc.waitUntilExit()
-        guard let data = try? pipe.fileHandleForReading.readToEnd(),
-              let root = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        else { return false }
+        let result: ProcessResult?
+        do {
+            result = try await Process.run(
+                npm,
+                args: ["root", "-g"],
+                env: env
+            )
+        } catch {
+            return false
+        }
+        guard let result else { return false }
+        let root = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !root.isEmpty else { return false }
         var isDir: ObjCBool = false
         return FileManager.default.fileExists(atPath: "\(root)/\(name)", isDirectory: &isDir) && isDir.boolValue
     }

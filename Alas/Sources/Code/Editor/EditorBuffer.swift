@@ -14,6 +14,17 @@ import Observation
 @Observable
 @MainActor
 final class EditorBuffer {
+    enum SaveError: LocalizedError {
+        case loadPending
+
+        var errorDescription: String? {
+            switch self {
+            case .loadPending:
+                "File is still loading. Try saving again after it finishes."
+            }
+        }
+    }
+
     let worktreeRoot: URL
     private(set) var relativePath: String
 
@@ -49,8 +60,31 @@ final class EditorBuffer {
     private var editObservers: [UUID: (EditorTextEdit?) -> Void] = [:]
     @ObservationIgnored
     private var storageDelegate: BufferStorageDelegate = .init { _ in }
+    private enum LoadState {
+        struct Pending {
+            let generation: Int
+            let hasPendingSnapshot: Bool
+            var userEdits: [EditorTextEdit] = []
+            var preloadText = ""
+            var queuedReload: Bool = false
+            var suppressEditTracking: Bool = false
+
+            var hasUserEdits: Bool { !userEdits.isEmpty }
+        }
+
+        case loaded(preloadUserEdits: Bool)
+        case loading(Pending)
+        case cancelled
+
+        var isLoading: Bool {
+            if case .loading = self { return true }
+            return false
+        }
+    }
     @ObservationIgnored
-    private var loading = false
+    private var loadState: LoadState = .loaded(preloadUserEdits: false)
+    @ObservationIgnored
+    private var programmaticEditDepth = 0
     @ObservationIgnored
     private var watcherSource: DispatchSourceFileSystemObject?
     @ObservationIgnored
@@ -61,6 +95,14 @@ final class EditorBuffer {
     private var moveLookupTask: Task<MovedFileLookupResult?, Never>?
     @ObservationIgnored
     private var moveLookupGeneration = 0
+    @ObservationIgnored
+    private var loadTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var nextLoadGeneration = 0
+    @ObservationIgnored
+    nonisolated(unsafe) static var loadGateForTesting: (@Sendable () async -> Void)?
+    @ObservationIgnored
+    nonisolated(unsafe) static var loadResultForTesting: (@Sendable (URL) async -> String?)?
     @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
     @ObservationIgnored
@@ -97,6 +139,10 @@ final class EditorBuffer {
     /// before issuing its own close+open.
     @ObservationIgnored
     private var languageReopenTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var lspOpenTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var lspOpenGeneration = 0
 
     /// Per-tab, per-session override of the inferred language. Setting this
     /// drives the buffer to close the document on the previous language
@@ -125,12 +171,24 @@ final class EditorBuffer {
     @ObservationIgnored
     var onPathChanged: ((String, String) -> Void)?
     @ObservationIgnored
+    var onRestoredPathChanged: ((String, String) -> Void)?
+    @ObservationIgnored
+    var onInitialLoadFinished: (() -> Void)?
+    @ObservationIgnored
     var onSnapshotRequested: (() -> Void)?
     @ObservationIgnored
     var onDiscardSnapshotsRequested: (() -> Void)?
     @ObservationIgnored
     private var pendingRestoredPathChange: (oldPath: String, newPath: String)?
     var persistenceTabId: String? { tabId }
+    @ObservationIgnored
+    private(set) var initialLoadFinished = false
+
+    enum SaveDisposition: Equatable {
+        case clean
+        case ready
+        case blockedByLoad
+    }
 
     struct EditObserverToken { fileprivate let id: UUID }
 
@@ -150,14 +208,24 @@ final class EditorBuffer {
 
     /// Production initializer that opts into hot-exit (no LSP). The `store`
     /// is consulted at init time for any persisted snapshot.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore)
+    }
+
+    /// Synchronous load variant for non-UI save materialization. Normal editor
+    /// opens use the async load path to avoid blocking the main thread.
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously)
     }
 
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore)
+    }
+
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously)
     }
 
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
@@ -181,7 +249,7 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
@@ -194,20 +262,70 @@ final class EditorBuffer {
         let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
-        loadFromDisk()
+        let snapshot: EditorBufferStore.Snapshot?
+        if restoreEnabled, let store, let worktreeId, let tabId {
+            snapshot = (try? store.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
+        } else {
+            snapshot = nil
+        }
+        let finishLoad: @MainActor (LoadState.Pending?) -> Void = { [weak self] pending in
+            self?.finishInitialLoad(
+                isExternal: isExternal,
+                snapshot: snapshot,
+                pendingUserEdits: pending?.userEdits ?? [],
+                preloadText: pending?.preloadText ?? "",
+                lsp: lsp,
+                checkConflictOnRestore: checkConflictOnRestore
+            )
+        }
+        if isExternal || loadSynchronously {
+            loadFromDiskSync()
+            finishLoad(nil)
+        } else {
+            loadFromDisk(
+                preservePendingEdits: true,
+                notifyAfterLoad: false,
+                hasPendingSnapshot: snapshot != nil,
+                completion: finishLoad
+            )
+        }
+    }
+
+    private func finishInitialLoad(
+        isExternal: Bool,
+        snapshot: EditorBufferStore.Snapshot?,
+        pendingUserEdits: [EditorTextEdit],
+        preloadText: String,
+        lsp: WorkspaceLSPManager?,
+        checkConflictOnRestore: Bool = false
+    ) {
+        if case .cancelled = loadState { return }
         if !isExternal,
-           restoreEnabled,
-           let store, let worktreeId, let tabId,
-           let snap = (try? store.read(worktreeId: worktreeId, tabId: tabId)) {
+           let snap = snapshot {
             applySnapshot(snap)
+            if onRestoredPathChanged != nil,
+               let restoredPathChange = consumeRestoredPathChange() {
+                onRestoredPathChanged?(restoredPathChange.oldPath, restoredPathChange.newPath)
+                if case .cancelled = loadState { return }
+            }
+        }
+        if !pendingUserEdits.isEmpty {
+            replayPendingUserEdits(pendingUserEdits, fallbackText: preloadText)
+            conflict = .changedOnDisk
+        }
+        if checkConflictOnRestore {
+            checkForConflictOnRestore()
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
-        if !isExternal, let lsp, let language {
-            let url = worktreeRoot.appendingPathComponent(self.relativePath)
-            let text = storage.string
-            openedLanguage = language
-            Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
-        }
+        // Notify any already-attached coordinator that content has arrived
+        // so it can re-apply base style (font/color) to the freshly loaded
+        // storage. Without this, bindBuffer's applyBaseStyle ran against
+        // empty storage and the loadFromDisk setAttributedString wiped
+        // everything, leaving the text view unstyled.
+        handleEdit(edit: nil)
+        initialLoadFinished = true
+        openLSPDocumentIfReady()
+        onInitialLoadFinished?()
     }
 
     /// Re-fire `didOpen` for this buffer's current text. Used after a
@@ -221,12 +339,54 @@ final class EditorBuffer {
     /// document would leave a dangling ref the next `didClose` couldn't
     /// balance.
     func reopenLSPDocument() {
-        guard !isExternal, let lsp, let effective = effectiveLanguage else { return }
+        openLSPDocumentIfReady()
+    }
+
+    private func openLSPDocumentIfReady() {
+        guard initialLoadFinished,
+              !isExternal,
+              openedLanguage == nil,
+              lspOpenTask == nil,
+              let lsp,
+              let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
-        openedLanguage = effective
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, text: text) }
+        lspOpenGeneration &+= 1
+        let generation = lspOpenGeneration
+        lspOpenTask = Task { [weak self] in
+            let opened = await lsp.openDocument(
+                worktreeRoot: worktreeRoot,
+                fileURL: url,
+                languageId: effective,
+                text: text
+            ) != nil
+            guard let self else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective)
+                }
+                return
+            }
+            guard !Task.isCancelled,
+                  self.lspOpenGeneration == generation,
+                  self.initialLoadFinished,
+                  self.effectiveLanguage == effective else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective)
+                }
+                return
+            }
+            self.lspOpenTask = nil
+            if opened {
+                self.openedLanguage = effective
+            }
+        }
+    }
+
+    private func cancelPendingLSPOpen() {
+        lspOpenGeneration &+= 1
+        lspOpenTask?.cancel()
+        lspOpenTask = nil
     }
 
     func reopenLSPDocument(afterRegistering language: String, forFileExtensions extensions: Set<String>) {
@@ -266,8 +426,81 @@ final class EditorBuffer {
         return change
     }
 
+    private var isLoading: Bool { loadState.isLoading }
+
+    var saveDisposition: SaveDisposition {
+        switch loadState {
+        case .loading(let pending):
+            return pending.hasUserEdits || pending.hasPendingSnapshot ? .blockedByLoad : .clean
+        case .loaded:
+            return dirty ? .ready : .clean
+        case .cancelled:
+            return .clean
+        }
+    }
+
+    private func beginAsyncLoad(hasPendingSnapshot: Bool) -> Int {
+        loadTask?.cancel()
+        nextLoadGeneration &+= 1
+        let generation = nextLoadGeneration
+        loadState = .loading(.init(generation: generation, hasPendingSnapshot: hasPendingSnapshot))
+        return generation
+    }
+
+    private func acceptLoadCompletion(generation: Int) -> LoadState.Pending? {
+        guard case .loading(let pending) = loadState,
+              pending.generation == generation else { return nil }
+        loadTask = nil
+        loadState = .loaded(preloadUserEdits: pending.hasUserEdits)
+        return pending
+    }
+
+    private func cancelPendingLoad() {
+        loadTask?.cancel()
+        loadTask = nil
+        loadState = .cancelled
+    }
+
+    private func markUserEditDuringLoadIfNeeded(_ edit: EditorTextEdit) -> Bool {
+        guard case .loading(var pending) = loadState else { return false }
+        guard !pending.suppressEditTracking else { return true }
+        pending.userEdits.append(edit)
+        pending.preloadText = storage.string
+        loadState = .loading(pending)
+        return true
+    }
+
+    private func queueReloadDuringLoadIfNeeded() -> Bool {
+        guard case .loading(var pending) = loadState else { return false }
+        pending.queuedReload = true
+        loadState = .loading(pending)
+        return true
+    }
+
+    private func withLoadEditTrackingSuppressed<T>(_ body: () throws -> T) rethrows -> T {
+        programmaticEditDepth += 1
+        guard case .loading(var pending) = loadState else {
+            defer { programmaticEditDepth -= 1 }
+            return try body()
+        }
+        pending.suppressEditTracking = true
+        loadState = .loading(pending)
+        defer {
+            programmaticEditDepth -= 1
+            if case .loading(var current) = loadState,
+               current.generation == pending.generation {
+                current.suppressEditTracking = false
+                loadState = .loading(current)
+            }
+        }
+        return try body()
+    }
+
     private func handleEdit(edit: EditorTextEdit?) {
-        guard !loading else { return }
+        guard programmaticEditDepth == 0 else { return }
+        if let edit, markUserEditDuringLoadIfNeeded(edit) {
+            return
+        }
         // External buffers are read-only; suppress all observer notifications
         // so didChange is never propagated to LSP or snapshot scheduler.
         guard !isExternal else { return }
@@ -277,9 +510,10 @@ final class EditorBuffer {
     }
 
     func revert() {
-        loadFromDisk()
-        discardSnapshot()
-        handleEdit(edit: nil)
+        loadFromDisk(preservePendingEdits: false) { [weak self] _ in
+            self?.discardSnapshot()
+            self?.handleEdit(edit: nil)
+        }
     }
 
     func startWatching() {
@@ -315,6 +549,13 @@ final class EditorBuffer {
             return
         }
         cancelMoveLookup()
+        // A load is already in-flight (initial load or a previous watcher-
+        // triggered revert). It will pick up the latest content, so skip —
+        // without this guard, two rapid watcher events (e.g. .write + .attrib)
+        // each fire revert(), both async loads apply, and observers fire twice.
+        if queueReloadDuringLoadIfNeeded() {
+            return
+        }
         guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
               onDiskMtime != originalMtime else { return }
         if dirty {
@@ -451,12 +692,17 @@ final class EditorBuffer {
             conflict = differsFromOriginal ? .changedOnDisk : nil
             snapshotNow()
         } else {
-            loadFromDisk()
-            discardSnapshot()
-            handleEdit(edit: nil)
+            loadFromDisk { [weak self] _ in
+                guard let self else { return }
+                self.discardSnapshot()
+                self.handleEdit(edit: nil)
+                self.notifyDidOpen()
+            }
         }
         notifyDidClose(url: oldURL)
-        notifyDidOpen(url: newURL, text: storage.string)
+        if wasDirty {
+            notifyDidOpen()
+        }
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
     }
@@ -483,7 +729,22 @@ final class EditorBuffer {
     func save() throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        switch saveDisposition {
+        case .blockedByLoad:
+            throw SaveError.loadPending
+        case .clean where isLoading:
+            return
+        case .clean, .ready:
+            break
+        }
         let url = worktreeRoot.appendingPathComponent(relativePath)
+        if dirty,
+           let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
+           onDiskMtime != originalMtime {
+            conflict = .changedOnDisk
+            throw SaveError.loadPending
+        }
+        if conflict == .changedOnDisk { throw SaveError.loadPending }
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)
         originalText = canonical
@@ -496,6 +757,7 @@ final class EditorBuffer {
     func saveAs(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        guard !isLoading else { throw SaveError.loadPending }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -514,7 +776,7 @@ final class EditorBuffer {
             updateOriginalFileIdentity(from: newURL)
             discardSnapshot()
             notifyDidClose(url: oldURL)
-            notifyDidOpen(url: newURL, text: canonical)
+            notifyDidOpen()
             notifyDidSave(url: newURL)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
@@ -527,6 +789,7 @@ final class EditorBuffer {
     func moveTo(relativePath newRelativePath: String) throws {
         lastSaveError = nil
         guard !readOnly else { return }
+        guard !isLoading else { throw SaveError.loadPending }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -555,7 +818,7 @@ final class EditorBuffer {
                 discardSnapshot()
             }
             notifyDidClose(url: oldURL)
-            notifyDidOpen(url: newURL, text: storage.string)
+            notifyDidOpen()
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
         } catch {
@@ -769,7 +1032,8 @@ final class EditorBuffer {
     /// language (if any). Skipped for external buffers — those route via a
     /// different external-document API.
     private func applyEffectiveLanguageToLSP() {
-        guard !isExternal, lsp != nil else { return }
+        guard initialLoadFinished, !isExternal, lsp != nil else { return }
+        cancelPendingLSPOpen()
         let prior = languageReopenTask
         // Cancel the prior queued transition before we await it — this
         // propagates cancellation through the chain. `close()` only cancels
@@ -806,7 +1070,12 @@ final class EditorBuffer {
             }
             if let target {
                 let text = self.storage.string
-                await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target, text: text)
+                let opened = await lsp.openDocument(
+                    worktreeRoot: worktreeRootCapture,
+                    fileURL: url,
+                    languageId: target,
+                    text: text
+                ) != nil
                 if Task.isCancelled {
                     // openDocument has already bumped refs on the server
                     // (the ref bump happens synchronously inside the
@@ -814,10 +1083,14 @@ final class EditorBuffer {
                     // have read `openedLanguage == nil` and skipped its
                     // didClose, so without this compensation the doc
                     // would be left referenced with no owning buffer.
-                    await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                    if opened {
+                        await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                    }
                     return
                 }
-                self.openedLanguage = target
+                if opened {
+                    self.openedLanguage = target
+                }
             }
         }
     }
@@ -829,17 +1102,15 @@ final class EditorBuffer {
     }
 
     private func notifyDidClose(url: URL) {
+        cancelPendingLSPOpen()
         if let lsp, let opened = openedLanguage {
             Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
             openedLanguage = nil
         }
     }
 
-    private func notifyDidOpen(url: URL, text: String) {
-        if let lsp, let effective = effectiveLanguage {
-            openedLanguage = effective
-            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: effective, text: text) }
-        }
+    private func notifyDidOpen() {
+        openLSPDocumentIfReady()
     }
 
     func saveRecordingError() throws {
@@ -960,13 +1231,13 @@ final class EditorBuffer {
                 return false
             }
         }
-        loading = true
-        storage.beginEditing()
-        for edit in ascending.reversed() {
-            storage.replaceCharacters(in: edit.range, with: edit.newText)
+        withLoadEditTrackingSuppressed {
+            storage.beginEditing()
+            for edit in ascending.reversed() {
+                storage.replaceCharacters(in: edit.range, with: edit.newText)
+            }
+            storage.endEditing()
         }
-        storage.endEditing()
-        loading = false
         editGeneration &+= 1
         return true
     }
@@ -984,14 +1255,30 @@ final class EditorBuffer {
             pendingRestoredPathChange = (oldRelativePath, snap.relativePath)
         }
         language = lsp?.language(forFileExtension: (snap.relativePath as NSString).pathExtension)
-        loading = true
-        defer { loading = false }
-        storage.setAttributedString(NSAttributedString(string: snap.content))
+        withLoadEditTrackingSuppressed {
+            storage.setAttributedString(NSAttributedString(string: snap.content))
+        }
         originalText = snap.originalText
         originalMtime = snap.originalMtime
         lineEnding = snap.lineEnding
         readOnly = false
         updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
+    }
+
+    private func replayPendingUserEdits(_ edits: [EditorTextEdit], fallbackText: String) {
+        var merged = storage.string
+        for edit in edits {
+            guard let next = TextEditCoordinates.apply(edit, to: merged) else {
+                withLoadEditTrackingSuppressed {
+                    storage.setAttributedString(NSAttributedString(string: fallbackText))
+                }
+                return
+            }
+            merged = next
+        }
+        withLoadEditTrackingSuppressed {
+            storage.setAttributedString(NSAttributedString(string: merged))
+        }
     }
 
     private func canRestoreSnapshotPath(_ path: String) -> Bool {
@@ -1053,6 +1340,8 @@ final class EditorBuffer {
     /// Tear-down for a buffer. App quit paths can keep a final dirty snapshot
     /// for hot-exit restore; explicit tab removal discards it.
     func close(persistDirtySnapshot: Bool = true) {
+        cancelPendingLoad()
+        cancelPendingLSPOpen()
         snapshotTask?.cancel()
         // Cancel any in-flight language-override reopen so it can't run
         // `openDocument` after close() has already torn down the buffer —
@@ -1088,39 +1377,177 @@ final class EditorBuffer {
         }
     }
 
-    private func loadFromDisk() {
-        loading = true
-        defer { loading = false }
+    /// Load the file from disk, calling `completion` on the main actor
+    /// when the content has been applied. The file read happens in a
+    /// `Task.detached` so the main thread isn't blocked by
+    /// `String(contentsOf:)` on large files.
+    private func loadFromDisk(
+        preservePendingEdits: Bool = false,
+        notifyAfterLoad: Bool = true,
+        hasPendingSnapshot: Bool = false,
+        completion: @escaping @MainActor (LoadState.Pending?) -> Void
+    ) {
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let resolvedURL = url.resolvingSymlinksInPath()
+        let isExternal = self.isExternal
+        let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
+        let task = Task.detached(priority: .userInitiated) { () -> LoadResult in
+            if let gate = await EditorBuffer.loadGateForTesting {
+                await gate()
+            }
+            guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
+                return .missing
+            }
+            let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            if isDirectory { return .missing }
+            if let override = await EditorBuffer.loadResultForTesting,
+               let raw = await override(resolvedURL) {
+                let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+                return .loaded(raw: raw, resolvedURL: resolvedURL, isExternal: isExternal, isSymlink: isSymlink)
+            }
+            guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
+                return .notUTF8
+            }
+            let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+            return .loaded(raw: raw, resolvedURL: resolvedURL, isExternal: isExternal, isSymlink: isSymlink)
+        }
+        loadTask = Task { [weak self] in
+            let result = await task.value
+            // A newer loadFromDisk may have cancelled this task and started
+            // its own. Bail out before mutating storage so a stale result
+            // can't overwrite a fresher load (e.g. two watcher events firing
+            // before the first async read completes).
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard let self,
+                      let pending = self.acceptLoadCompletion(generation: generation) else { return }
+                let didApplyChange = self.withLoadEditTrackingSuppressed {
+                    self.applyLoadResult(result)
+                }
+                completion(preservePendingEdits ? pending : nil)
+                self.settleQueuedReloadAfterLoad(
+                    pending.queuedReload,
+                    preservingUserEdits: preservePendingEdits && pending.hasUserEdits
+                )
+                if notifyAfterLoad, didApplyChange {
+                    self.handleEdit(edit: nil)
+                }
+            }
+        }
+    }
+
+    private enum LoadResult {
+        case missing
+        case notUTF8
+        case loaded(raw: String, resolvedURL: URL, isExternal: Bool, isSymlink: Bool)
+    }
+
+    @discardableResult
+    private func applyLoadResult(_ result: LoadResult) -> Bool {
+        switch result {
+        case .missing:
+            let didApplyChange = storage.string != "(unable to read file)" || !readOnly
+            if didApplyChange {
+                storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+                readOnly = true
+            }
+            return didApplyChange
+        case .notUTF8:
+            let message = "(read-only: file is not valid UTF-8)"
+            let didApplyChange = storage.string != message || !readOnly
+            if didApplyChange {
+                storage.setAttributedString(NSAttributedString(string: message))
+                readOnly = true
+            }
+            return didApplyChange
+        case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
+            let detected = LineEnding.detect(in: raw)
+            let canonical = LineEnding.lf.normalize(raw)
+            let nextReadOnly = isExternal || isSymlink
+            let didApplyChange = storage.string != canonical
+                || originalText != canonical
+                || lineEnding != detected
+                || readOnly != nextReadOnly
+            if didApplyChange {
+                storage.setAttributedString(NSAttributedString(string: canonical))
+            }
+            originalText = canonical
+            lineEnding = detected
+            updateOriginalFileAttributes(from: resolvedURL)
+            readOnly = nextReadOnly
+            return didApplyChange
+        }
+    }
+
+    private func settleQueuedReloadAfterLoad(_ queued: Bool, preservingUserEdits: Bool) {
+        guard queued else { return }
+        if case .cancelled = loadState { return }
+        if preservingUserEdits || dirty {
+            conflict = .changedOnDisk
+            startWatching()
+        } else {
+            revert()
+            startWatching()
+        }
+    }
+
+    @discardableResult
+    private func loadFromDiskSync() -> Self {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let resolvedURL = url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
-            storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+            withLoadEditTrackingSuppressed {
+                storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+            }
             readOnly = true
-            return
+            return self
         }
         let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         guard !isDirectory else {
-            storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+            withLoadEditTrackingSuppressed {
+                storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+            }
             readOnly = true
-            return
+            return self
         }
         guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
-            storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
+            withLoadEditTrackingSuppressed {
+                storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
+            }
             readOnly = true
-            return
+            return self
         }
         let detected = LineEnding.detect(in: raw)
         let canonical = LineEnding.lf.normalize(raw)
-        storage.setAttributedString(NSAttributedString(string: canonical))
+        withLoadEditTrackingSuppressed {
+            storage.setAttributedString(NSAttributedString(string: canonical))
+        }
         originalText = canonical
         lineEnding = detected
         updateOriginalFileAttributes(from: resolvedURL)
-        // Symlink-backed buffers are read-only to preserve semantics:
-        // save() writes to the unresolved path, which would replace the
-        // symlink entry instead of updating its target.
         let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-        readOnly = isExternal || isSymlink ? true : false
+        readOnly = isExternal || isSymlink
+        return self
     }
+
+    #if DEBUG
+    @discardableResult
+    func loadFromDiskSyncForTesting() -> Self {
+        loadFromDiskSync()
+    }
+
+    /// Wait for any in-flight async disk load to complete. Used by tests
+    /// that need to inspect buffer content immediately after init.
+    func awaitLoadForTesting() async {
+        if let loadTask {
+            await loadTask.value
+        }
+    }
+
+    func handleWatcherEventForTesting() {
+        handleWatcherEvent()
+    }
+    #endif
 }
 
 private final class BufferStorageDelegate: NSObject, NSTextStorageDelegate {

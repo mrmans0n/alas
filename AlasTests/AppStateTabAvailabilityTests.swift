@@ -308,6 +308,7 @@ struct AppStateTabAvailabilityTests {
             worktreeRoot: trees[0].path,
             relativePath: "a.txt"
         )
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
 
         #expect(state.hasAnyDirtyEditorTab)
@@ -340,6 +341,7 @@ struct AppStateTabAvailabilityTests {
             worktreeRoot: trees[0].path,
             relativePath: "a.txt"
         )
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         _ = state.tabs.appendTerminal(worktreeId: trees[0].id, title: "main", sessionId: "s1")
 
