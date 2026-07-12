@@ -118,7 +118,9 @@ final class DiffPaneLSPDocumentRetain {
         open: Open,
         close: @escaping Close
     ) async throws -> DiffPaneLSPDocumentRetain {
-        let text = try String(contentsOf: fileURL, encoding: .utf8)
+        let text = try await Task.detached(priority: .userInitiated) {
+            try String(contentsOf: fileURL, encoding: .utf8)
+        }.value
         let client = await open(worktreeRoot, fileURL, language, text)
         return DiffPaneLSPDocumentRetain(
             worktreeRoot: worktreeRoot,

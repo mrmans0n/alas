@@ -1233,6 +1233,13 @@ final class TabsManager {
         buffer.onPathChanged = { [weak self] oldPath, newPath in
             self?.handleBufferPathChanged(worktreeId: worktreeId, oldPath: oldPath, newPath: newPath)
         }
+        buffer.onRestoredPathChanged = { [weak self, weak buffer] _, newPath in
+            guard let self, let buffer else { return }
+            let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+            self.buffers[restoredKey] = buffer
+            self.bufferKeys[tabId] = restoredKey
+            _ = self.updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
+        }
         buffer.onSnapshotRequested = { [weak self, weak buffer] in
             guard let buffer else { return }
             self?.snapshotBufferForAllTabs(buffer)
@@ -1608,7 +1615,8 @@ final class TabsManager {
                 store: bufferStore,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                lsp: lsp
+                lsp: lsp,
+                loadSynchronously: true
             )
         } else {
             buffer = EditorBuffer(
@@ -1616,7 +1624,8 @@ final class TabsManager {
                 relativePath: relativePath,
                 store: bufferStore,
                 worktreeId: worktreeId,
-                tabId: tabId
+                tabId: tabId,
+                loadSynchronously: true
             )
         }
         if buffer.relativePath != relativePath {

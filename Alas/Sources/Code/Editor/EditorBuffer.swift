@@ -62,6 +62,10 @@ final class EditorBuffer {
     @ObservationIgnored
     private var moveLookupGeneration = 0
     @ObservationIgnored
+    private var loadTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var loadGeneration = 0
+    @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
     @ObservationIgnored
     private var originalVolumeIdentifier: AnyObject?
@@ -125,6 +129,8 @@ final class EditorBuffer {
     @ObservationIgnored
     var onPathChanged: ((String, String) -> Void)?
     @ObservationIgnored
+    var onRestoredPathChanged: ((String, String) -> Void)?
+    @ObservationIgnored
     var onSnapshotRequested: (() -> Void)?
     @ObservationIgnored
     var onDiscardSnapshotsRequested: (() -> Void)?
@@ -154,10 +160,20 @@ final class EditorBuffer {
         self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil)
     }
 
+    /// Synchronous load variant for non-UI save materialization. Normal editor
+    /// opens use the async load path to avoid blocking the main thread.
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, loadSynchronously: Bool) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, loadSynchronously: loadSynchronously)
+    }
+
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
     convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager) {
         self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp)
+    }
+
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously)
     }
 
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
@@ -181,7 +197,7 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
@@ -194,16 +210,51 @@ final class EditorBuffer {
         let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
-        loadFromDisk()
+        let finishLoad: @MainActor () -> Void = { [weak self] in
+            self?.finishInitialLoad(
+                isExternal: isExternal,
+                restoreEnabled: restoreEnabled,
+                store: store,
+                worktreeId: worktreeId,
+                tabId: tabId,
+                lsp: lsp
+            )
+        }
+        if loadSynchronously {
+            loadFromDiskSync()
+            finishLoad()
+        } else {
+            loadFromDisk(completion: finishLoad)
+        }
+    }
+
+    private func finishInitialLoad(
+        isExternal: Bool,
+        restoreEnabled: Bool,
+        store: EditorBufferStore?,
+        worktreeId: String?,
+        tabId: String?,
+        lsp: WorkspaceLSPManager?
+    ) {
         if !isExternal,
            restoreEnabled,
            let store, let worktreeId, let tabId,
            let snap = (try? store.read(worktreeId: worktreeId, tabId: tabId)) {
             applySnapshot(snap)
+            if onRestoredPathChanged != nil,
+               let restoredPathChange = consumeRestoredPathChange() {
+                onRestoredPathChanged?(restoredPathChange.oldPath, restoredPathChange.newPath)
+            }
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
+        // Notify any already-attached coordinator that content has arrived
+        // so it can re-apply base style (font/color) to the freshly loaded
+        // storage. Without this, bindBuffer's applyBaseStyle ran against
+        // empty storage and the loadFromDisk setAttributedString wiped
+        // everything, leaving the text view unstyled.
+        handleEdit(edit: nil)
         if !isExternal, let lsp, let language {
-            let url = worktreeRoot.appendingPathComponent(self.relativePath)
+            let url = worktreeRoot.appendingPathComponent(relativePath)
             let text = storage.string
             openedLanguage = language
             Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
@@ -277,9 +328,10 @@ final class EditorBuffer {
     }
 
     func revert() {
-        loadFromDisk()
-        discardSnapshot()
-        handleEdit(edit: nil)
+        loadFromDisk { [weak self] in
+            self?.discardSnapshot()
+            self?.handleEdit(edit: nil)
+        }
     }
 
     func startWatching() {
@@ -315,6 +367,11 @@ final class EditorBuffer {
             return
         }
         cancelMoveLookup()
+        // A load is already in-flight (initial load or a previous watcher-
+        // triggered revert). It will pick up the latest content, so skip —
+        // without this guard, two rapid watcher events (e.g. .write + .attrib)
+        // each fire revert(), both async loads apply, and observers fire twice.
+        if loading { return }
         guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
               onDiskMtime != originalMtime else { return }
         if dirty {
@@ -451,12 +508,14 @@ final class EditorBuffer {
             conflict = differsFromOriginal ? .changedOnDisk : nil
             snapshotNow()
         } else {
-            loadFromDisk()
-            discardSnapshot()
-            handleEdit(edit: nil)
+            loadFromDisk { [weak self] in
+                guard let self else { return }
+                self.discardSnapshot()
+                self.handleEdit(edit: nil)
+                self.notifyDidOpen(url: newURL, text: self.storage.string)
+            }
         }
         notifyDidClose(url: oldURL)
-        notifyDidOpen(url: newURL, text: storage.string)
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
     }
@@ -1088,7 +1147,73 @@ final class EditorBuffer {
         }
     }
 
-    private func loadFromDisk() {
+    /// Load the file from disk, calling `completion` on the main actor
+    /// when the content has been applied. The file read happens in a
+    /// `Task.detached` so the main thread isn't blocked by
+    /// `String(contentsOf:)` on large files.
+    private func loadFromDisk(completion: @escaping @MainActor () -> Void) {
+        loading = true
+        let url = worktreeRoot.appendingPathComponent(relativePath)
+        let resolvedURL = url.resolvingSymlinksInPath()
+        let isExternal = self.isExternal
+        loadTask?.cancel()
+        loadGeneration &+= 1
+        let generation = loadGeneration
+        let task = Task.detached(priority: .userInitiated) { () -> LoadResult in
+            guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
+                return .missing
+            }
+            let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            if isDirectory { return .missing }
+            guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
+                return .notUTF8
+            }
+            let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+            return .loaded(raw: raw, resolvedURL: resolvedURL, isExternal: isExternal, isSymlink: isSymlink)
+        }
+        loadTask = Task { [weak self] in
+            let result = await task.value
+            // A newer loadFromDisk may have cancelled this task and started
+            // its own. Bail out before mutating storage so a stale result
+            // can't overwrite a fresher load (e.g. two watcher events firing
+            // before the first async read completes).
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard let self, self.loadGeneration == generation else { return }
+                switch result {
+                case .missing:
+                    self.storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+                    self.readOnly = true
+                case .notUTF8:
+                    self.storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
+                    self.readOnly = true
+                case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
+                    let detected = LineEnding.detect(in: raw)
+                    let canonical = LineEnding.lf.normalize(raw)
+                    self.storage.setAttributedString(NSAttributedString(string: canonical))
+                    self.originalText = canonical
+                    self.lineEnding = detected
+                    self.updateOriginalFileAttributes(from: resolvedURL)
+                    self.readOnly = isExternal || isSymlink
+                }
+                // Keep `loading` true until after setAttributedString so the
+                // BufferStorageDelegate doesn't fire handleEdit for the
+                // content replacement. The completion's handleEdit(edit: nil)
+                // is the single notification path for a reload.
+                self.loading = false
+                completion()
+            }
+        }
+    }
+
+    private enum LoadResult {
+        case missing
+        case notUTF8
+        case loaded(raw: String, resolvedURL: URL, isExternal: Bool, isSymlink: Bool)
+    }
+
+    @discardableResult
+    private func loadFromDiskSync() -> Self {
         loading = true
         defer { loading = false }
         let url = worktreeRoot.appendingPathComponent(relativePath)
@@ -1096,18 +1221,18 @@ final class EditorBuffer {
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
             storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
             readOnly = true
-            return
+            return self
         }
         let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
         guard !isDirectory else {
             storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
             readOnly = true
-            return
+            return self
         }
         guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
             storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
             readOnly = true
-            return
+            return self
         }
         let detected = LineEnding.detect(in: raw)
         let canonical = LineEnding.lf.normalize(raw)
@@ -1115,12 +1240,25 @@ final class EditorBuffer {
         originalText = canonical
         lineEnding = detected
         updateOriginalFileAttributes(from: resolvedURL)
-        // Symlink-backed buffers are read-only to preserve semantics:
-        // save() writes to the unresolved path, which would replace the
-        // symlink entry instead of updating its target.
         let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
-        readOnly = isExternal || isSymlink ? true : false
+        readOnly = isExternal || isSymlink
+        return self
     }
+
+    #if DEBUG
+    @discardableResult
+    func loadFromDiskSyncForTesting() -> Self {
+        loadFromDiskSync()
+    }
+
+    /// Wait for any in-flight async disk load to complete. Used by tests
+    /// that need to inspect buffer content immediately after init.
+    func awaitLoadForTesting() async {
+        if let loadTask {
+            await loadTask.value
+        }
+    }
+    #endif
 }
 
 private final class BufferStorageDelegate: NSObject, NSTextStorageDelegate {

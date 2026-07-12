@@ -13,8 +13,8 @@ final class ContentSearcher: Sendable {
     /// Find an `rg` binary. Tries `which rg` first, then checks common
     /// installation paths (Homebrew, /usr/local/bin) as a fallback for
     /// environments where PATH is restricted (e.g. xcodebuild test runners).
-    static func discoverRg() -> String? {
-        if let found = try? syncWhich("rg") { return found }
+    static func discoverRg() async -> String? {
+        if let found = try? await asyncWhich("rg") { return found }
         let candidates = ["/opt/homebrew/bin/rg", "/usr/local/bin/rg"]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
@@ -42,7 +42,7 @@ final class ContentSearcher: Sendable {
     ) -> AsyncThrowingStream<ContentSearchHit, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                guard let rg = Self.discoverRg() else {
+                guard let rg = await Self.discoverRg() else {
                     continuation.finish(throwing: SearchError.rgNotFound)
                     return
                 }
@@ -144,8 +144,8 @@ final class ContentSearcher: Sendable {
         // observe `Task.isCancelled`. Wire cancellation to terminate the
         // child, which closes the pipe → reads return EOF immediately.
         await withTaskCancellationHandler {
-            await readAllLines(handle: handle) { lineData in
-                if let hit = parseRgLine(lineData, worktree: worktree) {
+            await self.readAllLines(handle: handle) { lineData in
+                if let hit = self.parseRgLine(lineData, worktree: worktree) {
                     continuation.yield(hit)
                 }
             }
@@ -155,7 +155,16 @@ final class ContentSearcher: Sendable {
         }
 
         if process.isRunning { process.terminate() }
-        process.waitUntilExit()
+        // Wait for the child via `terminationHandler` instead of the
+        // blocking `waitUntilExit()` so the cooperative pool thread is
+        // yielded while we wait.
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            if !process.isRunning {
+                cont.resume()
+            } else {
+                process.terminationHandler = { _ in cont.resume() }
+            }
+        }
         // Wait for stderr drain so any error text is visible below.
         _ = await drainTask.value
 
@@ -180,23 +189,38 @@ final class ContentSearcher: Sendable {
     }
 
     /// Read newline-delimited output from `handle`, calling `onLine` for
-    /// each complete line. Returns when the pipe reports EOF.
+    /// each complete line. Returns when the pipe reports EOF. Uses
+    /// `readabilityHandler` so the cooperative pool thread is yielded
+    /// between chunks instead of blocking on `availableData`.
     private func readAllLines(
         handle: FileHandle,
-        onLine: (Data) -> Void
+        onLine: @escaping (Data) -> Void
     ) async {
-        var leftover = Data()
-        while true {
-            let chunk = handle.availableData
-            if chunk.isEmpty { break }  // EOF
-            leftover.append(chunk)
-            while let nl = leftover.firstIndex(of: 0x0A) {
-                let line = leftover[..<nl]
-                leftover.removeSubrange(...nl)
-                onLine(Data(line))
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            var leftover = Data()
+            var didResume = false
+            let resume: () -> Void = {
+                if !didResume {
+                    didResume = true
+                    cont.resume()
+                }
+            }
+            handle.readabilityHandler = { fh in
+                let chunk = fh.availableData
+                if chunk.isEmpty {
+                    fh.readabilityHandler = nil
+                    if !leftover.isEmpty { onLine(leftover) }
+                    resume()
+                    return
+                }
+                leftover.append(chunk)
+                while let nl = leftover.firstIndex(of: 0x0A) {
+                    let line = leftover[..<nl]
+                    leftover.removeSubrange(...nl)
+                    onLine(Data(line))
+                }
             }
         }
-        if !leftover.isEmpty { onLine(leftover) }
     }
 
     /// Parse one rg JSON line. Only `match` events produce hits.
@@ -336,19 +360,14 @@ private actor StderrBuffer {
     var text: String { String(data: data, encoding: .utf8) ?? "" }
 }
 
-/// Tiny synchronous `which` — used at startup to locate rg without
-/// blocking the actor model.
-private func syncWhich(_ name: String) throws -> String? {
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    proc.arguments = ["which", name]
-    let pipe = Pipe()
-    proc.standardOutput = pipe
-    proc.standardError = Pipe()
-    try proc.run()
-    proc.waitUntilExit()
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    let s = String(data: data, encoding: .utf8)?
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-    return (s?.isEmpty == false) ? s : nil
+/// Locate `name` on PATH via `which`. Uses the async `Process.run` helper
+/// so the cooperative pool isn't blocked by `waitUntilExit`.
+private func asyncWhich(_ name: String) async throws -> String? {
+    let result = try await Process.run(
+        "/usr/bin/env",
+        args: ["which", name]
+    )
+    guard result.exitCode == 0 else { return nil }
+    let s = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    return s.isEmpty ? nil : s
 }

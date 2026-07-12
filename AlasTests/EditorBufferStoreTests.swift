@@ -65,7 +65,7 @@ struct EditorBufferStoreTests {
         #expect(try store.read(worktreeId: "wt", tabId: "t") == snap)
     }
 
-    @Test func externalBufferIsCachedSeparately() throws {
+    @Test func externalBufferIsCachedSeparately() async throws {
         let (store, _) = makeStore()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ext-\(UUID().uuidString).h")
@@ -73,15 +73,18 @@ struct EditorBufferStoreTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let a = store.externalBuffer(worktreeId: "w1", absoluteURL: url)
+        await a.awaitLoadForTesting()
         let b = store.externalBuffer(worktreeId: "w1", absoluteURL: url)
+        await b.awaitLoadForTesting()
         #expect(a === b)  // same instance reused
 
         // Different worktreeId → distinct buffer.
         let c = store.externalBuffer(worktreeId: "w2", absoluteURL: url)
+        await c.awaitLoadForTesting()
         #expect(c !== a)
     }
 
-    @Test func externalBufferIsReleasedOnDiscard() throws {
+    @Test func externalBufferIsReleasedOnDiscard() async throws {
         let (store, _) = makeStore()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ext-discard-\(UUID().uuidString).h")
@@ -89,8 +92,10 @@ struct EditorBufferStoreTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let a = store.externalBuffer(worktreeId: "w", absoluteURL: url)
+        await a.awaitLoadForTesting()
         store.discardExternalBuffer(worktreeId: "w", absoluteURL: url)
         let b = store.externalBuffer(worktreeId: "w", absoluteURL: url)
+        await b.awaitLoadForTesting()
         #expect(a !== b)  // a was discarded; b is a fresh instance
     }
 }

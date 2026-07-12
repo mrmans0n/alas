@@ -20,22 +20,26 @@ struct TabsManagerBufferTests {
         return (manager, store, storeRoot)
     }
 
-    @Test func bufferReturnsSameInstanceAcrossCalls() throws {
+    @Test func bufferReturnsSameInstanceAcrossCalls() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
         let b1 = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await b1.awaitLoadForTesting()
         let b2 = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await b2.awaitLoadForTesting()
         #expect(b1 === b2)
     }
 
-    @Test func buffersForSamePathShareOneInstanceAcrossTabs() throws {
+    @Test func buffersForSamePathShareOneInstanceAcrossTabs() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
 
         let first = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await first.awaitLoadForTesting()
         let second = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
+        await second.awaitLoadForTesting()
         first.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
 
         #expect(first === second)
@@ -43,11 +47,12 @@ struct TabsManagerBufferTests {
         #expect(manager.dirtyTabIds().sorted() == ["t1", "t2"])
     }
 
-    @Test func closingOneTabForSharedPathKeepsBufferForOtherTab() throws {
+    @Test func closingOneTabForSharedPathKeepsBufferForOtherTab() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
         let first = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await first.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
         first.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
 
@@ -66,7 +71,9 @@ struct TabsManagerBufferTests {
         try "b\n".write(to: destinationURL, atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
         let source = manager.buffer(worktreeId: "wt", tabId: "ta", worktreeRoot: root, relativePath: "a.txt")
+        await source.awaitLoadForTesting()
         let destination = manager.buffer(worktreeId: "wt", tabId: "tb", worktreeRoot: root, relativePath: "b.txt")
+        await destination.awaitLoadForTesting()
         source.storage.replaceCharacters(in: NSRange(location: 0, length: 1), with: "mine")
         destination.storage.replaceCharacters(in: NSRange(location: 0, length: 1), with: "dirty")
 
@@ -82,7 +89,7 @@ struct TabsManagerBufferTests {
         #expect(source.conflict == .deletedOnDisk)
     }
 
-    @Test func inAppRenameIntoOpenPathDoesNotReplaceDestinationBuffer() throws {
+    @Test func inAppRenameIntoOpenPathDoesNotReplaceDestinationBuffer() async throws {
         let root = tempWorktree()
         let sourceURL = root.appendingPathComponent("a.txt")
         let destinationURL = root.appendingPathComponent("b.txt")
@@ -90,7 +97,9 @@ struct TabsManagerBufferTests {
         try "b\n".write(to: destinationURL, atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
         let source = manager.buffer(worktreeId: "wt", tabId: "ta", worktreeRoot: root, relativePath: "a.txt")
+        await source.awaitLoadForTesting()
         let destination = manager.buffer(worktreeId: "wt", tabId: "tb", worktreeRoot: root, relativePath: "b.txt")
+        await destination.awaitLoadForTesting()
         destination.storage.replaceCharacters(in: NSRange(location: 0, length: 1), with: "dirty")
         try FileManager.default.removeItem(at: destinationURL)
 
@@ -104,7 +113,7 @@ struct TabsManagerBufferTests {
         #expect(source.relativePath == "a.txt")
     }
 
-    @Test func inAppRenameIntoUnloadedSnapshotPathIsRejected() throws {
+    @Test func inAppRenameIntoUnloadedSnapshotPathIsRejected() async throws {
         let root = tempWorktree()
         try "a\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "b\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -120,6 +129,7 @@ struct TabsManagerBufferTests {
         )
         try store.write(snapshot, worktreeId: "wt", tabId: destinationTab.id)
         let source = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await source.awaitLoadForTesting()
         try FileManager.default.removeItem(at: root.appendingPathComponent("b.txt"))
 
         #expect(throws: (any Error).self) {
@@ -131,11 +141,12 @@ struct TabsManagerBufferTests {
         #expect(manager.peekBuffer(tabId: destinationTab.id) == nil)
     }
 
-    @Test func closingDirtyBufferDiscardsSnapshotAndBuffer() throws {
+    @Test func closingDirtyBufferDiscardsSnapshotAndBuffer() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
         let buffer = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "edited ")
         buffer.snapshotNow()
         manager.discardBuffer(worktreeId: "wt", tabId: "t1")
@@ -143,24 +154,26 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: "t1") == nil)
     }
 
-    @Test func dirtyTabsReportsAcrossWorktrees() throws {
+    @Test func dirtyTabsReportsAcrossWorktrees() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "y".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
         let a = manager.buffer(worktreeId: "wt", tabId: "ta", worktreeRoot: root, relativePath: "a.txt")
+        await a.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "tb", worktreeRoot: root, relativePath: "b.txt")
         a.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
         let dirty = manager.dirtyTabIds()
         #expect(dirty == ["ta"])
     }
 
-    @Test func snapshotDirtyBuffersForQuitWritesOnlyDirty() throws {
+    @Test func snapshotDirtyBuffersForQuitWritesOnlyDirty() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "y".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
         let a = manager.buffer(worktreeId: "wt", tabId: "ta", worktreeRoot: root, relativePath: "a.txt")
+        await a.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "tb", worktreeRoot: root, relativePath: "b.txt")
         a.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
         manager.snapshotDirtyBuffersForQuit()
@@ -168,11 +181,12 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: "tb") == nil)
     }
 
-    @Test func snapshotDirtyBuffersForQuitWritesEveryTabSharingDirtyBuffer() throws {
+    @Test func snapshotDirtyBuffersForQuitWritesEveryTabSharingDirtyBuffer() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
         let first = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await first.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
         first.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
 
@@ -187,6 +201,7 @@ struct TabsManagerBufferTests {
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
         let buffer = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
 
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
@@ -203,6 +218,7 @@ struct TabsManagerBufferTests {
         let first = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
         let second = manager.appendEditor(worktreeId: "wt", title: "a copy", relativePath: "a.txt")
         let buffer = manager.buffer(worktreeId: "wt", tabId: first.id, worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
 
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
         try await Task.sleep(nanoseconds: 900_000_000)
@@ -212,11 +228,12 @@ struct TabsManagerBufferTests {
         #expect(manager.peekBuffer(tabId: second.id) == nil)
     }
 
-    @Test func savingSharedBufferDiscardsEveryTabSnapshot() throws {
+    @Test func savingSharedBufferDiscardsEveryTabSnapshot() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
         let buffer = manager.buffer(worktreeId: "wt", tabId: "t1", worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "t2", worktreeRoot: root, relativePath: "a.txt")
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
         manager.snapshotDirtyBuffersForQuit()
@@ -229,7 +246,7 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: "t2") == nil)
     }
 
-    @Test func savingSharedBufferDiscardsUnloadedSiblingSnapshot() throws {
+    @Test func savingSharedBufferDiscardsUnloadedSiblingSnapshot() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         let (manager, store, _) = makeManager()
@@ -244,6 +261,7 @@ struct TabsManagerBufferTests {
         )
         try store.write(stale, worktreeId: "wt", tabId: second.id)
         let buffer = manager.buffer(worktreeId: "wt", tabId: first.id, worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
 
         try buffer.save()
@@ -274,12 +292,13 @@ struct TabsManagerBufferTests {
         #expect(manager.hasEditor(worktreeId: "wt", relativePath: "b.txt", excluding: first.id))
     }
 
-    @Test func saveAllOnlySavesDirtyBuffersAndReturnsErrors() throws {
+    @Test func saveAllOnlySavesDirtyBuffersAndReturnsErrors() async throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "y".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
         let (manager, _, _) = makeManager()
         let a = manager.buffer(worktreeId: "wt", tabId: "ta", worktreeRoot: root, relativePath: "a.txt")
+        await a.awaitLoadForTesting()
         _ = manager.buffer(worktreeId: "wt", tabId: "tb", worktreeRoot: root, relativePath: "b.txt")
         a.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "z")
 
@@ -291,7 +310,7 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "y")
     }
 
-    @Test func bufferRestoredToSnapshotPathUpdatesTabAndCacheKey() throws {
+    @Test func bufferRestoredToSnapshotPathUpdatesTabAndCacheKey() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -308,7 +327,9 @@ struct TabsManagerBufferTests {
         try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
 
         let restored = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "a.txt")
+        await restored.awaitLoadForTesting()
         let cachedByRestoredPath = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "b.txt")
+        await cachedByRestoredPath.awaitLoadForTesting()
         let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == tab.id }
 
         #expect(restored === cachedByRestoredPath)
@@ -317,7 +338,7 @@ struct TabsManagerBufferTests {
         #expect(updatedTab?.relativeFilePath == "b.txt")
     }
 
-    @Test func bufferRestoreToOpenTargetPathReusesExistingOriginalPathBuffer() throws {
+    @Test func bufferRestoreToOpenTargetPathReusesExistingOriginalPathBuffer() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -327,9 +348,11 @@ struct TabsManagerBufferTests {
         let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
         // Create a live buffer at the original path from another tab
         let existing = manager.buffer(worktreeId: "wt", tabId: existingTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await existing.awaitLoadForTesting()
         existing.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "shared ")
         // Set up a dirty snapshot for sourceTab that would restore to b.txt
         let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        await target.awaitLoadForTesting()
         target.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "target ")
         let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
         let snapshot = EditorBufferStore.Snapshot(
@@ -342,6 +365,7 @@ struct TabsManagerBufferTests {
         try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
 
         let restored = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await restored.awaitLoadForTesting()
         let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
 
         #expect(restored === existing)
@@ -353,7 +377,7 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
     }
 
-    @Test func bufferRestoreToOpenTargetPathIsDiscarded() throws {
+    @Test func bufferRestoreToOpenTargetPathIsDiscarded() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -361,6 +385,7 @@ struct TabsManagerBufferTests {
         let sourceTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
         let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
         let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        await target.awaitLoadForTesting()
         target.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "target ")
         let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
         let snapshot = EditorBufferStore.Snapshot(
@@ -373,6 +398,7 @@ struct TabsManagerBufferTests {
         try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
 
         let restored = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await restored.awaitLoadForTesting()
         let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
 
         #expect(restored !== target)
@@ -383,7 +409,7 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
     }
 
-    @Test func bufferRestoreToCleanUnloadedTargetPathIsDiscarded() throws {
+    @Test func bufferRestoreToCleanUnloadedTargetPathIsDiscarded() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -401,7 +427,9 @@ struct TabsManagerBufferTests {
         try store.write(snapshot, worktreeId: "wt", tabId: sourceTab.id)
 
         let restored = manager.buffer(worktreeId: "wt", tabId: sourceTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await restored.awaitLoadForTesting()
         let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        await target.awaitLoadForTesting()
         let updatedTab = manager.tabs(forWorktree: "wt").first { $0.id == sourceTab.id }
 
         #expect(restored !== target)
@@ -411,7 +439,7 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: sourceTab.id) == nil)
     }
 
-    @Test func bufferRestoreAllowsTargetTabSnapshotThatMovesAway() throws {
+    @Test func bufferRestoreAllowsTargetTabSnapshotThatMovesAway() async throws {
         let root = tempWorktree()
         try "a\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "b\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -437,7 +465,9 @@ struct TabsManagerBufferTests {
         ), worktreeId: "wt", tabId: second.id)
 
         let firstBuffer = manager.buffer(worktreeId: "wt", tabId: first.id, worktreeRoot: root, relativePath: "a.txt")
+        await firstBuffer.awaitLoadForTesting()
         let secondBuffer = manager.buffer(worktreeId: "wt", tabId: second.id, worktreeRoot: root, relativePath: "b.txt")
+        await secondBuffer.awaitLoadForTesting()
 
         #expect(firstBuffer.relativePath == "b.txt")
         #expect(secondBuffer.relativePath == "c.txt")
@@ -493,7 +523,7 @@ struct TabsManagerBufferTests {
         #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "edited\n")
     }
 
-    @Test func saveAllSkipsUnloadedSnapshotThatWouldReplaceLiveTargetBuffer() throws {
+    @Test func saveAllSkipsUnloadedSnapshotThatWouldReplaceLiveTargetBuffer() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -501,6 +531,7 @@ struct TabsManagerBufferTests {
         let sourceTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
         let targetTab = manager.appendEditor(worktreeId: "wt", title: "b.txt", relativePath: "b.txt")
         let target = manager.buffer(worktreeId: "wt", tabId: targetTab.id, worktreeRoot: root, relativePath: "b.txt")
+        await target.awaitLoadForTesting()
         target.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "target ")
         let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
         let snapshot = EditorBufferStore.Snapshot(
@@ -571,7 +602,7 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) != nil)
     }
 
-    @Test func externalBufferIsReleasedWhenTabIsClosed() throws {
+    @Test func externalBufferIsReleasedWhenTabIsClosed() async throws {
         let (manager, store, _) = makeManager()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ext-tab-discard-\(UUID().uuidString).h")
@@ -580,10 +611,12 @@ struct TabsManagerBufferTests {
 
         let tabId = "ext-tab"
         let a = manager.externalBuffer(worktreeId: "wt", tabId: tabId, absoluteURL: url)
+        await a.awaitLoadForTesting()
         manager.discardBuffer(worktreeId: "wt", tabId: tabId)
         // After discard the store must have evicted the entry; requesting the
         // buffer again should return a new (distinct) instance.
         let b = store.externalBuffer(worktreeId: "wt", absoluteURL: url)
+        await b.awaitLoadForTesting()
         #expect(a !== b)
     }
 
@@ -591,7 +624,7 @@ struct TabsManagerBufferTests {
     /// switch back) must return the SAME cached buffer instance — proving the
     /// cache-hit path is exercised and that a second LSP open would be guarded
     /// by the `openedExternalDocs` set.
-    @Test func externalBufferCacheHitReturnsSameInstance() throws {
+    @Test func externalBufferCacheHitReturnsSameInstance() async throws {
         let (manager, _, _) = makeManager()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ext-cache-hit-\(UUID().uuidString).h")
@@ -604,6 +637,7 @@ struct TabsManagerBufferTests {
             worktreeId: "wt", tabId: tabId, absoluteURL: url,
             worktreeRoot: root, originatingFileURL: nil, language: "c"
         )
+        await a.awaitLoadForTesting()
         // Simulates the view being dismantled and remounted (tab switch away
         // and back). The second call must return the same instance and must
         // NOT attempt a second openExternalDocument.
@@ -611,6 +645,7 @@ struct TabsManagerBufferTests {
             worktreeId: "wt", tabId: tabId, absoluteURL: url,
             worktreeRoot: root, originatingFileURL: nil, language: "c"
         )
+        await b.awaitLoadForTesting()
         #expect(a === b)
     }
 }

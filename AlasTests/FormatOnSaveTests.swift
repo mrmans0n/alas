@@ -35,6 +35,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = FakeFormatter(edits: [
             LSPTextEdit(range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 5)), newText: "nope")
@@ -48,6 +49,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         try await buffer.formatAndSave(config: makeConfig(formatOnSave: true), lsp: nil)
         let onDisk = try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8)
@@ -58,6 +60,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = FakeFormatter(edits: [
             LSPTextEdit(range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 5)), newText: "formatted")
@@ -72,6 +75,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = FakeFormatter(throwError: true)
         try await buffer.formatAndSave(config: makeConfig(formatOnSave: true), lsp: formatter)
@@ -83,6 +87,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = FakeFormatter(delayNanoseconds: 200_000_000)
         try await buffer.formatAndSave(config: makeConfig(formatOnSave: true), lsp: formatter, formattingTimeoutNanoseconds: 20_000_000)
@@ -94,6 +99,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = FakeFormatter(edits: [
             LSPTextEdit(range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 5)), newText: "formatted")
@@ -111,6 +117,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = FakeFormatter(edits: [
             LSPTextEdit(range: LSPRange(start: LSPPosition(line: 0, character: 0), end: LSPPosition(line: 0, character: 2)), newText: "OK"),
@@ -126,6 +133,7 @@ struct FormatOnSaveTests {
         let root = tempWorktree()
         try writeFile(root, "a.txt", "hello")
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        await buffer.awaitLoadForTesting()
         buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 5), with: "HELLO")
         let formatter = TrackingFormatter()
         try await buffer.formatAndSave(config: makeConfig(formatOnSave: true), lsp: formatter)

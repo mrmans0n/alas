@@ -789,14 +789,17 @@ final class ACPNSTextView: NSTextView {
         panel.allowedContentTypes = [.png, .jpeg, .gif, .webP]
         panel.begin { [weak self] response in
             guard let self, response == .OK else { return }
-            for url in panel.urls {
-                switch Self.readImageFile(url) {
-                case .data(let data):
-                    _ = self.insertImage(data: data, worktreeId: self.worktreeIdForStaging)
-                case .tooLarge:
-                    self.coordinator?.reportImageError(.tooLarge)
-                case .unsupported:
-                    break
+            let worktreeId = self.worktreeIdForStaging
+            Task { @MainActor [weak self] in
+                for url in panel.urls {
+                    switch await Self.readImageFile(url) {
+                    case .data(let data):
+                        _ = self?.insertImage(data: data, worktreeId: worktreeId)
+                    case .tooLarge:
+                        self?.coordinator?.reportImageError(.tooLarge)
+                    case .unsupported:
+                        break
+                    }
                 }
             }
         }
@@ -834,22 +837,27 @@ final class ACPNSTextView: NSTextView {
 
     /// Read a file URL's image bytes, applying the size cap from its metadata
     /// BEFORE reading the file into memory (so an oversized pick/drop reports
-    /// `.tooLarge` instead of allocating the whole file).
-    static func readImageFile(_ url: URL) -> FileImageRead {
-        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-           size > ACPImageStaging.maxBytes { return .tooLarge }
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return .unsupported }
-        let header = (try? handle.read(upToCount: 16)) ?? Data()
-        try? handle.close()
-        guard ACPImageStaging.sniffMIME(header) != nil,
-              let data = try? Data(contentsOf: url) else { return .unsupported }
-        return .data(data)
+    /// `.tooLarge` instead of allocating the whole file). The file read and
+    /// MIME sniff happen in a `Task.detached` so the main thread isn't blocked.
+    static func readImageFile(_ url: URL) async -> FileImageRead {
+        await Task.detached(priority: .userInitiated) {
+            if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               size > ACPImageStaging.maxBytes { return .tooLarge }
+            guard let handle = try? FileHandle(forReadingFrom: url) else { return .unsupported }
+            let header = (try? handle.read(upToCount: 16)) ?? Data()
+            try? handle.close()
+            guard ACPImageStaging.sniffMIME(header) != nil,
+                  let data = try? Data(contentsOf: url) else { return .unsupported }
+            return .data(data)
+        }.value
     }
 
     /// Stage and insert every supported image from `pb` — raw bitmap data
     /// (one screenshot) or one-per image file URL (multiple Finder files). Each
     /// `insertImage` enforces the per-message cap; oversized file URLs surface
     /// the `.tooLarge` notice. Returns true if any image source was handled.
+    /// File-URL reads are dispatched off the main thread; pasteboard bitmap
+    /// data (already in memory) is handled inline.
     @discardableResult
     private func insertImages(from pb: NSPasteboard) -> Bool {
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
@@ -867,20 +875,30 @@ final class ACPNSTextView: NSTextView {
         }
         guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
         else { return false }
-        var handled = false
-        for url in urls {
-            switch Self.readImageFile(url) {
-            case .data(let data):
-                handled = true
-                _ = insertImage(data: data, worktreeId: worktreeIdForStaging)
-            case .tooLarge:
-                handled = true
-                coordinator?.reportImageError(.tooLarge)
-            case .unsupported:
-                break
+        guard !urls.isEmpty else { return false }
+        let worktreeId = worktreeIdForStaging
+        Task { @MainActor [weak self] in
+            var handled = false
+            for url in urls {
+                switch await Self.readImageFile(url) {
+                case .data(let data):
+                    handled = true
+                    _ = self?.insertImage(data: data, worktreeId: worktreeId)
+                case .tooLarge:
+                    handled = true
+                    self?.coordinator?.reportImageError(.tooLarge)
+                case .unsupported:
+                    break
+                }
             }
+            // `handled` is computed asynchronously so `insertImages` has
+            // already returned true to `paste`/`performDragOperation`; the
+            // actual insertion happens here on the main actor. This is fine —
+            // those override methods return `true` to indicate the pasteboard
+            // was claimed, and the image appears a few milliseconds later.
+            _ = handled
         }
-        return handled
+        return true
     }
 
     /// True when the general pasteboard currently holds a supported image.

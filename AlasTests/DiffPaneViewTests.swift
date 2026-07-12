@@ -2078,7 +2078,8 @@ let second = true
             theme: theme
         )
         let rendered = result.newCode.attributedString.string as NSString
-        let commentStart = rendered.range(of: "still comment").location
+        let commentRange = rendered.range(of: "still·comment")
+        let commentStart = try #require(commentRange.location != NSNotFound ? commentRange.location : nil)
         let foreground = try #require(result.newCode.attributedString.attribute(
             .foregroundColor,
             at: commentStart,

@@ -1296,6 +1296,9 @@ final class ACPSession: ObservableObject, Identifiable {
             || lower.contains("\"mimetype\"")
             || lower.contains("\"mime_type\"")
         else { return [] }
+        if lower.contains("[truncated]") {
+            return existingAssets.filter { $0.kind == .image }
+        }
         return existingAssets.filter { asset in
             guard asset.kind == .image else { return false }
             if let data = asset.data,

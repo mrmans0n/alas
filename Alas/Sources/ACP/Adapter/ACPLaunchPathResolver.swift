@@ -58,21 +58,15 @@ struct ACPLaunchPathResolver {
         return {
             guard let npm = AgentPath.resolveExecutable(
                 named: "npm", base: env["PATH"], wellKnown: additionalPathDirectories) else { return nil }
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: npm)
-            proc.arguments = ["prefix", "-g"]
-            proc.environment = ACPProcessEnvironment.augmented(
+            let augmentedEnv = ACPProcessEnvironment.augmented(
                 env, additionalPathDirectories: additionalPathDirectories)
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = Pipe()
-            do { try proc.run() } catch { return nil }
-            proc.waitUntilExit()
-            guard let data = try? pipe.fileHandleForReading.readToEnd(),
-                  let prefix = String(data: data, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !prefix.isEmpty
-            else { return nil }
+            guard let result = try? await Process.run(
+                npm,
+                args: ["prefix", "-g"],
+                env: augmentedEnv
+            ) else { return nil }
+            let prefix = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prefix.isEmpty else { return nil }
             return "\(prefix)/bin"
         }
     }
