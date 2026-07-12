@@ -708,6 +708,60 @@ struct EditorBufferTests {
         #expect(buffer.conflict == .changedOnDisk)
     }
 
+    @Test func externalRenameOfDirtyBufferReopensLSPAtMovedPath() async throws {
+        let root = tempWorktree()
+        let oldURL = try writeFile(root, "a.swift", "let value = 1\n")
+        let newURL = root.appendingPathComponent("nested/b.swift")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+            }
+        }
+        let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: "/usr/bin/true",
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ]), makeClient: { _, _, _, language, rootURI in
+            LSPClient(transport: transport, language: language, rootURI: rootURI)
+        })
+        let buffer = EditorBuffer(
+            worktreeRoot: root,
+            relativePath: "a.swift",
+            store: store,
+            worktreeId: "wt",
+            tabId: "t",
+            lsp: lsp
+        )
+        await buffer.awaitLoadForTesting()
+        for _ in 0..<20 where !transport.sent.contains(where: { $0.contains(#""method":"textDocument/didOpen""#) }) {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        buffer.storage.replaceCharacters(in: NSRange(location: 4, length: 5), with: "edited")
+        try FileManager.default.createDirectory(at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: oldURL, to: newURL)
+
+        buffer.finishMoveLookupForTest(movedRelativePath: "nested/b.swift", missingRelativePath: "a.swift")
+        for _ in 0..<20 where transport.sent.filter({ $0.contains(#""method":"textDocument/didOpen""#) }).count < 2 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let didOpen = transport.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
+        #expect(didOpen.count == 2)
+        #expect(didOpen.last?.contains("nested/b.swift") == true)
+        #expect(didOpen.last?.contains(#""text":"let edited = 1\n""#) == true)
+        #expect(transport.sent.filter { $0.contains(#""method":"textDocument/didClose""#) }.count == 1)
+        buffer.close(persistDirtySnapshot: false)
+        transport.finish()
+    }
+
     @Test func externalRenameFollowsHiddenFiles() async throws {
         let root = tempWorktree()
         let oldURL = try writeFile(root, ".env", "TOKEN=a\n")

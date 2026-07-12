@@ -661,6 +661,9 @@ final class EditorBuffer {
             }
         }
         notifyDidClose(url: oldURL)
+        if wasDirty {
+            notifyDidOpen(url: newURL, text: storage.string)
+        }
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
     }
