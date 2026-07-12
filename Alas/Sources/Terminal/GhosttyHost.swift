@@ -56,7 +56,8 @@ struct GhosttyHost: NSViewRepresentable {
             ])
         }
         guard isFocused else { return }
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak container] in
+            guard let container, container.window?.firstResponder !== session.surface else { return }
             container.window?.makeFirstResponder(session.surface)
         }
     }

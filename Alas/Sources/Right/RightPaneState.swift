@@ -45,7 +45,11 @@ final class RightPaneState {
     }
     /// Increments whenever `refresh()` publishes a new change list. This
     /// catches same-line unstaged edits whose add/delete totals stay constant.
+    /// It is now guarded by an effective-change fingerprint so no-op
+    /// watcher-driven refreshes do not re-fire downstream loaders.
     private(set) var changesGeneration: Int = 0
+    @ObservationIgnored
+    private var lastChangesFingerprint: String = ""
     /// Increments whenever cached snapshot data is explicitly invalidated.
     /// In-flight refreshes capture this before doing async work and must not
     /// publish if it changed underneath them.
@@ -491,6 +495,10 @@ final class RightPaneState {
             self.isLoadingOlder = false
             let ignoreUpstream = userOverrodeBaseBranch || !trackUpstreamForCommits
             async let s = git.status(worktreePath: worktree.path)
+            async let statusRaw = Process.git(
+                ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
+                cwd: worktree.path
+            )
             async let c = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: baseBranch,
@@ -530,10 +538,22 @@ final class RightPaneState {
             } else {
                 indexFingerprint = ""
             }
+            async let trackedContentFingerprintTask = Self.trackedContentFingerprint(worktreePath: worktree.path)
+            let statusRawResult = try? await statusRaw
+            let untrackedPaths = Self.untrackedPaths(from: statusRawResult?.stdout ?? "")
+            async let untrackedContentFingerprintTask = Self.untrackedContentFingerprint(paths: untrackedPaths, worktreePath: worktree.path)
             let previousBranch = self.currentBranch
             let previousHeadSHA = self.currentHeadSHA
             let currentBranch = (try? await br) ?? self.currentBranch
             let headSHA = (try? await self.git.revParseHEAD(worktreePath: self.worktree.path)) ?? ""
+            let trackedContentFingerprint = await trackedContentFingerprintTask
+            let untrackedContentFingerprint = await untrackedContentFingerprintTask
+            let workingTreeContentFingerprint = "\(trackedContentFingerprint)\u{0000}\(untrackedContentFingerprint)"
+            let newChangesFingerprint = Self.changesFingerprint(
+                changes: entries,
+                indexFingerprint: indexFingerprint,
+                workingTreeContentFingerprint: workingTreeContentFingerprint
+            )
             guard snapshotGeneration == snapshotInvalidationGeneration else {
                 return
             }
@@ -547,7 +567,10 @@ final class RightPaneState {
             if self.changes != entries { self.changes = entries }
             self.reconcileStashCaches(with: stashes)
             if self.stashes != stashes { self.stashes = stashes }
-            self.changesGeneration += 1
+            if self.lastChangesFingerprint != newChangesFingerprint {
+                self.lastChangesFingerprint = newChangesFingerprint
+                self.changesGeneration += 1
+            }
             if self.indexFingerprint != indexFingerprint { self.indexFingerprint = indexFingerprint }
             let mergedFileTree = Self.preservingLazyChildren(fresh: tree, previous: self.fileTree)
             if self.fileTree != mergedFileTree { self.fileTree = mergedFileTree }
@@ -595,6 +618,7 @@ final class RightPaneState {
                 didInitDefaultTab = true
             }
             self.hasLoadedSnapshot = true
+            let previousReviewRequestFingerprint = Self.reviewRequestReloadFingerprint(reviewLoop.snapshot?.reviewRequest)
             let upstreamBranchName = resolvedUpstream.map {
                 String($0.ref.dropFirst($0.remote.count + 1))
             }
@@ -609,6 +633,10 @@ final class RightPaneState {
                 remotes: remotes,
                 forceRemote: forceReviewLoopRemote
             )
+            let currentReviewRequestFingerprint = Self.reviewRequestReloadFingerprint(reviewLoop.snapshot?.reviewRequest)
+            if previousReviewRequestFingerprint != currentReviewRequestFingerprint {
+                changesGeneration += 1
+            }
         } catch {
             reviewLoop.failLocalRefresh(reviewLoopInspection, error: error)
             guard snapshotGeneration == snapshotInvalidationGeneration else {
@@ -646,6 +674,7 @@ final class RightPaneState {
         commitsNeedPush = true
         sidebarError = nil
         pendingDiscard = nil
+        lastChangesFingerprint = ""
         changesGeneration += 1
         invalidateFileTreeChildLoadsForRefresh()
     }
@@ -718,6 +747,16 @@ final class RightPaneState {
         await reviewLoop.refresh(attempt, remotes: remotes)
     }
 
+    nonisolated static func reviewRequestReloadFingerprint(_ request: ReviewRequest?) -> String {
+        guard let request else { return "nil" }
+        return [
+            request.id,
+            request.headSHA ?? "",
+            request.headRefName,
+            request.baseRefName
+        ].joined(separator: "\u{0000}")
+    }
+
     static func reviewLoopRemoteFingerprintRemotes(_ remotes: [GitRemote]) -> [String] {
         remotes
             .map { remote in
@@ -738,6 +777,151 @@ final class RightPaneState {
             return true
         }
         return now.timeIntervalSince(lastRefreshAt) >= minimumInterval
+    }
+
+    /// Extracts untracked paths from `git status --porcelain=v2 -z` output.
+    nonisolated static func untrackedPaths(from statusRaw: String) -> [String] {
+        statusRaw
+            .split(separator: "\0", omittingEmptySubsequences: true)
+            .compactMap { line -> String? in
+                let str = String(line)
+                guard str.hasPrefix("? ") else { return nil }
+                return String(str.dropFirst(2))
+            }
+    }
+
+    /// Returns a content fingerprint for tracked changes. Raw diff metadata is
+    /// insufficient for unstaged worktree edits because Git reports an all-zero
+    /// destination object when the filesystem copy is out of sync with the
+    /// index, but full binary patches can be very large. Keep the cheap raw
+    /// metadata and add path-scoped worktree blob hashes instead.
+    nonisolated static func trackedContentFingerprint(worktreePath: URL) async -> String {
+        if let raw = try? await Process.git(
+            ["diff", "--raw", "-z", "--no-renames", "HEAD"],
+            cwd: worktreePath
+        ), raw.exitCode == 0 {
+            let paths = await gitChangedPaths(
+                ["diff", "--name-only", "-z", "--no-renames", "HEAD"],
+                worktreePath: worktreePath
+            )
+            let content = await pathContentFingerprint(paths: paths, worktreePath: worktreePath)
+            return "\(raw.stdout)\u{0000}\(content)"
+        }
+
+        let cachedRaw = (try? await Process.git(
+            ["diff", "--raw", "-z", "--no-renames", "--cached"],
+            cwd: worktreePath
+        )).flatMap { $0.exitCode == 0 ? $0.stdout : nil } ?? ""
+        let unstagedRaw = (try? await Process.git(
+            ["diff", "--raw", "-z", "--no-renames"],
+            cwd: worktreePath
+        )).flatMap { $0.exitCode == 0 ? $0.stdout : nil } ?? ""
+        let cachedPaths = await gitChangedPaths(
+            ["diff", "--name-only", "-z", "--no-renames", "--cached"],
+            worktreePath: worktreePath
+        )
+        let unstagedPaths = await gitChangedPaths(
+            ["diff", "--name-only", "-z", "--no-renames"],
+            worktreePath: worktreePath
+        )
+        let paths = cachedPaths + unstagedPaths
+        let content = await pathContentFingerprint(paths: paths, worktreePath: worktreePath)
+        return "\(cachedRaw)\u{0000}\(unstagedRaw)\u{0000}\(content)"
+    }
+
+    /// Hashes the contents of untracked files so content edits that leave the
+    /// status line unchanged still invalidate the change fingerprint.
+    nonisolated static func untrackedContentFingerprint(paths: [String], worktreePath: URL) async -> String {
+        await pathContentFingerprint(paths: paths, worktreePath: worktreePath)
+    }
+
+    nonisolated private static func gitChangedPaths(_ args: [String], worktreePath: URL) async -> [String] {
+        guard let result = try? await Process.git(args, cwd: worktreePath), result.exitCode == 0 else {
+            return []
+        }
+        return result.stdout
+            .split(separator: "\0", omittingEmptySubsequences: true)
+            .map(String.init)
+    }
+
+    nonisolated private static func pathContentFingerprint(paths: [String], worktreePath: URL) async -> String {
+        let sortedPaths = Array(Set(paths)).sorted()
+        guard !sortedPaths.isEmpty else { return "" }
+
+        var pathKinds: [String: String] = [:]
+        var filePaths: [String] = []
+        for path in sortedPaths {
+            let fileURL = worktreePath.appendingPathComponent(path)
+            let attributes = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+            if let fileType = attributes?[.type] as? FileAttributeType {
+                switch fileType {
+                case .typeSymbolicLink:
+                    let destination = (try? FileManager.default.destinationOfSymbolicLink(atPath: fileURL.path)) ?? "unreadable"
+                    pathKinds[path] = "symlink:\(destination)"
+                case .typeDirectory:
+                    pathKinds[path] = "directory"
+                case .typeRegular:
+                    filePaths.append(path)
+                default:
+                    pathKinds[path] = "special:\(fileType.rawValue)"
+                }
+                continue
+            }
+
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
+                pathKinds[path] = "missing"
+                continue
+            }
+            if isDirectory.boolValue {
+                pathKinds[path] = "directory"
+            } else {
+                filePaths.append(path)
+            }
+        }
+
+        let hashes = await hashObjects(paths: filePaths, worktreePath: worktreePath)
+        return sortedPaths.map { path in
+            let value = pathKinds[path] ?? hashes[path] ?? "hash-error"
+            return "\(path)\u{0000}\(value)"
+        }.joined(separator: "\u{0000}")
+    }
+
+    nonisolated private static func hashObjects(paths: [String], worktreePath: URL) async -> [String: String] {
+        guard !paths.isEmpty else { return [:] }
+        if let result = try? await Process.git(["hash-object", "--"] + paths, cwd: worktreePath),
+           result.exitCode == 0 {
+            let hashes = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
+            if hashes.count == paths.count {
+                return Dictionary(uniqueKeysWithValues: zip(paths, hashes))
+            }
+        }
+
+        var hashes: [String: String] = [:]
+        for path in paths {
+            guard let result = try? await Process.git(["hash-object", "--", path], cwd: worktreePath),
+                  result.exitCode == 0 else {
+                continue
+            }
+            hashes[path] = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return hashes
+    }
+
+    /// Stable fingerprint of the effective change list, including staged
+    /// index contents, tracked/untracked file contents, and status metadata.
+    /// Used to decide whether `changesGeneration` really changed.
+    nonisolated static func changesFingerprint(
+        changes: [ChangedFile],
+        indexFingerprint: String,
+        workingTreeContentFingerprint: String
+    ) -> String {
+        let base = ReviewChangesLoadKey.fingerprint(
+            changes: changes,
+            indexFingerprint: indexFingerprint,
+            changesGeneration: 0
+        )
+        return "\(base)\u{0000}\(workingTreeContentFingerprint)"
     }
 
     func invalidateFileTreeChildLoadsForRefresh() {
