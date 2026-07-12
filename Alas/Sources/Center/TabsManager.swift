@@ -1255,6 +1255,10 @@ final class TabsManager {
             _ = self.updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
             buffer.startWatching()
         }
+        buffer.onInitialLoadFinished = { [weak self, weak buffer] in
+            guard let self, let buffer else { return }
+            self.promotePendingRestoredPathBuffer(worktreeId: worktreeId, tabId: tabId, buffer: buffer)
+        }
         buffer.onSnapshotRequested = { [weak self, weak buffer] in
             guard let buffer else { return }
             self?.snapshotBufferForAllTabs(buffer)
@@ -1266,6 +1270,9 @@ final class TabsManager {
         if restoresToDifferentPath {
             bufferKeys[tabId] = key
             pendingRestoredPathBuffers[tabId] = buffer
+            if buffer.initialLoadFinished {
+                promotePendingRestoredPathBuffer(worktreeId: worktreeId, tabId: tabId, buffer: buffer)
+            }
         } else if let restoredPathChange = buffer.consumeRestoredPathChange() {
             let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: restoredPathChange.newPath)
             buffers[restoredKey] = buffer
@@ -1396,6 +1403,15 @@ final class TabsManager {
         if let pending = pendingRestoredPathBuffers[tabId] { return pending }
         guard let key = bufferKeys[tabId] else { return nil }
         return buffers[key]
+    }
+
+    private func promotePendingRestoredPathBuffer(worktreeId: String, tabId: TabID, buffer: EditorBuffer) {
+        guard pendingRestoredPathBuffers[tabId] === buffer else { return }
+        let key = BufferKey(worktreeId: worktreeId, relativePath: buffer.relativePath)
+        if let existing = buffers[key], existing !== buffer { return }
+        pendingRestoredPathBuffers.removeValue(forKey: tabId)
+        buffers[key] = buffer
+        bufferKeys[tabId] = key
     }
 
     func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
@@ -1787,6 +1803,12 @@ final class TabsManager {
         var result: [(TabID, BufferKey)] = []
         var seen = Set<TabID>()
         let liveKeys = Set(bufferKeys.compactMap { _, key in buffers[key] === buffer ? key : nil })
+
+        for (tabId, pending) in pendingRestoredPathBuffers where pending === buffer {
+            guard let key = bufferKeys[tabId], !seen.contains(tabId) else { continue }
+            result.append((tabId, key))
+            seen.insert(tabId)
+        }
 
         for (tabId, key) in bufferKeys where liveKeys.contains(key) {
             result.append((tabId, key))

@@ -439,6 +439,26 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: url, encoding: .utf8) == "typed")
     }
 
+    @Test func editBeforeAsyncSymlinkLoadPreservesReadOnlyState() async throws {
+        let root = tempWorktree()
+        let target = try writeFile(root, "target.txt", "disk\n")
+        let link = root.appendingPathComponent("link.txt")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "link.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(buffer.readOnly == true)
+        buffer.resolveConflictKeepingMine()
+        try buffer.save()
+        #expect(try String(contentsOf: target, encoding: .utf8) == "disk\n")
+    }
+
     @Test func editBeforeAsyncLoadFinishesSkipsOlderSnapshotRestore() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "disk\n")

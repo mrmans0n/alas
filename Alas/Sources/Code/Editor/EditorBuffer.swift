@@ -156,12 +156,16 @@ final class EditorBuffer {
     @ObservationIgnored
     var onRestoredPathChanged: ((String, String) -> Void)?
     @ObservationIgnored
+    var onInitialLoadFinished: (() -> Void)?
+    @ObservationIgnored
     var onSnapshotRequested: (() -> Void)?
     @ObservationIgnored
     var onDiscardSnapshotsRequested: (() -> Void)?
     @ObservationIgnored
     private var pendingRestoredPathChange: (oldPath: String, newPath: String)?
     var persistenceTabId: String? { tabId }
+    @ObservationIgnored
+    private(set) var initialLoadFinished = false
 
     struct EditObserverToken { fileprivate let id: UUID }
 
@@ -290,6 +294,8 @@ final class EditorBuffer {
             openedLanguage = language
             Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
         }
+        initialLoadFinished = true
+        onInitialLoadFinished?()
     }
 
     /// Re-fire `didOpen` for this buffer's current text. Used after a
@@ -1259,10 +1265,18 @@ final class EditorBuffer {
                 self.loading = false
                 self.loadTask = nil
                 if preservePendingEdits, self.dirty {
-                    if case .loaded(let raw, let resolvedURL, _, _) = result {
+                    switch result {
+                    case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
                         self.originalText = LineEnding.lf.normalize(raw)
                         self.lineEnding = LineEnding.detect(in: raw)
                         self.updateOriginalFileAttributes(from: resolvedURL)
+                        self.readOnly = isExternal || isSymlink
+                    case .missing:
+                        self.originalText = "(unable to read file)"
+                        self.readOnly = true
+                    case .notUTF8:
+                        self.originalText = "(read-only: file is not valid UTF-8)"
+                        self.readOnly = true
                     }
                     if self.preservedPreloadEditsFromAsyncLoad {
                         self.conflict = .changedOnDisk

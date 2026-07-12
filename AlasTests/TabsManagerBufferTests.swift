@@ -563,6 +563,38 @@ struct TabsManagerBufferTests {
         await pending.awaitLoadForTesting()
     }
 
+    @Test func pendingAsyncRestoreSkippedByPreloadEditDiscardsSnapshotAfterSave() async throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+        let gate = TabsManagerAsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let pending = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "a.txt")
+        pending.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        await gate.open()
+        await pending.awaitLoadForTesting()
+        #expect(manager.peekBuffer(tabId: tab.id) === pending)
+
+        pending.resolveConflictKeepingMine()
+        try pending.save()
+
+        #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
+    }
+
     @Test func bufferRestoreChecksConflictAfterAsyncSnapshotRestore() async throws {
         let root = tempWorktree()
         try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
