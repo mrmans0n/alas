@@ -63,6 +63,7 @@ final class EditorBuffer {
     private enum LoadState {
         struct Pending {
             let generation: Int
+            let hasPendingSnapshot: Bool
             var hasUserEdits: Bool = false
             var queuedReload: Bool = false
             var suppressEditTracking: Bool = false
@@ -176,6 +177,12 @@ final class EditorBuffer {
     @ObservationIgnored
     private(set) var initialLoadFinished = false
 
+    enum SaveDisposition: Equatable {
+        case clean
+        case ready
+        case blockedByLoad
+    }
+
     struct EditObserverToken { fileprivate let id: UUID }
 
     /// `true` while the in-memory text differs from the bytes last read
@@ -248,13 +255,16 @@ final class EditorBuffer {
         let delegate = BufferStorageDelegate { [weak self] edit in self?.handleEdit(edit: edit) }
         self.storageDelegate = delegate
         self.storage.delegate = delegate
+        let snapshot: EditorBufferStore.Snapshot?
+        if restoreEnabled, let store, let worktreeId, let tabId {
+            snapshot = (try? store.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
+        } else {
+            snapshot = nil
+        }
         let finishLoad: @MainActor () -> Void = { [weak self] in
             self?.finishInitialLoad(
                 isExternal: isExternal,
-                restoreEnabled: restoreEnabled,
-                store: store,
-                worktreeId: worktreeId,
-                tabId: tabId,
+                snapshot: snapshot,
                 lsp: lsp,
                 checkConflictOnRestore: checkConflictOnRestore
             )
@@ -263,25 +273,25 @@ final class EditorBuffer {
             loadFromDiskSync()
             finishLoad()
         } else {
-            loadFromDisk(preservePendingEdits: true, notifyAfterLoad: false, completion: finishLoad)
+            loadFromDisk(
+                preservePendingEdits: true,
+                notifyAfterLoad: false,
+                hasPendingSnapshot: snapshot != nil,
+                completion: finishLoad
+            )
         }
     }
 
     private func finishInitialLoad(
         isExternal: Bool,
-        restoreEnabled: Bool,
-        store: EditorBufferStore?,
-        worktreeId: String?,
-        tabId: String?,
+        snapshot: EditorBufferStore.Snapshot?,
         lsp: WorkspaceLSPManager?,
         checkConflictOnRestore: Bool = false
     ) {
         if case .cancelled = loadState { return }
         if !isExternal,
-           restoreEnabled,
            !hasPreloadUserEdits,
-           let store, let worktreeId, let tabId,
-           let snap = (try? store.read(worktreeId: worktreeId, tabId: tabId)) {
+           let snap = snapshot {
             applySnapshot(snap)
             if onRestoredPathChanged != nil,
                let restoredPathChange = consumeRestoredPathChange() {
@@ -367,6 +377,17 @@ final class EditorBuffer {
 
     private var isLoading: Bool { loadState.isLoading }
 
+    var saveDisposition: SaveDisposition {
+        switch loadState {
+        case .loading(let pending):
+            return pending.hasUserEdits || pending.hasPendingSnapshot ? .blockedByLoad : .clean
+        case .loaded:
+            return dirty ? .ready : .clean
+        case .cancelled:
+            return .clean
+        }
+    }
+
     private var hasPreloadUserEdits: Bool {
         if case .loading(let pending) = loadState {
             return pending.hasUserEdits
@@ -377,11 +398,11 @@ final class EditorBuffer {
         return false
     }
 
-    private func beginAsyncLoad() -> Int {
+    private func beginAsyncLoad(hasPendingSnapshot: Bool) -> Int {
         loadTask?.cancel()
         nextLoadGeneration &+= 1
         let generation = nextLoadGeneration
-        loadState = .loading(.init(generation: generation))
+        loadState = .loading(.init(generation: generation, hasPendingSnapshot: hasPendingSnapshot))
         return generation
     }
 
@@ -663,9 +684,13 @@ final class EditorBuffer {
     func save() throws {
         lastSaveError = nil
         guard !readOnly else { return }
-        if isLoading {
-            if dirty { throw SaveError.loadPending }
+        switch saveDisposition {
+        case .blockedByLoad:
+            throw SaveError.loadPending
+        case .clean where isLoading:
             return
+        case .clean, .ready:
+            break
         }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         if dirty,
@@ -1286,11 +1311,16 @@ final class EditorBuffer {
     /// when the content has been applied. The file read happens in a
     /// `Task.detached` so the main thread isn't blocked by
     /// `String(contentsOf:)` on large files.
-    private func loadFromDisk(preservePendingEdits: Bool = false, notifyAfterLoad: Bool = true, completion: @escaping @MainActor () -> Void) {
+    private func loadFromDisk(
+        preservePendingEdits: Bool = false,
+        notifyAfterLoad: Bool = true,
+        hasPendingSnapshot: Bool = false,
+        completion: @escaping @MainActor () -> Void
+    ) {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let resolvedURL = url.resolvingSymlinksInPath()
         let isExternal = self.isExternal
-        let generation = beginAsyncLoad()
+        let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
         let task = Task.detached(priority: .userInitiated) { () -> LoadResult in
             if let gate = await EditorBuffer.loadGateForTesting {
                 await gate()

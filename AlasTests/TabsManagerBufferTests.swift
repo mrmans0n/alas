@@ -633,6 +633,53 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
     }
 
+    @Test func unindexedPreloadEditedBufferMoveDoesNotMoveOldPathTabs() async throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let restoringTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let oldPathTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: restoringTab.id)
+        let gate = TabsManagerAsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let restoring = manager.buffer(
+            worktreeId: "wt",
+            tabId: restoringTab.id,
+            worktreeRoot: root,
+            relativePath: "a.txt"
+        )
+        restoring.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed ")
+        let oldPath = manager.buffer(
+            worktreeId: "wt",
+            tabId: oldPathTab.id,
+            worktreeRoot: root,
+            relativePath: "a.txt"
+        )
+        await gate.open()
+        await restoring.awaitLoadForTesting()
+        await oldPath.awaitLoadForTesting()
+        restoring.resolveConflictKeepingMine()
+
+        try restoring.saveAs(relativePath: "c.txt")
+
+        let tabs = manager.tabs(forWorktree: "wt")
+        #expect(restoring !== oldPath)
+        #expect(manager.peekBuffer(tabId: restoringTab.id) === restoring)
+        #expect(manager.peekBuffer(tabId: oldPathTab.id) === oldPath)
+        #expect(tabs.first { $0.id == restoringTab.id }?.relativeFilePath == "c.txt")
+        #expect(tabs.first { $0.id == oldPathTab.id }?.relativeFilePath == "a.txt")
+    }
+
     @Test func bufferRestoreChecksConflictAfterAsyncSnapshotRestore() async throws {
         let root = tempWorktree()
         try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
@@ -898,6 +945,48 @@ struct TabsManagerBufferTests {
         #expect(updatedTab?.relativeFilePath == "b.txt")
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
         #expect(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8) == "edited\n")
+    }
+
+    @Test func saveAllUnsavedBlocksWhileLiveBufferHasPendingSnapshotRestore() async throws {
+        let root = tempWorktree()
+        let fileURL = root.appendingPathComponent("a.txt")
+        try "base\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        let gate = TabsManagerAsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "a.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+
+        let buffer = manager.buffer(
+            worktreeId: "wt",
+            tabId: tab.id,
+            worktreeRoot: root,
+            relativePath: "a.txt"
+        )
+        await gate.waitForWaiterCount(1)
+
+        #expect(manager.tabIdsWithUnsavedChanges(forWorktree: "wt") == [tab.id])
+        let pendingErrors = manager.saveAllUnsaved(forWorktree: "wt", root: root)
+        #expect(pendingErrors.map(\.tabId) == [tab.id])
+        #expect(try store.read(worktreeId: "wt", tabId: tab.id) == snapshot)
+        #expect(try String(contentsOf: fileURL, encoding: .utf8) == "base\n")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        let loadedErrors = manager.saveAllUnsaved(forWorktree: "wt", root: root)
+        #expect(loadedErrors.isEmpty)
+        #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
+        #expect(try String(contentsOf: fileURL, encoding: .utf8) == "restored\n")
     }
 
     @Test func saveAllPreservesUnloadedSnapshotWhenSaveFails() throws {
