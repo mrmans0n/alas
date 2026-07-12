@@ -309,13 +309,8 @@ final class EditorBuffer {
         // empty storage and the loadFromDisk setAttributedString wiped
         // everything, leaving the text view unstyled.
         handleEdit(edit: nil)
-        if !isExternal, let lsp, let language {
-            let url = worktreeRoot.appendingPathComponent(relativePath)
-            let text = storage.string
-            openedLanguage = language
-            Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: language, text: text) }
-        }
         initialLoadFinished = true
+        openLSPDocumentIfReady()
         onInitialLoadFinished?()
     }
 
@@ -330,7 +325,15 @@ final class EditorBuffer {
     /// document would leave a dangling ref the next `didClose` couldn't
     /// balance.
     func reopenLSPDocument() {
-        guard !isExternal, let lsp, let effective = effectiveLanguage else { return }
+        openLSPDocumentIfReady()
+    }
+
+    private func openLSPDocumentIfReady() {
+        guard initialLoadFinished,
+              !isExternal,
+              openedLanguage == nil,
+              let lsp,
+              let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
@@ -987,7 +990,7 @@ final class EditorBuffer {
     /// language (if any). Skipped for external buffers — those route via a
     /// different external-document API.
     private func applyEffectiveLanguageToLSP() {
-        guard !isExternal, lsp != nil else { return }
+        guard initialLoadFinished, !isExternal, lsp != nil else { return }
         let prior = languageReopenTask
         // Cancel the prior queued transition before we await it — this
         // propagates cancellation through the chain. `close()` only cancels
