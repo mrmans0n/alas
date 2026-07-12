@@ -14,7 +14,7 @@ import Foundation
     }
 
     @Test("manager exposes its instanceId")
-    func exposesInstanceId() throws {
+    func exposesInstanceId() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mgr-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -31,13 +31,44 @@ import Foundation
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
 
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
         #expect(mgrA.isMirror(sessionId: session.id) == false)
 
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == false)
+        #expect(await mgrB.acquireWriterLease(sessionId: session.id) == false)
         #expect(mgrB.isMirror(sessionId: session.id) == true)
+    }
+
+    @Test("restored session awaiting its first lease observation is a mirror")
+    func restoredSessionAwaitingLeaseObservationIsMirror() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-restored-pending-lease-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "stored", agentId: "claude", title: "Stored",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let manager = tempManager(instanceId: "A", store: store)
+
+        _ = manager.placeholderSession(id: "stored")
+
+        #expect(manager.isMirror(sessionId: "stored") == true)
+    }
+
+    @Test("restored session without a lease observation is writable after hydration")
+    func restoredSessionWithoutObservedLeaseIsWritableAfterHydration() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-restored-no-lease-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "stored", agentId: "claude", title: "Stored",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let manager = tempManager(instanceId: "A", store: store)
+
+        _ = manager.placeholderSession(id: "stored")
+        await manager.hydrateIfNeeded(id: "stored")
+
+        #expect(manager.isMirror(sessionId: "stored") == false)
     }
 
     @Test("releasing the lease lets another instance claim it")
@@ -47,12 +78,12 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
-        mgrA.releaseWriterLease(sessionId: session.id)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
+        await mgrA.releaseWriterLease(sessionId: session.id)
 
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrB.acquireWriterLease(sessionId: session.id) == true)
     }
 
     @Test("mirror re-read applies appended messages from another writer")
@@ -62,7 +93,7 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         // Writer appends a user message directly to the shared DB.
         let msg: ACPMessage = .user(id: UUID(), text: "hello from writer", attachments: [])
@@ -88,35 +119,36 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
         #expect(mgrA.isMirror(sessionId: session.id) == false)
 
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
         _ = mgrB.placeholderSession(id: session.id)
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
 
         // The synchronous parts (seizeLease + _ownedLeases insert) must have
         // completed before takeOver returns; the async attach kicks off later.
         #expect(try storeB.loadLease(sessionId: session.id)?.ownerInstance == "B")
-        #expect(mgrA.ownsLeaseForTest(sessionId: session.id) == false)
+        #expect(await mgrA.ownsLeaseForTest(sessionId: session.id) == false)
     }
 
-    @Test("heartbeat re-asserts ownership when the lease row went missing")
-    func heartbeatReassertsMissingRow() async throws {
+    @Test("heartbeat stands down when the lease row went missing")
+    func heartbeatStandsDownForMissingRow() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("hb-missing-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let mgr = tempManager(instanceId: "A", store: store)
         let session = mgr.createSession(agentId: "claude")
-        #expect(mgr.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgr.acquireWriterLease(sessionId: session.id) == true)
         // Simulate a failed-takeover deleting the row out from under us.
         try store.releaseLease(sessionId: session.id, instanceId: "A")
         #expect(try store.loadLease(sessionId: session.id) == nil)
-        // A heartbeat tick should re-assert our ownership, not stand down.
-        let standDown = mgr.heartbeatTickForTest(sessionId: session.id)
-        #expect(standDown == false)
-        #expect(try store.loadLease(sessionId: session.id)?.ownerInstance == "A")
+        // Missing ownership is ambiguous. Fail closed instead of recreating a
+        // lease that may have been deliberately removed during takeover.
+        let standDown = await mgr.heartbeatTickForTest(sessionId: session.id)
+        #expect(standDown == true)
+        #expect(try store.loadLease(sessionId: session.id) == nil)
     }
 
     @Test("heartbeat signals stand-down when another instance owns the lease")
@@ -126,11 +158,11 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
         // B seizes it.
         let now = Int64(Date().timeIntervalSince1970)
         try storeA.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: now)
-        #expect(mgrA.heartbeatTickForTest(sessionId: session.id) == true)   // A should stand down
+        #expect(await mgrA.heartbeatTickForTest(sessionId: session.id) == true)   // A should stand down
     }
 
     @Test("a failed attach releases the writer lease")
@@ -151,25 +183,25 @@ import Foundation
         let mgrB = ACPSessionManager(
             worktreeId: "wt", worktreePath: "/tmp/wt",
             store: storeB, instanceId: "B", pid: Int64(getpid()))
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrB.acquireWriterLease(sessionId: session.id) == true)
     }
 
     // MARK: - P1: Queue-write lease guard
 
     @Test("mirror cannot persist the queue; writer can")
-    func mirrorCannotPersistQueue() throws {
+    func mirrorCannotPersistQueue() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("queue-guard-\(UUID()).sqlite")
         // Writer: instance A owns the lease.
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
 
         // Mirror: instance B fails to acquire.
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == false)
+        #expect(await mgrB.acquireWriterLease(sessionId: session.id) == false)
 
         // Give mgrB a placeholder session so it has a local ACPSession to work with.
         let mirrorSession = mgrB.placeholderSession(id: session.id)
@@ -181,6 +213,7 @@ import Foundation
 
         // Mirror calls persistQueue — must be a no-op at the store level.
         mgrB.persistQueue(for: mirrorSession!)
+        await mgrB.flushPersistence()
         let storedAfterMirrorWrite = try storeB.loadQueue(sessionId: session.id)
         #expect(storedAfterMirrorWrite.isEmpty,
                 "mirror must not write session_queue when it does not hold the lease")
@@ -188,6 +221,7 @@ import Foundation
         // Positive case: writer can persist its queue.
         session.enqueue(blocks: [.text("writer prompt")])
         mgrA.persistQueue(for: session)
+        await mgrA.flushPersistence()
         let storedAfterWriterWrite = try storeA.loadQueue(sessionId: session.id)
         #expect(storedAfterWriterWrite.count == 1,
                 "writer must be able to persist the queue when it holds the lease")
@@ -202,7 +236,7 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)   // A owns it (in _ownedLeases)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)   // A owns it (in _ownedLeases)
         // B seizes the lease in the shared store (takeover) — A's _ownedLeases is now stale.
         let now = Int64(Date().timeIntervalSince1970)
         try storeA.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: now)
@@ -214,6 +248,7 @@ import Foundation
         #expect(session.queue.count == 1)
         // A still THINKS it owns the session in memory, but a manager write must be blocked.
         mgrA.persistQueue(for: session)
+        await mgrA.flushPersistence()
         let stored = try storeA.loadQueue(sessionId: session.id)
         #expect(stored.isEmpty,
                 "former owner must not write queue when another live instance owns the store lease")
@@ -222,18 +257,18 @@ import Foundation
     // MARK: - P2: Mirror poll teardown on eviction
 
     @Test("endMirroring is idempotent and evictIfIdle cancels the mirror poll")
-    func mirrorPollCancelledOnEvict() throws {
+    func mirrorPollCancelledOnEvict() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("evict-mirror-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let sessionA = mgrA.createSession(agentId: "claude")
-        #expect(mgrA.acquireWriterLease(sessionId: sessionA.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: sessionA.id) == true)
 
         // Instance B mirrors the session.
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: sessionA.id) == false)
+        #expect(await mgrB.acquireWriterLease(sessionId: sessionA.id) == false)
         let mirrorSession = mgrB.placeholderSession(id: sessionA.id)
         #expect(mirrorSession != nil)
         mgrB.beginMirroring(sessionId: sessionA.id)
@@ -270,15 +305,15 @@ import Foundation
 
     // MARK: - Fix 2: isMirror reads store even when _ownedLeases is stale
 
-    @Test("isMirror reads store even when _ownedLeases is stale after takeover")
-    func isMirrorReadsStoreAfterTakeover() throws {
+    @Test("heartbeat detects takeover while cached ownership is stale")
+    func heartbeatDetectsTakeover() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mirror-stale-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
         // A acquires — now in both _ownedLeases and the store.
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
         #expect(mgrA.isMirror(sessionId: session.id) == false)
 
         // B seizes the lease in the shared store (simulates takeOver).
@@ -286,30 +321,30 @@ import Foundation
         try storeA.seizeLease(sessionId: session.id, instanceId: "B",
                               pid: Int64(getpid()), now: now)
 
-        // A's _ownedLeases still contains the session (stale), but
-        // isMirror must now return true because the store says B owns it.
+        // A's cache is intentionally stale until its writer watch or heartbeat
+        // refreshes it. The transactional lease fence blocks writes meanwhile.
         #expect(mgrA._ownedLeases.contains(session.id),
                 "precondition: _ownedLeases is stale (still contains sessionId)")
-        #expect(mgrA.isMirror(sessionId: session.id) == true,
-                "isMirror must read the store and reflect that B is now the owner")
+        #expect(await mgrA.heartbeatTickForTest(sessionId: session.id),
+                "heartbeat must detect that B now owns the lease")
     }
 
     // MARK: - Fix 1: Writer-watch stand-down on takeover ping
 
     @Test("startWriterWatch activates a token; stopWriterWatch removes it")
-    func writerWatchTokenLifecycle() throws {
+    func writerWatchTokenLifecycle() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ww-lifecycle-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         let mgr = tempManager(instanceId: "A", store: store)
         let session = mgr.createSession(agentId: "claude")
-        #expect(mgr.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgr.acquireWriterLease(sessionId: session.id) == true)
 
         // Before anything: no writer-watch token.
         #expect(mgr.writerWatchActiveForTest(sessionId: session.id) == false)
 
         // heartbeatTick while we still own it returns false (no stand-down).
-        #expect(mgr.heartbeatTickForTest(sessionId: session.id) == false)
+        #expect(await mgr.heartbeatTickForTest(sessionId: session.id) == false)
 
         // Simulate what attach/takeOver does: acquire + startWriterWatch.
         // We test the token bookkeeping synchronously here; the async
@@ -329,18 +364,18 @@ import Foundation
         let now = Int64(Date().timeIntervalSince1970)
         try store.seizeLease(sessionId: session.id, instanceId: "B",
                              pid: Int64(getpid()), now: now)
-        #expect(mgr.heartbeatTickForTest(sessionId: session.id) == true,
+        #expect(await mgr.heartbeatTickForTest(sessionId: session.id) == true,
                 "heartbeatTick must return true (stand-down) when another instance owns the lease")
     }
 
     @Test("shutdownBackgroundTasks cancels writer-watch tokens")
-    func shutdownCancelsWriterWatch() throws {
+    func shutdownCancelsWriterWatch() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ww-shutdown-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         // Simulate becoming a writer by calling takeOver on a fresh manager.
         // takeOver calls startWriterWatch internally.
@@ -348,7 +383,7 @@ import Foundation
         let mgrB = tempManager(instanceId: "B", store: storeB)
         _ = mgrB.placeholderSession(id: session.id)
         // B takes over — it calls startWriterWatch on B's manager.
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
         #expect(mgrB.writerWatchActiveForTest(sessionId: session.id) == true,
                 "takeOver must activate the writer-watch subscription")
 
@@ -371,7 +406,7 @@ import Foundation
         // Simulate the "attach window": A holds the lease + heartbeat + writer-watch
         // but no runner has been registered yet (i.e. the runner registration step
         // inside `attach` hasn't been reached).
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
         // Manually start heartbeat and writer-watch via beginMirroring + takeOver
         // side-effect free path: just verify lease is released by detach with no runner.
         _ = mgrA.sessions[session.id]   // ensure session is cached
@@ -385,7 +420,7 @@ import Foundation
         // Lease must be released so another instance can acquire it.
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true,
+        #expect(await mgrB.acquireWriterLease(sessionId: session.id) == true,
                 "another instance must be able to acquire the lease after detach")
         // Mirror and writer-watch must not be active after detach.
         #expect(!mgrA.mirrorPollActiveForTest(sessionId: session.id),
@@ -397,13 +432,13 @@ import Foundation
     // MARK: - Fix 2 (P1): takeOver refreshes remoteSessionId from store
 
     @Test("takeOver refreshes remoteSessionId from store when cached value is nil")
-    func takeOverRefreshesRemoteSessionId() throws {
+    func takeOverRefreshesRemoteSessionId() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("takeover-remote-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         // Writer (A) persists a non-empty remote_session_id into the store —
         // this happens after session/new completes in a real attach.
@@ -425,7 +460,7 @@ import Foundation
         mirrorSession!.remoteSessionId = nil   // simulate stale mirror
 
         // B takes over — must refresh from the store before spawning attach.
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
 
         // The synchronous refresh inside takeOver must have restored the stored value.
         #expect(mgrB.sessions[session.id]?.remoteSessionId == remoteId,
@@ -441,11 +476,12 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         // Writer enqueues a prompt and persists it to the shared store.
         session.enqueue(blocks: [.text("queued from writer")])
         mgrA.persistQueue(for: session)
+        await mgrA.flushPersistence()
         let storedBeforeRefresh = try storeA.loadQueue(sessionId: session.id)
         #expect(storedBeforeRefresh.count == 1,
                 "precondition: writer persisted one queue item")
@@ -486,7 +522,7 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         // Mirror instance creates a placeholder (queue starts empty, no transcript rows).
         let storeB = try ACPSessionStore(path: url.path)
@@ -499,6 +535,7 @@ import Foundation
         // Writer persists a queue item WITHOUT adding any transcript messages.
         session.enqueue(blocks: [.text("writer queued item")])
         mgrA.persistQueue(for: session)
+        await mgrA.flushPersistence()
         let storedQueue = try storeA.loadQueue(sessionId: session.id)
         #expect(storedQueue.count == 1, "precondition: writer persisted one queue item")
         #expect((try? storeA.loadMessages(sessionId: session.id))?.isEmpty != false,
@@ -581,7 +618,7 @@ import Foundation
     }
 
     @Test("mirror poll slows when the session tab is not visible")
-    func mirrorPollIntervalTracksVisibleTab() throws {
+    func mirrorPollIntervalTracksVisibleTab() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mirror-interval-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -602,7 +639,8 @@ import Foundation
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        await mgrA.flushPersistence()
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB, hydratorPath: url.path)
@@ -632,7 +670,7 @@ import Foundation
     // MARK: - Fix 2 (P2): standDown on closed session doesn't start mirroring
 
     @Test("beginMirroring on a non-existent session is a no-op (no poll started)")
-    func beginMirroringNonExistentSessionIsNoop() throws {
+    func beginMirroringNonExistentSessionIsNoop() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("beginmirror-noop-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -673,6 +711,7 @@ import Foundation
             })
 
         let session = mgrA.createSession(agentId: "claude")
+        await mgrA.flushPersistence()
         // Persist a remote session id so the attach takes the loadSession path.
         let remoteId = "remote-abc"
         session.remoteSessionId = remoteId
@@ -703,14 +742,14 @@ import Foundation
 
     // MARK: - Fix 3: anotherLiveInstanceOwnsLease predicate (attach re-check)
 
-    @Test("anotherLiveInstanceOwnsLease returns true after a takeover seizes the store")
-    func anotherLiveInstanceOwnsLeaseAfterSeize() throws {
+    @Test("takeover is detected without a synchronous store read")
+    func takeoverDetectedAsynchronously() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("aliol-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
 
         // Before seizure: A owns the lease — not another live instance.
         #expect(mgrA.isMirror(sessionId: session.id) == false)
@@ -720,10 +759,8 @@ import Foundation
         try storeA.seizeLease(sessionId: session.id, instanceId: "B",
                               pid: Int64(getpid()), now: now)
 
-        // The guard predicate in attach must fire.
-        // isMirror now delegates to anotherLiveInstanceOwnsLease directly.
-        #expect(mgrA.isMirror(sessionId: session.id) == true,
-                "isMirror (== anotherLiveInstanceOwnsLease) must be true after B seizes; the attach re-check guard will abort the commit")
+        #expect(await mgrA.heartbeatTickForTest(sessionId: session.id),
+                "the next ownership check must detect the seized lease")
     }
 
     @Test("attach does not commit after the manager is disposed")
@@ -769,7 +806,7 @@ import Foundation
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
         // A owns the lease but has no runner (the pre-runner attach window).
-        #expect(mgrA.acquireWriterLease(sessionId: session.id) == true)
+        #expect(await mgrA.acquireWriterLease(sessionId: session.id) == true)
 
         // Simulate the dispose ordering: cancel tasks first, then release
         // leases after connections are shut down.
@@ -778,28 +815,29 @@ import Foundation
         // would be shut down between these two calls in production).
         #expect(mgrA._ownedLeases.contains(session.id),
                 "lease must still be held after shutdownBackgroundTasks (released separately)")
-        mgrA.releaseAllOwnedLeases()
+        await mgrA.releaseAllOwnedLeases()
 
         let storeB = try ACPSessionStore(path: url.path)
         let mgrB = tempManager(instanceId: "B", store: storeB)
-        #expect(mgrB.acquireWriterLease(sessionId: session.id) == true,
+        #expect(await mgrB.acquireWriterLease(sessionId: session.id) == true,
                 "another instance must be able to acquire after releaseAllOwnedLeases")
     }
 
     // MARK: - Fix 2: takeOver refreshes queue from store
 
     @Test("takeOver restores queue from store into the taking-over session")
-    func takeOverRestoresQueueFromStore() throws {
+    func takeOverRestoresQueueFromStore() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("takeover-queue-\(UUID()).sqlite")
         let storeA = try ACPSessionStore(path: url.path)
         let mgrA = tempManager(instanceId: "A", store: storeA)
         let session = mgrA.createSession(agentId: "claude")
-        _ = mgrA.acquireWriterLease(sessionId: session.id)
+        _ = await mgrA.acquireWriterLease(sessionId: session.id)
 
         // Writer (A) persists a non-empty queue into the store.
         session.enqueue(blocks: [.text("queued item from writer")])
         mgrA.persistQueue(for: session)
+        await mgrA.flushPersistence()
         let stored = try storeA.loadQueue(sessionId: session.id)
         #expect(stored.count == 1, "precondition: writer persisted one queue item")
 
@@ -812,7 +850,7 @@ import Foundation
                 "precondition: mirror placeholder queue is empty before takeOver")
 
         // B takes over — must refresh the queue from the store synchronously.
-        mgrB.takeOver(sessionId: session.id)
+        await mgrB.takeOver(sessionId: session.id)
 
         // The synchronous queue refresh inside takeOver must have restored
         // the persisted queue so the taking-over instance starts from the
@@ -852,7 +890,7 @@ import Foundation
         let attachingSession = mgr.createSession(agentId: "claude")
         // Session whose lease is owned but NOT attaching (plain _ownedLeases entry).
         let ownedSession = mgr.createSession(agentId: "claude")
-        #expect(mgr.acquireWriterLease(sessionId: ownedSession.id) == true,
+        #expect(await mgr.acquireWriterLease(sessionId: ownedSession.id) == true,
                 "precondition: ownedSession lease acquired")
 
         // Start attach in background — blocks inside setupEvaluator.
@@ -873,14 +911,14 @@ import Foundation
 
         // Dispose + release. The attaching session must be skipped.
         mgr.shutdownBackgroundTasks()
-        mgr.releaseAllOwnedLeases()
+        await mgr.releaseAllOwnedLeases()
 
         // Non-attaching owned session must have been released.
         #expect(!mgr._ownedLeases.contains(ownedSession.id),
                 "non-attaching owned session must be removed from _ownedLeases by releaseAllOwnedLeases")
         let storeC = try ACPSessionStore(path: url.path)
         let mgrC = tempManager(instanceId: "C", store: storeC)
-        #expect(mgrC.acquireWriterLease(sessionId: ownedSession.id) == true,
+        #expect(await mgrC.acquireWriterLease(sessionId: ownedSession.id) == true,
                 "non-attaching owned session lease must be claimable after releaseAllOwnedLeases")
 
         // Attaching session's lease must still be held in the store.
@@ -896,7 +934,7 @@ import Foundation
         // After the attach defer runs, the lease must be freed so another instance can claim it.
         let storeD = try ACPSessionStore(path: url.path)
         let mgrD = tempManager(instanceId: "D", store: storeD)
-        #expect(mgrD.acquireWriterLease(sessionId: attachingSession.id) == true,
+        #expect(await mgrD.acquireWriterLease(sessionId: attachingSession.id) == true,
                 "attaching session lease must be released by attach's own defer after the coroutine exits")
     }
 

@@ -143,7 +143,11 @@ private struct SessionsPopover: View {
         let isCurrent = row.id == session.id
         Button {
             if !isCurrent {
-                state.openExistingACPSession(sessionId: row.id)
+                Task {
+                    await state.openExistingACPSession(sessionId: row.id)
+                    onPick()
+                }
+                return
             }
             onPick()
         } label: {

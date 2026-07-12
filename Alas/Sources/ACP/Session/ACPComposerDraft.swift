@@ -1,6 +1,6 @@
 import Foundation
 
-struct ACPComposerDraft: Codable, Equatable {
+struct ACPComposerDraft: Codable, Equatable, Sendable {
     var segments: [Segment]
 
     static let empty = ACPComposerDraft(segments: [])
@@ -30,7 +30,7 @@ struct ACPComposerDraft: Codable, Equatable {
         }
     }
 
-    enum Segment: Codable, Equatable {
+    enum Segment: Codable, Equatable, Sendable {
         case text(String)
         case mention(displayName: String, uri: String)
         case image(uri: String, mimeType: String)
@@ -43,7 +43,7 @@ struct ACPComposerDraft: Codable, Equatable {
             case mimeType
         }
 
-        private enum SegmentType: String, Codable {
+        private enum SegmentType: String, Codable, Sendable {
             case text
             case mention
             case image

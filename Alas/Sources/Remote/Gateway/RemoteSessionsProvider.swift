@@ -13,20 +13,20 @@ protocol RemoteSessionsProvider: AnyObject {
     func hydrateIfNeeded(id: String) async
     func answerQuestion(for id: String, requestId: JSONRPCID, _ response: ACPQuestionResponse)
     func respondToUserInput(for id: String, token: UUID, action: ACPUserInputAction)
-    func fullToolCallContent(sessionId: String, toolCallId: String) -> String?
+    func fullToolCallContent(sessionId: String, toolCallId: String) async -> String?
     func isWriter(for id: String) -> Bool
-    func takeOver(for id: String)
+    func takeOver(for id: String) async
     /// `onResult` fires once with the final outcome (false = refused now or
     /// failed delivery later); the gateway emits `promptRejected` on false so
     /// the client can restore the text instead of losing it.
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void)
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async
     /// Decode a base64 image to a file under the session's acp-attachments dir.
     /// Returns the file URL on success, nil on any write error.
     func writeAttachment(_ data: Data, mimeType: String, name: String?, for id: String) -> URL?
-    func stop(for id: String)
-    func setModel(for id: String, modelId: String)
-    func setMode(for id: String, modeId: String)
-    func setAutoRun(for id: String, enabled: Bool)
+    func stop(for id: String) async
+    func setModel(for id: String, modelId: String) async
+    func setMode(for id: String, modeId: String) async
+    func setAutoRun(for id: String, enabled: Bool) async
     func renameSession(for id: String, title: String) -> Bool
     /// Projection of the session's config for the `sessionConfig` wire message,
     /// or nil if the session isn't live.

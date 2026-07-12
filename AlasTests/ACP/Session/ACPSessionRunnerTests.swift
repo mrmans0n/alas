@@ -695,7 +695,8 @@ struct ACPSessionRunnerTests {
 
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        let row = try #require(try runner.store.loadSession(id: "s"))
+        await runner.flushPersistence()
+        let row = try #require(try await runner.persistence.loadSession(id: "s"))
         #expect(runner.session.title == "t")
         #expect(row.title == "t")
     }
@@ -1020,7 +1021,7 @@ struct ACPSessionRunnerTests {
         }
     }
 
-    @Test("initial tool image enrichments apply during load replay suppression")
+    @Test("initial tool image enrichments apply in memory during load replay suppression")
     func initialToolImageEnrichmentsApplyDuringLoadReplaySuppression() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-tool-initial-image-replay-\(UUID().uuidString).sqlite")
@@ -1057,10 +1058,7 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             suppressingLoadReplay: true
         )
-        runner.start()
-        defer { runner.stop() }
-
-        mock.emit(.init(
+        runner.applyIncomingUpdateForTesting(.init(
             sessionId: "s",
             update: .toolCall(.init(
                 toolCallId: "tc-initial-image-replay",
@@ -1079,14 +1077,7 @@ struct ACPSessionRunnerTests {
                         ])
                     ])
                 ])))))
-        mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
-
-        try await waitUntil {
-            guard case .toolCall(let tc) = session.transcript.messages.first else { return false }
-            return tc.status == "completed"
-                && tc.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
-                && tc.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
-        }
+        runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.text("suppressed replay"))))
 
         #expect(session.transcript.messages.count == 1)
         if case .toolCall(let tc) = session.transcript.messages[0] {
@@ -1100,14 +1091,7 @@ struct ACPSessionRunnerTests {
             Issue.record("expected restored toolCall message")
         }
 
-        try await waitUntil {
-            guard let row = try? store.loadMessages(sessionId: "s").first,
-                  let decoded = try? ACPMessageCodec.decode(kind: row.kind, payload: row.payload),
-                  case .toolCall(let persisted) = decoded
-            else { return false }
-            return persisted.assets.contains(.image(data: "content-image-data", mimeType: "image/png"))
-                && persisted.assets.contains(.image(data: "raw-output-data", mimeType: "image/png"))
-        }
+        #expect(try store.loadMessages(sessionId: "s").isEmpty)
     }
 
     @Test("streaming chunks are persisted in a batch when streaming ends")
@@ -1153,6 +1137,7 @@ struct ACPSessionRunnerTests {
 
         await mock.finishPrompt()
         #expect(await completed.value)
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
@@ -1558,6 +1543,7 @@ struct ACPSessionRunnerTests {
         mock.emitUsageUpdate()
         try await Task.sleep(nanoseconds: 50_000_000)
         runner.stop()
+        await runner.flushPersistence()
         await mock.finishPrompt()
         _ = await completed.value
 
@@ -1614,6 +1600,7 @@ struct ACPSessionRunnerTests {
         try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
         try await Task.sleep(nanoseconds: 250_000_000)
         runner.stop()
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
@@ -1666,6 +1653,7 @@ struct ACPSessionRunnerTests {
         runner.stop()
         await mock.finishPrompt()
         _ = await completed.value
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
@@ -1719,6 +1707,7 @@ struct ACPSessionRunnerTests {
 
         runner.invalidateActivePrompt()
         runner.stop()
+        await runner.flushPersistence()
         await finishPrompt.open()
 
         let rows = try store.loadMessages(sessionId: sid)
@@ -1799,6 +1788,7 @@ struct ACPSessionRunnerTests {
         mock.emitUsageUpdate()
         try await Task.sleep(nanoseconds: 50_000_000)
         runner.stop()
+        await runner.flushPersistence()
         await mock.finishPrompt()
         _ = await completed.value
 
@@ -1885,6 +1875,7 @@ struct ACPSessionRunnerTests {
         runner.stop()
         await mock.finishPrompt()
         _ = await completed.value
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
@@ -1941,6 +1932,7 @@ struct ACPSessionRunnerTests {
         mock.emitUsageUpdate()
         try await Task.sleep(nanoseconds: 50_000_000)
         runner.stop()
+        await runner.flushPersistence()
         await mock.finishPrompt()
         _ = await completed.value
 
@@ -2016,6 +2008,7 @@ struct ACPSessionRunnerTests {
         mock.emitUsageUpdate()
         try await Task.sleep(nanoseconds: 50_000_000)
         runner.stop()
+        await runner.flushPersistence()
         await mock.finishPrompt()
         _ = await completed.value
 
@@ -2161,6 +2154,7 @@ struct ACPSessionRunnerTests {
         mock.emitUsageUpdate()
         try await Task.sleep(nanoseconds: 50_000_000)
         runner.stop()
+        await runner.flushPersistence()
         await mock.finishPrompt()
         _ = await completed.value
 
@@ -2228,6 +2222,7 @@ struct ACPSessionRunnerTests {
         runner.stop()
         await mock.finishPrompt()
         _ = await completed.value
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: sid)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
@@ -2237,6 +2232,64 @@ struct ACPSessionRunnerTests {
             return
         }
         #expect(text.value == "hello world and more")
+    }
+
+    @Test("fenced streaming write failure preserves the pending tail for takeover salvage")
+    func fencedStreamingWriteFailurePreservesPendingTail() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let sid = "s"
+        try store.upsertSession(.init(id: sid, agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
+        let oldLease = try #require(try store.loadLease(sessionId: sid))
+
+        let mock = StreamingBatchACPClient()
+        let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: mock),
+            store: store,
+            sessionId: sid,
+            worktreePath: FileManager.default.temporaryDirectory.path,
+            streamingPersistDebounceNanos: 5_000_000_000,
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            leaseFenceProvider: {
+                .init(sessionId: sid, ownerInstance: "ME", token: oldLease.token)
+            }
+        )
+        runner.start()
+
+        let completed = Task {
+            await withCheckedContinuation { continuation in
+                runner.send(text: "start", attachments: []) { succeeded in
+                    continuation.resume(returning: succeeded)
+                }
+            }
+        }
+
+        await mock.waitForChunks()
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+
+        // The cached canWrite closure still allows the enqueue, but the
+        // persistence actor observes the old token and rejects the write.
+        runner.stop()
+        await runner.flushPersistence()
+        await mock.finishPrompt()
+        _ = await completed.value
+
+        let rows = try store.loadMessages(sessionId: sid)
+        let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
+        guard case .agent(_, _, let text) = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload) else {
+            Issue.record("expected persisted agent message")
+            return
+        }
+        #expect(text.value == "hello world")
     }
 
     @Test("in-place plan update persists to disk even when plan is not the trailing message")
@@ -2424,7 +2477,7 @@ struct ACPSessionRunnerTests {
     // MARK: - onPersist callback tests
 
     @Test("onPersist fires after persistFromIndex writes a message")
-    func onPersistFiresAfterPersistFromIndex() throws {
+    func onPersistFiresAfterPersistFromIndex() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-onpersist-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2433,6 +2486,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         var posts = 0
+        var observedStoredMessage = false
         let mock = ACPMockClient()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         let runner = ACPSessionRunner(
@@ -2441,16 +2495,21 @@ struct ACPSessionRunnerTests {
             store: store,
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
-            onPersist: { posts += 1 }
+            onPersist: {
+                posts += 1
+                observedStoredMessage = (try? store.loadMessages(sessionId: "s").isEmpty == false) == true
+            }
         )
 
         session.appendSystemNotice("hello")
         runner.persistFromIndex(0)
+        await runner.flushPersistence()
         #expect(posts >= 1)
+        #expect(observedStoredMessage)
     }
 
     @Test("onPersist fires after persistIndices writes a message")
-    func onPersistFiresAfterPersistIndices() throws {
+    func onPersistFiresAfterPersistIndices() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-onpersist-idx-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2472,11 +2531,12 @@ struct ACPSessionRunnerTests {
 
         session.appendSystemNotice("hello")
         runner.persistIndices([0])
+        await runner.flushPersistence()
         #expect(posts >= 1)
     }
 
     @Test("persistIndices preserves stored full tool content after metadata-only update")
-    func persistIndicesPreservesStoredFullToolContentAfterMetadataOnlyUpdate() throws {
+    func persistIndicesPreservesStoredFullToolContentAfterMetadataOnlyUpdate() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-persist-truncated-tool-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2523,6 +2583,7 @@ struct ACPSessionRunnerTests {
             ])
         )))
         runner.persistIndices(dirty)
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
         let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
@@ -2536,7 +2597,7 @@ struct ACPSessionRunnerTests {
     }
 
     @Test("persistIndices stores replacement tool content after truncation")
-    func persistIndicesStoresReplacementToolContentAfterTruncation() throws {
+    func persistIndicesStoresReplacementToolContentAfterTruncation() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-persist-replacement-tool-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2573,6 +2634,7 @@ struct ACPSessionRunnerTests {
             content: [.content(.text(replacementContent))]
         )))
         runner.persistIndices(dirty)
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
         let row = try #require(rows.first(where: { $0.kind == "tool_call" }))
@@ -2586,7 +2648,7 @@ struct ACPSessionRunnerTests {
     }
 
     @Test("persistIndices updates deterministic row kind that appeared after runner initialization")
-    func persistIndicesUpdatesLateDeterministicRowCollisionKind() throws {
+    func persistIndicesUpdatesLateDeterministicRowCollisionKind() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-persist-collision-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2616,6 +2678,7 @@ struct ACPSessionRunnerTests {
 
         session.appendSystemNotice("fresh")
         runner.persistIndices([0])
+        await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
         let row = try #require(rows.first(where: { $0.id == "msg-s-0" }))
@@ -2654,7 +2717,7 @@ struct ACPSessionRunnerTests {
     }
 
     @Test("runner does not persist when it has lost the session lease")
-    func persistSkippedWhenLeaseLost() throws {
+    func persistSkippedWhenLeaseLost() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-lease-lost-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2681,13 +2744,14 @@ struct ACPSessionRunnerTests {
         // Put one message in the transcript, then attempt to persist.
         session.appendSystemNotice("should not land")
         runner.persistFromIndex(0)
+        await runner.flushPersistence()
 
         // Nothing should have been written — the lease is held by "OTHER", not "ME".
         #expect(try store.messageCount(sessionId: sid) == 0)
     }
 
     @Test("runner persists when it holds the session lease")
-    func persistProceedsWhenLeaseHeld() throws {
+    func persistProceedsWhenLeaseHeld() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-lease-held-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2713,6 +2777,7 @@ struct ACPSessionRunnerTests {
 
         session.appendSystemNotice("should land")
         runner.persistFromIndex(0)
+        await runner.flushPersistence()
 
         // The lease owner matches, so the message must be written.
         #expect(try store.messageCount(sessionId: sid) == 1)
@@ -2753,8 +2818,8 @@ struct ACPSessionRunnerTests {
 
     // MARK: - Fix 3 (P2): Terminal-create lease gate
 
-    @Test("terminal create denied when lease is held by another instance")
-    func terminalCreateDeniedWhenLeaseLost() async throws {
+    @Test("terminal create requires an authoritative lease check")
+    func terminalCreateDeniedWhenAuthoritativeLeaseCheckFails() async throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("rn-terminal-lease-\(UUID().uuidString).sqlite")
         let store = try ACPSessionStore(path: url.path)
@@ -2763,9 +2828,10 @@ struct ACPSessionRunnerTests {
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
-        // Seize the lease for a DIFFERENT instance than the runner's ownerInstanceId.
+        // The cache still says this runner owns the lease, but the authoritative
+        // check represents a takeover that landed before the side effect.
         let now = Int64(Date().timeIntervalSince1970)
-        try store.seizeLease(sessionId: sid, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        try store.seizeLease(sessionId: sid, instanceId: "ME", pid: Int64(getpid()), now: now)
 
         let mock = ACPMockClient()
         let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
@@ -2775,12 +2841,15 @@ struct ACPSessionRunnerTests {
             store: store,
             sessionId: sid,
             worktreePath: FileManager.default.temporaryDirectory.path,
-            ownerInstanceId: "ME"
+            ownerInstanceId: "ME",
+            canWrite: { true },
+            validateLease: { false }
         )
         runner.start()
         defer { runner.stop() }
 
-        // Request a terminal/create while the lease is held by "OTHER".
+        // Request a terminal/create after the authoritative check has rejected
+        // the stale cached authority.
         let params = ACPTerminalCreateParams(
             sessionId: sid, command: "/bin/echo",
             args: ["hi"], env: nil, cwd: nil, outputByteLimit: nil)
@@ -2905,6 +2974,7 @@ struct ACPSessionRunnerTests {
         }
 
         #expect(succeeded)
+        await runner.flushPersistence()
         let row = try #require(try store.loadSession(id: sid))
         #expect(row.title == "Remote Title")
         #expect(row.titleSource == .manual)

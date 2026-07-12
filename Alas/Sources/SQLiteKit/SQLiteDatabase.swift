@@ -4,7 +4,7 @@ import SQLite3
 final class SQLiteDatabase {
     private var handle: OpaquePointer?
 
-    init(path: String) throws {
+    init(path: String, busyTimeoutMilliseconds: Int32 = 5_000) throws {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(path, &handle, flags, nil)
         guard rc == SQLITE_OK, let h = handle else {
@@ -12,7 +12,7 @@ final class SQLiteDatabase {
             sqlite3_close(handle)
             throw SQLiteError.openFailed(code: rc, message: msg)
         }
-        sqlite3_busy_timeout(h, 5_000)
+        sqlite3_busy_timeout(h, busyTimeoutMilliseconds)
         _ = sqlite3_exec(h, "PRAGMA journal_mode = WAL;", nil, nil, nil)
         _ = sqlite3_exec(h, "PRAGMA foreign_keys = ON;", nil, nil, nil)
     }

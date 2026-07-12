@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct AlasApp: App {
+    @NSApplicationDelegateAdaptor(AlasApplicationDelegate.self) private var appDelegate
     @State private var state = AppState()
 
     private static var isRunningUnitTests: Bool {

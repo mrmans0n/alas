@@ -34,9 +34,34 @@ struct ACPSessionEnqueueWhileRecoveringTests {
             Issue.record("expected first block to be .text(\"hello\"), got \(String(describing: head.blocks.first))")
         }
 
+        await mgr.flushPersistence()
         let persisted = try store.loadQueue(sessionId: session.id)
         #expect(persisted.count == 1)
         #expect(persisted.first?.id == head.id)
+    }
+
+    @Test("enqueueWhileRecovering fences a stale queued write after takeover")
+    func enqueueIsFencedAfterTakeover() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mgr-recover-fence-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        let manager = ACPSessionManager(
+            worktreeId: "/tmp/wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            instanceId: "ME",
+            pid: Int64(getpid())
+        )
+        let session = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+
+        manager.enqueueWhileRecovering(text: "stale", attachments: [], into: session.id)
+        let now = Int64(Date().timeIntervalSince1970)
+        try store.seizeLease(sessionId: session.id, instanceId: "OTHER", pid: Int64(getpid()), now: now)
+        await manager.flushPersistence()
+
+        #expect(try store.loadQueue(sessionId: session.id).isEmpty)
     }
 
     @Test("enqueueWhileRecovering preserves attachments as resource links")

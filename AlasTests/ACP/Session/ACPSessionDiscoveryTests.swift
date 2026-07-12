@@ -110,7 +110,7 @@ struct ACPSessionDiscoveryTests {
 
     @MainActor
     @Test("materialization rejects sessions whose additional roots Alas cannot enforce")
-    func materializationRejectsAdditionalDirectories() throws {
+    func materializationRejectsAdditionalDirectories() async throws {
         let store = try temporaryStore()
         let manager = manager(store: store, client: ACPMockClient())
         let discovered = ACPDiscoveredSession(
@@ -124,13 +124,14 @@ struct ACPSessionDiscoveryTests {
             localSessionId: nil
         )
 
-        #expect(manager.materializeDiscoveredSession(discovered) == nil)
+        let materialized = await manager.materializeDiscoveredSession(discovered)
+        #expect(materialized == nil)
         #expect(try store.loadSession(agentId: "claude", remoteSessionId: "remote-extra-roots") == nil)
     }
 
     @MainActor
     @Test("materialization rejects discovery from another worktree")
-    func materializationRejectsAnotherWorktree() throws {
+    func materializationRejectsAnotherWorktree() async throws {
         let store = try temporaryStore()
         let manager = manager(store: store, client: ACPMockClient())
         let discovered = ACPDiscoveredSession(
@@ -144,7 +145,8 @@ struct ACPSessionDiscoveryTests {
             localSessionId: nil
         )
 
-        #expect(manager.materializeDiscoveredSession(discovered) == nil)
+        let materialized = await manager.materializeDiscoveredSession(discovered)
+        #expect(materialized == nil)
         #expect(try store.loadSession(agentId: "claude", remoteSessionId: "remote-other-worktree") == nil)
     }
 

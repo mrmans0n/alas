@@ -1,45 +1,53 @@
 import Foundation
 
-struct ACPPermissionDecisionLog {
-    let store: ACPSessionStore
+struct ACPPermissionDecisionLog: @unchecked Sendable {
+    let persistence: ACPSessionPersistence
     /// Optional gate: when provided, `record` becomes a no-op if the
     /// closure returns `false`. Used by `ACPSessionRunner` to prevent
     /// writes to the `permission_decisions` table after another instance
     /// has seized the session lease.
     let canWrite: (() -> Bool)?
+    let leaseFence: (() -> ACPSessionLeaseFence?)?
 
-    init(store: ACPSessionStore, canWrite: (() -> Bool)? = nil) {
-        self.store = store
+    init(
+        store: ACPSessionStore,
+        canWrite: (() -> Bool)? = nil,
+        leaseFence: (() -> ACPSessionLeaseFence?)? = nil
+    ) {
+        self.persistence = ACPSessionPersistence(path: store.path)
         self.canWrite = canWrite
+        self.leaseFence = leaseFence
     }
 
-    func record(sessionId: String, scopeKey: String, decision: ACPPermissionDecision, scope: ACPPermissionScopeKind) throws {
+    init(
+        persistence: ACPSessionPersistence,
+        canWrite: (() -> Bool)? = nil,
+        leaseFence: (() -> ACPSessionLeaseFence?)? = nil
+    ) {
+        self.persistence = persistence
+        self.canWrite = canWrite
+        self.leaseFence = leaseFence
+    }
+
+    func record(
+        sessionId: String,
+        scopeKey: String,
+        decision: ACPPermissionDecision,
+        scope: ACPPermissionScopeKind
+    ) async throws {
         if let canWrite, !canWrite() { return }
-        let now = Int64(Date().timeIntervalSince1970)
-        try store.db.exec("""
-        INSERT INTO permission_decisions (session_id, scope_key, decision, scope, decided_at)
-        VALUES (?,?,?,?,?)
-        ON CONFLICT(session_id, scope_key) DO UPDATE SET
-            decision = excluded.decision,
-            scope = excluded.scope,
-            decided_at = excluded.decided_at
-        """, bindings: [sessionId, scopeKey, decision.rawValue, scope.rawValue, now])
+        _ = try await persistence.recordPermissionDecision(
+            sessionId: sessionId,
+            scopeKey: scopeKey,
+            decision: decision,
+            scope: scope,
+            fence: leaseFence?()
+        )
     }
 
     /// Returns the matching decision for this session, prefer session-scoped
     /// then project-scoped (any session in this worktree).
-    func lookup(sessionId: String, scopeKey: String) throws -> ACPPermissionDecision? {
-        let sessionRows = try store.db.query("""
-        SELECT decision FROM permission_decisions WHERE session_id = ? AND scope_key = ?
-        """, bindings: [sessionId, scopeKey])
-        if let d = sessionRows.first?["decision"] as? String { return ACPPermissionDecision(rawValue: d) }
-
-        let projectRows = try store.db.query("""
-        SELECT decision FROM permission_decisions
-        WHERE scope_key = ? AND scope = 'project' LIMIT 1
-        """, bindings: [scopeKey])
-        if let d = projectRows.first?["decision"] as? String { return ACPPermissionDecision(rawValue: d) }
-
-        return nil
+    func lookup(sessionId: String, scopeKey: String) async throws -> ACPPermissionDecision? {
+        try await persistence.lookupPermissionDecision(sessionId: sessionId, scopeKey: scopeKey)
     }
 }

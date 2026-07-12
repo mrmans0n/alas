@@ -76,7 +76,7 @@ struct RemoteAppStateAccessTests {
         #expect(state.remoteAdvertisedAddresses.isEmpty)
     }
 
-    @Test func remoteRenameSessionUpdatesManualSessionTitleAndOpenTab() throws {
+    @Test func remoteRenameSessionUpdatesManualSessionTitleAndOpenTab() async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId {
@@ -120,13 +120,13 @@ struct RemoteAppStateAccessTests {
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         let session = try #require(manager.placeholderSession(id: tab.sessionId))
         session.remoteSessionId = "remote-shared"
-        try seedStoredSession(
+        try await seedStoredSession(
             id: tab.sessionId,
             title: "New session",
             titleSource: .placeholder,
             in: manager
         )
-        try seedStoredSession(
+        try await seedStoredSession(
             id: "historical-copy",
             title: "Actual Remote Title",
             titleSource: .manual,
@@ -155,7 +155,7 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-        try seedStoredSession(
+        try await seedStoredSession(
             id: "historical-\(UUID().uuidString)",
             title: "Historical",
             titleSource: .manual,
@@ -166,6 +166,42 @@ struct RemoteAppStateAccessTests {
         let historical = try #require(summaries.first { $0.title == "Historical" })
 
         #expect(!historical.isActive)
+    }
+
+    @Test func openingUncachedStoredSessionUsesPersistedTitleForTab() async throws {
+        var cleanupWorktreeId: String?
+        defer {
+            if let cleanupWorktreeId {
+                cleanupRemoteRenameFiles(worktreeId: cleanupWorktreeId)
+            }
+        }
+
+        let state = makeRemoteRenameState()
+        let worktreeId = try #require(state.selectedWorktreeId)
+        cleanupWorktreeId = worktreeId
+        state.openNewACPSession(agentID: "test-agent")
+        let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
+        let id = "uncached-\(UUID().uuidString)"
+        let now = Int64(Date().timeIntervalSince1970)
+        try await manager.persistence.upsertSession(.init(
+            id: id,
+            agentId: "test-agent",
+            title: "Persisted Title",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: false,
+            createdAt: now,
+            updatedAt: now,
+            lastOpenedAt: now,
+            archived: false
+        ))
+        #expect(!manager.sessionRows.contains { $0.id == id })
+
+        await state.openExistingACPSession(sessionId: id)
+
+        let tab = try #require(acpTabs(in: state).first { $0.sessionId == id })
+        #expect(tab.title == "Persisted Title")
     }
 
     @Test func remoteSessionSummariesPreferLivePlaceholderOverStoredDuplicate() async throws {
@@ -184,6 +220,7 @@ struct RemoteAppStateAccessTests {
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
         let session = try #require(manager.placeholderSession(id: tab.sessionId))
         session.remoteSessionId = "remote-shared"
+        await manager.flushPersistence()
         let mirrorOwner = try ACPSessionManager(
             worktreeId: worktreeId,
             worktreePath: "/tmp/mirror-owner",
@@ -192,12 +229,10 @@ struct RemoteAppStateAccessTests {
             pid: Int64(getpid())
         )
         _ = try #require(mirrorOwner.placeholderSession(id: tab.sessionId))
-        #expect(mirrorOwner.acquireWriterLease(sessionId: tab.sessionId))
+        #expect(await mirrorOwner.acquireWriterLease(sessionId: tab.sessionId))
+        #expect(!(await manager.acquireWriterLease(sessionId: tab.sessionId)))
         #expect(manager.isMirror(sessionId: tab.sessionId))
-        defer {
-            mirrorOwner.releaseWriterLease(sessionId: tab.sessionId)
-        }
-        try seedStoredSession(
+        try await seedStoredSession(
             id: tab.sessionId,
             title: "New session",
             titleSource: .placeholder,
@@ -205,7 +240,7 @@ struct RemoteAppStateAccessTests {
             lastOpenedAt: 1,
             in: manager
         )
-        try seedStoredSession(
+        try await seedStoredSession(
             id: "historical-copy",
             title: "Actual Remote Title",
             titleSource: .manual,
@@ -220,6 +255,7 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.count == 1)
         #expect(summaries.first?.id == tab.sessionId)
         #expect(summaries.first?.title == "Actual Remote Title")
+        await mirrorOwner.releaseWriterLease(sessionId: tab.sessionId)
     }
 
     @Test func remoteSessionSummariesKeepDifferentAgentsWithSameRemoteSessionId() async throws {
@@ -235,7 +271,7 @@ struct RemoteAppStateAccessTests {
         cleanupWorktreeId = worktreeId
         state.openNewACPSession(agentID: "test-agent")
         let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-        try seedStoredSession(
+        try await seedStoredSession(
             id: "codex-session",
             agentId: "codex",
             title: "Codex Session",
@@ -243,7 +279,7 @@ struct RemoteAppStateAccessTests {
             remoteSessionId: "remote-shared",
             in: manager
         )
-        try seedStoredSession(
+        try await seedStoredSession(
             id: "claude-session",
             agentId: "claude",
             title: "Claude Session",
@@ -258,7 +294,7 @@ struct RemoteAppStateAccessTests {
         #expect(summaries.map(\.id).contains("claude-session"))
     }
 
-    @Test func remoteRenameSessionRejectsEmptyAndUnknownSession() throws {
+    @Test func remoteRenameSessionRejectsEmptyAndUnknownSession() async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId {
@@ -300,7 +336,7 @@ struct RemoteAppStateAccessTests {
             cleanupWorktreeId = worktreeId
             state.openNewACPSession(agentID: "test-agent")
             let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-            try seedStoredSession(id: sessionId, title: "Recent", in: manager)
+            try await seedStoredSession(id: sessionId, title: "Recent", in: manager)
 
             let renamed = state.renameSession(for: sessionId, title: "Recent Remote")
 
@@ -319,7 +355,7 @@ struct RemoteAppStateAccessTests {
         }
     }
 
-    @Test func remoteRenameSessionRejectsArchivedSession() throws {
+    @Test func remoteRenameSessionRejectsArchivedSession() async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId {
@@ -335,14 +371,14 @@ struct RemoteAppStateAccessTests {
             cleanupWorktreeId = worktreeId
             state.openNewACPSession(agentID: "test-agent")
             let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
-            try seedStoredSession(id: sessionId, title: "Archived", archived: true, in: manager)
+            try await seedStoredSession(id: sessionId, title: "Archived", archived: true, in: manager)
 
             #expect(!state.renameSession(for: sessionId, title: "Remote Title"))
             #expect(manager.liveSession(for: sessionId) == nil)
         }
     }
 
-    @Test func remoteRenameSessionUpdatesMirrorSessionWithoutWriterLease() throws {
+    @Test func remoteRenameSessionUpdatesMirrorSessionWithoutWriterLease() async throws {
         var cleanupWorktreeId: String?
         defer {
             if let cleanupWorktreeId {
@@ -361,6 +397,7 @@ struct RemoteAppStateAccessTests {
             sessionId = tab.sessionId
             let manager = try #require(state.acpManager(forWorktreeId: worktreeId))
             let session = try #require(manager.placeholderSession(id: sessionId))
+            await manager.flushPersistence()
             let mirrorOwner = try ACPSessionManager(
                 worktreeId: worktreeId,
                 worktreePath: "/tmp/mirror-owner",
@@ -369,10 +406,12 @@ struct RemoteAppStateAccessTests {
                 pid: Int64(getpid())
             )
             let writerSession = try #require(mirrorOwner.placeholderSession(id: sessionId))
-            #expect(mirrorOwner.acquireWriterLease(sessionId: sessionId))
+            #expect(await mirrorOwner.acquireWriterLease(sessionId: sessionId))
+            #expect(!(await manager.acquireWriterLease(sessionId: sessionId)))
             #expect(manager.isMirror(sessionId: sessionId))
 
             let renamed = state.renameSession(for: sessionId, title: "Mirror Title")
+            await manager.flushPersistence()
 
             #expect(renamed)
             #expect(session.title == "Mirror Title")
@@ -381,7 +420,7 @@ struct RemoteAppStateAccessTests {
             #expect(writerSession.title == "New session")
             writerSession.autoRunEnabled = true
             mirrorOwner.persist(writerSession)
-            mirrorOwner.releaseWriterLease(sessionId: sessionId)
+            await mirrorOwner.releaseWriterLease(sessionId: sessionId)
         }
 
         do {
@@ -432,7 +471,7 @@ struct RemoteAppStateAccessTests {
         #expect(ids.contains(deleteFailed.id))
     }
 
-    @Test func remoteAgentsIncludeEnabledACPCapableAgentsOnly() throws {
+    @Test func remoteAgentsIncludeEnabledACPCapableAgentsOnly() async throws {
         let state = makeRemoteRenameState()
         let customAgent = AgentDefinition(
             id: "custom-agent",
@@ -461,7 +500,7 @@ struct RemoteAppStateAccessTests {
         #expect(agents == [RemoteAgentOption(id: "claude", name: claudeName, isDefault: true)])
     }
 
-    @Test func remoteAgentsPreserveNativeACPLaunchOrder() throws {
+    @Test func remoteAgentsPreserveNativeACPLaunchOrder() async throws {
         let state = makeRemoteRenameState()
         state.agentRegistry = AgentRegistry(
             builtinState: [
@@ -793,9 +832,9 @@ struct RemoteAppStateAccessTests {
         updatedAt: Int64? = nil,
         lastOpenedAt: Int64? = nil,
         in manager: ACPSessionManager
-    ) throws {
+    ) async throws {
         let now = Int64(Date().timeIntervalSince1970)
-        try manager.store.upsertSession(ACPSessionRow(
+        try await manager.persistence.upsertSession(ACPSessionRow(
             id: id,
             agentId: agentId,
             title: title,
@@ -809,7 +848,7 @@ struct RemoteAppStateAccessTests {
             lastOpenedAt: lastOpenedAt ?? now,
             archived: archived
         ))
-        manager.refreshRecent()
+        await manager.refreshRecentNow()
     }
 
     private func cleanupRemoteRenameFiles(worktreeId: String) {

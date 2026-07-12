@@ -57,7 +57,7 @@ final class RemoteSessionGateway {
                 send(.sessionClosed(sessionId: id))
                 return
             }
-            sendSnapshot(id: id, session: session)
+            await sendSnapshot(id: id, session: session)
             if let cfg = provider.sessionConfig(for: id) {
                 send(.sessionConfig(cfg))
             }
@@ -74,7 +74,7 @@ final class RemoteSessionGateway {
             lastQuestionReq[id] = nil
             lastElicitationReq[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
-            applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
+            await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
             applyQuestionAnswer(sessionId: id, requestId: requestId, answers: answers)
         case .elicitationResponse(let id, let requestId, let action, let content):
@@ -85,7 +85,7 @@ final class RemoteSessionGateway {
                 content: content
             )
         case .takeOver(let id):
-            provider.takeOver(for: id)
+            await provider.takeOver(for: id)
             // Takeover seizes the writer lease synchronously but mostly mutates
             // lease/agent state, not the transcript — so the objectWillChange
             // delta that normally carries `canDrive` may never fire on an idle
@@ -94,7 +94,7 @@ final class RemoteSessionGateway {
             // button stays up and sendPrompt stays blocked until some unrelated
             // transcript mutation happens to occur).
             if let session = provider.session(for: id) {
-                sendSnapshot(id: id, session: session)
+                await sendSnapshot(id: id, session: session)
             }
         case .sendPrompt(let id, let text, let attachments):
             // Pre-check the lease BEFORE materializing — `materialize` writes the
@@ -131,7 +131,7 @@ final class RemoteSessionGateway {
             // these file URIs (the transcript bubble references them), so we
             // must keep the files.
             var refusalIsSynchronous = true
-            provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
+            await provider.sendPrompt(for: id, text: trimmed, attachments: materialized) { [weak self] accepted in
                 guard let self else { return }
                 if !accepted {
                     self.send(.promptRejected(sessionId: id))
@@ -141,16 +141,16 @@ final class RemoteSessionGateway {
             refusalIsSynchronous = false
         case .stop(let id):
             guard provider.isWriter(for: id) else { return }
-            provider.stop(for: id)
+            await provider.stop(for: id)
         case .setModel(let id, let modelId):
             guard provider.isWriter(for: id) else { return }
-            provider.setModel(for: id, modelId: modelId)
+            await provider.setModel(for: id, modelId: modelId)
         case .setMode(let id, let modeId):
             guard provider.isWriter(for: id) else { return }
-            provider.setMode(for: id, modeId: modeId)
+            await provider.setMode(for: id, modeId: modeId)
         case .setAutoRun(let id, let enabled):
             guard provider.isWriter(for: id) else { return }
-            provider.setAutoRun(for: id, enabled: enabled)
+            await provider.setAutoRun(for: id, enabled: enabled)
         case .renameSession(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return }
@@ -259,8 +259,8 @@ final class RemoteSessionGateway {
 
     // MARK: snapshot / delta
 
-    private func sendSnapshot(id: String, session: ACPSession) {
-        let wire = wireMessages(id: id, session: session)
+    private func sendSnapshot(id: String, session: ACPSession) async {
+        let wire = await wireMessages(id: id, session: session)
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
                                  canDrive: provider.isWriter(for: id),
@@ -284,7 +284,7 @@ final class RemoteSessionGateway {
             self.coalesce[id] = Task { @MainActor [weak self, weak session] in
                 try? await Task.sleep(nanoseconds: Self.coalesceNanos)
                 guard !Task.isCancelled, let self, let session else { return }
-                self.sendDelta(id: id, session: session)
+                await self.sendDelta(id: id, session: session)
             }
         }
         // Re-emit sessionConfig when the session's config publishers change.
@@ -315,10 +315,10 @@ final class RemoteSessionGateway {
         }
     }
 
-    private func sendDelta(id: String, session: ACPSession) {
+    private func sendDelta(id: String, session: ACPSession) async {
         // v1: send a full re-snapshot as the "delta" (simple + always correct).
         // A true per-message diff optimization is intentionally deferred (YAGNI).
-        let wire = wireMessages(id: id, session: session)
+        let wire = await wireMessages(id: id, session: session)
         send(.transcriptDelta(sessionId: id,
                               streamingState: Self.stateString(session.transcript.streamingState),
                               canDrive: provider.isWriter(for: id),
@@ -328,21 +328,27 @@ final class RemoteSessionGateway {
         emitPendingElicitationIfAny(id: id, session: session)
     }
 
-    private func wireMessages(id: String, session: ACPSession) -> [RemoteWireMessage] {
-        session.transcript.messages.enumerated().map { index, message in
-            Self.toWire(
+    private func wireMessages(id: String, session: ACPSession) async -> [RemoteWireMessage] {
+        var wire: [RemoteWireMessage] = []
+        wire.reserveCapacity(session.transcript.messages.count)
+        for (index, message) in session.transcript.messages.enumerated() {
+            wire.append(Self.toWire(
                 message,
                 index: index,
-                fullToolCallContent: fullToolCallContentIfNeeded(sessionId: id, message: message)
-            )
+                fullToolCallContent: await fullToolCallContentIfNeeded(
+                    sessionId: id,
+                    message: message
+                )
+            ))
         }
+        return wire
     }
 
-    private func fullToolCallContentIfNeeded(sessionId: String, message: ACPMessage) -> String? {
+    private func fullToolCallContentIfNeeded(sessionId: String, message: ACPMessage) async -> String? {
         guard case .toolCall(let toolCall) = message,
               toolCall.isContentTruncated
         else { return nil }
-        return provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
+        return await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
     }
 
     private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
@@ -448,7 +454,7 @@ final class RemoteSessionGateway {
 
     // MARK: decision
 
-    private func applyDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?) {
+    private func applyDecision(sessionId: String, requestId: Int, optionId: String, persistScope: String?) async {
         guard let session = provider.session(for: sessionId),
               let policy = provider.permissionPolicy(for: sessionId),
               let pending = session.transcript.pendingPermission,
@@ -473,7 +479,7 @@ final class RemoteSessionGateway {
 
         // Same scopeKey derivation as ACPTabView.scopeKey(for:).
         let scopeKey = Self.scopeKey(for: pending.params)
-        policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
+        await policy.userDecided(scopeKey: scopeKey, optionId: optionId, decision: decision, persistScope: scope)
         lastPermissionReq[sessionId] = nil
         send(.permissionResolved(sessionId: sessionId, requestId: requestId))
     }

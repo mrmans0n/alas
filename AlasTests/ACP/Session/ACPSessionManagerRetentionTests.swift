@@ -97,7 +97,32 @@ struct ACPSessionManagerRetentionTests {
         #expect(mgr.sessions[id] == nil)
         // The store must contain the draft — flushPendingDraftWrite was
         // called inline by evictIfIdle.
-        let loaded = try mgr.store.loadComposerDraft(sessionId: id)
+        await mgr.flushPersistence()
+        let loaded = try await mgr.persistence.loadComposerDraftRecord(sessionId: id)?.draft
+        #expect(loaded == draft)
+    }
+
+    @Test("reopening before an evicted draft commits keeps the flushed draft")
+    func reopenBeforeEvictedDraftCommitUsesHandoff() async throws {
+        let mgr = makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        let id = s.id
+        await mgr.flushPersistence()
+
+        let draft = ACPComposerDraft(segments: [.text("restore immediately")])
+        mgr.persistComposerDraft(draft, for: s)
+        mgr.retainSession(id: id)
+        mgr.releaseSession(id: id)
+        #expect(mgr.sessions[id] == nil)
+
+        let reopened = try #require(mgr.placeholderSession(id: id))
+        #expect(reopened.composerDraft == draft)
+
+        await mgr.hydrateIfNeeded(id: id)
+        #expect(reopened.composerDraft == draft)
+
+        await mgr.flushPersistence()
+        let loaded = try await mgr.persistence.loadComposerDraftRecord(sessionId: id)?.draft
         #expect(loaded == draft)
     }
 }

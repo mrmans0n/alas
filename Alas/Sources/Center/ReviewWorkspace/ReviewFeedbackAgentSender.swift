@@ -68,8 +68,10 @@ struct ReviewFeedbackAgentSender {
                     appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
                     completion(.success(()))
                 case .existingSession(_, let sessionID, _):
-                    appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { accepted in
-                        completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+                    Task { @MainActor in
+                        await appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { accepted in
+                            completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
+                        }
                     }
                 }
             }

@@ -33,7 +33,7 @@ struct ACPPermissionPolicyTests {
         let store = try makeStore()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         let log = ACPPermissionDecisionLog(store: store)
-        try log.record(sessionId: "s", scopeKey: "tool:bash", decision: .deny, scope: .session)
+        try await log.record(sessionId: "s", scopeKey: "tool:bash", decision: .deny, scope: .session)
         let policy = ACPPermissionPolicy(session: session, log: log)
         let opts: [ACPPermissionOption] = [
             .init(optionId: "allow", name: "Allow", kind: "allow_once"),
@@ -41,6 +41,22 @@ struct ACPPermissionPolicyTests {
         ]
         let resp = await policy.evaluate(scopeKey: "tool:bash", options: opts, params: stubParams())
         #expect(resp.outcome == .selected(optionId: "deny"))
+    }
+
+    @Test("persisted user decisions commit before userDecided returns")
+    func persistedUserDecisionIsAwaited() async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let log = ACPPermissionDecisionLog(store: store)
+        let policy = ACPPermissionPolicy(session: session, log: log)
+        await policy.userDecided(
+            scopeKey: "tool:bash",
+            optionId: "allow",
+            decision: .allow,
+            persistScope: .session
+        )
+
+        #expect(try await log.lookup(sessionId: "s", scopeKey: "tool:bash") == .allow)
     }
 
     private func stubParams() -> ACPPermissionRequestParams {

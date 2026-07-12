@@ -77,12 +77,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
         lastUserInputResponse = (id, token, action)
     }
 
-    func fullToolCallContent(sessionId: String, toolCallId: String) -> String? {
+    func fullToolCallContent(sessionId: String, toolCallId: String) async -> String? {
         fullToolCallContents["\(sessionId)|\(toolCallId)"]
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
-    func takeOver(for id: String) {
+    func takeOver(for id: String) async {
         tookOver.append(id)
         writers.insert(id)
     }

@@ -498,6 +498,9 @@ final class AppState {
         // we'd resolve to a 0-element id list. RootView calls reloadTabs() after
         // refreshAll() returns.
         rightPaneStore.appState = self
+        AlasTerminationCoordinator.shared.flush = { [weak self] in
+            await self?.flushAllACPComposerDrafts()
+        }
 
         // Kick off a background resolution of the user's login-shell PATH so
         // every `Process.git()` invocation uses the same environment a terminal
@@ -3464,9 +3467,12 @@ final class AppState {
     /// all live managers. Called from app-will-terminate so an in-flight
     /// typing burst doesn't lose its last ~300ms of input to the
     /// debounce window.
-    func flushAllACPComposerDrafts() {
+    func flushAllACPComposerDrafts() async {
         for manager in acpManagers.values {
             manager.flushPendingDraftWrites()
+        }
+        for manager in acpManagers.values {
+            await manager.flushAllPersistence()
         }
     }
 
@@ -3517,51 +3523,47 @@ final class AppState {
     }
 
     /// Returns (or lazily creates) the ACP session manager for the given worktree.
-    /// Returns nil when the SQLite backing store cannot be opened.
+    /// Store opening and migration happen lazily on the persistence actor.
     func acpManager(for worktree: Worktree) -> ACPSessionManager? {
         if let existing = acpManagers[worktree.id] { return existing }
         let dbURL = Paths.acpSessionsDB(forWorktreeId: worktree.id)
-        do {
-            let store = try ACPSessionStore(path: dbURL.path)
-            let mgr = ACPSessionManager(
-                worktreeId: worktree.id,
-                worktreePath: worktree.path.path,
-                store: store,
-                instanceId: instanceId,
-                pid: Int64(ProcessInfo.processInfo.processIdentifier),
-                hydratorPath: dbURL.path,
-                onDirtyCheck: { [weak self] path in
-                    self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
-                },
-                onLiveBufferRead: { [weak self] path in
-                    self?.editorLiveBufferText(for: path, worktreeId: worktree.id)
-                },
-                onSessionTitleUpdated: { [weak self] sessionId, title in
-                    _ = self?.tabs.renameACPSessionTabs(
-                        worktreeId: worktree.id,
-                        sessionId: sessionId,
-                        title: title
-                    )
-                },
-                mcpProjectContextProvider: { [weak self] in
-                    guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
-                        return nil
-                    }
-                    return MCPProjectContext(
-                        projectDirectory: project.path,
-                        configuredServers: project.mcpServers
-                    )
+        let persistence = ACPSessionPersistence(path: dbURL.path)
+        let mgr = ACPSessionManager(
+            worktreeId: worktree.id,
+            worktreePath: worktree.path.path,
+            persistence: persistence,
+            instanceId: instanceId,
+            pid: Int64(ProcessInfo.processInfo.processIdentifier),
+            hydratorPath: dbURL.path,
+            onDirtyCheck: { [weak self] path in
+                self?.editorHasDirtyBuffer(for: path, worktreeId: worktree.id) ?? false
+            },
+            onLiveBufferRead: { [weak self] path in
+                self?.editorLiveBufferText(for: path, worktreeId: worktree.id)
+            },
+            onSessionTitleUpdated: { [weak self] sessionId, title in
+                _ = self?.tabs.renameACPSessionTabs(
+                    worktreeId: worktree.id,
+                    sessionId: sessionId,
+                    title: title
+                )
+            },
+            mcpProjectContextProvider: { [weak self] in
+                guard let project = self?.projects.first(where: { $0.id == worktree.projectId }) else {
+                    return nil
                 }
-            )
-            acpManagers[worktree.id] = mgr
-            acpHarnessBridge.attach(manager: mgr)
-            #if DEBUG
-            memoryDiagnostics.attach(manager: mgr)
-            #endif
-            return mgr
-        } catch {
-            return nil
-        }
+                return MCPProjectContext(
+                    projectDirectory: project.path,
+                    configuredServers: project.mcpServers
+                )
+            }
+        )
+        acpManagers[worktree.id] = mgr
+        acpHarnessBridge.attach(manager: mgr)
+        #if DEBUG
+        memoryDiagnostics.attach(manager: mgr)
+        #endif
+        return mgr
     }
 
     /// Release the ACP session manager for the given worktree id.
@@ -3595,6 +3597,7 @@ final class AppState {
         // notifier subscriptions from outliving the manager.
         manager.shutdownBackgroundTasks()
         Task { @MainActor in
+            await manager.flushAllPersistence()
             for sid in sessionIds { await manager.detach(sessionId: sid) }
             // Release any leases this manager still owns AFTER all runner
             // connections are shut down (detach above). A freed lease must
@@ -3602,7 +3605,7 @@ final class AppState {
             // `detach` already released runner-session leases; this mops up
             // any remaining pre-runner owned leases (e.g. sessions acquired
             // a lease but didn't register a runner yet).
-            manager.releaseAllOwnedLeases()
+            await manager.releaseAllOwnedLeases()
         }
     }
 
@@ -3698,7 +3701,7 @@ final class AppState {
     /// for this session is already open in the current worktree we
     /// just focus it; otherwise we create one and let openSession()
     /// rehydrate the transcript from disk.
-    func openExistingACPSession(sessionId: ACPSession.ID) {
+    func openExistingACPSession(sessionId: ACPSession.ID) async {
         guard let worktreeId = selectedWorktreeId,
               let worktree = worktree(withId: worktreeId) else { return }
         guard let mgr = acpManager(for: worktree) else { return }
@@ -3713,9 +3716,12 @@ final class AppState {
             return
         }
 
-        // Load the row so we can stamp the right title onto the new tab.
+        // Resolve an uncached row before creating the tab so hydration cannot
+        // leave a generic title behind indefinitely.
         let title: String
-        if let row = try? mgr.store.loadSession(id: sessionId) {
+        if let liveTitle = mgr.liveSession(for: sessionId)?.title {
+            title = liveTitle
+        } else if let row = await mgr.persistedSessionRow(id: sessionId) {
             title = row.title
         } else {
             title = "ACP session"
@@ -3729,24 +3735,24 @@ final class AppState {
     func openDiscoveredACPSession(
         _ discovered: ACPDiscoveredSession,
         capabilities: ACPSessionDiscoveryCapabilities
-    ) -> Bool {
+    ) async -> Bool {
         guard let resolved = projectAndWorktree(withWorktreeId: discovered.worktreeId),
               let manager = acpManager(for: resolved.worktree)
         else { return false }
 
         focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
         if let localSessionId = discovered.localSessionId {
-            openExistingACPSession(sessionId: localSessionId)
+            await openExistingACPSession(sessionId: localSessionId)
             return true
         }
         guard capabilities.canOpenRemoteSession,
-              let row = manager.materializeDiscoveredSession(
+              let row = await manager.materializeDiscoveredSession(
                 discovered,
                 autoRunDefault: config.harness.acpAutoRunByDefault
               )
         else { return false }
 
-        openExistingACPSession(sessionId: row.id)
+        await openExistingACPSession(sessionId: row.id)
         return true
     }
 
@@ -4141,9 +4147,12 @@ extension AppState: RemoteSessionsProvider {
         return nil
     }
 
-    func fullToolCallContent(sessionId: String, toolCallId: String) -> String? {
+    func fullToolCallContent(sessionId: String, toolCallId: String) async -> String? {
         for mgr in acpManagers.values {
-            if let content = mgr.reloadFullToolCallContent(sessionId: sessionId, toolCallId: toolCallId) {
+            if let content = await mgr.reloadFullToolCallContent(
+                sessionId: sessionId,
+                toolCallId: toolCallId
+            ) {
                 return content
             }
         }
@@ -4188,18 +4197,18 @@ extension AppState: RemoteSessionsProvider {
         return false
     }
 
-    func takeOver(for id: String) {
+    func takeOver(for id: String) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.takeOver(sessionId: id)
+            await mgr.takeOver(sessionId: id)
             return
         }
     }
 
     /// `onResult` fires once (false when no manager owns the id, the manager
     /// refuses, or delivery later fails) so the gateway can restore the text.
-    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) {
+    func sendPrompt(for id: String, text: String, attachments: [ACPMessage.Attachment], onResult: @escaping @MainActor (Bool) -> Void) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
+            await mgr.sendPrompt(for: id, text: text, attachments: attachments, onResult: onResult)
             return
         }
         onResult(false)
@@ -4216,30 +4225,30 @@ extension AppState: RemoteSessionsProvider {
         return url
     }
 
-    func stop(for id: String) {
+    func stop(for id: String) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.interrupt(for: id)
+            await mgr.interrupt(for: id)
             return
         }
     }
 
-    func setModel(for id: String, modelId: String) {
+    func setModel(for id: String, modelId: String) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.setModel(for: id, modelId: modelId)
+            await mgr.setModel(for: id, modelId: modelId)
             return
         }
     }
 
-    func setMode(for id: String, modeId: String) {
+    func setMode(for id: String, modeId: String) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.setMode(for: id, modeId: modeId)
+            await mgr.setMode(for: id, modeId: modeId)
             return
         }
     }
 
-    func setAutoRun(for id: String, enabled: Bool) {
+    func setAutoRun(for id: String, enabled: Bool) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            mgr.setAutoRun(for: id, enabled: enabled)
+            await mgr.setAutoRun(for: id, enabled: enabled)
             return
         }
     }

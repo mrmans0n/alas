@@ -13,6 +13,7 @@ struct ACPSessionManagerTests {
         let s = mgr.createSession(agentId: "claude")
         #expect(mgr.sessions[s.id] != nil)
         #expect(!s.restoredFromPersistence)
+        await mgr.flushPersistence()
         let row = try store.loadSession(id: s.id)
         #expect(row?.agentId == "claude")
     }
@@ -24,6 +25,7 @@ struct ACPSessionManagerTests {
         let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
         let s = mgr.createSession(agentId: "claude", autoRunDefault: true)
         #expect(s.autoRunEnabled == true)
+        await mgr.flushPersistence()
         let row = try store.loadSession(id: s.id)
         #expect(row?.autoRun == true)
     }
@@ -35,6 +37,7 @@ struct ACPSessionManagerTests {
         let mgr = ACPSessionManager(worktreeId: "/tmp/wt", worktreePath: "/tmp/wt", store: store)
         let s = mgr.createSession(agentId: "claude")
         #expect(s.autoRunEnabled == false)
+        await mgr.flushPersistence()
         let row = try store.loadSession(id: s.id)
         #expect(row?.autoRun == false)
     }
@@ -113,12 +116,14 @@ struct ACPSessionManagerTests {
         #expect(session.composerDraft == draft)
         #expect(session.composerDraftRevision == 1)
         mgr.flushPendingDraftWrites()
+        await mgr.flushPersistence()
         #expect(try store.loadComposerDraft(sessionId: session.id) == draft)
 
         mgr.persistComposerDraft(.empty, for: session)
         #expect(session.composerDraft == .empty)
         #expect(session.composerDraftRevision == 2)
         mgr.flushPendingDraftWrites()
+        await mgr.flushPersistence()
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
     }
 
@@ -157,6 +162,7 @@ struct ACPSessionManagerTests {
         mgr.persistComposerDraft(ACPComposerDraft(segments: [.text("sent")]), for: session)
 
         mgr.clearComposerDraft(for: session)
+        await mgr.flushPersistence()
 
         #expect(session.composerDraft == .empty)
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
@@ -168,12 +174,15 @@ struct ACPSessionManagerTests {
         let store = try ACPSessionStore(path: url.path)
         let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
         let session = mgr.createSession(agentId: "claude")
+        await mgr.flushPersistence()
+        let existingMessage: ACPMessage = .user(id: UUID(), text: "old", attachments: [])
+        session.transcript.messages.append(existingMessage)
         try store.appendMessage(
             sessionId: session.id,
             id: "m0",
-            kind: "user",
+            kind: existingMessage.kind,
             seq: 0,
-            payload: Data("old".utf8),
+            payload: try ACPMessageCodec.encode(existingMessage),
             createdAt: 1
         )
         let submitted = ACPComposerDraft(segments: [.text("sent")])
@@ -184,9 +193,10 @@ struct ACPSessionManagerTests {
         mgr.persistComposerDraft(submitted, for: session)
 
         let suspendedRevision = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        await mgr.flushPersistence()
         #expect(session.composerDraft == .empty)
         #expect(session.composerDraftRevision == suspendedRevision)
-        // SQLite was written synchronously by suspend, no flush needed.
+        // The explicit persistence barrier makes the recovery row durable.
         #expect(try store.loadComposerDraft(sessionId: session.id) == submitted)
         #expect(try store.loadComposerDraftRecord(sessionId: session.id)?.submittedAfterSeq == 0)
     }
@@ -204,6 +214,7 @@ struct ACPSessionManagerTests {
 
         // Success path with no intervening typing: SQLite row is purged.
         mgr.purgeSuspendedComposerDraft(for: session, suspendedRevision: suspendedRevision)
+        await mgr.flushPersistence()
         #expect(try store.loadComposerDraft(sessionId: session.id) == nil)
 
         // Re-suspend, then simulate the user typing while the prompt is
@@ -215,6 +226,7 @@ struct ACPSessionManagerTests {
         mgr.purgeSuspendedComposerDraft(for: session, suspendedRevision: suspendedAgain)
         #expect(session.composerDraft == newer)
         mgr.flushPendingDraftWrites()
+        await mgr.flushPersistence()
         #expect(try store.loadComposerDraft(sessionId: session.id) == newer)
     }
 
@@ -259,6 +271,7 @@ struct ACPSessionManagerTests {
 
         mgr.persistComposerDraft(submitted, for: session)
         _ = mgr.suspendComposerDraftForSubmission(submitted, for: session)
+        await mgr.flushPersistence()
 
         // What `ACPInputField.makeCoordinator()` reads as `initialDraft`.
         #expect(session.composerDraft.isEmpty)
@@ -288,7 +301,7 @@ struct ACPSessionManagerTests {
     }
 
     @Test("persistQueue writes to SQLite without requiring a runner")
-    func persistQueueWithoutRunner() throws {
+    func persistQueueWithoutRunner() async throws {
         // Regression: ACPTabView's queue actions used to call
         // `manager.runners[sessionId]?.persistQueue()`, which silently
         // no-oped when no runner was attached (setup nudge / launch
@@ -302,11 +315,13 @@ struct ACPSessionManagerTests {
         session.enqueue(blocks: [.text("b")])
 
         mgr.persistQueue(for: session)
+        await mgr.flushPersistence()
         let persisted = try store.loadQueue(sessionId: session.id)
         #expect(persisted == session.queue)
 
         session.clearPendingQueue()
         mgr.persistQueue(for: session)
+        await mgr.flushPersistence()
         let afterClear = try store.loadQueue(sessionId: session.id)
         #expect(afterClear.isEmpty)
     }
