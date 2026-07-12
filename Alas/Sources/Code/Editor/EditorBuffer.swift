@@ -598,7 +598,7 @@ final class EditorBuffer {
             conflict = .changedOnDisk
             throw SaveError.loadPending
         }
-        if preservedPreloadEditsFromAsyncLoad { throw SaveError.loadPending }
+        if conflict == .changedOnDisk { throw SaveError.loadPending }
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)
         originalText = canonical
@@ -1264,12 +1264,21 @@ final class EditorBuffer {
                         self.lineEnding = LineEnding.detect(in: raw)
                         self.updateOriginalFileAttributes(from: resolvedURL)
                     }
+                    if self.preservedPreloadEditsFromAsyncLoad {
+                        self.conflict = .changedOnDisk
+                        self.preservedPreloadEditsFromAsyncLoad = false
+                    }
                     let shouldReload = self.reloadAfterLoad
                     self.reloadAfterLoad = false
                     completion()
                     if shouldReload {
-                        self.revert()
-                        self.startWatching()
+                        if self.dirty {
+                            self.conflict = .changedOnDisk
+                            self.startWatching()
+                        } else {
+                            self.revert()
+                            self.startWatching()
+                        }
                     }
                     return
                 }

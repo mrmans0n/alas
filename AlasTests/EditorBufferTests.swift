@@ -432,6 +432,11 @@ struct EditorBufferTests {
         }
 
         #expect(try String(contentsOf: url, encoding: .utf8) == "disk\n")
+        #expect(buffer.conflict == .changedOnDisk)
+
+        buffer.resolveConflictKeepingMine()
+        try buffer.save()
+        #expect(try String(contentsOf: url, encoding: .utf8) == "typed")
     }
 
     @Test func editBeforeAsyncLoadFinishesSkipsOlderSnapshotRestore() async throws {
@@ -485,6 +490,29 @@ struct EditorBufferTests {
         await buffer.awaitLoadForTesting()
 
         #expect(buffer.storage.string == "new\n")
+    }
+
+    @Test func watcherEventDuringPreservedInitialEditKeepsUserTextAndRaisesConflict() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "old\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        EditorBuffer.loadResultForTesting = { _ in "old\n" }
+        defer {
+            EditorBuffer.loadGateForTesting = nil
+            EditorBuffer.loadResultForTesting = nil
+        }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        try "new\n".write(to: url, atomically: true, encoding: .utf8)
+        buffer.handleWatcherEventForTesting()
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(buffer.storage.string == "typed")
+        #expect(buffer.conflict == .changedOnDisk)
+        #expect(try String(contentsOf: url, encoding: .utf8) == "new\n")
     }
 
     @Test func closeBeforeAsyncLoadFinishesDoesNotOpenLSPDocument() async throws {
