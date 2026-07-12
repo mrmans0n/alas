@@ -59,13 +59,12 @@ struct ACPMessageList: View {
     /// reset to `max(0, count - tailWindow)` after hydration); the
     /// filter drops `.plan` entries because the toolbar pill renders
     /// the current turn's plan instead of an inline card.
-    private var visibleRows: [(index: Int, stableId: String, message: ACPMessage)] {
-        let head = min(transcript.visibleHead, transcript.messages.count)
-        return (head..<transcript.messages.count).compactMap { index in
-            let message = transcript.messages[index]
-            if case .plan = message { return nil }
-            return (index, transcript.stableId(for: message), message)
-        }
+    private var visibleRows: [VisibleRow] {
+        Self.visibleRows(
+            messages: transcript.messages,
+            visibleHead: transcript.visibleHead,
+            stableId: { transcript.stableId(for: $0) }
+        )
     }
 
     /// Cheap signature of the entire transcript. SwiftUI re-evaluates when
@@ -128,9 +127,8 @@ struct ACPMessageList: View {
                                 .padding(.bottom, 4)
                                 .background(topPaginationSentinel)
                         }
-                        ForEach(visibleRows, id: \.stableId) { item in
-                            row(for: item.message, stableId: item.stableId)
-                                .background(rowFrameReporter(id: item.stableId))
+                        ForEach(visibleRows) { row in
+                            visibleRow(row)
                         }
                         if transcript.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
@@ -618,6 +616,26 @@ struct ACPMessageList: View {
         !isModernScrollTrackingAvailable
     }
 
+    struct VisibleRow: Identifiable, Equatable {
+        let index: Int
+        let stableId: String
+
+        var id: String { stableId }
+    }
+
+    static func visibleRows(
+        messages: [ACPMessage],
+        visibleHead: Int,
+        stableId: (ACPMessage) -> String
+    ) -> [VisibleRow] {
+        let head = min(visibleHead, messages.count)
+        return (head..<messages.count).compactMap { index in
+            let message = messages[index]
+            if case .plan = message { return nil }
+            return VisibleRow(index: index, stableId: stableId(message))
+        }
+    }
+
     struct VisibleMessageLookup {
         let ids: Set<String>
         let indexByStableId: [String: Int]
@@ -807,6 +825,17 @@ struct ACPMessageList: View {
                 proxy.scrollTo(anchorId, anchor: .top)
             }
             DispatchQueue.main.async { isRestoringTail = false }
+        }
+    }
+
+    @ViewBuilder
+    private func visibleRow(_ visibleRow: VisibleRow) -> some View {
+        if transcript.messages.indices.contains(visibleRow.index) {
+            let message = transcript.messages[visibleRow.index]
+            row(for: message, stableId: visibleRow.stableId)
+                .background(rowFrameReporter(id: visibleRow.stableId))
+        } else {
+            EmptyView()
         }
     }
 

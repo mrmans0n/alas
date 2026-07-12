@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 import CoreGraphics
 @testable import Alas
 
@@ -204,6 +205,26 @@ struct ACPMessageListPaginationTests {
         #expect(!lookup.contains("message-39"))
         #expect(lookup.transcriptIndex(for: "message-41") == 41)
         #expect(lookup.firstStableId == "message-40")
+    }
+
+    @Test("visible rows contain only transcript indices and stable ids")
+    @MainActor
+    func visibleRowsContainOnlyIndicesAndStableIds() {
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), messageId: "user-1", text: "old", attachments: []),
+            .plan(id: UUID(), [ACPMessage.PlanItem(content: "skip", status: "pending")]),
+            .agent(id: UUID(), messageId: "agent-1", StreamingText("new"))
+        ]
+
+        let rows = ACPMessageList.visibleRows(
+            messages: messages,
+            visibleHead: 1,
+            stableId: { $0.stableId }
+        )
+
+        #expect(rows == [
+            ACPMessageList.VisibleRow(index: 2, stableId: "acp-agent:agent-1")
+        ])
     }
 
     @Test("visible anchor memory accepts live anchors when the remembered id is stale")
