@@ -1244,16 +1244,13 @@ final class TabsManager {
         }
         buffer.onRestoredPathChanged = { [weak self, weak buffer] oldPath, newPath in
             guard let self, let buffer else { return }
-            let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
-            let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
-            if self.buffers[oldKey] === buffer {
-                self.buffers.removeValue(forKey: oldKey)
-            }
-            self.pendingRestoredPathBuffers.removeValue(forKey: tabId)
-            self.buffers[restoredKey] = buffer
-            self.bufferKeys[tabId] = restoredKey
-            _ = self.updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
-            buffer.startWatching()
+            self.resolvePendingRestoredPathChange(
+                worktreeId: worktreeId,
+                tabId: tabId,
+                buffer: buffer,
+                oldPath: oldPath,
+                newPath: newPath
+            )
         }
         buffer.onInitialLoadFinished = { [weak self, weak buffer] in
             guard let self, let buffer else { return }
@@ -1412,6 +1409,33 @@ final class TabsManager {
         pendingRestoredPathBuffers.removeValue(forKey: tabId)
         buffers[key] = buffer
         bufferKeys[tabId] = key
+    }
+
+    private func resolvePendingRestoredPathChange(
+        worktreeId: String,
+        tabId: TabID,
+        buffer: EditorBuffer,
+        oldPath: String,
+        newPath: String
+    ) {
+        let oldKey = BufferKey(worktreeId: worktreeId, relativePath: oldPath)
+        let restoredKey = BufferKey(worktreeId: worktreeId, relativePath: newPath)
+        if buffers[oldKey] === buffer {
+            buffers.removeValue(forKey: oldKey)
+        }
+        if let existing = buffers[restoredKey], existing !== buffer {
+            pendingRestoredPathBuffers.removeValue(forKey: tabId)
+            bufferKeys[tabId] = restoredKey
+            bufferStore.discard(worktreeId: worktreeId, tabId: tabId)
+            _ = updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
+            buffer.close(persistDirtySnapshot: false)
+            return
+        }
+        pendingRestoredPathBuffers.removeValue(forKey: tabId)
+        buffers[restoredKey] = buffer
+        bufferKeys[tabId] = restoredKey
+        _ = updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
+        buffer.startWatching()
     }
 
     func activeEditorContext(worktreeId: String) -> (tab: EditorTabState, buffer: EditorBuffer)? {
