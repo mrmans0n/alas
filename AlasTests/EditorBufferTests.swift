@@ -617,6 +617,65 @@ struct EditorBufferTests {
         transport.finish()
     }
 
+    @Test func reopenRetriesAfterInitialLSPServerWasUnavailable() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "main.swift", "print(1)\n")
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"textDocumentSync":1}}}"#)
+            }
+        }
+        let unavailable = LanguageServerConfig(
+            language: "swift",
+            extensions: ["swift"],
+            command: root.appendingPathComponent("missing-server").path,
+            args: [],
+            env: [:],
+            rootMarkers: [],
+            enabled: true
+        )
+        let available = LanguageServerConfig(
+            language: "swift",
+            extensions: ["swift"],
+            command: "/usr/bin/true",
+            args: [],
+            env: [:],
+            rootMarkers: [],
+            enabled: true
+        )
+        let lsp = WorkspaceLSPManager(
+            registry: LanguageServerRegistry(userDefined: [unavailable]),
+            makeClient: { _, _, _, language, rootURI in
+                LSPClient(transport: transport, language: language, rootURI: rootURI)
+            }
+        )
+        let buffer = EditorBuffer(
+            worktreeRoot: root,
+            relativePath: "main.swift",
+            store: store,
+            worktreeId: "wt",
+            tabId: "t",
+            lsp: lsp
+        )
+        await buffer.awaitLoadForTesting()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        #expect(!transport.sent.contains { $0.contains(#""method":"textDocument/didOpen""#) })
+
+        lsp.updateRegistry(LanguageServerRegistry(userDefined: [available]))
+        buffer.reopenLSPDocument()
+        for _ in 0..<20 where !transport.sent.contains(where: { $0.contains(#""method":"textDocument/didOpen""#) }) {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let didOpen = transport.sent.filter { $0.contains(#""method":"textDocument/didOpen""#) }
+        #expect(didOpen.count == 1)
+        #expect(didOpen.first?.contains(#""text":"print(1)\n""#) == true)
+        buffer.close(persistDirtySnapshot: false)
+        transport.finish()
+    }
+
     @Test func revertReloadsFromDiskAndClearsDirty() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "original\n")

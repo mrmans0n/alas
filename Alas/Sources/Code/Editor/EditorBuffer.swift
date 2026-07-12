@@ -136,6 +136,10 @@ final class EditorBuffer {
     /// before issuing its own close+open.
     @ObservationIgnored
     private var languageReopenTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var lspOpenTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var lspOpenGeneration = 0
 
     /// Per-tab, per-session override of the inferred language. Setting this
     /// drives the buffer to close the document on the previous language
@@ -332,13 +336,47 @@ final class EditorBuffer {
         guard initialLoadFinished,
               !isExternal,
               openedLanguage == nil,
+              lspOpenTask == nil,
               let lsp,
               let effective = effectiveLanguage else { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard !lsp.isDocumentOpen(fileURL: url, worktreeRoot: worktreeRoot) else { return }
         let text = storage.string
-        openedLanguage = effective
-        Task { await lsp.openDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective, text: text) }
+        lspOpenGeneration &+= 1
+        let generation = lspOpenGeneration
+        lspOpenTask = Task { [weak self] in
+            let opened = await lsp.openDocument(
+                worktreeRoot: worktreeRoot,
+                fileURL: url,
+                languageId: effective,
+                text: text
+            ) != nil
+            guard let self else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective)
+                }
+                return
+            }
+            guard !Task.isCancelled,
+                  self.lspOpenGeneration == generation,
+                  self.initialLoadFinished,
+                  self.effectiveLanguage == effective else {
+                if opened {
+                    await lsp.closeDocument(worktreeRoot: worktreeRoot, fileURL: url, languageId: effective)
+                }
+                return
+            }
+            self.lspOpenTask = nil
+            if opened {
+                self.openedLanguage = effective
+            }
+        }
+    }
+
+    private func cancelPendingLSPOpen() {
+        lspOpenGeneration &+= 1
+        lspOpenTask?.cancel()
+        lspOpenTask = nil
     }
 
     func reopenLSPDocument(afterRegistering language: String, forFileExtensions extensions: Set<String>) {
@@ -657,12 +695,12 @@ final class EditorBuffer {
                 guard let self else { return }
                 self.discardSnapshot()
                 self.handleEdit(edit: nil)
-                self.notifyDidOpen(url: newURL, text: self.storage.string)
+                self.notifyDidOpen()
             }
         }
         notifyDidClose(url: oldURL)
         if wasDirty {
-            notifyDidOpen(url: newURL, text: storage.string)
+            notifyDidOpen()
         }
         onPathChanged?(oldRelativePath, newRelativePath)
         startWatching()
@@ -737,7 +775,7 @@ final class EditorBuffer {
             updateOriginalFileIdentity(from: newURL)
             discardSnapshot()
             notifyDidClose(url: oldURL)
-            notifyDidOpen(url: newURL, text: canonical)
+            notifyDidOpen()
             notifyDidSave(url: newURL)
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
@@ -779,7 +817,7 @@ final class EditorBuffer {
                 discardSnapshot()
             }
             notifyDidClose(url: oldURL)
-            notifyDidOpen(url: newURL, text: storage.string)
+            notifyDidOpen()
             onPathChanged?(oldURLRelativePath(from: oldURL), newRelativePath)
             startWatching()
         } catch {
@@ -994,6 +1032,7 @@ final class EditorBuffer {
     /// different external-document API.
     private func applyEffectiveLanguageToLSP() {
         guard initialLoadFinished, !isExternal, lsp != nil else { return }
+        cancelPendingLSPOpen()
         let prior = languageReopenTask
         // Cancel the prior queued transition before we await it — this
         // propagates cancellation through the chain. `close()` only cancels
@@ -1030,7 +1069,12 @@ final class EditorBuffer {
             }
             if let target {
                 let text = self.storage.string
-                await lsp.openDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target, text: text)
+                let opened = await lsp.openDocument(
+                    worktreeRoot: worktreeRootCapture,
+                    fileURL: url,
+                    languageId: target,
+                    text: text
+                ) != nil
                 if Task.isCancelled {
                     // openDocument has already bumped refs on the server
                     // (the ref bump happens synchronously inside the
@@ -1038,10 +1082,14 @@ final class EditorBuffer {
                     // have read `openedLanguage == nil` and skipped its
                     // didClose, so without this compensation the doc
                     // would be left referenced with no owning buffer.
-                    await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                    if opened {
+                        await lsp.closeDocument(worktreeRoot: worktreeRootCapture, fileURL: url, languageId: target)
+                    }
                     return
                 }
-                self.openedLanguage = target
+                if opened {
+                    self.openedLanguage = target
+                }
             }
         }
     }
@@ -1053,17 +1101,15 @@ final class EditorBuffer {
     }
 
     private func notifyDidClose(url: URL) {
+        cancelPendingLSPOpen()
         if let lsp, let opened = openedLanguage {
             Task { await lsp.closeDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: opened) }
             openedLanguage = nil
         }
     }
 
-    private func notifyDidOpen(url: URL, text: String) {
-        if let lsp, let effective = effectiveLanguage {
-            openedLanguage = effective
-            Task { await lsp.openDocument(worktreeRoot: self.worktreeRoot, fileURL: url, languageId: effective, text: text) }
-        }
+    private func notifyDidOpen() {
+        openLSPDocumentIfReady()
     }
 
     func saveRecordingError() throws {
@@ -1278,6 +1324,7 @@ final class EditorBuffer {
     /// for hot-exit restore; explicit tab removal discards it.
     func close(persistDirtySnapshot: Bool = true) {
         cancelPendingLoad()
+        cancelPendingLSPOpen()
         snapshotTask?.cancel()
         // Cancel any in-flight language-override reopen so it can't run
         // `openDocument` after close() has already torn down the buffer —
