@@ -17,6 +17,7 @@ struct ACPToolCallCard: View {
     var loadFullContent: ((String) -> String?)? = nil
     @State private var expanded = false
     @State private var expandedContent: String? = nil
+    @State private var expandedSyntax = ACPToolCallSyntaxCache()
     @Environment(\.theme) private var theme
     @Environment(\.acpTerminalHost) private var terminalHost
 
@@ -78,6 +79,10 @@ struct ACPToolCallCard: View {
         // body from the previous tool call.
         .onChange(of: toolCall.toolCallId) { _, _ in
             expandedContent = nil
+            expandedSyntax.clear()
+        }
+        .onChange(of: toolCall.contentRevision) { _, _ in
+            expandedSyntax.clear()
         }
     }
 
@@ -88,6 +93,26 @@ struct ACPToolCallCard: View {
     /// always render straight from `toolCall.content`.
     private var displayContent: String {
         expandedContent ?? toolCall.content
+    }
+
+    private var displayContentSource: ACPToolCallSyntaxCache.ContentSource {
+        expandedContent == nil ? .message : .expanded
+    }
+
+    private var displayContentLanguage: String? {
+        if let explicit = toolCall.contentLanguage {
+            return explicit
+        }
+        return expandedSyntax.language(
+            for: .init(
+                toolCallId: toolCall.toolCallId,
+                contentRevision: toolCall.contentRevision,
+                contentSource: displayContentSource,
+                locations: toolCall.locations
+            ),
+            content: displayContent,
+            locations: toolCall.locations
+        )
     }
 
     @ViewBuilder
@@ -113,10 +138,7 @@ struct ACPToolCallCard: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         ACPSyntaxHighlightedText(
                             text: displayContent,
-                            explicitLanguage: toolCall.contentLanguage ?? ACPToolOutputSyntax.highlighterExtension(
-                                content: displayContent,
-                                locations: toolCall.locations
-                            ),
+                            explicitLanguage: displayContentLanguage,
                             fontSize: 11.5
                         )
                             .padding(.horizontal, 12).padding(.vertical, 10)
@@ -194,6 +216,41 @@ struct ACPToolCallCard: View {
                 .foregroundStyle(theme.color("accent"))
         }
         .frame(width: 18, height: 18)
+    }
+}
+
+private final class ACPToolCallSyntaxCache {
+    private var key: Key?
+    private var cachedLanguage: String?
+
+    func language(for key: Key, content: String, locations: [String]) -> String? {
+        if self.key == key {
+            return cachedLanguage
+        }
+        let language = ACPToolOutputSyntax.highlighterExtension(
+            content: content,
+            locations: locations
+        )
+        self.key = key
+        cachedLanguage = language
+        return language
+    }
+
+    func clear() {
+        key = nil
+        cachedLanguage = nil
+    }
+
+    enum ContentSource: Hashable {
+        case message
+        case expanded
+    }
+
+    struct Key: Hashable {
+        let toolCallId: String
+        let contentRevision: Int
+        let contentSource: ContentSource
+        let locations: [String]
     }
 }
 

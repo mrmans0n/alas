@@ -170,6 +170,10 @@ enum ACPMessage: Equatable {
         /// Rendered inside the expanded card. Updated in place when the
         /// agent sends `tool_call_update` with new content.
         var content: String
+        /// In-memory revision for displayed content changes. Restored rows
+        /// start from their persisted snapshot, so this is intentionally not
+        /// encoded.
+        var contentRevision: Int = 0
         /// One-line teaser shown on the collapsed row (first text chunk,
         /// truncated). Computed at apply() time so we don't repeatedly
         /// scan the full content during rendering.
@@ -211,6 +215,7 @@ enum ACPMessage: Equatable {
             guard !isContentTruncated else { return }
             if content.count > Self.truncatedTailBytes {
                 content = String(content.prefix(Self.truncatedTailBytes))
+                contentRevision &+= 1
             }
             isContentTruncated = true
         }
@@ -313,6 +318,12 @@ enum ACPMessage: Equatable {
             hasher.combine(assets)
             hasher.combine(locations)
             hasher.combine(terminalIds)
+        }
+
+        mutating func replaceContent(_ newContent: String) {
+            guard content != newContent else { return }
+            content = newContent
+            contentRevision &+= 1
         }
     }
 
