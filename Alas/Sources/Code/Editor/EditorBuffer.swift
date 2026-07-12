@@ -85,6 +85,8 @@ final class EditorBuffer {
     @ObservationIgnored
     private var preservedPreloadEditsFromAsyncLoad = false
     @ObservationIgnored
+    private var suppressPreloadEditPreservation = false
+    @ObservationIgnored
     nonisolated(unsafe) static var loadGateForTesting: (@Sendable () async -> Void)?
     @ObservationIgnored
     nonisolated(unsafe) static var loadResultForTesting: (@Sendable (URL) async -> String?)?
@@ -347,7 +349,12 @@ final class EditorBuffer {
 
     private func handleEdit(edit: EditorTextEdit?) {
         if loading {
-            if storage.string != originalText { return }
+            guard !suppressPreloadEditPreservation else { return }
+            if storage.string != originalText {
+                hasPreservedPreloadEdits = true
+                preservedPreloadEditsFromAsyncLoad = loadTask != nil
+                return
+            }
             originalText = "\u{0}"
             hasPreservedPreloadEdits = true
             preservedPreloadEditsFromAsyncLoad = loadTask != nil
@@ -1068,6 +1075,8 @@ final class EditorBuffer {
             }
         }
         loading = true
+        suppressPreloadEditPreservation = true
+        defer { suppressPreloadEditPreservation = false }
         storage.beginEditing()
         for edit in ascending.reversed() {
             storage.replaceCharacters(in: edit.range, with: edit.newText)
@@ -1092,7 +1101,11 @@ final class EditorBuffer {
         }
         language = lsp?.language(forFileExtension: (snap.relativePath as NSString).pathExtension)
         loading = true
-        defer { loading = false }
+        suppressPreloadEditPreservation = true
+        defer {
+            suppressPreloadEditPreservation = false
+            loading = false
+        }
         storage.setAttributedString(NSAttributedString(string: snap.content))
         originalText = snap.originalText
         originalMtime = snap.originalMtime
@@ -1256,9 +1269,13 @@ final class EditorBuffer {
                     return
                 }
                 self.loading = true
+                self.suppressPreloadEditPreservation = true
                 var didApplyChange = false
                 do {
-                    defer { self.loading = false }
+                    defer {
+                        self.suppressPreloadEditPreservation = false
+                        self.loading = false
+                    }
                     switch result {
                     case .missing:
                         didApplyChange = self.storage.string != "(unable to read file)" || !self.readOnly

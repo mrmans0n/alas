@@ -372,6 +372,24 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: url, encoding: .utf8) == "external\n")
     }
 
+    @Test func editBeforeAsyncLoadFinishesCannotSavePartialTextAfterLoad() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "disk\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(throws: (any Error).self) {
+            try buffer.save()
+        }
+        #expect(try String(contentsOf: url, encoding: .utf8) == "disk\n")
+    }
+
     @Test func watcherEventDuringInitialLoadTriggersReloadAfterLoadFinishes() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "old\n")

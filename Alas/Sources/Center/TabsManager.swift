@@ -1192,6 +1192,7 @@ final class TabsManager {
     /// Returns the buffer for `tabId`, creating it (cold-load from disk or
     /// hot-restore from snapshot) on first access.
     func buffer(worktreeId: String, tabId: TabID, worktreeRoot: URL, relativePath: String) -> EditorBuffer {
+        if let existing = pendingRestoredPathBuffers[tabId] { return existing }
         if let key = bufferKeys[tabId], let existing = buffers[key] { return existing }
         let snapshot = (try? bufferStore.read(worktreeId: worktreeId, tabId: tabId)) ?? nil
         var restoresToDifferentPath = snapshot.map { $0.relativePath != relativePath } ?? false

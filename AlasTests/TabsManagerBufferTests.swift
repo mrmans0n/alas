@@ -501,6 +501,39 @@ struct TabsManagerBufferTests {
         #expect(first.relativePath == "b.txt")
     }
 
+    @Test func pendingAsyncRestoreWinsOverOldPathCacheForSameTab() async throws {
+        let root = tempWorktree()
+        try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let restoringTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let otherTab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("b.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "b.txt",
+            content: "restored\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: restoringTab.id)
+        let gate = TabsManagerAsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let pending = manager.buffer(worktreeId: "wt", tabId: restoringTab.id, worktreeRoot: root, relativePath: "a.txt")
+        let oldPath = manager.buffer(worktreeId: "wt", tabId: otherTab.id, worktreeRoot: root, relativePath: "a.txt")
+        let again = manager.buffer(worktreeId: "wt", tabId: restoringTab.id, worktreeRoot: root, relativePath: "a.txt")
+        await gate.open()
+        await pending.awaitLoadForTesting()
+        await oldPath.awaitLoadForTesting()
+
+        #expect(again === pending)
+        #expect(oldPath !== pending)
+        #expect(pending.relativePath == "b.txt")
+        #expect(oldPath.relativePath == "a.txt")
+    }
+
     @Test func bufferRestoreChecksConflictAfterAsyncSnapshotRestore() async throws {
         let root = tempWorktree()
         try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
