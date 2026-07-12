@@ -330,6 +330,36 @@ struct EditorBufferTests {
         #expect(buffer.dirty == true)
     }
 
+    @Test func closeBeforeAsyncLoadFinishesDoesNotOpenLSPDocument() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "main.swift", "print(1)\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let lsp = WorkspaceLSPManager(registry: LanguageServerRegistry(userDefined: [
+            LanguageServerConfig(
+                language: "swift",
+                extensions: ["swift"],
+                command: "/usr/bin/true",
+                args: [],
+                env: [:],
+                rootMarkers: [],
+                enabled: true
+            )
+        ]), makeClient: { _, _, _, language, rootURI in
+            LSPClient(transport: FakeTransport(), language: language, rootURI: rootURI)
+        })
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "main.swift", store: store, worktreeId: "wt", tabId: "t", lsp: lsp)
+        buffer.close(persistDirtySnapshot: false)
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(lsp.documentStatus(forFile: url, worktreeRoot: root) == .none)
+    }
+
     @Test func revertReloadsFromDiskAndClearsDirty() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "original\n")

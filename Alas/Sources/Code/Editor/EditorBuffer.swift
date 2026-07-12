@@ -66,6 +66,8 @@ final class EditorBuffer {
     @ObservationIgnored
     private var loadGeneration = 0
     @ObservationIgnored
+    private var closed = false
+    @ObservationIgnored
     nonisolated(unsafe) static var loadGateForTesting: (@Sendable () async -> Void)?
     @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
@@ -1120,6 +1122,9 @@ final class EditorBuffer {
     /// Tear-down for a buffer. App quit paths can keep a final dirty snapshot
     /// for hot-exit restore; explicit tab removal discards it.
     func close(persistDirtySnapshot: Bool = true) {
+        closed = true
+        loadTask?.cancel()
+        loadTask = nil
         snapshotTask?.cancel()
         // Cancel any in-flight language-override reopen so it can't run
         // `openDocument` after close() has already torn down the buffer —
@@ -1161,6 +1166,7 @@ final class EditorBuffer {
     /// `String(contentsOf:)` on large files.
     private func loadFromDisk(preservePendingEdits: Bool = false, notifyAfterLoad: Bool = true, completion: @escaping @MainActor () -> Void) {
         loading = true
+        closed = false
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let resolvedURL = url.resolvingSymlinksInPath()
         let isExternal = self.isExternal
@@ -1190,7 +1196,7 @@ final class EditorBuffer {
             // before the first async read completes).
             if Task.isCancelled { return }
             await MainActor.run {
-                guard let self, self.loadGeneration == generation else { return }
+                guard let self, self.loadGeneration == generation, !self.closed else { return }
                 self.loading = false
                 if preservePendingEdits, self.dirty {
                     completion()
