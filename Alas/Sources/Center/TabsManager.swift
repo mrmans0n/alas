@@ -1244,6 +1244,7 @@ final class TabsManager {
             self.buffers[restoredKey] = buffer
             self.bufferKeys[tabId] = restoredKey
             _ = self.updateEditorPath(worktreeId: worktreeId, tabId: tabId, relativePath: newPath)
+            buffer.startWatching()
         }
         buffer.onSnapshotRequested = { [weak self, weak buffer] in
             guard let buffer else { return }

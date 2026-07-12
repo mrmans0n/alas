@@ -835,6 +835,18 @@ final class ACPNSTextView: NSTextView {
         case unsupported
     }
 
+    private enum FileImageCandidate {
+        case supported
+        case tooLarge
+        case unsupported
+    }
+
+    private static func imageFileCandidate(_ url: URL) -> FileImageCandidate {
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+           size > ACPImageStaging.maxBytes { return .tooLarge }
+        return isSupportedImageFile(url) ? .supported : .unsupported
+    }
+
     /// Read a file URL's image bytes, applying the size cap from its metadata
     /// BEFORE reading the file into memory (so an oversized pick/drop reports
     /// `.tooLarge` instead of allocating the whole file). The file read and
@@ -876,7 +888,7 @@ final class ACPNSTextView: NSTextView {
         guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
         else { return false }
         guard !urls.isEmpty else { return false }
-        guard urls.contains(where: { Self.isSupportedImageFile($0) }) else { return false }
+        guard urls.contains(where: { Self.imageFileCandidate($0) != .unsupported }) else { return false }
         let worktreeId = worktreeIdForStaging
         Task { @MainActor [weak self] in
             for url in urls {

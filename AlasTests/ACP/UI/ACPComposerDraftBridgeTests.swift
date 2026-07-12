@@ -555,6 +555,32 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string == "fallback text")
     }
 
+    @Test("paste with oversized image file URL reports image error")
+    func pasteWithOversizedImageFileURLReportsImageError() async throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let coordinator = makeCoordinator(sendOnEnter: true) { _, _, _, _, _ in true }
+        let reported = ACPImageErrorRecorder()
+        coordinator.onImageError = { error in
+            Task { await reported.append(error) }
+        }
+        textView.coordinator = coordinator
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString).png")
+        var bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        bytes.append(Data(repeating: 0, count: ACPImageStaging.maxBytes + 1))
+        try bytes.write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([temp as NSURL])
+        NSPasteboard.general.setString("fallback text", forType: .string)
+
+        textView.paste(nil)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let errors = await reported.snapshot()
+
+        #expect(errors == [.tooLarge])
+        #expect(textView.string.isEmpty)
+    }
+
     @Test("plain paste insertion goes through NSTextView editing hooks")
     func plainPasteInsertionUsesTextViewEditingHooks() {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
@@ -596,6 +622,16 @@ struct ACPComposerDraftBridgeTests {
             changes.append(Change(range: affectedCharRange, replacement: replacementString))
             return true
         }
+    }
+
+    private actor ACPImageErrorRecorder {
+        private var errors: [ACPImageStaging.StagingError] = []
+
+        func append(_ error: ACPImageStaging.StagingError) {
+            errors.append(error)
+        }
+
+        func snapshot() -> [ACPImageStaging.StagingError] { errors }
     }
 
     // MARK: - Keyboard intent resolution (doCommandBy)
