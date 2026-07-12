@@ -131,4 +131,18 @@ struct ACPMarkdownTextBareURLTests {
         #expect(url?.absoluteString == "https://example.com/foo*bar*")
         #expect(effectiveRange == range)
     }
+
+    @Test("non-memoized inline markdown does not populate cache")
+    func nonMemoizedInlineMarkdownDoesNotPopulateCache() {
+        ACPMarkdownText.removeAllInlineCacheObjectsForTesting()
+
+        _ = ACPMarkdownText.inlineMarkdown("streamed **prefix**", memoize: false)
+        #expect(ACPMarkdownText.inlineCacheInsertionCountForTesting == 0)
+
+        _ = ACPMarkdownText.inlineMarkdown("stable **block**")
+        #expect(ACPMarkdownText.inlineCacheInsertionCountForTesting == 1)
+
+        _ = ACPMarkdownText.inlineMarkdown("stable **block**")
+        #expect(ACPMarkdownText.inlineCacheInsertionCountForTesting == 1)
+    }
 }
