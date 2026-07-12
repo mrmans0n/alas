@@ -338,6 +338,30 @@ struct TabsManagerBufferTests {
         #expect(updatedTab?.relativeFilePath == "b.txt")
     }
 
+    @Test func bufferRestoreChecksConflictAfterAsyncSnapshotRestore() async throws {
+        let root = tempWorktree()
+        try "base\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let (manager, store, _) = makeManager()
+        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("a.txt").path)
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "a.txt",
+            content: "edited\n",
+            originalText: "base\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: tab.id)
+        try await Task.sleep(nanoseconds: 1_100_000_000)
+        try "external\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+
+        let restored = manager.buffer(worktreeId: "wt", tabId: tab.id, worktreeRoot: root, relativePath: "a.txt")
+        await restored.awaitLoadForTesting()
+
+        #expect(restored.storage.string == "edited\n")
+        #expect(restored.conflict == .changedOnDisk)
+    }
+
     @Test func bufferRestoreToOpenTargetPathReusesExistingOriginalPathBuffer() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)

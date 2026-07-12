@@ -876,27 +876,19 @@ final class ACPNSTextView: NSTextView {
         guard let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]
         else { return false }
         guard !urls.isEmpty else { return false }
+        guard urls.contains(where: { Self.isSupportedImageFile($0) }) else { return false }
         let worktreeId = worktreeIdForStaging
         Task { @MainActor [weak self] in
-            var handled = false
             for url in urls {
                 switch await Self.readImageFile(url) {
                 case .data(let data):
-                    handled = true
                     _ = self?.insertImage(data: data, worktreeId: worktreeId)
                 case .tooLarge:
-                    handled = true
                     self?.coordinator?.reportImageError(.tooLarge)
                 case .unsupported:
                     break
                 }
             }
-            // `handled` is computed asynchronously so `insertImages` has
-            // already returned true to `paste`/`performDragOperation`; the
-            // actual insertion happens here on the main actor. This is fine —
-            // those override methods return `true` to indicate the pasteboard
-            // was claimed, and the image appears a few milliseconds later.
-            _ = handled
         }
         return true
     }

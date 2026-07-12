@@ -540,6 +540,21 @@ struct ACPComposerDraftBridgeTests {
         try assertComposerBaseStyle(in: textView.attributedString(), range: NSRange(location: 0, length: 4))
     }
 
+    @Test("paste with unsupported file URL falls back to plain text")
+    func pasteWithUnsupportedFileURLFallsBackToPlainText() throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString).txt")
+        try "not an image".write(to: temp, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([temp as NSURL])
+        NSPasteboard.general.setString("fallback text", forType: .string)
+
+        textView.paste(nil)
+
+        #expect(textView.string == "fallback text")
+    }
+
     @Test("plain paste insertion goes through NSTextView editing hooks")
     func plainPasteInsertionUsesTextViewEditingHooks() {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))

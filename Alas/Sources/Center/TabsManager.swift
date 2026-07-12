@@ -1214,7 +1214,8 @@ final class TabsManager {
                 store: bufferStore,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                lsp: lsp
+                lsp: lsp,
+                checkConflictOnRestore: true
             )
         } else {
             buffer = EditorBuffer(
@@ -1222,11 +1223,11 @@ final class TabsManager {
                 relativePath: relativePath,
                 store: bufferStore,
                 worktreeId: worktreeId,
-                tabId: tabId
+                tabId: tabId,
+                checkConflictOnRestore: true
             )
         }
         buffer.startWatching()
-        buffer.checkForConflictOnRestore()
         buffer.shouldFollowPathChange = { [weak self] oldPath, newPath in
             self?.canFollowBufferPathChange(worktreeId: worktreeId, oldPath: oldPath, newPath: newPath) ?? false
         }

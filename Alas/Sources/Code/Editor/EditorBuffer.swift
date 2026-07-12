@@ -66,6 +66,8 @@ final class EditorBuffer {
     @ObservationIgnored
     private var loadGeneration = 0
     @ObservationIgnored
+    nonisolated(unsafe) static var loadGateForTesting: (@Sendable () async -> Void)?
+    @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
     @ObservationIgnored
     private var originalVolumeIdentifier: AnyObject?
@@ -156,8 +158,8 @@ final class EditorBuffer {
 
     /// Production initializer that opts into hot-exit (no LSP). The `store`
     /// is consulted at init time for any persisted snapshot.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, checkConflictOnRestore: Bool = false) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: nil, checkConflictOnRestore: checkConflictOnRestore)
     }
 
     /// Synchronous load variant for non-UI save materialization. Normal editor
@@ -168,8 +170,8 @@ final class EditorBuffer {
 
     /// Production initializer that opts into hot-exit and opens an LSP
     /// document. The buffer owns the LSP open/close lifecycle for this file.
-    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager) {
-        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp)
+    convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, checkConflictOnRestore: Bool = false) {
+        self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, checkConflictOnRestore: checkConflictOnRestore)
     }
 
     convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool) {
@@ -197,7 +199,7 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
@@ -217,14 +219,15 @@ final class EditorBuffer {
                 store: store,
                 worktreeId: worktreeId,
                 tabId: tabId,
-                lsp: lsp
+                lsp: lsp,
+                checkConflictOnRestore: checkConflictOnRestore
             )
         }
         if loadSynchronously {
             loadFromDiskSync()
             finishLoad()
         } else {
-            loadFromDisk(completion: finishLoad)
+            loadFromDisk(preservePendingEdits: true, notifyAfterLoad: false, completion: finishLoad)
         }
     }
 
@@ -234,7 +237,8 @@ final class EditorBuffer {
         store: EditorBufferStore?,
         worktreeId: String?,
         tabId: String?,
-        lsp: WorkspaceLSPManager?
+        lsp: WorkspaceLSPManager?,
+        checkConflictOnRestore: Bool = false
     ) {
         if !isExternal,
            restoreEnabled,
@@ -245,6 +249,9 @@ final class EditorBuffer {
                let restoredPathChange = consumeRestoredPathChange() {
                 onRestoredPathChanged?(restoredPathChange.oldPath, restoredPathChange.newPath)
             }
+        }
+        if checkConflictOnRestore {
+            checkForConflictOnRestore()
         }
         onEdit { [weak self] in self?.scheduleSnapshot() }
         // Notify any already-attached coordinator that content has arrived
@@ -328,7 +335,7 @@ final class EditorBuffer {
     }
 
     func revert() {
-        loadFromDisk { [weak self] in
+        loadFromDisk(preservePendingEdits: false) { [weak self] in
             self?.discardSnapshot()
             self?.handleEdit(edit: nil)
         }
@@ -1151,7 +1158,7 @@ final class EditorBuffer {
     /// when the content has been applied. The file read happens in a
     /// `Task.detached` so the main thread isn't blocked by
     /// `String(contentsOf:)` on large files.
-    private func loadFromDisk(completion: @escaping @MainActor () -> Void) {
+    private func loadFromDisk(preservePendingEdits: Bool = false, notifyAfterLoad: Bool = true, completion: @escaping @MainActor () -> Void) {
         loading = true
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let resolvedURL = url.resolvingSymlinksInPath()
@@ -1160,6 +1167,9 @@ final class EditorBuffer {
         loadGeneration &+= 1
         let generation = loadGeneration
         let task = Task.detached(priority: .userInitiated) { () -> LoadResult in
+            if let gate = await EditorBuffer.loadGateForTesting {
+                await gate()
+            }
             guard FileManager.default.fileExists(atPath: resolvedURL.path) else {
                 return .missing
             }
@@ -1180,28 +1190,50 @@ final class EditorBuffer {
             if Task.isCancelled { return }
             await MainActor.run {
                 guard let self, self.loadGeneration == generation else { return }
-                switch result {
-                case .missing:
-                    self.storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
-                    self.readOnly = true
-                case .notUTF8:
-                    self.storage.setAttributedString(NSAttributedString(string: "(read-only: file is not valid UTF-8)"))
-                    self.readOnly = true
-                case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
-                    let detected = LineEnding.detect(in: raw)
-                    let canonical = LineEnding.lf.normalize(raw)
-                    self.storage.setAttributedString(NSAttributedString(string: canonical))
-                    self.originalText = canonical
-                    self.lineEnding = detected
-                    self.updateOriginalFileAttributes(from: resolvedURL)
-                    self.readOnly = isExternal || isSymlink
-                }
-                // Keep `loading` true until after setAttributedString so the
-                // BufferStorageDelegate doesn't fire handleEdit for the
-                // content replacement. The completion's handleEdit(edit: nil)
-                // is the single notification path for a reload.
                 self.loading = false
+                if preservePendingEdits, self.dirty {
+                    completion()
+                    return
+                }
+                self.loading = true
+                var didApplyChange = false
+                do {
+                    defer { self.loading = false }
+                    switch result {
+                    case .missing:
+                        didApplyChange = self.storage.string != "(unable to read file)" || !self.readOnly
+                        if didApplyChange {
+                            self.storage.setAttributedString(NSAttributedString(string: "(unable to read file)"))
+                            self.readOnly = true
+                        }
+                    case .notUTF8:
+                        let message = "(read-only: file is not valid UTF-8)"
+                        didApplyChange = self.storage.string != message || !self.readOnly
+                        if didApplyChange {
+                            self.storage.setAttributedString(NSAttributedString(string: message))
+                            self.readOnly = true
+                        }
+                    case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
+                        let detected = LineEnding.detect(in: raw)
+                        let canonical = LineEnding.lf.normalize(raw)
+                        let nextReadOnly = isExternal || isSymlink
+                        didApplyChange = self.storage.string != canonical
+                            || self.originalText != canonical
+                            || self.lineEnding != detected
+                            || self.readOnly != nextReadOnly
+                        if didApplyChange {
+                            self.storage.setAttributedString(NSAttributedString(string: canonical))
+                        }
+                        self.originalText = canonical
+                        self.lineEnding = detected
+                        self.updateOriginalFileAttributes(from: resolvedURL)
+                        self.readOnly = nextReadOnly
+                    }
+                }
                 completion()
+                if notifyAfterLoad, didApplyChange {
+                    self.handleEdit(edit: nil)
+                }
             }
         }
     }

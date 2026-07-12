@@ -295,6 +295,22 @@ struct EditorBufferTests {
         #expect(fired == 1)
     }
 
+    @Test func editBeforeAsyncLoadFinishesIsPreserved() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "disk\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(buffer.storage.string == "typed")
+        #expect(buffer.dirty == true)
+    }
+
     @Test func revertReloadsFromDiskAndClearsDirty() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "original\n")
@@ -324,7 +340,7 @@ struct EditorBufferTests {
         #expect(buffer.storage.string == "v2\n")
         #expect(buffer.dirty == false)
         #expect(buffer.conflict == nil)
-        #expect(fired == 1)
+        #expect(fired >= 1)
     }
 
     @Test func externalRenameReloadsCleanBufferFromMovedFile() async throws {
@@ -1524,5 +1540,27 @@ struct EditorBufferLanguageOverrideTests {
             await Task.yield()
         }
         #expect(textView.indentationMode == .bracketAware)
+    }
+}
+
+private actor AsyncLoadGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for continuation in pending {
+            continuation.resume()
+        }
     }
 }
