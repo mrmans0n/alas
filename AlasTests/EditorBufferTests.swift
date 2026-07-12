@@ -389,7 +389,7 @@ struct EditorBufferTests {
         await gate.open()
         await buffer.awaitLoadForTesting()
 
-        #expect(buffer.storage.string == "typed")
+        #expect(buffer.storage.string == "typeddisk\n")
         #expect(buffer.dirty == true)
     }
 
@@ -436,7 +436,7 @@ struct EditorBufferTests {
 
         buffer.resolveConflictKeepingMine()
         try buffer.save()
-        #expect(try String(contentsOf: url, encoding: .utf8) == "typed")
+        #expect(try String(contentsOf: url, encoding: .utf8) == "typeddisk\n")
     }
 
     @Test func editBeforeAsyncSymlinkLoadPreservesReadOnlyState() async throws {
@@ -459,7 +459,7 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: target, encoding: .utf8) == "disk\n")
     }
 
-    @Test func editBeforeAsyncLoadFinishesSkipsOlderSnapshotRestore() async throws {
+    @Test func editBeforeAsyncLoadFinishesReplaysOntoSnapshotRestore() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "disk\n")
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -481,8 +481,10 @@ struct EditorBufferTests {
         await gate.open()
         await buffer.awaitLoadForTesting()
 
-        #expect(buffer.storage.string == "typed")
+        #expect(buffer.storage.string == "typedsnapshot\n")
         #expect(buffer.originalText == "disk\n")
+        #expect(buffer.conflict == .changedOnDisk)
+        #expect(try store.read(worktreeId: "wt", tabId: "t") == snapshot)
     }
 
     @Test func watcherEventDuringInitialLoadTriggersReloadAfterLoadFinishes() async throws {
@@ -530,7 +532,7 @@ struct EditorBufferTests {
         await gate.open()
         await buffer.awaitLoadForTesting()
 
-        #expect(buffer.storage.string == "typed")
+        #expect(buffer.storage.string == "typedold\n")
         #expect(buffer.conflict == .changedOnDisk)
         #expect(try String(contentsOf: url, encoding: .utf8) == "new\n")
     }

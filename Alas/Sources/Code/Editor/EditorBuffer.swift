@@ -64,9 +64,12 @@ final class EditorBuffer {
         struct Pending {
             let generation: Int
             let hasPendingSnapshot: Bool
-            var hasUserEdits: Bool = false
+            var userEdits: [EditorTextEdit] = []
+            var preloadText = ""
             var queuedReload: Bool = false
             var suppressEditTracking: Bool = false
+
+            var hasUserEdits: Bool { !userEdits.isEmpty }
         }
 
         case loaded(preloadUserEdits: Bool)
@@ -265,17 +268,19 @@ final class EditorBuffer {
         } else {
             snapshot = nil
         }
-        let finishLoad: @MainActor () -> Void = { [weak self] in
+        let finishLoad: @MainActor (LoadState.Pending?) -> Void = { [weak self] pending in
             self?.finishInitialLoad(
                 isExternal: isExternal,
                 snapshot: snapshot,
+                pendingUserEdits: pending?.userEdits ?? [],
+                preloadText: pending?.preloadText ?? "",
                 lsp: lsp,
                 checkConflictOnRestore: checkConflictOnRestore
             )
         }
         if isExternal || loadSynchronously {
             loadFromDiskSync()
-            finishLoad()
+            finishLoad(nil)
         } else {
             loadFromDisk(
                 preservePendingEdits: true,
@@ -289,12 +294,13 @@ final class EditorBuffer {
     private func finishInitialLoad(
         isExternal: Bool,
         snapshot: EditorBufferStore.Snapshot?,
+        pendingUserEdits: [EditorTextEdit],
+        preloadText: String,
         lsp: WorkspaceLSPManager?,
         checkConflictOnRestore: Bool = false
     ) {
         if case .cancelled = loadState { return }
         if !isExternal,
-           !hasPreloadUserEdits,
            let snap = snapshot {
             applySnapshot(snap)
             if onRestoredPathChanged != nil,
@@ -302,6 +308,10 @@ final class EditorBuffer {
                 onRestoredPathChanged?(restoredPathChange.oldPath, restoredPathChange.newPath)
                 if case .cancelled = loadState { return }
             }
+        }
+        if !pendingUserEdits.isEmpty {
+            replayPendingUserEdits(pendingUserEdits, fallbackText: preloadText)
+            conflict = .changedOnDisk
         }
         if checkConflictOnRestore {
             checkForConflictOnRestore()
@@ -429,16 +439,6 @@ final class EditorBuffer {
         }
     }
 
-    private var hasPreloadUserEdits: Bool {
-        if case .loading(let pending) = loadState {
-            return pending.hasUserEdits
-        }
-        if case .loaded(let preloadUserEdits) = loadState {
-            return preloadUserEdits
-        }
-        return false
-    }
-
     private func beginAsyncLoad(hasPendingSnapshot: Bool) -> Int {
         loadTask?.cancel()
         nextLoadGeneration &+= 1
@@ -461,10 +461,11 @@ final class EditorBuffer {
         loadState = .cancelled
     }
 
-    private func markUserEditDuringLoadIfNeeded() -> Bool {
+    private func markUserEditDuringLoadIfNeeded(_ edit: EditorTextEdit) -> Bool {
         guard case .loading(var pending) = loadState else { return false }
         guard !pending.suppressEditTracking else { return true }
-        pending.hasUserEdits = true
+        pending.userEdits.append(edit)
+        pending.preloadText = storage.string
         loadState = .loading(pending)
         return true
     }
@@ -497,7 +498,7 @@ final class EditorBuffer {
 
     private func handleEdit(edit: EditorTextEdit?) {
         guard programmaticEditDepth == 0 else { return }
-        if markUserEditDuringLoadIfNeeded() {
+        if let edit, markUserEditDuringLoadIfNeeded(edit) {
             return
         }
         // External buffers are read-only; suppress all observer notifications
@@ -509,7 +510,7 @@ final class EditorBuffer {
     }
 
     func revert() {
-        loadFromDisk(preservePendingEdits: false) { [weak self] in
+        loadFromDisk(preservePendingEdits: false) { [weak self] _ in
             self?.discardSnapshot()
             self?.handleEdit(edit: nil)
         }
@@ -691,7 +692,7 @@ final class EditorBuffer {
             conflict = differsFromOriginal ? .changedOnDisk : nil
             snapshotNow()
         } else {
-            loadFromDisk { [weak self] in
+            loadFromDisk { [weak self] _ in
                 guard let self else { return }
                 self.discardSnapshot()
                 self.handleEdit(edit: nil)
@@ -1264,6 +1265,22 @@ final class EditorBuffer {
         updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
     }
 
+    private func replayPendingUserEdits(_ edits: [EditorTextEdit], fallbackText: String) {
+        var merged = storage.string
+        for edit in edits {
+            guard let next = TextEditCoordinates.apply(edit, to: merged) else {
+                withLoadEditTrackingSuppressed {
+                    storage.setAttributedString(NSAttributedString(string: fallbackText))
+                }
+                return
+            }
+            merged = next
+        }
+        withLoadEditTrackingSuppressed {
+            storage.setAttributedString(NSAttributedString(string: merged))
+        }
+    }
+
     private func canRestoreSnapshotPath(_ path: String) -> Bool {
         guard !path.isEmpty,
               !path.contains("\0"),
@@ -1368,7 +1385,7 @@ final class EditorBuffer {
         preservePendingEdits: Bool = false,
         notifyAfterLoad: Bool = true,
         hasPendingSnapshot: Bool = false,
-        completion: @escaping @MainActor () -> Void
+        completion: @escaping @MainActor (LoadState.Pending?) -> Void
     ) {
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let resolvedURL = url.resolvingSymlinksInPath()
@@ -1404,18 +1421,14 @@ final class EditorBuffer {
             await MainActor.run {
                 guard let self,
                       let pending = self.acceptLoadCompletion(generation: generation) else { return }
-                if preservePendingEdits, pending.hasUserEdits {
-                    self.recordLoadedBaseline(from: result)
-                    self.conflict = .changedOnDisk
-                    completion()
-                    self.settleQueuedReloadAfterLoad(pending.queuedReload, preservingUserEdits: true)
-                    return
-                }
                 let didApplyChange = self.withLoadEditTrackingSuppressed {
                     self.applyLoadResult(result)
                 }
-                completion()
-                self.settleQueuedReloadAfterLoad(pending.queuedReload, preservingUserEdits: false)
+                completion(preservePendingEdits ? pending : nil)
+                self.settleQueuedReloadAfterLoad(
+                    pending.queuedReload,
+                    preservingUserEdits: preservePendingEdits && pending.hasUserEdits
+                )
                 if notifyAfterLoad, didApplyChange {
                     self.handleEdit(edit: nil)
                 }
@@ -1463,22 +1476,6 @@ final class EditorBuffer {
             updateOriginalFileAttributes(from: resolvedURL)
             readOnly = nextReadOnly
             return didApplyChange
-        }
-    }
-
-    private func recordLoadedBaseline(from result: LoadResult) {
-        switch result {
-        case .loaded(let raw, let resolvedURL, let isExternal, let isSymlink):
-            originalText = LineEnding.lf.normalize(raw)
-            lineEnding = LineEnding.detect(in: raw)
-            updateOriginalFileAttributes(from: resolvedURL)
-            readOnly = isExternal || isSymlink
-        case .missing:
-            originalText = "(unable to read file)"
-            readOnly = true
-        case .notUTF8:
-            originalText = "(read-only: file is not valid UTF-8)"
-            readOnly = true
         }
     }
 

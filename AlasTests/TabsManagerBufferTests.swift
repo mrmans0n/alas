@@ -601,7 +601,7 @@ struct TabsManagerBufferTests {
         await pending.awaitLoadForTesting()
     }
 
-    @Test func pendingAsyncRestoreSkippedByPreloadEditDiscardsSnapshotAfterSave() async throws {
+    @Test func pendingAsyncRestoreReplaysPreloadEditAndDiscardsSnapshotAfterSave() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
@@ -626,6 +626,8 @@ struct TabsManagerBufferTests {
         await gate.open()
         await pending.awaitLoadForTesting()
         #expect(manager.peekBuffer(tabId: tab.id) === pending)
+        #expect(pending.relativePath == "b.txt")
+        #expect(pending.storage.string == "typedrestored\n")
 
         pending.resolveConflictKeepingMine()
         try pending.save()
@@ -633,7 +635,7 @@ struct TabsManagerBufferTests {
         #expect(try store.read(worktreeId: "wt", tabId: tab.id) == nil)
     }
 
-    @Test func unindexedPreloadEditedBufferMoveDoesNotMoveOldPathTabs() async throws {
+    @Test func preloadEditedRestoredBufferMoveDoesNotMoveOldPathTabs() async throws {
         let root = tempWorktree()
         try "old\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         try "base\n".write(to: root.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
