@@ -104,7 +104,10 @@ struct EditorBufferTests {
         _ = try writeFile(root, "a.txt", "hello\n")
         let gate = AsyncLoadGate()
         EditorBuffer.loadGateForTesting = { await gate.wait() }
-        defer { EditorBuffer.loadGateForTesting = nil }
+        defer {
+            EditorBuffer.loadGateForTesting = nil
+            EditorBuffer.loadResultForTesting = nil
+        }
 
         let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
 
@@ -345,6 +348,55 @@ struct EditorBufferTests {
 
         #expect(buffer.storage.string == "typed")
         #expect(buffer.dirty == true)
+    }
+
+    @Test func editBeforeAsyncLoadFinishesKeepsDiskBaselineAndSaveBlocked() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "disk\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+        let url = root.appendingPathComponent("a.txt")
+        try "external\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: url.path)
+
+        #expect(throws: (any Error).self) {
+            try buffer.save()
+        }
+
+        #expect(try String(contentsOf: url, encoding: .utf8) == "external\n")
+    }
+
+    @Test func watcherEventDuringInitialLoadTriggersReloadAfterLoadFinishes() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.txt", "old\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        final class StaleReadOnce: @unchecked Sendable { var used = false }
+        let staleRead = StaleReadOnce()
+        EditorBuffer.loadResultForTesting = { _ in
+            if staleRead.used { return nil }
+            staleRead.used = true
+            return "old\n"
+        }
+        defer {
+            EditorBuffer.loadGateForTesting = nil
+            EditorBuffer.loadResultForTesting = nil
+        }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt")
+
+        buffer.handleWatcherEventForTesting()
+        try "new\n".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+        await buffer.awaitLoadForTesting()
+
+        #expect(buffer.storage.string == "new\n")
     }
 
     @Test func closeBeforeAsyncLoadFinishesDoesNotOpenLSPDocument() async throws {

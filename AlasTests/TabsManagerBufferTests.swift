@@ -665,13 +665,14 @@ struct TabsManagerBufferTests {
     @Test func saveAllSavesUnloadedDirtySnapshots() throws {
         let root = tempWorktree()
         try "x".write(to: root.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let attrs = try FileManager.default.attributesOfItem(atPath: root.appendingPathComponent("a.txt").path)
         let (manager, store, _) = makeManager()
         let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
         let snapshot = EditorBufferStore.Snapshot(
             relativePath: "a.txt",
             content: "edited\n",
             originalText: "x",
-            originalMtime: Date(),
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
             lineEnding: .lf
         )
         try store.write(snapshot, worktreeId: "wt", tabId: tab.id)

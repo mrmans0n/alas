@@ -79,7 +79,15 @@ final class EditorBuffer {
     @ObservationIgnored
     private var closed = false
     @ObservationIgnored
+    private var reloadAfterLoad = false
+    @ObservationIgnored
+    private var hasPreservedPreloadEdits = false
+    @ObservationIgnored
+    private var preservedPreloadEditsFromAsyncLoad = false
+    @ObservationIgnored
     nonisolated(unsafe) static var loadGateForTesting: (@Sendable () async -> Void)?
+    @ObservationIgnored
+    nonisolated(unsafe) static var loadResultForTesting: (@Sendable (URL) async -> String?)?
     @ObservationIgnored
     private var originalFileIdentifier: AnyObject?
     @ObservationIgnored
@@ -338,7 +346,13 @@ final class EditorBuffer {
     }
 
     private func handleEdit(edit: EditorTextEdit?) {
-        guard !loading else { return }
+        if loading {
+            if storage.string != originalText { return }
+            originalText = "\u{0}"
+            hasPreservedPreloadEdits = true
+            preservedPreloadEditsFromAsyncLoad = loadTask != nil
+            return
+        }
         // External buffers are read-only; suppress all observer notifications
         // so didChange is never propagated to LSP or snapshot scheduler.
         guard !isExternal else { return }
@@ -391,7 +405,10 @@ final class EditorBuffer {
         // triggered revert). It will pick up the latest content, so skip —
         // without this guard, two rapid watcher events (e.g. .write + .attrib)
         // each fire revert(), both async loads apply, and observers fire twice.
-        if loading { return }
+        if loading {
+            reloadAfterLoad = true
+            return
+        }
         guard let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
               onDiskMtime != originalMtime else { return }
         if dirty {
@@ -567,6 +584,13 @@ final class EditorBuffer {
             return
         }
         let url = worktreeRoot.appendingPathComponent(relativePath)
+        if dirty,
+           let onDiskMtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
+           onDiskMtime != originalMtime {
+            conflict = .changedOnDisk
+            throw SaveError.loadPending
+        }
+        if preservedPreloadEditsFromAsyncLoad { throw SaveError.loadPending }
         let canonical = storage.string
         try write(canonical: canonical, to: url, createDirectories: false)
         originalText = canonical
@@ -1196,6 +1220,11 @@ final class EditorBuffer {
             }
             let isDirectory = (try? resolvedURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
             if isDirectory { return .missing }
+            if let override = await EditorBuffer.loadResultForTesting,
+               let raw = await override(resolvedURL) {
+                let isSymlink = (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
+                return .loaded(raw: raw, resolvedURL: resolvedURL, isExternal: isExternal, isSymlink: isSymlink)
+            }
             guard let raw = try? String(contentsOf: resolvedURL, encoding: .utf8) else {
                 return .notUTF8
             }
@@ -1213,7 +1242,17 @@ final class EditorBuffer {
                 guard let self, self.loadGeneration == generation, !self.closed else { return }
                 self.loading = false
                 if preservePendingEdits, self.dirty {
+                    if case .loaded(let raw, let resolvedURL, _, _) = result {
+                        self.originalText = LineEnding.lf.normalize(raw)
+                        self.lineEnding = LineEnding.detect(in: raw)
+                        self.updateOriginalFileAttributes(from: resolvedURL)
+                    }
+                    let shouldReload = self.reloadAfterLoad
+                    self.reloadAfterLoad = false
                     completion()
+                    if shouldReload {
+                        self.revert()
+                    }
                     return
                 }
                 self.loading = true
@@ -1252,6 +1291,11 @@ final class EditorBuffer {
                     }
                 }
                 completion()
+                let shouldReload = self.reloadAfterLoad
+                self.reloadAfterLoad = false
+                if shouldReload {
+                    self.revert()
+                }
                 if notifyAfterLoad, didApplyChange {
                     self.handleEdit(edit: nil)
                 }
@@ -1310,6 +1354,10 @@ final class EditorBuffer {
         if let loadTask {
             await loadTask.value
         }
+    }
+
+    func handleWatcherEventForTesting() {
+        handleWatcherEvent()
     }
     #endif
 }
