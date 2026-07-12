@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-13
+
+### ✨ Features
+
+- Add remote machine support over SSH (#738).
+
 ## [0.9.1] - 2026-07-12
 
 ### 🐛 Fixes
