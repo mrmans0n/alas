@@ -1393,6 +1393,7 @@ final class TabsManager {
     /// Inspect (do not create) the buffer for `tabId`. Used by tests and by
     /// dirty-tab queries.
     func peekBuffer(tabId: TabID) -> EditorBuffer? {
+        if let pending = pendingRestoredPathBuffers[tabId] { return pending }
         guard let key = bufferKeys[tabId] else { return nil }
         return buffers[key]
     }
@@ -1461,8 +1462,8 @@ final class TabsManager {
 
     /// Tab IDs whose buffers are currently dirty. Order is unspecified.
     func dirtyTabIds() -> [TabID] {
-        bufferKeys.compactMap { tabId, key in
-            buffers[key]?.dirty == true ? tabId : nil
+        bufferKeys.compactMap { tabId, _ in
+            peekBuffer(tabId: tabId)?.dirty == true ? tabId : nil
         }
     }
 
@@ -1540,8 +1541,8 @@ final class TabsManager {
     /// quit handler. Errors are swallowed — failing to snapshot one buffer
     /// must not block snapshotting the rest, and quit must not be blocked.
     func snapshotDirtyBuffersForQuit() {
-        for (tabId, key) in bufferKeys {
-            guard let buffer = buffers[key], buffer.dirty else { continue }
+        for (tabId, _) in bufferKeys {
+            guard let buffer = peekBuffer(tabId: tabId), buffer.dirty else { continue }
             buffer.snapshotNow(tabId: tabId)
         }
     }
@@ -1550,8 +1551,8 @@ final class TabsManager {
     func saveAll(worktreeRoots: [String: URL] = [:]) -> [(tabId: TabID, error: Error)] {
         var errors: [(TabID, Error)] = []
         var saved = Set<ObjectIdentifier>()
-        for (tabId, key) in bufferKeys {
-            guard let buffer = buffers[key], buffer.dirty else { continue }
+        for (tabId, _) in bufferKeys {
+            guard let buffer = peekBuffer(tabId: tabId), buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
             saved.insert(id)
@@ -1591,7 +1592,7 @@ final class TabsManager {
         // Pass 1: live dirty buffers belonging to this worktree.
         for (tabId, key) in bufferKeys {
             guard key.worktreeId == worktreeId,
-                  let buffer = buffers[key], buffer.dirty else { continue }
+                  let buffer = peekBuffer(tabId: tabId), buffer.dirty else { continue }
             let id = ObjectIdentifier(buffer)
             guard !saved.contains(id) else { continue }
             saved.insert(id)

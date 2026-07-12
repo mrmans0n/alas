@@ -921,7 +921,10 @@ final class ACPNSTextView: NSTextView {
                         isFirstImage: isFirstImage
                     )
                     if self.insertImage(data: data, worktreeId: worktreeId, replacementRange: replacementRange) {
-                        nextLocation += max(0, (self.textStorage?.length ?? 0) - beforeLength)
+                        nextLocation = self.selectedRange().location
+                        if nextLocation == replacementRange.location {
+                            nextLocation += max(0, (self.textStorage?.length ?? 0) - beforeLength)
+                        }
                         isFirstImage = false
                     }
                 case .tooLarge:

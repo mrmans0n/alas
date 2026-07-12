@@ -1331,7 +1331,11 @@ final class EditorBuffer {
     @discardableResult
     private func loadFromDiskSync() -> Self {
         loading = true
-        defer { loading = false }
+        suppressPreloadEditPreservation = true
+        defer {
+            suppressPreloadEditPreservation = false
+            loading = false
+        }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         let resolvedURL = url.resolvingSymlinksInPath()
         guard FileManager.default.fileExists(atPath: resolvedURL.path) else {

@@ -605,6 +605,33 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string.contains("\u{fffc}"))
     }
 
+    @Test("async image paste advances after replacing selected text")
+    func asyncImagePasteAdvancesAfterReplacingSelectedText() async throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        var first = pngBytes
+        first.append(0x01)
+        var second = pngBytes
+        second.append(0x02)
+        let firstURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString)-1.png")
+        let secondURL = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString)-2.png")
+        try first.write(to: firstURL)
+        try second.write(to: secondURL)
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        textView.string = "replace me"
+        textView.setSelectedRange(NSRange(location: 0, length: 7))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([firstURL as NSURL, secondURL as NSURL])
+
+        textView.paste(nil)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(textView.string.hasSuffix(" me"))
+        #expect(try imageAttachmentData(in: textView) == [first, second])
+    }
+
     @Test("plain paste insertion goes through NSTextView editing hooks")
     func plainPasteInsertionUsesTextViewEditingHooks() {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
@@ -680,6 +707,21 @@ struct ACPComposerDraftBridgeTests {
                 continuation.resume()
             }
         }
+    }
+
+    private var pngBytes: Data {
+        Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!
+    }
+
+    private func imageAttachmentData(in textView: ACPNSTextView) throws -> [Data] {
+        var data: [Data] = []
+        textView.textStorage?.enumerateAttribute(.imageAttachmentURI, in: NSRange(location: 0, length: textView.attributedString().length)) { value, _, _ in
+            guard let raw = value as? String,
+                  let url = URL(string: raw),
+                  let bytes = try? Data(contentsOf: url) else { return }
+            data.append(bytes)
+        }
+        return data
     }
 
     // MARK: - Keyboard intent resolution (doCommandBy)
