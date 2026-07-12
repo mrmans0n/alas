@@ -17,14 +17,11 @@ struct WorkspaceLSPManagerStatusTests {
 
     private func manager(
         withFakeEntry language: String = "swift",
-        makeClient: @escaping (_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient = { executable, arguments, environment, language, rootURI in
-            LSPClient(
-                transport: LSPTransport(executable: executable, arguments: arguments, environment: environment),
-                language: language,
-                rootURI: rootURI
-            )
-        }
+        makeClient: ((_ executable: URL, _ arguments: [String], _ environment: [String: String], _ language: String, _ rootURI: String) -> LSPClient)? = nil
     ) -> WorkspaceLSPManager {
+        let makeClient = makeClient ?? { _, _, _, language, rootURI in
+            readyClient(language: language, rootURI: rootURI)
+        }
         let registry = LanguageServerRegistry(userDefined: [
             LanguageServerConfig(
                 language: language,
@@ -50,9 +47,46 @@ struct WorkspaceLSPManagerStatusTests {
         )
     }
 
+    private func readyClient(language: String, rootURI: String) -> LSPClient {
+        let transport = FakeTransport()
+        transport.onSend = { sent in
+            guard let id = Self.requestId(in: sent) else { return }
+            if sent.contains(#""method":"initialize""#) {
+                transport.deliverFrame(
+                    #"{"jsonrpc":"2.0","id":\#(id),"result":{"capabilities":{"textDocumentSync":1}}}"#
+                )
+            } else if sent.contains(#""method":"shutdown""#) {
+                transport.deliverFrame(#"{"jsonrpc":"2.0","id":\#(id),"result":null}"#)
+            }
+        }
+        return LSPClient(transport: transport, language: language, rootURI: rootURI)
+    }
+
+    private static func requestId(in json: String) -> Int? {
+        guard let data = json.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object["id"] as? Int
+    }
+
     @Test func documentStatusIsNoneBeforeOpen() {
         let mgr = manager()
         #expect(mgr.documentStatus(forFile: fileURL, worktreeRoot: root) == .none)
+    }
+
+    @Test func remoteRootProbeCommandUsesQuotedMarkerVariables() {
+        let command = WorkspaceLSPManager.remoteLSPRootProbeCommand(
+            fileURL: URL(fileURLWithPath: "/srv/repo/Package/Sources/App/main.swift"),
+            worktreeRoot: URL(fileURLWithPath: "/srv/repo"),
+            markers: ["Package.swift", "*.xcodeproj", "quote'file"]
+        )
+
+        #expect(command.contains("root='/srv/repo'"))
+        #expect(command.contains("m0='Package.swift'"))
+        #expect(command.contains("m1='*.xcodeproj'"))
+        #expect(command.contains("m2='quote'\\''file'"))
+        #expect(command.contains("find \"$dir\" -maxdepth 1 -name \"$m1\""))
+        #expect(command.contains("[ -e \"$dir/$m0\" ]"))
+        #expect(!command.contains("dirname --"))
     }
 
     @Test func stateTickStartsAtZero() {
@@ -260,6 +294,9 @@ struct WorkspaceLSPManagerStatusTests {
                         return .allowed
                     }
                 )
+            },
+            makeClient: { _, _, _, language, rootURI in
+                readyClient(language: language, rootURI: rootURI)
             }
         )
 
@@ -355,6 +392,9 @@ struct WorkspaceLSPManagerStatusTests {
                     gatekeeperAssessor: { _ in box.blocked ? .rejected : .allowed },
                     gatekeeperRemediator: { _, _ in await box.waitForBothRemediationAttempts() }
                 )
+            },
+            makeClient: { _, _, _, language, rootURI in
+                readyClient(language: language, rootURI: rootURI)
             }
         )
 

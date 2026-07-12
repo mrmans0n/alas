@@ -210,7 +210,7 @@ struct ACPSessionManagerAttachRestoreTests {
             store: store,
             onSessionTitleUpdated: { titleCallbacks.append(($0, $1)) },
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _ in ACPConnection(client: ACPMockClient()) }
+            connectionFactory: { _, _, _ in ACPConnection(client: ACPMockClient()) }
         )
 
         let session = try #require(manager.placeholderSession(id: "local"))
@@ -1238,7 +1238,7 @@ struct ACPSessionManagerAttachRestoreTests {
                 captured.count = mgrBox.pointee?.sessions["local"]?.transcript.messages.count ?? -2
                 return .ready
             },
-            connectionFactory: { _ in ACPConnection(client: client) }
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
         mgrBox.pointee = manager
 
@@ -1329,7 +1329,7 @@ struct ACPSessionManagerAttachRestoreTests {
             worktreePath: "/tmp/wt",
             store: store,
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _ in ACPConnection(client: client) },
+            connectionFactory: { _, _, _ in ACPConnection(client: client) },
             mcpProjectContextProvider: mcpProjectContextProvider
         )
     }

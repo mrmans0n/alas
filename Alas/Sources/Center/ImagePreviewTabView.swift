@@ -15,7 +15,7 @@ struct ImagePreviewTabView: View {
         }
         .background(theme.color("bg-1"))
         .task(id: absoluteURL) {
-            loadImage()
+            await loadImage()
         }
     }
 
@@ -124,7 +124,7 @@ struct ImagePreviewTabView: View {
         worktreePath.appendingPathComponent(relativePath)
     }
 
-    private func loadImage() {
+    private func loadImage() async {
         loadState = .loading
 
         guard ImageFileType.isSupported(relativePath: relativePath) else {
@@ -133,12 +133,31 @@ struct ImagePreviewTabView: View {
         }
 
         let url = absoluteURL
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            loadState = .missing
-            return
+        let data: Data
+        if let host = RemoteHostRegistry.shared.host(forPath: url.path) {
+            do {
+                switch try await RemoteFileAccess.read(host: host, path: url.path) {
+                case let .file(contents, _): data = contents
+                case .missing, .directory, .symlink:
+                    loadState = .missing
+                    return
+                case .unreadable:
+                    loadState = .decodeFailed
+                    return
+                }
+            } catch {
+                loadState = .missing
+                return
+            }
+        } else {
+            guard FileManager.default.fileExists(atPath: url.path), let contents = try? Data(contentsOf: url) else {
+                loadState = .missing
+                return
+            }
+            data = contents
         }
 
-        guard let image = NSImage(contentsOf: url) else {
+        guard let image = NSImage(data: data) else {
             loadState = .decodeFailed
             return
         }
@@ -146,7 +165,7 @@ struct ImagePreviewTabView: View {
         loadState = .loaded(ImagePreviewInfo(
             image: image,
             pixelSize: pixelSize(for: image),
-            byteCount: byteCount(for: url)
+            byteCount: Int64(data.count)
         ))
     }
 
@@ -156,12 +175,6 @@ struct ImagePreviewTabView: View {
             return image.size
         }
         return CGSize(width: cgImage.width, height: cgImage.height)
-    }
-
-    private func byteCount(for url: URL) -> Int64? {
-        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
-              let size = values.fileSize else { return nil }
-        return Int64(size)
     }
 }
 

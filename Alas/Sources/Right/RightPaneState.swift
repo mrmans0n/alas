@@ -28,6 +28,8 @@ private struct SyncFetchTarget: Hashable {
 @Observable
 @MainActor
 final class RightPaneState {
+    nonisolated static let remoteUntrackedContentFingerprintCommand = "git ls-files --others --exclude-standard -z | xargs -0 sh -c '[ \"$#\" -gt 0 ] || exit 0; git hash-object -- \"$@\"' sh 2>/dev/null"
+
     let worktree: Worktree
     let reviewLoop: ReviewLoopState
     var changes: [ChangedFile] = []
@@ -250,6 +252,9 @@ final class RightPaneState {
 
     @ObservationIgnored
     private let reviewLoopRemoteRefreshMinimumInterval: TimeInterval = 45
+    @ObservationIgnored private var remotePollTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteFingerprint: String?
+    private static let remotePollIntervalNanos: UInt64 = 7 * 1_000_000_000
 
     /// True iff the "behind base" chip should be shown.
     var showBehindBaseChip: Bool {
@@ -282,7 +287,11 @@ final class RightPaneState {
     }
 
     func start() {
-        watcher.start()
+        if !worktree.path.isRemoteAlasPath {
+            watcher.start()
+        } else {
+            startRemotePolling()
+        }
         Task { @MainActor in await self.refresh() }
         Task { @MainActor in await self.refreshSyncStatus() }
         syncStatusTimer?.cancel()
@@ -303,6 +312,54 @@ final class RightPaneState {
         watcher.stop()
         syncStatusTimer?.cancel()
         syncStatusTimer = nil
+        remotePollTask?.cancel()
+        remotePollTask = nil
+    }
+
+    private func startRemotePolling() {
+        remotePollTask?.cancel()
+        remotePollTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.remotePollIntervalNanos)
+                guard let self, !Task.isCancelled, NSApp?.isActive ?? true else { continue }
+                await remotePollTick()
+            }
+        }
+    }
+
+    private func remotePollTick() async {
+        let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+        let status = try? await Process.git(["status", "--porcelain=v2", "-z", "--untracked-files=all"], cwd: worktree.path)
+        guard let status, !RemoteExec.isConnectionFailure(exitCode: status.exitCode) else {
+            if let host { RemoteHostStatusStore.shared.reportConnectionFailure(host: host) }
+            return
+        }
+        if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
+        guard status.exitCode == 0 else { return }
+        let head = try? await Process.git(["rev-parse", "HEAD"], cwd: worktree.path)
+        let unstagedDiff = try? await Process.git(["diff", "--no-ext-diff", "--binary"], cwd: worktree.path)
+        let stagedDiff = try? await Process.git(["diff", "--cached", "--no-ext-diff", "--binary"], cwd: worktree.path)
+        let untrackedContent: ProcessResult?
+        if let host {
+            untrackedContent = try? await RemoteExec.run(
+                host: host,
+                cwd: worktree.path.path,
+                command: Self.remoteUntrackedContentFingerprintCommand,
+                timeout: 15
+            )
+        } else {
+            untrackedContent = nil
+        }
+        let fingerprint = RemoteStatusFingerprint.make(
+            status: status.stdout,
+            head: head?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            unstagedDiff: unstagedDiff?.stdout ?? "",
+            stagedDiff: stagedDiff?.stdout ?? "",
+            untrackedContent: untrackedContent?.stdout ?? ""
+        )
+        let shouldRefresh = RemoteStatusFingerprint.shouldRefresh(previous: remoteFingerprint, current: fingerprint)
+        remoteFingerprint = fingerprint
+        if shouldRefresh { await refresh() }
     }
 
     /// Update the base branch, record it in the recent list, and refresh.

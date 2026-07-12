@@ -23,12 +23,13 @@ struct EditorConflictBanner: View {
                 row(
                     message: "File was deleted on disk.",
                     primary: ("Save anyway", {
-                        do {
-                            try buffer.saveRecordingError()
-                            buffer.resolveConflictKeepingMine()
-                        } catch {
-                            // saveRecordingError() already set lastSaveError; leave the
-                            // conflict in place so the user can retry.
+                        Task { @MainActor in
+                            do {
+                                try await buffer.saveConflictKeepingMineAwaitingRemote()
+                            } catch {
+                                // saveConflictKeepingMineAwaitingRemote() already set lastSaveError;
+                                // leave the conflict in place so the user can retry.
+                            }
                         }
                     }),
                     secondary: ("Keep mine", { buffer.resolveConflictKeepingMine() })

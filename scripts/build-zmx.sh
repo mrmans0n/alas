@@ -68,6 +68,39 @@ skip_if_optional() {
     die "$*"
 }
 
+linux_zmx_output() {
+    printf '%s/.build/zmx/linux-%s/install/bin/zmx\n' "${srcroot}" "$1"
+}
+
+build_linux_binaries() {
+    local linux_target linux_arch linux_prefix linux_output linux_marker linux_fingerprint
+    for linux_target in x86_64-linux-musl aarch64-linux-musl; do
+        linux_arch="${linux_target%%-*}"
+        linux_prefix="${srcroot}/.build/zmx/linux-${linux_arch}/install"
+        linux_output="${linux_prefix}/bin/zmx"
+        linux_marker="${srcroot}/.build/zmx/linux-${linux_arch}/fingerprint"
+        linux_fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "${zmx_sha}" "${zmx_dirt}" "${linux_target}" "${zig_bin}" "${zig_id}" "${script_id}" | shasum -a 256 | awk '{print $1}')"
+        if [ -x "${linux_output}" ] && [ -f "${linux_marker}" ] && [ "$(cat "${linux_marker}")" = "${linux_fingerprint}" ]; then
+            continue
+        fi
+
+        rm -f "${linux_output}"
+        mkdir -p "${linux_prefix}"
+        (
+            cd "${zmx_src}"
+            "${zig_bin}" build \
+                -Doptimize=ReleaseFast \
+                -Dtarget="${linux_target}" \
+                --prefix "${linux_prefix}" \
+                --cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-cache" \
+                --global-cache-dir "${srcroot}/.build/zmx/linux-${linux_arch}/.zig-global-cache"
+        )
+        [ -x "${linux_output}" ] || die "Linux zmx build produced no binary: ${linux_output}"
+        printf '%s\n' "${linux_fingerprint}" > "${linux_marker}.tmp"
+        mv "${linux_marker}.tmp" "${linux_marker}"
+    done
+}
+
 # Universal-build fast path: recursively invoke this script for each slice,
 # then `lipo` the results. Each per-arch recursive call goes through the
 # normal cache, so re-archives with no zmx change short-circuit on both
@@ -143,6 +176,7 @@ cached_binary="${cache_dir}/zmx"
 if [ -x "${cached_binary}" ]; then
     cp "${cached_binary}" "${zmx_output}"
     chmod +x "${zmx_output}"
+    build_linux_binaries
     exit 0
 fi
 
@@ -184,6 +218,7 @@ run_zig_build_with_retries() {
 }
 
 run_zig_build_with_retries
+build_linux_binaries
 
 # Publish to cache atomically. Use a per-process temp file so two concurrent
 # builds with the same fingerprint don't trample each other's `.tmp` mid-copy

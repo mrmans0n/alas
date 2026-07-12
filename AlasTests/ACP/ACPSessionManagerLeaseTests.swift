@@ -175,7 +175,7 @@ import Foundation
             worktreeId: "wt", worktreePath: "/tmp/wt",
             store: storeA, instanceId: "A", pid: Int64(getpid()),
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _ in throw StubError() })
+            connectionFactory: { _, _, _ in throw StubError() })
         let session = mgrA.createSession(agentId: "claude")
         await mgrA.attach(to: session.id, freshlyCreated: true)
         // attach failed at connectionFactory; the defer must have released the lease.
@@ -698,7 +698,7 @@ import Foundation
             worktreeId: "wt", worktreePath: "/tmp/wt",
             store: storeA, instanceId: "A", pid: Int64(getpid()),
             setupEvaluator: { _ in .ready },
-            connectionFactory: { [weak storeA] _ throws -> ACPConnection in
+            connectionFactory: { [weak storeA] _, _, _ throws -> ACPConnection in
                 connectionCallCount += 1
                 // On the first connection attempt, seize the lease as "B"
                 // to simulate a takeover arriving while A awaits loadSession.
@@ -786,7 +786,7 @@ import Foundation
             worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
             instanceId: "A", pid: Int64(getpid()),
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _ in ACPConnection(client: client) })
+            connectionFactory: { _, _, _ in ACPConnection(client: client) })
         let session = mgr.createSession(agentId: "claude")
         // Dispose the manager BEFORE attach so any in-flight attach finds
         // isDisposed == true at the pre-commit guard.
@@ -882,7 +882,7 @@ import Foundation
                 await setupGate.wait()   // block until test releases
                 return .ready
             },
-            connectionFactory: { _ throws -> ACPConnection in
+            connectionFactory: { _, _, _ throws -> ACPConnection in
                 throw CancellationError()  // attach will fail here, but attach's defer still runs
             })
 

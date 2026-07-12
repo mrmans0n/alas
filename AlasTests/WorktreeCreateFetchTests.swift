@@ -157,7 +157,7 @@ struct WorktreeCreateFetchTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-fetched")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "origin/main",
             branch: "fetched-branch",
@@ -188,7 +188,7 @@ struct WorktreeCreateFetchTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-local")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "main",
             branch: "local-branch",
@@ -220,7 +220,7 @@ struct WorktreeCreateFetchTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-fail-continue")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "origin/main",
             branch: "fail-continue-branch",
@@ -248,7 +248,7 @@ struct WorktreeCreateFetchTests {
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
 
         let dest = repo.appendingPathComponent("wt-no-fetch")
-        let id = state.createWorktree(
+        let id = await state.createWorktree(
             projectId: project.id,
             base: "origin/main",
             branch: "no-fetch-branch",

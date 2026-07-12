@@ -133,4 +133,26 @@ struct AppStateKeepSessionsAliveTests {
 
         #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [term.id])
     }
+
+    @Test func topologyRefreshDoesNotPruneUnrelatedTerminalTabsWhenKeepAliveFalse() async throws {
+        let repo = try await makeRepo(name: "topology-keep")
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let state = AppState()
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "test", color: "#000000"
+        )
+        try await state.projectsManager.refreshWorktrees(projectId: project.id)
+        let trees = state.projectsManager.worktrees(projectId: project.id)
+        state.selectedWorktreeId = trees[0].id
+        state.config.terminal.keepSessionsAlive = false
+
+        let term = state.tabs.appendTerminal(
+            worktreeId: trees[0].id, title: "a", sessionId: "leaf-a"
+        )
+
+        await state.refreshProjectTopology(projectId: project.id)
+
+        #expect(state.tabs.tabs(forWorktree: trees[0].id).map(\.id) == [term.id])
+    }
 }

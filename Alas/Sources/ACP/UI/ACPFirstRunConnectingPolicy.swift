@@ -13,6 +13,7 @@ enum ACPFirstRunConnectingPolicy {
 
         if case .failed = session.hydrationState { return nil }
         if case .needsSetup = session.setupState { return nil }
+        if case .setupError = session.setupState { return nil }
         if case .needsAuth = session.setupState { return nil }
         if case .disconnected = session.agentState { return nil }
         if case .failed = session.agentState { return nil }

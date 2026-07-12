@@ -42,16 +42,11 @@ final class ContentSearcher: Sendable {
     ) -> AsyncThrowingStream<ContentSearchHit, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                guard let rg = await Self.discoverRg() else {
-                    continuation.finish(throwing: SearchError.rgNotFound)
-                    return
-                }
                 var deferredFailure: Error? = nil
                 for wt in worktrees {
                     if Task.isCancelled { break }
                     do {
                         try await self.streamRg(
-                            rg: rg,
                             query: query,
                             options: options,
                             worktree: wt,
@@ -86,7 +81,6 @@ final class ContentSearcher: Sendable {
     }
 
     private func streamRg(
-        rg: String,
         query: String,
         options: SearchContentOptions,
         worktree: SearchWorktree,
@@ -114,9 +108,30 @@ final class ContentSearcher: Sendable {
         args.append(".")
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: rg)
-        process.arguments = args
-        process.currentDirectoryURL = worktree.absolutePath
+        if let host = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path) {
+            let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host)
+            guard capabilities?.hasRipgrep == true else {
+                try await streamGitGrep(
+                    query: query,
+                    options: options,
+                    worktree: worktree,
+                    into: continuation
+                )
+                return
+            }
+            let invocation = RemoteContentSearch.rgInvocation(
+                host: host,
+                cwd: worktree.absolutePath.path,
+                rgArgs: args
+            )
+            process.executableURL = URL(fileURLWithPath: invocation.executable)
+            process.arguments = invocation.args
+        } else {
+            guard let rg = await Self.discoverRg() else { throw SearchError.rgNotFound }
+            process.executableURL = URL(fileURLWithPath: rg)
+            process.arguments = args
+            process.currentDirectoryURL = worktree.absolutePath
+        }
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -200,6 +215,122 @@ final class ContentSearcher: Sendable {
     /// the blocking `availableData` calls cannot occupy Swift's cooperative
     /// executor, and it starts before `process.run()` so pipe output is drained
     /// concurrently with the child.
+
+    /// Buffered fallback for remote hosts without ripgrep. `Process.git` is
+    /// already remote-aware, so it runs this command through the same batch
+    /// ssh transport while preserving the normal local Git environment.
+    private func streamGitGrep(
+        query: String,
+        options: SearchContentOptions,
+        worktree: SearchWorktree,
+        into continuation: AsyncThrowingStream<ContentSearchHit, Error>.Continuation
+    ) async throws {
+        let result: ProcessResult
+        if let host = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path) {
+            let invocation = RemoteContentSearch.cappedGitGrepInvocation(
+                host: host,
+                cwd: worktree.absolutePath.path,
+                query: query,
+                options: options
+            )
+            result = try await Process.run(invocation.executable, args: invocation.args, timeout: 60)
+        } else {
+            result = try await Process.git(
+                RemoteContentSearch.gitGrepArgs(query: query, options: options),
+                cwd: worktree.absolutePath,
+                timeout: 60
+            )
+        }
+        // git grep uses 1 for a valid search without matches.
+        guard result.exitCode == 0 || result.exitCode == 1 else {
+            throw SearchError.rgFailed(exitCode: result.exitCode)
+        }
+
+        var emitted = 0
+        for line in result.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            if Task.isCancelled { throw CancellationError() }
+            guard emitted < RemoteContentSearch.maxGitGrepHits else {
+                logger.notice("remote git grep hit cap (\(RemoteContentSearch.maxGitGrepHits))")
+                break
+            }
+            guard let parsed = RemoteContentSearch.parseGitGrepLine(String(line)) else { continue }
+            continuation.yield(makeGitGrepHit(
+                parsed,
+                worktree: worktree,
+                query: query,
+                options: options
+            ))
+            emitted += 1
+        }
+    }
+
+    private func makeGitGrepHit(
+        _ parsed: (path: String, line: Int, column: Int, text: String),
+        worktree: SearchWorktree,
+        query: String,
+        options: SearchContentOptions
+    ) -> ContentSearchHit {
+        let raw = parsed.text
+        let fallbackStart = max(0, parsed.column - 1)
+        let startByte = min(fallbackStart, raw.utf8.count)
+        let endByte = gitGrepMatchEndByte(in: raw, startByte: startByte, query: query, options: options)
+        let column = charOffset(forByteOffset: startByte, in: raw).map { $0 + 1 } ?? (startByte + 1)
+        let revealColumn = utf16Offset(forByteOffset: startByte, in: raw).map { $0 + 1 } ?? column
+        let (snippet, matchCharRange) = windowSnippet(
+            raw: raw,
+            matchStartByte: startByte,
+            matchEndByte: endByte
+        )
+        return ContentSearchHit(
+            worktreeId: worktree.id,
+            projectId: worktree.projectId,
+            relativePath: parsed.path,
+            line: parsed.line,
+            column: column,
+            revealColumn: revealColumn,
+            snippet: snippet,
+            matchCharRange: matchCharRange
+        )
+    }
+
+    private func gitGrepMatchEndByte(
+        in text: String,
+        startByte: Int,
+        query: String,
+        options: SearchContentOptions
+    ) -> Int {
+        guard startByte >= 0, startByte <= text.utf8.count else { return startByte }
+        let utf8Index = text.utf8.index(text.utf8.startIndex, offsetBy: startByte)
+        guard let startIndex = utf8Index.samePosition(in: text) else { return startByte }
+        let suffix = String(text[startIndex...])
+        guard let matchRange = firstMatchRange(in: suffix, query: query, options: options),
+              matchRange.lowerBound == suffix.startIndex
+        else {
+            return min(text.utf8.count, startByte + query.utf8.count)
+        }
+        return startByte + suffix[..<matchRange.upperBound].utf8.count
+    }
+
+    private func firstMatchRange(
+        in text: String,
+        query: String,
+        options: SearchContentOptions
+    ) -> Range<String.Index>? {
+        let caseInsensitive = !options.caseSensitive && !query.contains(where: \.isUppercase)
+        if !options.regex {
+            return text.range(
+                of: query,
+                options: caseInsensitive ? [.caseInsensitive] : []
+            )
+        }
+
+        let regexOptions: NSRegularExpression.Options = caseInsensitive ? [.caseInsensitive] : []
+        guard let regex = try? NSRegularExpression(pattern: query, options: regexOptions),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
+        else { return nil }
+        return Range(match.range, in: text)
+    }
+
     private func readAllLines(
         handle: FileHandle,
         worktree: SearchWorktree,

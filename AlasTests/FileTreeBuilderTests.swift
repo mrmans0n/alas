@@ -90,6 +90,19 @@ struct FileTreeBuilderTests {
         #expect(buildDir.children == nil)
     }
 
+    @Test func requestedDirectoryWithLoadedChildrenMustNotBeLazy() {
+        let tree = FileTreeBuilder.build(
+            paths: ["src", "src/App.swift"],
+            badges: [:],
+            directories: ["src"],
+            lazyDirectories: []
+        )
+
+        let src = tree.first { $0.path == "src" }!
+        #expect(src.childrenState == .loaded)
+        #expect(src.children?.map(\.path) == ["src/App.swift"])
+    }
+
     @Test func preservesUntrackedStatusBadgeSeparatelyFromVisibility() {
         let tree = FileTreeBuilder.build(
             paths: ["new.txt"],

@@ -63,6 +63,11 @@ final class ProjectsManager {
     ) {
         self.projects = persistedProjects
         self.defaultOrderingSource = defaultOrdering
+        for project in persistedProjects {
+            if let host = project.host {
+                RemoteHostRegistry.shared.register(root: project.path, host: host)
+            }
+        }
     }
 
     /// Replace the live source of the global default sort mode. The closure is
@@ -79,12 +84,24 @@ final class ProjectsManager {
         path: URL,
         displayName: String,
         icon: ProjectIcon,
+        host: String? = nil,
         id: String = UUID().uuidString
     ) async throws -> ProjectConfig {
-        let isRepo = try await git.isGitRepository(path)
-        guard isRepo else {
-            throw NSError(domain: "ProjectsManager", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
+        let worktreeRootsByProject = worktreesByProject.mapValues { $0.map(\.path.path) }
+        try Self.ensureNoPathCollision(
+            newRoot: path.path,
+            newHost: host,
+            existing: projects,
+            existingWorktreeRootsByProject: worktreeRootsByProject
+        )
+        if let host {
+            try await RemoteRepoValidator.validate(host: host, path: path.path)
+        } else {
+            let isRepo = try await git.isGitRepository(path)
+            guard isRepo else {
+                throw NSError(domain: "ProjectsManager", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Not a git repository: \(path.path)"])
+            }
         }
         let project = ProjectConfig(
             id: id,
@@ -92,8 +109,12 @@ final class ProjectsManager {
             path: path.path,
             color: icon.color,
             addedAt: Date(),
-            icon: icon
+            icon: icon,
+            host: host
         )
+        if let host {
+            RemoteHostRegistry.shared.register(root: path.path, host: host)
+        }
         projects.append(project)
         return project
     }
@@ -112,7 +133,14 @@ final class ProjectsManager {
         )
     }
 
-    func removeProject(id: String) {
+    func removeProject(id: String, unregisterRemoteRoots: Bool = true) {
+        if unregisterRemoteRoots,
+           let project = projects.first(where: { $0.id == id }), project.host != nil {
+            RemoteHostRegistry.shared.unregister(root: project.path)
+            for worktree in worktreesByProject[id, default: []] {
+                RemoteHostRegistry.shared.unregister(root: worktree.path.path)
+            }
+        }
         let ids = Set(worktreesByProject[id, default: []].map(\.id))
         projects.removeAll { $0.id == id }
         worktreesByProject.removeValue(forKey: id)
@@ -340,6 +368,7 @@ final class ProjectsManager {
         for id in clearOperationIds {
             worktreeOperationStates.removeValue(forKey: id)
         }
+        reconcileRemoteHostRegistrations(project: project, previous: previous, reconciled: reconciled)
         worktreesByProject[projectId] = reconciled
         let orderChanged = applyWorktreeOrdering(projectId: projectId)
 
@@ -348,6 +377,45 @@ final class ProjectsManager {
         let before = projects[idx].hiddenWorktreePaths.count
         projects[idx].hiddenWorktreePaths.removeAll { !live.contains($0) }
         return orderChanged || projects[idx].hiddenWorktreePaths.count != before
+    }
+
+    func reconcileRemoteHostRegistrations(project: ProjectConfig, previous: [Worktree], reconciled: [Worktree]) {
+        guard let host = project.host else { return }
+        let liveRoots = Set(reconciled.map { $0.path.path })
+        for worktree in previous where !liveRoots.contains(worktree.path.path) {
+            RemoteHostRegistry.shared.unregister(root: worktree.path.path)
+        }
+        for worktree in reconciled {
+            RemoteHostRegistry.shared.register(root: worktree.path.path, host: host)
+        }
+    }
+
+    /// Remote and local roots must not overlap: a prefix collision would make
+    /// host routing ambiguous. Existing local-to-local nesting remains valid.
+    nonisolated static func ensureNoPathCollision(
+        newRoot: String,
+        newHost: String?,
+        existing: [ProjectConfig],
+        existingWorktreeRootsByProject: [String: [String]] = [:]
+    ) throws {
+        func overlaps(_ lhs: String, _ rhs: String) -> Bool {
+            lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
+        }
+
+        for project in existing {
+            let roots = [project.path] + existingWorktreeRootsByProject[project.id, default: []]
+            for root in roots {
+                let bothLocal = newHost == nil && project.host == nil
+                let sameHost = newHost != nil && newHost == project.host
+                if bothLocal || sameHost { continue }
+                if !overlaps(newRoot, root) { continue }
+                throw NSError(
+                    domain: "ProjectsManager",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Path \(newRoot) collides with existing project \(project.name) (\(root)). Remote and local project roots must not overlap."]
+                )
+            }
+        }
     }
 
     /// Refresh every project. Returns `true` when at least one project's

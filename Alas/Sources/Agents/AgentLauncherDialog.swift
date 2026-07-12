@@ -428,7 +428,9 @@ struct AgentLauncherDialog: View {
         case .terminal:
             guard let worktree = selectedWorktree() else { close()
             return }
-            _ = try? appState.openAgentTerminalTab(for: worktree, agentId: agent.id)
+            Task { @MainActor in
+                _ = try? await appState.openAgentTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, agentId: agent.id)
+            }
         case .acp:
             beginSessionBrowser(for: agent)
             return

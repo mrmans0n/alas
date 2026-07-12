@@ -35,7 +35,11 @@ struct WorktreeService {
     func list(repoPath: URL, projectId: String) async throws -> [Worktree] {
         let result = try await Process.git(["worktree", "list", "--porcelain"], cwd: repoPath)
         guard result.exitCode == 0 else { throw WorktreeError.gitFailed(result.stderr) }
-        return Self.parsePorcelain(result.stdout, projectId: projectId)
+        var trees = Self.parsePorcelain(result.stdout, projectId: projectId)
+        if let host = RemoteHostRegistry.shared.host(forPath: repoPath.path) {
+            trees = await Self.fillingRemoteLastActivity(trees, host: host)
+        }
+        return trees
     }
 
     /// Returns a best-effort "last activity" timestamp for the worktree at
@@ -45,6 +49,7 @@ struct WorktreeService {
     /// Falls back through packed-refs, HEAD's own mtime, and the worktree
     /// directory mtime if any layer can't be resolved.
     static func lastActivity(forWorktreeAt path: URL) -> Date? {
+        if path.isRemoteAlasPath { return nil }
         let fm = FileManager.default
 
         func mtime(of pathStr: String) -> Date? {
@@ -111,6 +116,34 @@ struct WorktreeService {
         // (it's rewritten on each detached commit/checkout).
         if let m = mtime(of: headPath) { return m }
         return dirMtime()
+    }
+
+    static func date(fromEpochOutput output: String) -> Date? {
+        TimeInterval(output.trimmingCharacters(in: .whitespacesAndNewlines)).map(Date.init(timeIntervalSince1970:))
+    }
+
+    private static func fillingRemoteLastActivity(_ trees: [Worktree], host: String) async -> [Worktree] {
+        await withTaskGroup(of: (Int, Date?).self) { group in
+            for (index, tree) in trees.enumerated() {
+                group.addTask {
+                    let invocation = GitInvocation.build(
+                        gitArgs: ["log", "-1", "--format=%ct", "HEAD"],
+                        cwd: tree.path,
+                        host: host
+                    )
+                    let result = try? await Process.run(
+                        invocation.executable,
+                        args: invocation.args,
+                        cwd: invocation.cwd,
+                        env: invocation.env
+                    )
+                    return (index, result.flatMap { $0.exitCode == 0 ? date(fromEpochOutput: $0.stdout) : nil })
+                }
+            }
+            var trees = trees
+            for await (index, date) in group where date != nil { trees[index].lastActivity = date! }
+            return trees
+        }
     }
 
     static func parsePorcelain(_ out: String, projectId: String) -> [Worktree] {

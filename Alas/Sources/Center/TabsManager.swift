@@ -1622,6 +1622,40 @@ final class TabsManager {
         return errors
     }
 
+    @discardableResult
+    func saveAllAwaitingRemote(worktreeRoots: [String: URL] = [:]) async -> [(tabId: TabID, error: Error)] {
+        var errors: [(TabID, Error)] = []
+        var saved = Set<ObjectIdentifier>()
+        for (tabId, key) in bufferKeys {
+            guard let buffer = buffers[key], buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
+        for (worktreeId, file) in byWorktree {
+            guard let root = worktreeRoots[worktreeId] else { continue }
+            for tab in file.tabs {
+                guard case .editor(let state) = tab,
+                      peekBuffer(tabId: state.id) == nil,
+                      (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
+                guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+                do {
+                    try await buffer.saveRecordingErrorAwaitingRemote()
+                    buffer.close(persistDirtySnapshot: false)
+                } catch {
+                    errors.append((state.id, error))
+                    buffer.close(persistDirtySnapshot: true)
+                }
+            }
+        }
+        return errors
+    }
+
     /// Save all unsaved buffers for a single worktree. Mirrors the snapshot-
     /// materialize pattern from `saveAll(worktreeRoots:)` but scoped to one
     /// worktree so archive/delete can save before teardown.
@@ -1652,6 +1686,41 @@ final class TabsManager {
             guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
             do {
                 try buffer.saveRecordingError()
+                buffer.close(persistDirtySnapshot: false)
+            } catch {
+                errors.append((state.id, error))
+                buffer.close(persistDirtySnapshot: true)
+            }
+        }
+        return errors
+    }
+
+    @discardableResult
+    func saveAllUnsavedAwaitingRemote(forWorktree worktreeId: String, root: URL) async -> [(tabId: TabID, error: Error)] {
+        var errors: [(TabID, Error)] = []
+        var saved = Set<ObjectIdentifier>()
+        // Pass 1: live dirty buffers belonging to this worktree.
+        for (tabId, key) in bufferKeys {
+            guard key.worktreeId == worktreeId,
+                  let buffer = buffers[key], buffer.dirty else { continue }
+            let id = ObjectIdentifier(buffer)
+            guard !saved.contains(id) else { continue }
+            saved.insert(id)
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
+            } catch {
+                errors.append((tabId, error))
+            }
+        }
+        // Pass 2: editor tabs with no live buffer but a persisted snapshot.
+        guard let file = byWorktree[worktreeId] else { return errors }
+        for tab in file.tabs {
+            guard case .editor(let state) = tab,
+                  peekBuffer(tabId: state.id) == nil,
+                  (try? bufferStore.read(worktreeId: worktreeId, tabId: state.id)) != nil else { continue }
+            guard let buffer = materializeSnapshotBufferForSave(worktreeId: worktreeId, tabId: state.id, worktreeRoot: root, relativePath: state.relativePath) else { continue }
+            do {
+                try await buffer.saveRecordingErrorAwaitingRemote()
                 buffer.close(persistDirtySnapshot: false)
             } catch {
                 errors.append((state.id, error))

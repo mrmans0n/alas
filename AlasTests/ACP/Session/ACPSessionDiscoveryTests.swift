@@ -163,7 +163,7 @@ struct ACPSessionDiscoveryTests {
             worktreePath: "/tmp/wt",
             store: store,
             setupEvaluator: { _ in .ready },
-            connectionFactory: { _ in ACPConnection(client: client) }
+            connectionFactory: { _, _, _ in ACPConnection(client: client) }
         )
     }
 

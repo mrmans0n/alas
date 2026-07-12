@@ -250,25 +250,27 @@ struct NewWorktreeDialog: View {
                 surface = .acp(agentId: launchAgentId)
             }
         }
-        let id = state.createWorktree(
-            projectId: project.id,
-            base: base,
-            branch: branch,
-            destination: dest,
-            runStartup: runStartup,
-            launchSurface: surface
-        )
-        guard !id.isEmpty else {
-            createErrorMessage = "A worktree already exists at this path."
-            return
+        Task { @MainActor in
+            let id = await state.createWorktree(
+                projectId: project.id,
+                base: base,
+                branch: branch,
+                destination: dest,
+                runStartup: runStartup,
+                launchSurface: surface
+            )
+            guard !id.isEmpty else {
+                createErrorMessage = "A worktree already exists at this path."
+                return
+            }
+            state.setWorktreeLaunchDefaults(
+                projectId: project.id,
+                openAfterCreate: openAfterCreate,
+                launcherMode: persistableLaunchMode
+            )
+            createErrorMessage = nil
+            presented = false
         }
-        state.setWorktreeLaunchDefaults(
-            projectId: project.id,
-            openAfterCreate: openAfterCreate,
-            launcherMode: persistableLaunchMode
-        )
-        createErrorMessage = nil
-        presented = false
     }
 
     private func submitCreate() {

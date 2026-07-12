@@ -118,9 +118,7 @@ final class DiffPaneLSPDocumentRetain {
         open: Open,
         close: @escaping Close
     ) async throws -> DiffPaneLSPDocumentRetain {
-        let text = try await Task.detached(priority: .userInitiated) {
-            try String(contentsOf: fileURL, encoding: .utf8)
-        }.value
+        let text = try await fileText(at: fileURL)
         let client = await open(worktreeRoot, fileURL, language, text)
         return DiffPaneLSPDocumentRetain(
             worktreeRoot: worktreeRoot,
@@ -135,6 +133,20 @@ final class DiffPaneLSPDocumentRetain {
         guard !didClose else { return }
         didClose = true
         await closeDocument(worktreeRoot, fileURL, language)
+    }
+
+    fileprivate static func fileText(at fileURL: URL) async throws -> String {
+        if let host = RemoteHostRegistry.shared.host(forPath: fileURL.path) {
+            guard case let .file(data, _) = try await RemoteFileAccess.read(host: host, path: fileURL.path),
+                  let text = String(data: data, encoding: .utf8)
+            else {
+                throw CocoaError(.fileReadInapplicableStringEncoding)
+            }
+            return text
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            try String(contentsOf: fileURL, encoding: .utf8)
+        }.value
     }
 
     deinit {
@@ -351,16 +363,17 @@ final class DiffPaneLSPController {
         let fileURL = context.fileURL
         let lineNumber = match.position.line
         let sourceText = match.sourceText
-        let diskMatches = await Task.detached(priority: .userInitiated) {
-            guard let text = try? String(contentsOf: fileURL, encoding: .utf8) else {
-                return false
-            }
+        let diskMatches: Bool
+        do {
+            let text = try await DiffPaneLSPDocumentRetain.fileText(at: fileURL)
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
             guard lineNumber >= 0, lineNumber < lines.count else {
                 return false
             }
-            return String(lines[lineNumber]) == sourceText
-        }.value
+            diskMatches = String(lines[lineNumber]) == sourceText
+        } catch {
+            diskMatches = false
+        }
         guard diskMatches else { return false }
         if let lspMatches = context.lsp.openedDocumentLineMatches(
             forFile: fileURL,

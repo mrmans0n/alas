@@ -228,6 +228,7 @@ private struct ACPSessionView: View {
         if session.hydrationState == .loading { return true }
         guard manager.runners[sessionId] == nil else { return false }
         if case .needsSetup = session.setupState { return false }
+        if case .setupError = session.setupState { return false }
         if case .needsAuth = session.setupState { return false }
         if session.lastError != nil { return false }
         if session.agentState == .disconnected { return false }
@@ -587,6 +588,12 @@ private struct ACPSessionView: View {
                 } else if case .needsSetup(let reason) = session.setupState {
                     setupReasonBanner(reason: reason)
                 }
+            case .none:
+                if case .setupError(let reason) = session.setupState {
+                    setupReasonBanner(reason: reason)
+                } else {
+                    EmptyView()
+                }
             case .showUpdate(let current, let latest):
                 if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
                     ACPSetupNudgeBanner(
@@ -691,15 +698,17 @@ private struct ACPSessionView: View {
             session.lastError = "Failed to launch auth terminal: unsupported sign-in method."
             return
         }
-        do {
-            _ = try state.openACPAuthTerminalTab(for: worktree, command: command) {
-                Task { @MainActor in
-                    session.pendingAuthMethodId = method.id
-                    await reattachAndRefreshAdapterUpdateState()
+        Task { @MainActor in
+            do {
+                _ = try await state.openACPAuthTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, command: command) {
+                    Task { @MainActor in
+                        session.pendingAuthMethodId = method.id
+                        await reattachAndRefreshAdapterUpdateState()
+                    }
                 }
+            } catch {
+                session.lastError = "Failed to launch auth terminal: \(error.localizedDescription)"
             }
-        } catch {
-            session.lastError = "Failed to launch auth terminal: \(error.localizedDescription)"
         }
     }
 

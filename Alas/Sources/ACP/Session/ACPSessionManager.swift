@@ -17,7 +17,11 @@ private enum ACPMirrorRefreshPolicy {
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
-    typealias ACPConnectionFactory = @MainActor (_ spec: ACPLaunchSpec) throws -> ACPConnection
+    typealias ACPConnectionFactory = @MainActor (
+        _ spec: ACPLaunchSpec,
+        _ host: String?,
+        _ worktreePath: String
+    ) throws -> ACPConnection
     typealias MCPProjectContextProvider = @MainActor () -> MCPProjectContext?
 
     let instanceId: String
@@ -47,6 +51,7 @@ final class ACPSessionManager: ObservableObject {
     private var draftFlushHandoffSequence: UInt64 = 0
     private(set) var runners: [ACPSession.ID: ACPSessionRunner] = [:]
     private var elicitationCoordinators: [ACPSession.ID: ACPElicitationCoordinator] = [:]
+    private var autoReconnectTasks: [ACPSession.ID: Task<Void, Never>] = [:]
     #if DEBUG
     /// Number of attached runners. Public-but-namespaced read accessor for
     /// `MemoryDiagnostics`; we don't expose the runner instances themselves.
@@ -291,9 +296,23 @@ final class ACPSessionManager: ObservableObject {
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             return await checker.evaluate(spec.setupCheck)
         }
-        self.connectionFactory = connectionFactory ?? { spec in
+        self.connectionFactory = connectionFactory ?? { spec, host, worktreePath in
             let client: ACPStdioClient
-            if spec.command.hasPrefix("/") {
+            if let host {
+                let invocation = ACPRemoteLaunch.channelInvocation(
+                    host: host,
+                    worktreePath: worktreePath,
+                    command: spec.command,
+                    arguments: spec.arguments
+                )
+                // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
+                // HOME, and any host-specific connection configuration.
+                client = try ACPStdioClient(
+                    executable: URL(fileURLWithPath: invocation.executable),
+                    arguments: invocation.args,
+                    environment: nil
+                )
+            } else if spec.command.hasPrefix("/") {
                 client = try ACPStdioClient(
                     executable: URL(fileURLWithPath: spec.command),
                     arguments: spec.arguments,
@@ -705,6 +724,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func closeSession(id: ACPSession.ID) {
+        autoReconnectTasks.removeValue(forKey: id)?.cancel()
         // Flush any pending draft write before dropping the in-memory
         // session reference — otherwise a tab-switch-while-typing
         // window can lose the last ~300ms of input.
@@ -723,6 +743,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deleteSession(id: ACPSession.ID) {
+        autoReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
         inFlightBackfills[id] = nil
@@ -1229,12 +1250,14 @@ final class ACPSessionManager: ObservableObject {
         guard let spec = ACPLaunchCatalog.spec(for: agentId) else {
             throw ACPSessionDiscoveryError.noLaunchSpec(agentId)
         }
-        let setup = await setupEvaluator(spec)
+        let setup = await evaluateSetup(for: spec)
         guard case .ready = setup else {
             throw ACPSessionDiscoveryError.setupRequired(setup.reasonText)
         }
 
-        let connection = try connectionFactory(await resolvedLaunchSpec(for: spec))
+        let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
+        let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+        let connection = try connectionFactory(launchSpec, host, worktreePath)
         do {
             let initialized = try await connection.initialize()
             guard initialized.sessionCapabilities.supportsList else {
@@ -1606,6 +1629,7 @@ extension ACPSessionManager {
             await runner.flushPersistence()
             await runner.connection.shutdown()
         }
+        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
         elicitationCoordinators.removeValue(forKey: sessionId)?.stop()
         if let session = sessions[sessionId] {
             session.agentState = .idle
@@ -1932,9 +1956,9 @@ extension ACPSessionManager {
             await releaseWriterLease(sessionId: sessionId)
             return
         }
-        let setup = await setupEvaluator(spec)
+        let setup = await evaluateSetup(for: spec)
         guard case .ready = setup else {
-            session.setupState = .needsSetup(reason: setup.reasonText)
+            session.setupState = setup.sessionSetupState
             session.agentState = .failed(setup.reasonText)
             await releaseWriterLease(sessionId: sessionId)
             return
@@ -1946,7 +1970,9 @@ extension ACPSessionManager {
 
         let connection: ACPConnection
         do {
-            connection = try connectionFactory(await resolvedLaunchSpec(for: spec))
+            let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
+            let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
+            connection = try connectionFactory(launchSpec, host, worktreePath)
         } catch {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
@@ -2000,6 +2026,16 @@ extension ACPSessionManager {
                 capabilities: initialized.mcpCapabilities
             ))
             session.mcpAttachmentSummary = .init(plan: mcpPlan)
+            let mcpSplit = RemoteHostRegistry.shared.host(forPath: worktreePath).map { _ in
+                ACPRemoteMCPFilter.split(mcpPlan.wireServers)
+            }
+            let wireMCPServers = mcpSplit?.kept ?? mcpPlan.wireServers
+            let remoteMCPNotice: String?
+            if let mcpSplit, !mcpSplit.droppedStdio.isEmpty {
+                remoteMCPNotice = "MCP servers unavailable on remote host: \(mcpSplit.droppedStdio.joined(separator: ", "))"
+            } else {
+                remoteMCPNotice = nil
+            }
             if let pendingAuthMethodId = session.pendingAuthMethodId {
                 do {
                     try await connection.authenticate(methodId: pendingAuthMethodId)
@@ -2066,6 +2102,11 @@ extension ACPSessionManager {
                                           leaseFenceProvider: { [weak self] in
                                               self?.leaseFence(sessionId: sessionId)
                                           })
+            runner.onUnexpectedDisconnect = { [weak self] in
+                Task { @MainActor in
+                    self?.scheduleAutoReconnect(sessionId: sessionId)
+                }
+            }
             var runnerStarted = false
             func startRunnerIfNeeded() {
                 guard !runnerStarted else { return }
@@ -2085,7 +2126,7 @@ extension ACPSessionManager {
                 session.firstRunConnectingPhase = .creatingSession
             }
             if freshlyCreated {
-                result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
+                result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
             } else if let remoteId = session.remoteSessionId, !remoteId.isEmpty {
                 if session.hasConversationTranscript {
                     session.contextRecoveryStatus = .restoring
@@ -2094,7 +2135,7 @@ extension ACPSessionManager {
                 case .resume:
                     do {
                         result = try await connection.resumeSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: mcpPlan.wireServers)
+                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
                         if !pendingRecovery {
                             session.contextRecoveryStatus = nil
                         }
@@ -2108,7 +2149,7 @@ extension ACPSessionManager {
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
-                        result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
+                        result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             if isWriter(for: sessionId) {
@@ -2128,7 +2169,7 @@ extension ACPSessionManager {
                 case .loadStrict:
                     do {
                         result = try await connection.loadSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: mcpPlan.wireServers)
+                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2144,7 +2185,7 @@ extension ACPSessionManager {
                 case .loadWithRecovery:
                     do {
                         result = try await connection.loadSession(
-                            cwd: worktreePath, sessionId: remoteId, mcpServers: mcpPlan.wireServers)
+                            cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
@@ -2158,7 +2199,7 @@ extension ACPSessionManager {
                         if ACPAuthFailure.message(from: error) != nil {
                             throw error
                         }
-                        result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
+                        result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
                         if session.hasConversationTranscript {
                             shouldHoldQueueForRecovery = true
                             // Guard the store write: if another instance took over
@@ -2182,7 +2223,7 @@ extension ACPSessionManager {
                     throw ACPSessionAttachError.remoteSessionUnsupported
                 }
             } else {
-                result = try await connection.newSession(cwd: worktreePath, mcpServers: mcpPlan.wireServers)
+                result = try await connection.newSession(cwd: worktreePath, mcpServers: wireMCPServers)
                 if session.hasConversationTranscript {
                     shouldHoldQueueForRecovery = true
                     // Guard the store write: if another instance took over
@@ -2246,6 +2287,9 @@ extension ACPSessionManager {
             keepElicitationCoordinator = true
             attachSucceeded = true
             session.agentState = .ready
+            if let remoteMCPNotice {
+                runner.appendAndPersistSystemNotice(remoteMCPNotice)
+            }
             if shouldHoldQueueForRecovery {
                 sendTranscriptAsContext(sessionId: sessionId, agentName: nil)
             } else {
@@ -2303,6 +2347,45 @@ extension ACPSessionManager {
         case .spawning, .ready: return
         case .idle, .disconnected, .failed:
             await attach(to: sessionId, freshlyCreated: false)
+        }
+    }
+
+    /// Remote SSH channel drops are commonly transient. Reuse the regular
+    /// reattach path so restoration and queued-prompt handling stay identical.
+    func scheduleAutoReconnect(sessionId: ACPSession.ID) {
+        guard sessions[sessionId] != nil,
+              RemoteHostRegistry.shared.host(forPath: worktreePath) != nil
+        else { return }
+
+        autoReconnectTasks.removeValue(forKey: sessionId)?.cancel()
+        autoReconnectTasks[sessionId] = Task { @MainActor [weak self] in
+            defer {
+                self?.autoReconnectTasks.removeValue(forKey: sessionId)
+                self?.sessions[sessionId]?.autoReconnecting = false
+            }
+            self?.sessions[sessionId]?.autoReconnecting = true
+            var attempt = 0
+            while let delay = ACPReconnectPolicy.delay(forAttempt: attempt), !Task.isCancelled {
+                attempt += 1
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled,
+                      let session = self.sessions[sessionId]
+                else { return }
+                switch session.agentState {
+                case .ready:
+                    return
+                case .disconnected, .failed:
+                    break
+                case .idle, .spawning:
+                    continue
+                }
+                if let host = RemoteHostRegistry.shared.host(forPath: self.worktreePath),
+                   RemoteHostStatusStore.shared.isOffline(host) {
+                    continue
+                }
+                await self.reattach(to: sessionId)
+                if self.sessions[sessionId]?.agentState == .ready { return }
+            }
         }
     }
 
@@ -2440,14 +2523,45 @@ extension ACPSessionManager {
     /// Swap `spec.command` for the verified absolute launch path when one can
     /// be resolved (npm-backed adapters); otherwise return `spec` unchanged so
     /// launch falls back to PATH-based `/usr/bin/env <command>`.
-    private func resolvedLaunchSpec(for spec: ACPLaunchSpec) async -> ACPLaunchSpec {
-        let env = ProcessInfo.processInfo.environment
-        let resolver = ACPLaunchPathResolver(
-            env: env,
-            additionalPathDirectories: AgentPath.wellKnownDirectories,
-            npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
-        guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
-        return spec.overridingCommand(path)
+    private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async -> ACPLaunchSpec {
+        if let host {
+            guard let command = ACPRemoteLaunch.launchPathProbeCommand(for: spec),
+                  let probe = try? await RemoteExec.run(host: host, cwd: nil, command: command),
+                  probe.exitCode == 0
+            else {
+                return spec
+            }
+            let path = probe.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            return path.isEmpty ? spec : spec.overridingCommand(path)
+        } else {
+            let env = ProcessInfo.processInfo.environment
+            let resolver = ACPLaunchPathResolver(
+                env: env,
+                additionalPathDirectories: AgentPath.wellKnownDirectories,
+                npmGlobalBinDirectory: ACPLaunchPathResolver.defaultNpmGlobalBinDirectory(env: env))
+            guard let path = await resolver.resolvedLaunchPath(for: spec) else { return spec }
+            return spec.overridingCommand(path)
+        }
+    }
+
+    private func evaluateSetup(for spec: ACPLaunchSpec) async -> ACPSetupResult {
+        guard let host = RemoteHostRegistry.shared.host(forPath: worktreePath) else {
+            return await setupEvaluator(spec)
+        }
+
+        do {
+            let probe = try await RemoteExec.run(
+                host: host,
+                cwd: nil,
+                command: ACPRemoteLaunch.setupProbeCommand(check: spec.setupCheck)
+            )
+            guard probe.exitCode == 0 else {
+                return .error(message: "Required agent setup for \(spec.agentID) is missing on \(host)")
+            }
+            return .ready
+        } catch {
+            return .error(message: "Could not verify \(spec.command) on \(host): \(error.localizedDescription)")
+        }
     }
 
     private func handleAuthRequiredRunner(
@@ -2521,6 +2635,14 @@ private extension ACPSetupResult {
         case .ready: return ""
         case .missing(let r): return r
         case .error(let m): return m
+        }
+    }
+
+    var sessionSetupState: ACPSession.SetupState {
+        switch self {
+        case .ready: return .ready
+        case .missing(let reason): return .needsSetup(reason: reason)
+        case .error(let message): return .setupError(reason: message)
         }
     }
 }
