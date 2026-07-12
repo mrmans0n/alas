@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-12
+
+### 🐛 Fixes
+
+- Move ACP session persistence off the main actor (#740).
+- Avoid ACP message copies in transcript rows (#747).
+- Stabilize ACP transcript tail scrolling (#748).
+- Avoid main-thread process and file stalls (#742).
+
 ## [0.9.0] - 2026-07-12
 
 ### ✨ Features
