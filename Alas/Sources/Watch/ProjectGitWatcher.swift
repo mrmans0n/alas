@@ -2,6 +2,27 @@ import Foundation
 import CoreServices
 import os
 
+private final class ProjectGitWatcherStreamContext {
+    weak var watcher: ProjectGitWatcher?
+    let gitDir: URL
+    let worktreeRoot: URL
+
+    init(watcher: ProjectGitWatcher, gitDir: URL, worktreeRoot: URL) {
+        self.watcher = watcher
+        self.gitDir = gitDir
+        self.worktreeRoot = worktreeRoot
+    }
+}
+
+private struct ProjectGitWatcherStreamBatch {
+    var headFiles: Set<URL> = []
+    var sawTopology = false
+
+    var hasChanges: Bool {
+        !headFiles.isEmpty || sawTopology
+    }
+}
+
 /// Per-project FSEvents watcher rooted at the project's resolved `.git`
 /// directory. Splits events into a fast HEAD-only path (callback emits
 /// `[worktreeRoot: branchLabel]` read directly from disk) and a slow
@@ -11,6 +32,13 @@ import os
 @MainActor
 final class ProjectGitWatcher {
     typealias GitInfo = (gitDir: URL, worktreeRoot: URL)
+
+    nonisolated private static let eventQueueKey = DispatchSpecificKey<Void>()
+    nonisolated private static let eventQueue: DispatchQueue = {
+        let queue = DispatchQueue(label: "io.nlopez.alas.project-git-watcher", qos: .utility)
+        queue.setSpecific(key: eventQueueKey, value: ())
+        return queue
+    }()
 
     var onHeadChanged: (([URL: String]) -> Void)?
     var onTopologyChanged: (() -> Void)?
@@ -104,10 +132,8 @@ final class ProjectGitWatcher {
         startGeneration += 1
         isRunning = false
         if let stream {
-            FSEventStreamStop(stream)
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
             self.stream = nil
+            Self.releaseStream(stream)
         }
         headDebouncer.cancel()
         topologyDebouncer.cancel()
@@ -121,54 +147,11 @@ final class ProjectGitWatcher {
     /// deterministically.
     func processEvents(_ paths: [String]) {
         guard let gitDir = resolvedGitDir, let worktreeRoot = resolvedWorktreeRoot else { return }
-        var sawHead = false
-        var sawTopology = false
-        for path in paths {
-            switch GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot) {
-            case .ignored, .other:
-                continue
-            case .headChange(let root):
-                pendingHeadFiles.insert(headFile(forWorktreeRoot: root, gitDir: gitDir))
-                sawHead = true
-            case .topologyChange:
-                sawTopology = true
-            }
-        }
-        if sawHead { headDebouncer.poke() }
-        if sawTopology { topologyDebouncer.poke() }
+        let batch = Self.classifyStreamEvents(paths, gitDir: gitDir, worktreeRoot: worktreeRoot)
+        processStreamBatch(batch, requireRunning: false)
     }
 
     // MARK: - Private
-
-    private func headFile(forWorktreeRoot root: URL, gitDir: URL) -> URL {
-        // Main worktree: HEAD lives at gitDir/HEAD.
-        // Use resolvedWorktreeRoot (not gitDir.deletingLastPathComponent) so
-        // that separate-gitdir repos (submodules, --separate-git-dir) work
-        // correctly when gitDir lives outside the worktree.
-        let mainRoot = resolvedWorktreeRoot?.standardizedFileURL
-        if root.standardizedFileURL.path == (mainRoot ?? gitDir.deletingLastPathComponent().standardizedFileURL).path {
-            return gitDir.appendingPathComponent("HEAD")
-        }
-        // Linked worktree: walk gitDir/worktrees/<name>/gitdir back to find
-        // which name matches this root. Rare path; small N.
-        let worktreesDir = gitDir.appendingPathComponent("worktrees")
-        let entries = (try? FileManager.default.contentsOfDirectory(
-            at: worktreesDir,
-            includingPropertiesForKeys: nil
-        )) ?? []
-        for entry in entries {
-            let gitdirFile = entry.appendingPathComponent("gitdir")
-            guard let contents = try? String(contentsOf: gitdirFile, encoding: .utf8) else { continue }
-            let gitlink = contents.trimmingCharacters(in: .whitespacesAndNewlines)
-            let candidate = URL(fileURLWithPath: gitlink).deletingLastPathComponent().standardizedFileURL
-            if candidate.path == root.standardizedFileURL.path {
-                return entry.appendingPathComponent("HEAD")
-            }
-        }
-        // Fallback: treat as main-worktree HEAD if we can't find a match.
-        // The follow-up topology refresh will reconcile.
-        return gitDir.appendingPathComponent("HEAD")
-    }
 
     private func fireHead() {
         let pending = pendingHeadFiles
@@ -219,18 +202,39 @@ final class ProjectGitWatcher {
             startStreamOverride(self, gitDir)
             return
         }
+        guard let worktreeRoot = resolvedWorktreeRoot else { return }
+        let streamContext = ProjectGitWatcherStreamContext(
+            watcher: self,
+            gitDir: gitDir,
+            worktreeRoot: worktreeRoot
+        )
         var context = FSEventStreamContext(
             version: 0,
-            info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil, release: nil, copyDescription: nil
+            info: Unmanaged.passRetained(streamContext).toOpaque(),
+            retain: nil,
+            release: { info in
+                guard let info else { return }
+                Unmanaged<ProjectGitWatcherStreamContext>.fromOpaque(info).release()
+            },
+            copyDescription: nil
         )
         let cb: FSEventStreamCallback = { _, ctx, numEvents, eventPaths, _, _ in
             guard let ctx else { return }
-            let watcher = Unmanaged<ProjectGitWatcher>.fromOpaque(ctx).takeUnretainedValue()
+            let streamContext = Unmanaged<ProjectGitWatcherStreamContext>.fromOpaque(ctx).takeUnretainedValue()
+            guard let watcher = streamContext.watcher else { return }
             let cfArray = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
             guard let paths = cfArray as? [String], paths.count == numEvents else { return }
-            // FSEvents is dispatched on .main per FSEventStreamSetDispatchQueue below.
-            MainActor.assumeIsolated { watcher.processEvents(paths) }
+            let batch = ProjectGitWatcher.classifyStreamEvents(
+                paths,
+                gitDir: streamContext.gitDir,
+                worktreeRoot: streamContext.worktreeRoot
+            )
+            guard batch.hasChanges else { return }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    watcher.processStreamBatch(batch, requireRunning: true)
+                }
+            }
         }
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault,
@@ -244,10 +248,56 @@ final class ProjectGitWatcher {
                 | kFSEventStreamCreateFlagNoDefer
                 | kFSEventStreamCreateFlagUseCFTypes
             )
-        ) else { return }
-        FSEventStreamSetDispatchQueue(stream, .main)
+        ) else {
+            Unmanaged<ProjectGitWatcherStreamContext>.fromOpaque(context.info!).release()
+            return
+        }
+        FSEventStreamSetDispatchQueue(stream, Self.eventQueue)
         FSEventStreamStart(stream)
         self.stream = stream
+    }
+
+    nonisolated private static func releaseStream(_ stream: FSEventStreamRef) {
+        let release = {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+        }
+        if DispatchQueue.getSpecific(key: eventQueueKey) != nil {
+            release()
+        } else {
+            eventQueue.sync(execute: release)
+        }
+    }
+
+    nonisolated private static func classifyStreamEvents(
+        _ paths: [String],
+        gitDir: URL,
+        worktreeRoot: URL
+    ) -> ProjectGitWatcherStreamBatch {
+        var batch = ProjectGitWatcherStreamBatch()
+        for path in paths {
+            switch GitEventFilter.classify(eventPath: path, gitDir: gitDir, worktreeRoot: worktreeRoot) {
+            case .ignored, .other:
+                continue
+            case .headChange:
+                batch.headFiles.insert(URL(fileURLWithPath: path).standardizedFileURL)
+            case .topologyChange:
+                batch.sawTopology = true
+            }
+        }
+        return batch
+    }
+
+    private func processStreamBatch(_ batch: ProjectGitWatcherStreamBatch, requireRunning: Bool) {
+        guard !requireRunning || isRunning else { return }
+        if !batch.headFiles.isEmpty {
+            pendingHeadFiles.formUnion(batch.headFiles)
+            headDebouncer.poke()
+        }
+        if batch.sawTopology {
+            topologyDebouncer.poke()
+        }
     }
 
     /// Resolves the *common* git directory and the main worktree root.
