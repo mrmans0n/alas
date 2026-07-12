@@ -265,6 +265,7 @@ final class EditorBuffer {
     ) {
         if !isExternal,
            restoreEnabled,
+           !hasPreservedPreloadEdits,
            let store, let worktreeId, let tabId,
            let snap = (try? store.read(worktreeId: worktreeId, tabId: tabId)) {
             applySnapshot(snap)

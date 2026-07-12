@@ -581,6 +581,30 @@ struct ACPComposerDraftBridgeTests {
         #expect(textView.string.isEmpty)
     }
 
+    @Test("async image paste does not replace stale selection after edit")
+    func asyncImagePasteDoesNotReplaceStaleSelectionAfterEdit() async throws {
+        let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("alas-paste-\(UUID().uuidString).png")
+        try Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")!.write(to: temp)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        let gate = ACPImageReadGate()
+        ACPNSTextView.imageFileReadGateForTesting = { await gate.wait() }
+        defer { ACPNSTextView.imageFileReadGateForTesting = nil }
+        textView.string = "replace me"
+        textView.setSelectedRange(NSRange(location: 0, length: 7))
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([temp as NSURL])
+
+        textView.paste(nil)
+        textView.setSelectedRange(NSRange(location: textView.string.count, length: 0))
+        _ = textView.insertPlainText("!")
+        await gate.open()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(textView.string.hasPrefix("replace me!"))
+        #expect(textView.string.contains("\u{fffc}"))
+    }
+
     @Test("plain paste insertion goes through NSTextView editing hooks")
     func plainPasteInsertionUsesTextViewEditingHooks() {
         let textView = ACPNSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 40))
@@ -632,6 +656,30 @@ struct ACPComposerDraftBridgeTests {
         }
 
         func snapshot() -> [ACPImageStaging.StagingError] { errors }
+    }
+
+    private actor ACPImageReadGate {
+        private var open = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                if open {
+                    continuation.resume()
+                } else {
+                    waiters.append(continuation)
+                }
+            }
+        }
+
+        func open() async {
+            open = true
+            let continuations = waiters
+            waiters.removeAll()
+            for continuation in continuations {
+                continuation.resume()
+            }
+        }
     }
 
     // MARK: - Keyboard intent resolution (doCommandBy)

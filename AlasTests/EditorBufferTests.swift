@@ -389,6 +389,32 @@ struct EditorBufferTests {
         #expect(try String(contentsOf: url, encoding: .utf8) == "typed")
     }
 
+    @Test func editBeforeAsyncLoadFinishesSkipsOlderSnapshotRestore() async throws {
+        let root = tempWorktree()
+        let url = try writeFile(root, "a.txt", "disk\n")
+        let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+        let store = EditorBufferStore(rootOverride: tempWorktree())
+        let snapshot = EditorBufferStore.Snapshot(
+            relativePath: "a.txt",
+            content: "snapshot\n",
+            originalText: "disk\n",
+            originalMtime: (attrs[.modificationDate] as? Date) ?? Date(),
+            lineEnding: .lf
+        )
+        try store.write(snapshot, worktreeId: "wt", tabId: "t")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let buffer = EditorBuffer(worktreeRoot: root, relativePath: "a.txt", store: store, worktreeId: "wt", tabId: "t")
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "typed")
+
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        #expect(buffer.storage.string == "typed")
+        #expect(buffer.originalText == "disk\n")
+    }
+
     @Test func watcherEventDuringInitialLoadTriggersReloadAfterLoadFinishes() async throws {
         let root = tempWorktree()
         _ = try writeFile(root, "a.txt", "old\n")

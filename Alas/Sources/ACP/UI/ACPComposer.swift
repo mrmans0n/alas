@@ -519,6 +519,10 @@ final class ACPNSTextView: NSTextView {
     weak var coordinator: ACPInputField.Coordinator?
     private var chatTypography: ACPChatTypography = .default
 
+    #if DEBUG
+    nonisolated(unsafe) static var imageFileReadGateForTesting: (@Sendable () async -> Void)?
+    #endif
+
     /// Greyed-out hint drawn when the storage is empty. Matches the Cursor
     /// chat composer's placeholder.
     var placeholderText: String = "Plan, ask, or build — type / for commands"
@@ -860,6 +864,11 @@ final class ACPNSTextView: NSTextView {
     /// MIME sniff happen in a `Task.detached` so the main thread isn't blocked.
     static func readImageFile(_ url: URL) async -> FileImageRead {
         await Task.detached(priority: .userInitiated) {
+            #if DEBUG
+            if let gate = await ACPNSTextView.imageFileReadGateForTesting {
+                await gate()
+            }
+            #endif
             if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                size > ACPImageStaging.maxBytes { return .tooLarge }
             guard let handle = try? FileHandle(forReadingFrom: url) else { return .unsupported }
@@ -900,13 +909,20 @@ final class ACPNSTextView: NSTextView {
         let insertionRange = selectedRange()
         Task { @MainActor [weak self] in
             var nextLocation = insertionRange.location
+            var isFirstImage = true
             for url in urls {
                 switch await Self.readImageFile(url) {
                 case .data(let data):
                     guard let self else { return }
                     let beforeLength = self.textStorage?.length ?? 0
-                    if self.insertImage(data: data, worktreeId: worktreeId, replacementRange: NSRange(location: nextLocation, length: nextLocation == insertionRange.location ? insertionRange.length : 0)) {
+                    let replacementRange = self.asyncImageReplacementRange(
+                        capturedRange: insertionRange,
+                        nextLocation: nextLocation,
+                        isFirstImage: isFirstImage
+                    )
+                    if self.insertImage(data: data, worktreeId: worktreeId, replacementRange: replacementRange) {
                         nextLocation += max(0, (self.textStorage?.length ?? 0) - beforeLength)
+                        isFirstImage = false
                     }
                 case .tooLarge:
                     self?.coordinator?.reportImageError(.tooLarge)
@@ -916,6 +932,17 @@ final class ACPNSTextView: NSTextView {
             }
         }
         return true
+    }
+
+    private func asyncImageReplacementRange(
+        capturedRange: NSRange,
+        nextLocation: Int,
+        isFirstImage: Bool
+    ) -> NSRange {
+        guard isFirstImage else { return NSRange(location: nextLocation, length: 0) }
+        let current = selectedRange()
+        guard current == capturedRange else { return NSRange(location: current.location, length: 0) }
+        return capturedRange
     }
 
     /// True when the general pasteboard currently holds a supported image.
