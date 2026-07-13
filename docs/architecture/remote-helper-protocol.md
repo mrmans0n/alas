@@ -100,11 +100,11 @@ for 250 ms before the helper sends one notification.
 `fs/read`
 
 Params: `{"path": "/srv/repo/README.md", "offset": 0}`  
-Result: `{"content": "...", "mtime": 1783940000.25}`
+Result: `{"kind":"file","contentBase64":"Li4u","mtime":1783940000.25}`
 
-The helper only reads regular files and decodes content as strict UTF-8. Binary
-or otherwise invalid UTF-8 files return an error instead of lossy replacement
-text.
+File bytes are base64 encoded so images and other binary files use the same
+operation. Non-file results use `kind` values `missing`, `directory`, `symlink`,
+or `unreadable`.
 
 `fs/write`
 
@@ -138,10 +138,52 @@ Result:
 }
 ```
 
+`fs/line-counts`
+
+Params: `{"root":"/srv/repo","paths":["README.md","src/main.swift"]}`
+Result: `{"entries":[{"path":"README.md","lineCount":42}]}`
+
+Missing and non-regular files are omitted. The request is not subject to the
+exec fallback's argv cap.
+
+`fs/list`
+
+Params: `{"path":"/srv/repo/src"}`
+Result: `{"entries":[{"name":"main.swift","isDirectory":false}]}`
+
+`search/start`
+
+Params:
+
+```json
+{
+  "root": "/srv/repo",
+  "query": "needle",
+  "caseSensitive": false,
+  "wholeWord": false,
+  "regex": false
+}
+```
+
+Result: `{"searchId":"1"}`
+
+The helper runs `rg --json` and emits each output line as a `search/event`
+notification. It finishes with `search/complete`, including ripgrep's exit code,
+bounded stderr, and whether the operation was cancelled.
+
+`search/cancel`
+
+Params: `{"searchId":"1"}`
+Result: `{"ok":true}`
+
+Cancellation kills the server-side ripgrep child without closing the helper
+channel.
+
 ## Security
 
 The helper only serves paths under registered roots. `watch/subscribe` resolves
-the requested root with the remote host filesystem. `fs/read` and `fs/stat`
+the requested root with the remote host filesystem. Reads, stats, listings,
+line counts, and searches
 resolve existing target paths and require them to be under a registered root.
 `fs/write` resolves the parent directory and requires that parent to be under a
 registered root before writing. If the final path already exists as a symlink,
@@ -164,6 +206,5 @@ range:
 | `-32021` | path does not exist |
 | `-32022` | no containment roots have been registered |
 | `-32023` | path is outside registered roots |
-| `-32024` | file content is not valid UTF-8 |
 | `-32025` | path is not a regular file |
 | `-32030` | `expectedMtime` did not match |

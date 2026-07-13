@@ -21,12 +21,58 @@ enum RemoteFileStats {
     }
 
     static func lineCounts(host: String, cwd: String, paths: [String]) async -> [String: Int] {
-        let paths = Array(paths.prefix(maxBatchedPaths))
-        guard let command = wcCommand(paths: paths),
+        guard !paths.isEmpty else { return [:] }
+        if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.lineCounts(root: cwd, paths: paths)
+                RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper", startedAt: startedAt)
+                return Dictionary(uniqueKeysWithValues: result.entries.map { ($0.path, $0.lineCount) })
+            } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
+                RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper", startedAt: startedAt)
+                logger.debug("helper line counts failed: \(String(describing: error), privacy: .public)")
+                return [:]
+            } catch {
+                RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper-fallback", startedAt: startedAt)
+            }
+        }
+
+        let fallbackPaths = Array(paths.prefix(maxBatchedPaths))
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/line-counts", host: host, transport: "exec", startedAt: startedAt) }
+        guard let command = wcCommand(paths: fallbackPaths),
               let result = try? await RemoteExec.run(host: host, cwd: cwd, command: command),
               !RemoteExec.isConnectionFailure(exitCode: result.exitCode)
         else { return [:] }
-        return parseWcOutput(result.stdout, requested: paths)
+        return parseWcOutput(result.stdout, requested: fallbackPaths)
+    }
+
+    static func directoryEntries(host: String, path: String) async -> [(name: String, isDirectory: Bool)] {
+        if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.list(path: path)
+                RemoteOperationTiming.log("fs/list", host: host, transport: "helper", startedAt: startedAt)
+                return result.entries.map { ($0.name, $0.isDirectory) }
+            } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
+                RemoteOperationTiming.log("fs/list", host: host, transport: "helper", startedAt: startedAt)
+                logger.debug("helper directory listing failed: \(String(describing: error), privacy: .public)")
+                return []
+            } catch {
+                RemoteOperationTiming.log("fs/list", host: host, transport: "helper-fallback", startedAt: startedAt)
+            }
+        }
+
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/list", host: host, transport: "exec", startedAt: startedAt) }
+        guard let result = try? await RemoteExec.run(
+            host: host,
+            cwd: nil,
+            command: "ls -1Ap " + SSHCommand.shellQuote(path)
+        ), result.exitCode == 0 else { return [] }
+        return parseLsEntries(result.stdout)
     }
 
     static func parseLsEntries(_ output: String) -> [(name: String, isDirectory: Bool)] {

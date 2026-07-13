@@ -119,6 +119,20 @@ final class ContentSearcher: Sendable {
                 )
                 return
             }
+            if capabilities?.helperHandshake != nil {
+                do {
+                    try await streamHelperRg(
+                        host: host,
+                        query: query,
+                        options: options,
+                        worktree: worktree,
+                        into: continuation
+                    )
+                    return
+                } catch let error as RemoteHelperClientError where error.shouldFallbackToRemoteExec {
+                    logger.debug("helper search unavailable; using exec: \(String(describing: error), privacy: .public)")
+                }
+            }
             let invocation = RemoteContentSearch.rgInvocation(
                 host: host,
                 cwd: worktree.absolutePath.path,
@@ -131,6 +145,14 @@ final class ContentSearcher: Sendable {
             process.executableURL = URL(fileURLWithPath: rg)
             process.arguments = args
             process.currentDirectoryURL = worktree.absolutePath
+        }
+
+        let execStartedAt = CFAbsoluteTimeGetCurrent()
+        let execHost = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path)
+        defer {
+            if let execHost {
+                RemoteOperationTiming.log("search", host: execHost, transport: "exec", startedAt: execStartedAt)
+            }
         }
 
         let outPipe = Pipe()
@@ -192,22 +214,62 @@ final class ContentSearcher: Sendable {
 
         // ripgrep exits 0 on matches, 1 on no matches, 2+ on its own errors.
         // Skip the check if we cancelled the child ourselves.
-        if !Task.isCancelled,
-           process.terminationReason == .exit,
-           process.terminationStatus > 1 {
-            let stderr = stderrBuf.text
-            // rg's regex parse errors begin with "regex parse error" or
-            // mention unsupported look-around / backreference features.
-            // Distinguish those from soft I/O errors so the model can
-            // surface "Invalid regex pattern." instead of a generic banner.
-            let lower = stderr.lowercased()
-            if lower.contains("regex parse error")
-                || lower.contains("look-around")
-                || lower.contains("backreference") {
-                throw SearchError.regexInvalid
-            }
-            throw SearchError.rgFailed(exitCode: process.terminationStatus)
+        if !Task.isCancelled, process.terminationReason == .exit {
+            try validateRgExit(process.terminationStatus, stderr: stderrBuf.text)
         }
+    }
+
+    private func streamHelperRg(
+        host: String,
+        query: String,
+        options: SearchContentOptions,
+        worktree: SearchWorktree,
+        into continuation: AsyncThrowingStream<ContentSearchHit, Error>.Continuation
+    ) async throws {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        let client = await RemoteHelperClientPool.shared.client(for: host)
+        let handle = try await client.search(
+            root: worktree.absolutePath.path,
+            query: query,
+            caseSensitive: options.caseSensitive,
+            wholeWord: options.wholeWord,
+            regex: options.regex
+        )
+        defer {
+            RemoteOperationTiming.log("search", host: host, transport: "helper", startedAt: startedAt)
+        }
+
+        try await withTaskCancellationHandler {
+            for try await event in handle.events {
+                switch event {
+                case .line(let line):
+                    if let hit = parseRgLine(Data(line.utf8), worktree: worktree) {
+                        continuation.yield(hit)
+                    }
+                case let .complete(exitCode, stderr, cancelled):
+                    if cancelled || Task.isCancelled {
+                        throw CancellationError()
+                    }
+                    try validateRgExit(exitCode, stderr: stderr)
+                }
+            }
+        } onCancel: {
+            Task {
+                try? await client.cancelSearch(searchId: handle.searchId)
+            }
+        }
+        if Task.isCancelled { throw CancellationError() }
+    }
+
+    private func validateRgExit(_ exitCode: Int32, stderr: String) throws {
+        guard exitCode > 1 else { return }
+        let lower = stderr.lowercased()
+        if lower.contains("regex parse error")
+            || lower.contains("look-around")
+            || lower.contains("backreference") {
+            throw SearchError.regexInvalid
+        }
+        throw SearchError.rgFailed(exitCode: exitCode)
     }
 
     /// Read newline-delimited output from `handle`, yielding hits as soon as
@@ -227,6 +289,10 @@ final class ContentSearcher: Sendable {
     ) async throws {
         let result: ProcessResult
         if let host = RemoteHostRegistry.shared.host(forPath: worktree.absolutePath.path) {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            defer {
+                RemoteOperationTiming.log("search", host: host, transport: "git-exec", startedAt: startedAt)
+            }
             let invocation = RemoteContentSearch.cappedGitGrepInvocation(
                 host: host,
                 cwd: worktree.absolutePath.path,

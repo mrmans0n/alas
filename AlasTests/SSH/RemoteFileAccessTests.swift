@@ -33,6 +33,32 @@ struct RemoteFileAccessTests {
         #expect(RemoteFileAccess.parseReadPayload(Data()) == nil)
     }
 
+    @Test func helperReadPayloadPreservesBinaryBytes() {
+        let result = RemoteHelperFSReadResult(
+            kind: "file",
+            content: nil,
+            contentBase64: "AP8KQg==",
+            mtime: 42,
+            detail: nil
+        )
+        #expect(RemoteFileAccess.readResult(from: result) == .file(
+            data: Data([0x00, 0xFF, 0x0A, 0x42]),
+            mtime: Date(timeIntervalSince1970: 42)
+        ))
+    }
+
+    @Test func helperReadPayloadMapsNonFileKinds() {
+        #expect(RemoteFileAccess.readResult(from: RemoteHelperFSReadResult(
+            kind: "missing", content: nil, contentBase64: nil, mtime: nil, detail: nil
+        )) == .missing)
+        #expect(RemoteFileAccess.readResult(from: RemoteHelperFSReadResult(
+            kind: "directory", content: nil, contentBase64: nil, mtime: nil, detail: nil
+        )) == .directory)
+        #expect(RemoteFileAccess.readResult(from: RemoteHelperFSReadResult(
+            kind: "symlink", content: nil, contentBase64: nil, mtime: nil, detail: nil
+        )) == .symlink)
+    }
+
     @Test func writeScriptPreservesPermissionsAndIsAtomic() {
         let script = RemoteFileAccess.writeScript(path: "/srv/repo/run.sh")
         #expect(script.contains("f='/srv/repo/run.sh'"))

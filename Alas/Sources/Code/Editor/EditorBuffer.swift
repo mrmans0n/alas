@@ -1025,38 +1025,26 @@ final class EditorBuffer {
             try await verifyRemoteFileContained(host: host, path: path)
             priorOriginalText = originalText
             let baseline = originalMtime
-            let remoteMtime = try await RemoteFileAccess.mtime(host: host, path: path)
             let shouldOverwriteConflict = remoteOverwriteAfterConflict
-            if !shouldOverwriteConflict {
-                switch RemoteSaveGate.decision(
-                    originalMtime: baseline,
-                    remoteMtime: remoteMtime
-                ) {
-                case .conflict:
-                    guard remoteSaveGeneration == generation else { return }
-                    rollbackRemoteSave(to: priorOriginalText, conflict: .changedOnDisk)
-                    throw SaveError.remoteSaveConflict
-                case .targetDeleted:
-                    guard remoteSaveGeneration == generation else { return }
-                    rollbackRemoteSave(to: priorOriginalText, conflict: .deletedOnDisk)
-                    throw SaveError.remoteSaveConflict
-                case .proceed:
-                    break
-                }
-                if RemoteSaveGate.requiresContentCheck(originalMtime: baseline, remoteMtime: remoteMtime) {
-                    guard try await remoteContentsStillMatchBaseline(host: host, path: path, baseline: priorOriginalText) else {
-                        guard remoteSaveGeneration == generation else { return }
-                        rollbackRemoteSave(to: priorOriginalText, conflict: .changedOnDisk)
-                        throw SaveError.remoteSaveConflict
-                    }
-                }
+            let newMtime: Date
+            do {
+                newMtime = try await RemoteFileAccess.write(
+                    host: host,
+                    path: path,
+                    content: serialized,
+                    expectedMtime: shouldOverwriteConflict ? nil : baseline,
+                    expectedContent: shouldOverwriteConflict
+                        ? nil
+                        : lineEnding.normalize(priorOriginalText)
+                )
+            } catch RemoteFileAccessError.saveConflict(let conflict) {
+                guard remoteSaveGeneration == generation else { return }
+                rollbackRemoteSave(
+                    to: priorOriginalText,
+                    conflict: conflict == .deleted ? .deletedOnDisk : .changedOnDisk
+                )
+                throw SaveError.remoteSaveConflict
             }
-
-            let newMtime = try await RemoteFileAccess.write(
-                host: host,
-                path: path,
-                content: serialized
-            )
             guard remoteSaveGeneration == generation else {
                 originalText = canonical
                 originalMtime = newMtime
@@ -1078,18 +1066,6 @@ final class EditorBuffer {
         }
     }
 
-    private func remoteContentsStillMatchBaseline(host: String, path: String, baseline: String) async throws -> Bool {
-        switch try await RemoteFileAccess.read(host: host, path: path) {
-        case let .file(data, _):
-            guard let remoteText = String(data: data, encoding: .utf8) else { return false }
-            return remoteText == lineEnding.normalize(baseline)
-        case .missing:
-            return false
-        case .directory, .symlink, .unreadable:
-            return false
-        }
-    }
-
     private func rollbackRemoteSave(to originalText: String, conflict: Conflict) {
         self.originalText = originalText
         self.conflict = conflict
@@ -1102,6 +1078,8 @@ final class EditorBuffer {
             lastSaveError = "Unable to save remote file: \(detail)"
         case let RemoteFileAccessError.writeFailed(detail):
             lastSaveError = "Unable to save remote file: \(detail)"
+        case RemoteFileAccessError.saveConflict:
+            lastSaveError = "The remote file changed before it could be saved."
         default:
             lastSaveError = (error as NSError).localizedDescription
         }

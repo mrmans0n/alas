@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum RemoteReadResult: Equatable {
     case file(data: Data, mtime: Date)
@@ -11,6 +12,12 @@ enum RemoteReadResult: Equatable {
 enum RemoteFileAccessError: Error, Equatable {
     case connectionFailed(String)
     case writeFailed(String)
+    case saveConflict(RemoteSaveConflict)
+}
+
+enum RemoteSaveConflict: Equatable {
+    case changed
+    case deleted
 }
 
 /// Should a remote save proceed given the buffer's baseline mtime and the
@@ -35,9 +42,19 @@ enum RemoteSaveGate {
     }
 }
 
-/// File I/O over ssh, one round trip per operation. Scripts are POSIX
-/// portable (GNU and BSD remotes); `stat` flavors are chained instead of
-/// OS-gated. Exit-code contract for reads: 3 = directory, 4 = missing.
+enum RemoteOperationTiming {
+    private static let logger = Logger(subsystem: "app.alas", category: "RemoteOperations")
+
+    static func log(_ operation: String, host: String, transport: String, startedAt: CFAbsoluteTime) {
+        let milliseconds = (CFAbsoluteTimeGetCurrent() - startedAt) * 1_000
+        logger.debug(
+            "\(operation, privacy: .public) host=\(host, privacy: .public) transport=\(transport, privacy: .public) duration_ms=\(milliseconds, format: .fixed(precision: 1))"
+        )
+    }
+}
+
+/// Remote file I/O prefers the persistent helper channel. The POSIX ssh
+/// scripts remain the compatibility path for hosts without a usable helper.
 enum RemoteFileAccess {
     /// Chained GNU-then-BSD mtime probe, reused across scripts.
     private static let statMtime = "stat -c %Y -- \"$f\" 2>/dev/null || stat -f %m \"$f\""
@@ -62,6 +79,51 @@ enum RemoteFileAccess {
     }
 
     static func read(host: String, path: String) async throws -> RemoteReadResult {
+        if await helperIsInstalled(host: host) {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.read(path: path)
+                RemoteOperationTiming.log("fs/read", host: host, transport: "helper", startedAt: startedAt)
+                return readResult(from: result)
+            } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
+                RemoteOperationTiming.log("fs/read", host: host, transport: "helper", startedAt: startedAt)
+                if case .jsonrpc(let rpcError) = error {
+                    return .unreadable(rpcError.message)
+                }
+                return .unreadable(String(describing: error))
+            } catch {
+                RemoteOperationTiming.log("fs/read", host: host, transport: "helper-fallback", startedAt: startedAt)
+            }
+        }
+        return try await readViaExec(host: host, path: path)
+    }
+
+    static func readResult(from result: RemoteHelperFSReadResult) -> RemoteReadResult {
+        switch result.kind {
+        case "missing":
+            return .missing
+        case "directory":
+            return .directory
+        case "symlink":
+            return .symlink
+        case "unreadable":
+            return .unreadable(result.detail ?? "remote helper could not read the file")
+        case "file", nil:
+            let data = result.contentBase64.flatMap { Data(base64Encoded: $0) }
+                ?? result.content.map { Data($0.utf8) }
+            guard let data, let seconds = result.mtime else {
+                return .unreadable("unexpected helper read payload")
+            }
+            return .file(data: data, mtime: Date(timeIntervalSince1970: seconds))
+        default:
+            return .unreadable("unexpected helper read kind")
+        }
+    }
+
+    private static func readViaExec(host: String, path: String) async throws -> RemoteReadResult {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/read", host: host, transport: "exec", startedAt: startedAt) }
         let result = try await RemoteExec.runData(
             host: host,
             cwd: nil,
@@ -106,7 +168,74 @@ enum RemoteFileAccess {
             + statMtime
     }
 
-    static func write(host: String, path: String, content: String) async throws -> Date {
+    static func write(
+        host: String,
+        path: String,
+        content: String,
+        expectedMtime: Date? = nil,
+        expectedContent: String? = nil
+    ) async throws -> Date {
+        if await helperIsInstalled(host: host) {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.write(
+                    path: path,
+                    content: content,
+                    expectedMtime: expectedMtime?.timeIntervalSince1970
+                )
+                RemoteOperationTiming.log("fs/write", host: host, transport: "helper", startedAt: startedAt)
+                guard let seconds = result.mtime else {
+                    throw RemoteFileAccessError.writeFailed("unexpected helper write payload")
+                }
+                return Date(timeIntervalSince1970: seconds)
+            } catch let error as RemoteHelperClientError {
+                RemoteOperationTiming.log(
+                    "fs/write",
+                    host: host,
+                    transport: error.shouldFallbackToRemoteExec ? "helper-fallback" : "helper",
+                    startedAt: startedAt
+                )
+                if case .jsonrpc(let rpcError) = error, rpcError.code == -32030 {
+                    throw RemoteFileAccessError.saveConflict(
+                        rpcError.message.contains("missing") ? .deleted : .changed
+                    )
+                }
+                guard error.shouldFallbackToRemoteExec else {
+                    throw RemoteFileAccessError.writeFailed(String(describing: error))
+                }
+            } catch let error as RemoteFileAccessError {
+                throw error
+            } catch {
+                RemoteOperationTiming.log("fs/write", host: host, transport: "helper-fallback", startedAt: startedAt)
+            }
+        }
+
+        if let expectedMtime {
+            let remoteMtime = try await mtimeViaExec(host: host, path: path)
+            switch RemoteSaveGate.decision(originalMtime: expectedMtime, remoteMtime: remoteMtime) {
+            case .conflict:
+                throw RemoteFileAccessError.saveConflict(.changed)
+            case .targetDeleted:
+                throw RemoteFileAccessError.saveConflict(.deleted)
+            case .proceed:
+                break
+            }
+            if RemoteSaveGate.requiresContentCheck(originalMtime: expectedMtime, remoteMtime: remoteMtime),
+               let expectedContent {
+                guard case let .file(data, _) = try await readViaExec(host: host, path: path),
+                      String(data: data, encoding: .utf8) == expectedContent
+                else {
+                    throw RemoteFileAccessError.saveConflict(.changed)
+                }
+            }
+        }
+        return try await writeViaExec(host: host, path: path, content: content)
+    }
+
+    private static func writeViaExec(host: String, path: String, content: String) async throws -> Date {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/write", host: host, transport: "exec", startedAt: startedAt) }
         let invocation = RemoteExec.invocation(
             host: host,
             cwd: nil,
@@ -132,6 +261,27 @@ enum RemoteFileAccess {
     /// Returns nil when the target does not exist. Throws only for an ssh
     /// connection failure.
     static func mtime(host: String, path: String) async throws -> Date? {
+        if await helperIsInstalled(host: host) {
+            let startedAt = CFAbsoluteTimeGetCurrent()
+            do {
+                let client = await RemoteHelperClientPool.shared.client(for: host)
+                let result = try await client.stat(paths: [path])
+                RemoteOperationTiming.log("fs/stat", host: host, transport: "helper", startedAt: startedAt)
+                guard let entry = result.entries.first, entry.exists else { return nil }
+                return entry.mtime.map(Date.init(timeIntervalSince1970:))
+            } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
+                RemoteOperationTiming.log("fs/stat", host: host, transport: "helper", startedAt: startedAt)
+                return nil
+            } catch {
+                RemoteOperationTiming.log("fs/stat", host: host, transport: "helper-fallback", startedAt: startedAt)
+            }
+        }
+        return try await mtimeViaExec(host: host, path: path)
+    }
+
+    private static func mtimeViaExec(host: String, path: String) async throws -> Date? {
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        defer { RemoteOperationTiming.log("fs/stat", host: host, transport: "exec", startedAt: startedAt) }
         let command = "f=\(SSHCommand.shellQuote(path)); \(statMtime)"
         let result = try await RemoteExec.run(host: host, cwd: nil, command: command)
         if RemoteExec.isConnectionFailure(exitCode: result.exitCode) {
@@ -141,5 +291,9 @@ enum RemoteFileAccess {
               let seconds = TimeInterval(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         else { return nil }
         return Date(timeIntervalSince1970: seconds)
+    }
+
+    private static func helperIsInstalled(host: String) async -> Bool {
+        await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil
     }
 }

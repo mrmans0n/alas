@@ -90,6 +90,74 @@ struct RemoteHelperClientTests {
         #expect((try await hello.value).name == "alas-helper")
     }
 
+    @Test func searchStreamsEventsArrivingImmediatelyAfterStart() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let start = Task {
+            try await client.search(
+                root: "/srv/repo",
+                query: "needle",
+                caseSensitive: false,
+                wholeWord: true,
+                regex: false
+            )
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        #expect(request["method"] as? String == "search/start")
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["root"] as? String == "/srv/repo")
+        #expect(params["wholeWord"] as? Bool == true)
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"searchId":"search-1"}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"search/event","params":{"searchId":"search-1","line":"{\"type\":\"begin\"}"}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"search/complete","params":{"searchId":"search-1","exitCode":0,"stderr":"","cancelled":false}}"#.utf8))
+
+        let handle = try await start.value
+        var events: [RemoteHelperSearchEvent] = []
+        for try await event in handle.events {
+            events.append(event)
+        }
+        #expect(events == [
+            .line(#"{"type":"begin"}"#),
+            .complete(exitCode: 0, stderr: "", cancelled: false),
+        ])
+    }
+
+    @Test func statsMethodsUseSingleHelperRequests() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let counts = Task { try await client.lineCounts(root: "/srv/repo", paths: ["a", "b"]) }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let countsRequest = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        #expect(countsRequest["method"] as? String == "fs/line-counts")
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"entries":[{"path":"a","lineCount":3}]}}"#.utf8))
+        #expect((try await counts.value).entries == [RemoteHelperFSLineCountEntry(path: "a", lineCount: 3)])
+
+        let listing = Task { try await client.list(path: "/srv/repo") }
+        try await waitUntil { transport.sentFrames.count == 2 }
+        let listRequest = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[1]) as? [String: Any]
+        )
+        #expect(listRequest["method"] as? String == "fs/list")
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"result":{"entries":[{"name":"src","isDirectory":true}]}}"#.utf8))
+        #expect((try await listing.value).entries == [RemoteHelperFSListEntry(name: "src", isDirectory: true)])
+    }
+
     @Test func watchEventNotificationsAreYielded() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
