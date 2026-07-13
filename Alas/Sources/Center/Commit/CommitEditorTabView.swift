@@ -372,7 +372,8 @@ struct CommitEditorTabView: View {
         let currentSha = tabState.currentSha
         let baseRef = tabState.baseRef
         let prompt = appState.config.changes.prompt
-        let ignoreUpstream = !appState.config.changes.trackUpstreamForCommits
+        let commitsResolution: GitService.BaseResolution =
+            appState.config.changes.trackUpstreamForCommits ? .upstreamThenBase : .baseLocalFirst
 
         busy = true
         error = nil
@@ -387,7 +388,7 @@ struct CommitEditorTabView: View {
                 let nearbyCommits = try await git.commitsAhead(
                     at: worktreePath,
                     baseBranch: baseRef,
-                    ignoreUpstream: ignoreUpstream
+                    resolution: commitsResolution
                 ).commits
                 let payload = CommitContextBuilder.buildForCommitEdit(
                     branch: branch,

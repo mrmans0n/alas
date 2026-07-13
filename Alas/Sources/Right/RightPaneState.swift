@@ -170,8 +170,8 @@ final class RightPaneState {
     /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
     /// `RightPaneStore` on every `state(for:)` call. When false (the
     /// default) — or when `userOverrodeBaseBranch` is true — `refresh()`
-    /// passes `ignoreUpstream: true` to `commitsAhead`, so the Commits
-    /// section compares HEAD against the base branch instead of `@{u}`.
+    /// passes `resolution: .baseLocalFirst` to `commitsAhead`, so the
+    /// Commits section compares HEAD against the base branch instead of `@{u}`.
     var trackUpstreamForCommits: Bool = false
 
     var pendingDiscard: PendingDiscard? = nil
@@ -588,6 +588,7 @@ final class RightPaneState {
             self.hasMoreOlder = true
             self.isLoadingOlder = false
             let ignoreUpstream = userOverrodeBaseBranch || !trackUpstreamForCommits
+            let commitsResolution: GitService.BaseResolution = ignoreUpstream ? .baseLocalFirst : .upstreamThenBase
             async let s = git.status(worktreePath: worktree.path)
             async let statusRaw = Process.git(
                 ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
@@ -596,12 +597,12 @@ final class RightPaneState {
             async let c = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: baseBranch,
-                ignoreUpstream: ignoreUpstream
+                resolution: commitsResolution
             )
             async let reviewLoopBase = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: baseBranch,
-                ignoreUpstream: true
+                resolution: .baseLocalFirst
             )
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)

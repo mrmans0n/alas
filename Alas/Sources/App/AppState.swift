@@ -4405,7 +4405,7 @@ extension AppState: RemoteSessionsProvider {
             async let commits = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
-                ignoreUpstream: !config.changes.trackUpstreamForCommits
+                resolution: config.changes.trackUpstreamForCommits ? .upstreamThenBase : .baseLocalFirst
             )
             let (changes, commitResult) = try await (status, commits)
             return RemoteWorktreeSummaryBuilder.make(

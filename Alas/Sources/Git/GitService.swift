@@ -1177,6 +1177,19 @@ extension GitService {
 }
 
 extension GitService {
+    /// How `commitsAhead` chooses the ref it compares `HEAD` against.
+    /// - `upstreamThenBase`: use the branch's own upstream `@{u}` when it
+    ///   resolves, otherwise the base branch (origin-qualified, then local).
+    /// - `baseOriginFirst`: never use `@{u}`; prefer `origin/<base>`, then
+    ///   local `<base>`. Rebase-stable ("Auto").
+    /// - `baseLocalFirst`: never use `@{u}`; prefer local `<base>`, then
+    ///   `origin/<base>` ("Manual").
+    enum BaseResolution: Equatable {
+        case upstreamThenBase
+        case baseOriginFirst
+        case baseLocalFirst
+    }
+
     /// Commits on the current branch but not on a comparison ref, using a
     /// 2-step cascade to pick the ref:
     ///   1. `@{u}..HEAD` if an upstream tracking branch is configured.
@@ -1187,12 +1200,16 @@ extension GitService {
     ///
     /// One `git log` invocation parses subject + author + ISO date +
     /// per-commit numstat in a single pass to avoid N round-trips.
-    func commitsAhead(at worktree: URL, baseBranch: String? = nil, ignoreUpstream: Bool = false) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
+    func commitsAhead(
+        at worktree: URL,
+        baseBranch: String? = nil,
+        resolution: BaseResolution = .upstreamThenBase
+    ) async throws -> (commits: [CommitInfo], comparisonRef: String?) {
         // Step 1: Resolve upstream first. `--symbolic-full-name @{u}` returns
         // `refs/remotes/origin/main`; `--abbrev-ref @{u}` returns
         // `origin/main`. Use the abbreviated form for display.
         var upstreamName: String? = nil
-        if !ignoreUpstream {
+        if resolution == .upstreamThenBase {
             let up = try await Process.git(
                 ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
                 cwd: worktree
@@ -1205,49 +1222,32 @@ extension GitService {
             }
         }
 
-        // Step 2: If no upstream, try the base branch. Prefer `origin/<base>`
-        // over local `<base>` for simple branch names. Slash-named bases are
-        // ambiguous, so resolve local refs first before treating them as
-        // remote-qualified refs.
+        // Step 2: If no upstream ref was chosen, resolve the base branch.
+        // Slash-named bases are ambiguous, so always resolve local first for
+        // them; simple names follow the requested preference.
+        func refExists(_ ref: String) async -> Bool {
+            let r = try? await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: worktree)
+            return r?.exitCode == 0
+        }
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
             if base.contains("/") {
-                let local = try await Process.git(
-                    ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
-                    cwd: worktree
-                )
-                if local.exitCode == 0 {
+                if await refExists("refs/heads/\(base)") {
                     baseName = base
-                } else {
-                    let direct = try await Process.git(
-                        ["show-ref", "--verify", "--quiet", "refs/remotes/\(base)"],
-                        cwd: worktree
-                    )
-                    if direct.exitCode == 0 { baseName = base }
+                } else if await refExists("refs/remotes/\(base)") {
+                    baseName = base
                 }
             }
             if baseName == nil {
-                if ignoreUpstream {
-                    let local = try await Process.git(
-                        ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
-                        cwd: worktree
-                    )
-                    if local.exitCode == 0 { baseName = base }
-                }
-                if baseName == nil {
-                    let origin = try await Process.git(
-                        ["show-ref", "--verify", "--quiet", "refs/remotes/origin/\(base)"],
-                        cwd: worktree
-                    )
-                    if origin.exitCode == 0 {
-                        baseName = "origin/\(base)"
-                    } else if !ignoreUpstream {
-                        let local = try await Process.git(
-                            ["show-ref", "--verify", "--quiet", "refs/heads/\(base)"],
-                            cwd: worktree
-                        )
-                        if local.exitCode == 0 { baseName = base }
-                    }
+                let localExists = await refExists("refs/heads/\(base)")
+                let originExists = await refExists("refs/remotes/origin/\(base)")
+                switch resolution {
+                case .baseLocalFirst:
+                    if localExists { baseName = base }
+                    else if originExists { baseName = "origin/\(base)" }
+                case .baseOriginFirst, .upstreamThenBase:
+                    if originExists { baseName = "origin/\(base)" }
+                    else if localExists { baseName = base }
                 }
             }
         }
