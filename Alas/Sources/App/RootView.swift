@@ -6,12 +6,18 @@ struct NewWorktreePresentation: Identifiable, Equatable {
     let projectId: String?
 }
 
+private struct CommitReviewSessionLaunchError: Identifiable, Equatable {
+    let id = UUID()
+    let message: String
+}
+
 struct RootView: View {
     @Bindable var state: AppState
     @State private var showNewProject = false
     @State private var editingProject: ProjectConfig?
     @State private var removingProject: ProjectConfig?
     @State private var newWorktreePresentation: NewWorktreePresentation?
+    @State private var commitReviewSessionLaunchError: CommitReviewSessionLaunchError?
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -42,6 +48,20 @@ struct RootView: View {
                 removingProject: $removingProject,
                 newWorktreePresentation: $newWorktreePresentation
             ))
+            .alert(
+                "Could not open review session",
+                isPresented: Binding(
+                    get: { commitReviewSessionLaunchError != nil },
+                    set: { if !$0 { commitReviewSessionLaunchError = nil } }
+                ),
+                presenting: commitReviewSessionLaunchError
+            ) { _ in
+                Button("OK", role: .cancel) {
+                    commitReviewSessionLaunchError = nil
+                }
+            } message: { error in
+                Text(error.message)
+            }
             .task {
                 state.startHarness()
                 if await state.projectsManager.refreshAll() {
@@ -153,6 +173,9 @@ struct RootView: View {
                 },
                 onEditCommit: { commit, baseRef in
                     openOrFocusCommitEditor(worktree: wt, commit: commit, baseRef: baseRef)
+                },
+                onReviewCommit: { commit in
+                    openOrFocusCommitReviewSession(worktree: wt, commit: commit)
                 }
             )
         case .creating(let wt):
@@ -267,6 +290,35 @@ struct RootView: View {
             title: title
         )
         state.tabs.activate(worktreeId: worktree.id, tabId: tab.id)
+    }
+
+    static func commitReviewSessionTarget(worktree: Worktree, commit: CommitInfo) -> ReviewSessionTarget {
+        CommitTabView.reviewSessionTarget(
+            worktreeID: worktree.id,
+            repositoryPath: worktree.path,
+            sha: commit.sha,
+            title: commit.subject
+        )
+    }
+
+    @MainActor
+    private func openOrFocusCommitReviewSession(worktree: Worktree, commit: CommitInfo) {
+        let target = Self.commitReviewSessionTarget(worktree: worktree, commit: commit)
+        let store = ReviewSessionStore()
+        ReviewSessionLauncher.openOrFocus(
+            target: target,
+            findActive: { try store.findActive(targetID: $0) },
+            save: { try store.save($0) },
+            open: { record in
+                commitReviewSessionLaunchError = nil
+                state.tabs.openOrFocusReviewSession(worktreeId: worktree.id, record: record)
+            },
+            onFailure: { error in
+                commitReviewSessionLaunchError = CommitReviewSessionLaunchError(
+                    message: error.localizedDescription
+                )
+            }
+        )
     }
 }
 
