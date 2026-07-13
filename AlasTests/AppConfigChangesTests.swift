@@ -112,10 +112,6 @@ struct AppConfigChangesTests {
         #expect(decoded.changes.reviewRequestPrompt == "custom review request prompt")
     }
 
-    @Test func defaultsHaveTrackUpstreamForCommitsOff() {
-        #expect(AppConfig.defaults.changes.trackUpstreamForCommits == false)
-    }
-
     @Test func decodesLegacyChangesWithoutTrackUpstreamForCommits() throws {
         // A config blob with a `changes` section that predates the new key.
         let json = """
@@ -156,15 +152,7 @@ struct AppConfigChangesTests {
         """
         let cfg = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
         #expect(cfg.changes.aiToolId == "claude")
-        #expect(cfg.changes.trackUpstreamForCommits == false)
-    }
-
-    @Test func roundTripsTrackUpstreamForCommits() throws {
-        var cfg = AppConfig.defaults
-        cfg.changes.trackUpstreamForCommits = true
-        let data = try JSONEncoder().encode(cfg)
-        let decoded = try JSONDecoder().decode(AppConfig.self, from: data)
-        #expect(decoded.changes.trackUpstreamForCommits == true)
+        #expect(cfg.changes.comparisonMode == .auto)
     }
 
     private func decodeChanges(mutating: ([String: Any]) -> [String: Any]) throws -> AppConfig.Changes {

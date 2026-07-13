@@ -304,12 +304,6 @@ struct AppConfig: Codable, Equatable {
         /// appended verbatim by `MergeAgent`. `{filePath}` and
         /// `{language}` are substituted; anything else passes through.
         var mergeSingleResolvePrompt: String
-        /// When true, the Commits section uses the branch's upstream
-        /// tracking ref (`@{u}`) as the comparison base once one exists,
-        /// matching git's own "ahead/behind" semantics. When false
-        /// (default), it always compares against `worktrees.baseBranch`,
-        /// so the list stays stable across pushes.
-        var trackUpstreamForCommits: Bool
         /// How the Commits section chooses its comparison base.
         /// - `auto` (default): compare against `origin/<base>` (falls back to
         ///   local `<base>`); stable across rebases.
@@ -327,9 +321,15 @@ struct AppConfig: Codable, Equatable {
 
         enum CodingKeys: String, CodingKey {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
-                 mergeSingleResolvePrompt, trackUpstreamForCommits, comparisonMode,
+                 mergeSingleResolvePrompt, comparisonMode,
                  diffLayoutMode, diffWrapLines, diffShowWhitespace
         }
+    }
+
+    /// Legacy key retained only so `AppConfig.init(from:)` can migrate
+    /// pre-`comparisonMode` configs; no stored property backs it.
+    private enum LegacyChangesKey: String, CodingKey {
+        case trackUpstreamForCommits
     }
 
     struct Agents: Codable, Equatable {
@@ -441,7 +441,6 @@ struct AppConfig: Codable, Equatable {
             reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
             mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
             mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
-            trackUpstreamForCommits: false,
             comparisonMode: .auto,
             diffLayoutMode: .split,
             diffWrapLines: false,
@@ -670,12 +669,15 @@ extension AppConfig {
                 ?? AppConfig.defaultMergeBulkResolvePrompt
             let singleResolve = (try? changesContainer.decode(String.self, forKey: .mergeSingleResolvePrompt))
                 ?? AppConfig.defaultMergeSingleResolvePrompt
-            let trackUpstream = (try? changesContainer.decode(Bool.self, forKey: .trackUpstreamForCommits)) ?? false
+            let legacyTrackUpstream: Bool? = {
+                guard let legacy = try? c.nestedContainer(keyedBy: LegacyChangesKey.self, forKey: .changes) else { return nil }
+                return try? legacy.decode(Bool.self, forKey: .trackUpstreamForCommits)
+            }()
             let comparisonMode: Changes.ChangesComparisonMode = {
                 if let explicit = try? changesContainer.decode(Changes.ChangesComparisonMode.self, forKey: .comparisonMode) {
                     return explicit
                 }
-                return trackUpstream ? .branchUpstream : .auto
+                return (legacyTrackUpstream == true) ? .branchUpstream : .auto
             }()
             let diffLayoutMode = (try? changesContainer.decode(DiffLayoutMode.self, forKey: .diffLayoutMode)) ?? .split
             let diffWrapLines = (try? changesContainer.decode(Bool.self, forKey: .diffWrapLines)) ?? false
@@ -686,7 +688,6 @@ extension AppConfig {
                 reviewRequestPrompt: reviewRequestPrompt,
                 mergeBulkResolvePrompt: bulkResolve,
                 mergeSingleResolvePrompt: singleResolve,
-                trackUpstreamForCommits: trackUpstream,
                 comparisonMode: comparisonMode,
                 diffLayoutMode: diffLayoutMode,
                 diffWrapLines: diffWrapLines,
@@ -699,7 +700,6 @@ extension AppConfig {
                 reviewRequestPrompt: AppConfig.defaultReviewRequestPrompt,
                 mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
                 mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
-                trackUpstreamForCommits: false,
                 comparisonMode: .auto,
                 diffLayoutMode: .split,
                 diffWrapLines: false,
