@@ -232,6 +232,7 @@ struct RemoteHelperProcAttachResult: Codable, Equatable, Sendable {
     let procId: String
     let running: Bool
     let exitCode: Int32?
+    let stdinOffset: UInt64
     let stdoutOffset: UInt64
     let stderrOffset: UInt64
     let stdoutFrames: [RemoteHelperProcReplayFrame]
@@ -283,5 +284,6 @@ enum RemoteHelperProcEvent: Equatable, Sendable {
 
 struct RemoteHelperProcAttachHandle: Sendable {
     let procId: String
+    let stdinOffset: UInt64
     let events: AsyncStream<RemoteHelperProcEvent>
 }

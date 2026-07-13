@@ -143,6 +143,7 @@ struct RemoteHelperClientTests {
           "procId":"acp-session-1",
           "running":true,
           "exitCode":null,
+          "stdinOffset":40,
           "stdoutOffset":25,
           "stderrOffset":0,
           "stdoutFrames":[{"offset":25,"dataBase64":"eyJqc29ucnBjIjoiMi4wIn0="}],
@@ -151,6 +152,7 @@ struct RemoteHelperClientTests {
         """#.utf8))
 
         let handle = try await attach.value
+        #expect(handle.stdinOffset == 40)
         var iterator = handle.events.makeAsyncIterator()
         #expect(await iterator.next() == .stdout(Data(#"{"jsonrpc":"2.0"}"#.utf8), offset: 25))
         #expect(await iterator.next() == .available)
@@ -189,6 +191,7 @@ struct RemoteHelperClientTests {
           "procId":"acp-session-1",
           "running":true,
           "exitCode":null,
+          "stdinOffset":0,
           "stdoutOffset":0,
           "stderrOffset":0,
           "stdoutFrames":[],

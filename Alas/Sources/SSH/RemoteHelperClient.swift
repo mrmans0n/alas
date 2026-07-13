@@ -331,7 +331,11 @@ actor RemoteHelperClient {
             activeProcAttachments.removeValue(forKey: procId)
             scheduleIdleShutdownIfPossible()
         }
-        return RemoteHelperProcAttachHandle(procId: procId, events: events)
+        return RemoteHelperProcAttachHandle(
+            procId: procId,
+            stdinOffset: result.stdinOffset,
+            events: events
+        )
     }
 
     func writeProc(procId: String, data: Data, expectedStdinOffset: UInt64? = nil) async throws -> UInt64 {

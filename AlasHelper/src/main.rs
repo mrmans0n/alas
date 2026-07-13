@@ -46,6 +46,7 @@ struct HelperState {
     watchers: HashMap<String, SubscriptionWatcher>,
     searches: HashMap<String, Arc<AtomicBool>>,
     event_sender: Option<Sender<ServerMessage>>,
+    proc_tailers: HashSet<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -969,6 +970,9 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
     let stderr_offset = params.stderr_offset.unwrap_or(0);
     let stdout_frames = read_stdout_frames(&dir.join("stdout.log"), stdout_offset)?;
     let stderr_chunk = read_file_tail(&dir.join("stderr.log"), stderr_offset)?;
+    let stdin_offset = std::fs::metadata(dir.join("stdin.log"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
     let stdout_next_offset = stdout_frames
         .last()
         .map(|frame| frame.offset)
@@ -980,24 +984,35 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
     let status = proc_status_in_dir(&dir);
     if status.running {
         if let Some(sender) = state.event_sender.clone() {
-            spawn_proc_stdout_tail(
-                params.proc_id.clone(),
-                dir.clone(),
-                stdout_next_offset,
-                sender.clone(),
-            );
-            spawn_proc_stderr_tail(
-                params.proc_id.clone(),
-                dir.clone(),
-                stderr_next_offset,
-                sender,
-            );
+            if state
+                .proc_tailers
+                .insert(format!("{}:stdout", params.proc_id))
+            {
+                spawn_proc_stdout_tail(
+                    params.proc_id.clone(),
+                    dir.clone(),
+                    stdout_next_offset,
+                    sender.clone(),
+                );
+            }
+            if state
+                .proc_tailers
+                .insert(format!("{}:stderr", params.proc_id))
+            {
+                spawn_proc_stderr_tail(
+                    params.proc_id.clone(),
+                    dir.clone(),
+                    stderr_next_offset,
+                    sender,
+                );
+            }
         }
     }
     Ok(json!({
         "procId": params.proc_id,
         "running": status.running,
         "exitCode": status.exit_code,
+        "stdinOffset": stdin_offset,
         "stdoutOffset": stdout_next_offset,
         "stderrOffset": stderr_next_offset,
         "stdoutFrames": stdout_frames.into_iter().map(|frame| {

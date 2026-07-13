@@ -96,6 +96,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     stdoutOffset: stdoutOffset,
                     stderrOffset: stderrOffset
                 )
+                stdinOffset = handle.stdinOffset
                 attempt = 0
                 for await event in handle.events {
                     guard !Task.isCancelled, !state.isTerminated else { return }
@@ -128,30 +129,56 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     }
 
     private func flushPendingWrites() async {
-        guard state.beginFlushingWrites() else { return }
-        defer { state.endFlushingWrites() }
-        while !Task.isCancelled && !state.isTerminated {
-            guard state.writesEnabled else { return }
-            let next = state.takeNextWrite()
-            guard let next else { return }
-            do {
-                let client = await RemoteHelperClientPool.shared.client(for: host)
-                stdinOffset = try await client.writeProc(
-                    procId: procId,
-                    data: Self.frameForProcWrite(next),
-                    expectedStdinOffset: stdinOffset
-                )
-            } catch RemoteHelperClientError.jsonrpc(let error) {
-                _ = state.markTerminated()
-                let message = "Remote helper failed to write ACP input: \(error.message)\n"
-                continuation?.yield(.stderr(Data(message.utf8)))
-                continuation?.yield(.exited(127))
-                continuation?.finish()
-                return
-            } catch {
-                state.requeueForOffsetGuardedRetry(next)
-                return
+        var ownsFlush = false
+        defer {
+            if ownsFlush {
+                state.endFlushingWrites()
             }
+        }
+        flushLoop: while !Task.isCancelled && !state.isTerminated {
+            guard state.beginFlushingWrites() else { return }
+            ownsFlush = true
+            while !Task.isCancelled && !state.isTerminated {
+                guard state.writesEnabled else {
+                    state.endFlushingWrites()
+                    ownsFlush = false
+                    return
+                }
+                let next = state.takeNextWrite()
+                guard let next else {
+                    if state.endFlushingWritesAndShouldRestart() {
+                        ownsFlush = false
+                        continue flushLoop
+                    }
+                    ownsFlush = false
+                    return
+                }
+                do {
+                    let client = await RemoteHelperClientPool.shared.client(for: host)
+                    stdinOffset = try await client.writeProc(
+                        procId: procId,
+                        data: Self.frameForProcWrite(next),
+                        expectedStdinOffset: stdinOffset
+                    )
+                } catch RemoteHelperClientError.jsonrpc(let error) {
+                    _ = state.markTerminated()
+                    let message = "Remote helper failed to write ACP input: \(error.message)\n"
+                    continuation?.yield(.stderr(Data(message.utf8)))
+                    continuation?.yield(.exited(127))
+                    continuation?.finish()
+                    state.endFlushingWrites()
+                    ownsFlush = false
+                    return
+                } catch {
+                    state.requeueForOffsetGuardedRetry(next)
+                    state.endFlushingWrites()
+                    ownsFlush = false
+                    return
+                }
+            }
+            state.endFlushingWrites()
+            ownsFlush = false
+            return
         }
     }
 
@@ -245,6 +272,13 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             lock.lock()
             defer { lock.unlock() }
             isFlushingWrites = false
+        }
+
+        func endFlushingWritesAndShouldRestart() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            isFlushingWrites = false
+            return canWrite && !terminated && !pendingWrites.isEmpty
         }
 
         func requeueForOffsetGuardedRetry(_ data: Data) {
