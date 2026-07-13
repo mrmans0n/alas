@@ -990,28 +990,14 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
     let status = proc_status_in_dir(&dir);
     if status.running {
         if let Some(sender) = state.event_sender.clone() {
-            if state
-                .proc_tailers
-                .insert(proc_tailer_key(&params.proc_id, "stdout"))
-            {
-                spawn_proc_stdout_tail(
-                    params.proc_id.clone(),
-                    dir.clone(),
-                    stdout_next_offset,
-                    sender.clone(),
-                );
-            }
-            if state
-                .proc_tailers
-                .insert(proc_tailer_key(&params.proc_id, "stderr"))
-            {
-                spawn_proc_stderr_tail(
-                    params.proc_id.clone(),
-                    dir.clone(),
-                    stderr_next_offset,
-                    sender,
-                );
-            }
+            ensure_proc_tailers(
+                state,
+                &params.proc_id,
+                &dir,
+                stdout_next_offset,
+                stderr_next_offset,
+                sender,
+            );
         }
     }
     Ok(json!({
@@ -1034,6 +1020,38 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
             })
         }).collect::<Vec<_>>()
     }))
+}
+
+fn ensure_proc_tailers(
+    state: &mut HelperState,
+    proc_id: &str,
+    dir: &Path,
+    stdout_offset: u64,
+    stderr_offset: u64,
+    sender: Sender<ServerMessage>,
+) {
+    if state
+        .proc_tailers
+        .insert(proc_tailer_key(proc_id, "stdout"))
+    {
+        spawn_proc_stdout_tail(
+            proc_id.to_string(),
+            dir.to_path_buf(),
+            stdout_offset,
+            sender.clone(),
+        );
+    }
+    if state
+        .proc_tailers
+        .insert(proc_tailer_key(proc_id, "stderr"))
+    {
+        spawn_proc_stderr_tail(
+            proc_id.to_string(),
+            dir.to_path_buf(),
+            stderr_offset,
+            sender,
+        );
+    }
 }
 
 fn proc_write(params: Option<Value>) -> Result<Value, HelperError> {
