@@ -1154,7 +1154,7 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
         return Err(jsonrpc_error(-32051, "process not found"));
     }
     let stdout_offset = requested_log_offset(&dir.join("stdout.log"), params.stdout_offset);
-    let stderr_offset = params.stderr_offset.unwrap_or(0);
+    let stderr_offset = requested_log_offset(&dir.join("stderr.log"), params.stderr_offset);
     let stdout_frames = read_stdout_frames(&dir.join("stdout.log"), stdout_offset)?;
     let stderr_chunk = read_file_tail(&dir.join("stderr.log"), stderr_offset)?;
     let stdin_offset = std::fs::metadata(dir.join("stdin.log"))

@@ -164,12 +164,13 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     ownsFlush = false
                     return
                 }
+                let expectedStdinOffset = next.expectedStdinOffset ?? stdinOffset
                 do {
                     let client = await RemoteHelperClientPool.shared.client(for: host)
                     stdinOffset = try await client.writeProc(
                         procId: procId,
-                        data: Self.frameForProcWrite(next),
-                        expectedStdinOffset: stdinOffset
+                        data: Self.frameForProcWrite(next.data),
+                        expectedStdinOffset: expectedStdinOffset
                     )
                 } catch RemoteHelperClientError.jsonrpc(let error) {
                     _ = state.markTerminated()
@@ -181,7 +182,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     ownsFlush = false
                     return
                 } catch {
-                    state.requeueForOffsetGuardedRetry(next)
+                    state.requeueForOffsetGuardedRetry(next.withExpectedStdinOffset(expectedStdinOffset))
                     state.endFlushingWrites()
                     ownsFlush = false
                     return
@@ -219,7 +220,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         private var terminated = false
         private var canWrite = false
         private var isFlushingWrites = false
-        private var pendingWrites: [Data] = []
+        private var pendingWrites: [PendingProcWrite] = []
 
         var isTerminated: Bool {
             lock.lock()
@@ -260,11 +261,11 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             lock.lock()
             defer { lock.unlock() }
             guard !terminated else { return false }
-            pendingWrites.append(data)
+            pendingWrites.append(PendingProcWrite(data: data, expectedStdinOffset: nil))
             return true
         }
 
-        func takeNextWrite() -> Data? {
+        func takeNextWrite() -> PendingProcWrite? {
             lock.lock()
             defer { lock.unlock() }
             guard !pendingWrites.isEmpty else { return nil }
@@ -292,11 +293,20 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             return canWrite && !terminated && !pendingWrites.isEmpty
         }
 
-        func requeueForOffsetGuardedRetry(_ data: Data) {
+        func requeueForOffsetGuardedRetry(_ write: PendingProcWrite) {
             lock.lock()
             defer { lock.unlock() }
             guard !terminated else { return }
-            pendingWrites.insert(data, at: 0)
+            pendingWrites.insert(write, at: 0)
+        }
+    }
+
+    private struct PendingProcWrite {
+        let data: Data
+        let expectedStdinOffset: UInt64?
+
+        func withExpectedStdinOffset(_ offset: UInt64) -> PendingProcWrite {
+            PendingProcWrite(data: data, expectedStdinOffset: offset)
         }
     }
 }
