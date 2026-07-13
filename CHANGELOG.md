@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-07-13
+
+### ✨ Features
+
+- Notify when ACP sessions ask questions (#765).
+
+### 🐛 Fixes
+
+- Prevent worktree deletion launch crashes (#767).
+
 ## [0.10.1] - 2026-07-13
 
 ### ✨ Features
