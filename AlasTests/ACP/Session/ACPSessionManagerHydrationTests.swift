@@ -674,6 +674,41 @@ struct ACPSessionManagerHydrationTests {
         }
     }
 
+    @Test("remembered non-tail scroll anchor reopens with bounded newer rows")
+    func rememberedScrollAnchorRestoresBoundedWindow() async throws {
+        let path = tmpStorePath()
+        let store = try ACPSessionStore(path: path)
+        try store.upsertSession(.init(
+            id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+
+        var anchorId = ""
+        for i in 0..<200 {
+            let id = UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", i))!
+            if i == 40 { anchorId = id.uuidString }
+            let m: ACPMessage = .user(id: id, text: "m\(i)", attachments: [])
+            let payload = try ACPMessageCodec.encode(m)
+            try store.appendMessage(sessionId: "s", id: "m\(i)", kind: "user",
+                                    seq: Int64(i), payload: payload, createdAt: 0)
+        }
+
+        let mgr = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        mgr.rememberTranscriptScrollAnchor(
+            sessionId: "s",
+            anchorMessageId: anchorId,
+            anchorMessageIndex: 40,
+            followsTail: false
+        )
+
+        let reopened = try #require(mgr.placeholderSession(id: "s"))
+        await mgr.hydrateIfNeeded(id: "s")
+        await mgr.awaitBackfill(id: "s")
+
+        #expect(reopened.transcript.visibleHead == 40)
+        #expect(reopened.transcript.visibleTail == 40 + ACPTranscript.maxVisibleRows)
+    }
+
     @Test("contextRestoreWarning sees the full transcript even when only tail is in memory")
     func contextRestoreWarningComputedFromFullWires() async throws {
         let path = tmpStorePath()

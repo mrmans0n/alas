@@ -34,6 +34,7 @@ struct ACPMessageList: View {
     @State private var isRestoringTail = false
     @State private var headFrame: CGRect = .zero
     @State private var lastHeadStepAt: Date = .distantPast
+    @State private var lastTailStepAt: Date = .distantPast
     @State private var scrollViewRef = ACPWeakScrollViewRef()
     @State private var latestTopVisibleAnchor = ACPMutableScrollAnchor()
     @State private var latestRememberedScrollAnchorIndex: Int?
@@ -63,6 +64,7 @@ struct ACPMessageList: View {
         Self.visibleRows(
             messages: transcript.messages,
             visibleHead: transcript.visibleHead,
+            visibleTail: transcript.visibleTailBound,
             stableId: { transcript.stableId(for: $0) }
         )
     }
@@ -129,6 +131,12 @@ struct ACPMessageList: View {
                         }
                         ForEach(visibleRows) { row in
                             visibleRow(row)
+                        }
+                        if Self.shouldShowBottomPaginationSentinel(
+                            visibleTail: transcript.visibleTailBound,
+                            messageCount: transcript.messages.count
+                        ) {
+                            bottomPaginationSentinel
                         }
                         if transcript.pendingPermission != nil, let policy = policy {
                             ACPPermissionPrompt(session: session, policy: policy, scopeKey: scopeKey)
@@ -211,7 +219,7 @@ struct ACPMessageList: View {
                     onResolveScrollView: { scrollViewRef.scrollView = $0 },
                     onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
                     onPaused: { setFollowsTranscriptTail(false) },
-                    onAtBottom: { setFollowsTranscriptTail(true) },
+                    onAtBottom: { handleAtBottom(proxy: proxy) },
                     onGeometry: { old, new in
                         handleScrollGeometry(
                             previousMinY: old.minY,
@@ -223,7 +231,7 @@ struct ACPMessageList: View {
                     }
                 ))
                 .modifier(ACPScrollTargetVisibilityTracking(
-                    onVisibleTargetIDs: handleVisibleTargetIDs
+                    onVisibleTargetIDs: { ids in handleVisibleTargetIDs(ids, proxy: proxy) }
                 ))
                 .onAppear {
                     restoreTailIfNeeded(proxy: proxy, animated: false)
@@ -458,8 +466,16 @@ struct ACPMessageList: View {
         restoredRememberedAnchor = anchor
     }
 
-    private func handleVisibleTargetIDs(_ ids: [String]) {
+    private func handleVisibleTargetIDs(_ ids: [String], proxy: ScrollViewProxy) {
         let lookup = visibleMessageLookup
+        if Self.shouldPageNewerRowsFromBottomSentinel(
+            isSentinelVisible: ids.contains(Self.bottomPaginationSentinelID),
+            isUserDriven: ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type),
+            visibleTail: transcript.visibleTailBound,
+            messageCount: transcript.messages.count
+        ) {
+            stepTailForwardPreservingScroll(proxy: proxy, lookup: lookup)
+        }
         guard let anchor = Self.topVisibleScrollTargetID(
             in: ids,
             visibleMessageIds: lookup.ids
@@ -477,6 +493,50 @@ struct ACPMessageList: View {
         onRememberScrollAnchor(anchor, anchorIndex, false)
         latestRememberedScrollAnchorIndex = anchorIndex
         restoredRememberedAnchor = anchor
+    }
+
+    private func stepTailForwardPreservingScroll(
+        proxy: ScrollViewProxy,
+        lookup: VisibleMessageLookup
+    ) {
+        guard !isRestoringTail else { return }
+        guard transcript.visibleTailBound < transcript.messages.count else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastTailStepAt) > headStepDebounceInterval else { return }
+        lastTailStepAt = now
+        let anchorId = latestTopVisibleAnchor.value ?? lookup.firstStableId
+        let anchorIndex = lookup.transcriptIndex(for: anchorId)
+        isRestoringTail = true
+        transcript.stepTailForward(preserving: anchorIndex)
+        let updatedRows = Self.visibleRows(
+            messages: transcript.messages,
+            visibleHead: transcript.visibleHead,
+            visibleTail: transcript.visibleTailBound,
+            stableId: { transcript.stableId(for: $0) }
+        )
+        let updatedLookup = Self.visibleMessageLookup(rows: updatedRows.map { row in
+            (index: row.index, stableId: row.stableId)
+        })
+        let scrollTargetId = updatedLookup.contains(anchorId) ? anchorId : updatedLookup.firstStableId
+        DispatchQueue.main.async {
+            if let scrollTargetId {
+                proxy.scrollTo(scrollTargetId, anchor: .top)
+            }
+            DispatchQueue.main.async {
+                isRestoringTail = false
+            }
+        }
+    }
+
+    private func handleAtBottom(proxy: ScrollViewProxy) {
+        if Self.shouldResumeTailFollowAtBottom(
+            visibleTail: transcript.visibleTailBound,
+            messageCount: transcript.messages.count
+        ) {
+            setFollowsTranscriptTail(true)
+        } else {
+            stepTailForwardPreservingScroll(proxy: proxy, lookup: visibleMessageLookup)
+        }
     }
 
     @ViewBuilder
@@ -519,6 +579,14 @@ struct ACPMessageList: View {
         .frame(height: 1)
     }
 
+    private var bottomPaginationSentinel: some View {
+        Color.clear
+            .frame(height: 1)
+            .id(Self.bottomPaginationSentinelID)
+    }
+
+    private static let bottomPaginationSentinelID = "__transcript_later__"
+
     nonisolated static func topPaginationIndicator(
         visibleHead: Int,
         isBackfillingOlderMessages: Bool
@@ -535,6 +603,29 @@ struct ACPMessageList: View {
         case .sending:
             return false
         }
+    }
+
+    nonisolated static func shouldShowBottomPaginationSentinel(
+        visibleTail: Int,
+        messageCount: Int
+    ) -> Bool {
+        visibleTail < messageCount
+    }
+
+    nonisolated static func shouldResumeTailFollowAtBottom(
+        visibleTail: Int,
+        messageCount: Int
+    ) -> Bool {
+        visibleTail >= messageCount
+    }
+
+    nonisolated static func shouldPageNewerRowsFromBottomSentinel(
+        isSentinelVisible: Bool,
+        isUserDriven: Bool,
+        visibleTail: Int,
+        messageCount: Int
+    ) -> Bool {
+        isSentinelVisible && isUserDriven && visibleTail < messageCount
     }
 
     nonisolated static func queueHeaderCount(statuses: [QueuedPrompt.Status]) -> Int {
@@ -636,10 +727,12 @@ struct ACPMessageList: View {
     static func visibleRows(
         messages: [ACPMessage],
         visibleHead: Int,
+        visibleTail: Int,
         stableId: (ACPMessage) -> String
     ) -> [VisibleRow] {
         let head = min(visibleHead, messages.count)
-        return (head..<messages.count).compactMap { index in
+        let tail = max(head, min(visibleTail, messages.count))
+        return (head..<tail).compactMap { index in
             let message = messages[index]
             if case .plan = message { return nil }
             return VisibleRow(index: index, stableId: stableId(message))
@@ -752,7 +845,7 @@ struct ACPMessageList: View {
         )
         switch decision {
         case .userScrolledUp: setFollowsTranscriptTail(false)
-        case .userAtBottom: setFollowsTranscriptTail(true)
+        case .userAtBottom: handleAtBottom(proxy: proxy)
         case .noChange: break
         }
         if Self.shouldRestoreTailAfterContentGrowth(
@@ -805,28 +898,10 @@ struct ACPMessageList: View {
     /// Reveal an older chunk while keeping the viewport anchored to the same
     /// content.
     private func stepHeadBackPreservingScroll(proxy: ScrollViewProxy) {
-        // macOS 14: the ScrollView is NSScrollView-backed, so we preserve the
-        // exact reading position by shifting the clip-view origin by the height
-        // the prepended rows add.
-        if let scrollView = scrollViewRef.scrollView {
-            let clipView = scrollView.contentView
-            let oldOffset = clipView.bounds.origin.y
-            let oldContentHeight = scrollView.documentView?.bounds.height ?? 0
-            isRestoringTail = true
-            transcript.stepHeadBack()
-            DispatchQueue.main.async {
-                let newContentHeight = scrollView.documentView?.bounds.height ?? 0
-                let delta = newContentHeight - oldContentHeight
-                if delta > 0 {
-                    clipView.setBoundsOrigin(NSPoint(x: clipView.bounds.origin.x, y: oldOffset + delta))
-                }
-                DispatchQueue.main.async { isRestoringTail = false }
-            }
-            return
-        }
-        // macOS 15+: no reachable NSScrollView. Anchor the row currently at the
-        // top of the window and pin it back to the top after the older rows lay
-        // out, so the viewport doesn't jump.
+        // Anchor the row currently at the top of the window and pin it back after
+        // the older rows lay out. This works on both scroll-tracking paths and
+        // does not depend on net content-height changes when the bounded window
+        // also trims newer rows from the bottom.
         let anchorId = visibleMessageLookup.firstStableId
         isRestoringTail = true
         transcript.stepHeadBack()

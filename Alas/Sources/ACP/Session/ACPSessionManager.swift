@@ -855,13 +855,13 @@ final class ACPSessionManager: ObservableObject {
         if let index = memory.anchorMessageIndex {
             let localIndex = index - messageIndexOffset
             guard localIndex >= 0, localIndex < session.transcript.messages.count else { return }
-            session.transcript.setVisibleHead(localIndex)
+            session.transcript.setVisibleWindow(containing: localIndex)
             return
         }
         guard let anchor = memory.anchorMessageId,
               let index = session.transcript.messages.firstIndex(where: { $0.stableId == anchor })
         else { return }
-        session.transcript.setVisibleHead(index)
+        session.transcript.setVisibleWindow(containing: index)
     }
 
     /// Drops the cached `ACPSession` when its refcount is zero AND no live

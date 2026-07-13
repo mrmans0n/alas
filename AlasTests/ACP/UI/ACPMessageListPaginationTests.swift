@@ -225,12 +225,85 @@ struct ACPMessageListPaginationTests {
         let rows = ACPMessageList.visibleRows(
             messages: messages,
             visibleHead: 1,
+            visibleTail: messages.count,
             stableId: { $0.stableId }
         )
 
         #expect(rows == [
             ACPMessageList.VisibleRow(index: 2, stableId: "acp-agent:agent-1")
         ])
+    }
+
+    @Test("visible rows stop at the visible tail")
+    @MainActor
+    func visibleRowsStopAtVisibleTail() {
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), messageId: "user-1", text: "one", attachments: []),
+            .user(id: UUID(), messageId: "user-2", text: "two", attachments: []),
+            .user(id: UUID(), messageId: "user-3", text: "three", attachments: []),
+            .user(id: UUID(), messageId: "user-4", text: "four", attachments: [])
+        ]
+
+        let rows = ACPMessageList.visibleRows(
+            messages: messages,
+            visibleHead: 1,
+            visibleTail: 3,
+            stableId: { $0.stableId }
+        )
+
+        #expect(rows.map(\.index) == [1, 2])
+    }
+
+    @Test("bottom pagination sentinel is shown only when newer rows are hidden")
+    func bottomPaginationSentinelReflectsVisibleTail() {
+        #expect(ACPMessageList.shouldShowBottomPaginationSentinel(
+            visibleTail: 90,
+            messageCount: 100
+        ))
+        #expect(!ACPMessageList.shouldShowBottomPaginationSentinel(
+            visibleTail: 100,
+            messageCount: 100
+        ))
+    }
+
+    @Test("bottom geometry resumes tail follow only at the live transcript tail")
+    func bottomGeometryResumesTailFollowOnlyAtLiveTail() {
+        #expect(!ACPMessageList.shouldResumeTailFollowAtBottom(
+            visibleTail: 90,
+            messageCount: 100
+        ))
+        #expect(ACPMessageList.shouldResumeTailFollowAtBottom(
+            visibleTail: 100,
+            messageCount: 100
+        ))
+    }
+
+    @Test("bottom sentinel pages newer rows only during user scroll")
+    func bottomSentinelPagesNewerRowsOnlyDuringUserScroll() {
+        #expect(!ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
+            isSentinelVisible: true,
+            isUserDriven: false,
+            visibleTail: 90,
+            messageCount: 100
+        ))
+        #expect(ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
+            isSentinelVisible: true,
+            isUserDriven: true,
+            visibleTail: 90,
+            messageCount: 100
+        ))
+        #expect(!ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
+            isSentinelVisible: true,
+            isUserDriven: true,
+            visibleTail: 100,
+            messageCount: 100
+        ))
+        #expect(!ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
+            isSentinelVisible: false,
+            isUserDriven: true,
+            visibleTail: 90,
+            messageCount: 100
+        ))
     }
 
     @Test("visible anchor memory accepts live anchors when the remembered id is stale")
