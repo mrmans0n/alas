@@ -166,6 +166,11 @@ struct RemoteHelperClientTests {
         #expect(await iterator.next() == .stdout(Data(#"{"method":"session/update"}"#.utf8), offset: 52))
     }
 
+    @Test func remoteHelperACPTransportFramesWritesAsNewlineDelimitedACP() {
+        let framed = RemoteHelperACPTransport.frameForProcWrite(Data(#"{"id":1}"#.utf8))
+        #expect(framed == Data("{\"id\":1}\n".utf8))
+    }
+
     @Test func searchStreamsEventsArrivingImmediatelyAfterStart() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(

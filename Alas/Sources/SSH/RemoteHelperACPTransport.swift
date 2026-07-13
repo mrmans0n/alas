@@ -122,12 +122,16 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             guard let next else { return }
             do {
                 let client = await RemoteHelperClientPool.shared.client(for: host)
-                try await client.writeProc(procId: procId, data: next)
+                try await client.writeProc(procId: procId, data: Self.frameForProcWrite(next))
             } catch {
                 state.requeue(next)
                 return
             }
         }
+    }
+
+    static func frameForProcWrite(_ data: Data) -> Data {
+        JSONRPCNewlineFramer.encode(data)
     }
 
     private final class State: @unchecked Sendable {

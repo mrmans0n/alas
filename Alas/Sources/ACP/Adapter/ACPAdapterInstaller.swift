@@ -44,6 +44,12 @@ enum ACPProcessEnvironment {
         for (k, v) in extra { env[k] = v }
         return env
     }
+
+    static func remoteOverridesForACP(extra: [String: String]) -> [String: String] {
+        extra.filter { key, _ in
+            !agentSessionMarkerKeys.contains(key)
+        }
+    }
 }
 
 enum ACPInstallerRegistry {

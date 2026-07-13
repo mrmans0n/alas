@@ -1365,7 +1365,7 @@ final class ACPSessionManager: ObservableObject {
                 command: spec.command,
                 arguments: spec.arguments,
                 cwd: worktreePath,
-                environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv)
+                environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv)
             )
             client = ACPStdioClient.makeForTesting(transport: transport)
         } else if let host {
