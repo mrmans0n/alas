@@ -382,6 +382,7 @@
 		4CFC511BB3BEFB139BDF66F6 /* MemoryReportWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C3E23DCE2A602A87915ECE /* MemoryReportWindow.swift */; };
 		4D1584E4013D1A667723E4A6 /* MergeAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90D74C28EB7B8C3CBC53994D /* MergeAgent.swift */; };
 		4D9A57C74B314FA3570B0406 /* GitServiceReviewRequestDraftTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFB1CCDE2E4D85A46E6CFB1A /* GitServiceReviewRequestDraftTests.swift */; };
+		4DEFF78597731750310ABE00 /* RemoteHelperWatchSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F17DE68E81565014FC9454 /* RemoteHelperWatchSession.swift */; };
 		4DF50D8995FBF711085A40AF /* ReviewThreadMutations.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14CEB6C5C076B4147D587909 /* ReviewThreadMutations.swift */; };
 		4E08D715B766E9D04B4BA0B0 /* WindowAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB020862232495EC1C5ECBEA /* WindowAppearance.swift */; };
 		4E352BDC87A204DE2912F54F /* ACPHarnessBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45EABFDF5380D8D48B15312C /* ACPHarnessBridge.swift */; };
@@ -1691,6 +1692,7 @@
 		58B78EE378B0A076C904E2E4 /* TreeSitterLua */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TreeSitterLua; path = ThirdParty/TreeSitterLua; sourceTree = SOURCE_ROOT; };
 		58BC051640BBB02A2EBF6E4F /* ReviewDraftCommentController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewDraftCommentController.swift; sourceTree = "<group>"; };
 		59DBB72EE97F0E906442919B /* CommitTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitTabView.swift; sourceTree = "<group>"; };
+		59F17DE68E81565014FC9454 /* RemoteHelperWatchSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHelperWatchSession.swift; sourceTree = "<group>"; };
 		5A1A152D4297DBB5B8DFF950 /* ReviewRequestDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewRequestDraftTests.swift; sourceTree = "<group>"; };
 		5A2EFB5253073D6A4A328FE0 /* RemoteConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteConnection.swift; sourceTree = "<group>"; };
 		5A43A7D90E591CFD18088C70 /* AgentLauncherModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLauncherModel.swift; sourceTree = "<group>"; };
@@ -3642,6 +3644,7 @@
 				C9042DA34C7025958BCFEE08 /* RemoteHelperHandshake.swift */,
 				0EE8745F3A4C6F0645D1D44A /* RemoteHelperInstaller.swift */,
 				B0B0D8590E0335CD31B758E0 /* RemoteHelperProtocol.swift */,
+				59F17DE68E81565014FC9454 /* RemoteHelperWatchSession.swift */,
 				10B3615A1591964AB1C9E524 /* RemoteHostCapabilities.swift */,
 				8DF79BBCD948528D655A9A81 /* RemoteHostRegistry.swift */,
 				416C797DBD3F9F4901817769 /* RemoteHostStatusStore.swift */,
@@ -5339,6 +5342,7 @@
 				B0C493B1DE30CD22F1BAD24C /* RemoteHelperHandshake.swift in Sources */,
 				40C56ABCF57F6F3F7D40E020 /* RemoteHelperInstaller.swift in Sources */,
 				019D3627B3CEB44C34CC34F9 /* RemoteHelperProtocol.swift in Sources */,
+				4DEFF78597731750310ABE00 /* RemoteHelperWatchSession.swift in Sources */,
 				330D198F38767801994BF84C /* RemoteHostCapabilities.swift in Sources */,
 				F47287FCE8C870F02F2A55E0 /* RemoteHostRegistry.swift in Sources */,
 				52AB869F9071103FD1649552 /* RemoteHostStatusStore.swift in Sources */,

@@ -21,7 +21,9 @@ client replays those subscriptions before sending the next caller request. If
 the SSH channel exits with status `255`, the app reports a host connection
 failure through `RemoteHostStatusStore`. Other exits are treated as helper
 crashes: in-flight requests fail with a fallback-capable client error, but the
-host is not marked offline. The next request starts a new helper channel.
+host is not marked offline. Watch consumers are notified immediately so they
+resume their pre-helper polling cadence; the next retry starts a new helper
+channel and replays the active subscriptions.
 
 ## Handshake
 
@@ -37,9 +39,9 @@ Result:
 {
   "name": "alas-helper",
   "protocolVersion": 1,
-  "binaryVersion": "0.2.0",
+  "binaryVersion": "0.3.0",
   "capabilities": {
-    "watchKinds": [],
+    "watchKinds": ["files", "git"],
     "fs": {"read": true, "write": true, "stat": true},
     "ping": true
   }
@@ -61,10 +63,10 @@ Result: `{"ok": true}`
 Params: `{"root": "/srv/repo", "kinds": ["files", "git"]}`  
 Result: `{"subscriptionId": "1"}`
 
-The helper canonicalizes `root` and registers it as an allowed containment root.
-Future watcher implementations will emit `watch/event` notifications for the
-registered subscription and advertise their supported kinds in
-`hello.capabilities.watchKinds`.
+The helper canonicalizes `root`, registers it as an allowed containment root,
+and starts a native recursive watcher. Linux uses inotify and macOS uses
+FSEvents through `notify`. For git subscriptions the helper also resolves and
+watches the common git directory, including when it lives outside the worktree.
 
 `watch/unsubscribe`
 
@@ -87,6 +89,12 @@ Notification:
   }
 }
 ```
+
+`files` events contain changed paths under the worktree root. `git` events are
+limited to the same meaningful changes as the local git watcher: main or linked
+worktree HEAD changes, worktree topology changes, branch refs, and packed refs.
+Transient lockfiles and unrelated git metadata are ignored. Events are grouped
+by subscription and kind for 250 ms before the helper sends one notification.
 
 `fs/read`
 

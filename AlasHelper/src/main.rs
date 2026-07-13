@@ -1,9 +1,14 @@
+mod watch;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use watch::{SubscriptionWatcher, WatchKind, WatchNotification};
 
 const PROTOCOL_VERSION: u32 = 1;
 
@@ -28,10 +33,12 @@ struct HelperError {
     message: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct HelperState {
     next_subscription_id: u64,
     subscriptions: HashMap<String, PathBuf>,
+    watchers: HashMap<String, SubscriptionWatcher>,
+    event_sender: Option<Sender<ServerMessage>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +73,12 @@ struct FsStatParams {
     paths: Vec<String>,
 }
 
+pub(crate) enum ServerMessage {
+    Request(String),
+    Watch(WatchNotification),
+    InputClosed,
+}
+
 fn handshake() -> Handshake<'static> {
     Handshake {
         name: env!("CARGO_PKG_NAME"),
@@ -76,7 +89,7 @@ fn handshake() -> Handshake<'static> {
 
 fn capabilities() -> Value {
     json!({
-        "watchKinds": [],
+        "watchKinds": ["files", "git"],
         "fs": {
             "read": true,
             "write": true,
@@ -109,20 +122,103 @@ fn main() {
 }
 
 fn serve() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
-    let mut state = HelperState::default();
+    const DEBOUNCE: Duration = Duration::from_millis(250);
+    let (sender, receiver) = mpsc::channel();
+    let input_sender = sender.clone();
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        for line in stdin.lock().lines() {
+            match line {
+                Ok(line) => {
+                    if input_sender.send(ServerMessage::Request(line)).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = input_sender.send(ServerMessage::InputClosed);
+    });
 
-    for line in stdin.lock().lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    let mut stdout = io::stdout().lock();
+    let mut state = HelperState {
+        event_sender: Some(sender),
+        ..HelperState::default()
+    };
+    let mut pending_events: HashMap<(String, WatchKind), HashSet<String>> = HashMap::new();
+    let mut flush_at: Option<Instant> = None;
+
+    loop {
+        let message = match flush_at {
+            Some(deadline) => {
+                let timeout = deadline.saturating_duration_since(Instant::now());
+                match receiver.recv_timeout(timeout) {
+                    Ok(message) => Some(message),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            None => match receiver.recv() {
+                Ok(message) => Some(message),
+                Err(_) => break,
+            },
+        };
+
+        match message {
+            Some(ServerMessage::Request(line)) => {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                if let Some(response) = handle_line(&mut state, &line) {
+                    write_json_line(&mut stdout, &response)?;
+                }
+            }
+            Some(ServerMessage::Watch(notification)) => {
+                pending_events
+                    .entry((notification.subscription_id, notification.kind))
+                    .or_default()
+                    .extend(notification.paths);
+                flush_at.get_or_insert_with(|| Instant::now() + DEBOUNCE);
+            }
+            Some(ServerMessage::InputClosed) => {
+                flush_watch_events(&mut stdout, &state, &mut pending_events)?;
+                break;
+            }
+            None => {
+                flush_watch_events(&mut stdout, &state, &mut pending_events)?;
+                flush_at = None;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_json_line(stdout: &mut impl Write, line: &str) -> io::Result<()> {
+    writeln!(stdout, "{line}")?;
+    stdout.flush()
+}
+
+fn flush_watch_events(
+    stdout: &mut impl Write,
+    state: &HelperState,
+    pending: &mut HashMap<(String, WatchKind), HashSet<String>>,
+) -> io::Result<()> {
+    let events = std::mem::take(pending);
+    for ((subscription_id, kind), paths) in events {
+        let Some(root) = state.subscriptions.get(&subscription_id) else {
             continue;
-        }
-        let response = handle_line(&mut state, &line);
-        if let Some(response) = response {
-            writeln!(stdout, "{response}")?;
-            stdout.flush()?;
-        }
+        };
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "watch/event",
+            "params": {
+                "subscriptionId": subscription_id,
+                "root": root.display().to_string(),
+                "kind": kind.as_str(),
+                "paths": paths.into_iter().collect::<Vec<_>>()
+            }
+        });
+        write_json_line(stdout, &notification.to_string())?;
     }
     Ok(())
 }
@@ -180,8 +276,24 @@ fn watch_subscribe(state: &mut HelperState, params: Option<Value>) -> Result<Val
     let params: WatchSubscribeParams = decode_params(params)?;
     let root = std::fs::canonicalize(&params.root)
         .map_err(|error| jsonrpc_error(-32010, format!("invalid root: {error}")))?;
+    let kinds: HashSet<_> = params
+        .kinds
+        .iter()
+        .map(|kind| {
+            WatchKind::parse(kind)
+                .ok_or_else(|| jsonrpc_error(-32602, format!("unsupported watch kind: {kind}")))
+        })
+        .collect::<Result<_, _>>()?;
+    if kinds.is_empty() {
+        return Err(jsonrpc_error(-32602, "at least one watch kind is required"));
+    }
     state.next_subscription_id += 1;
     let id = state.next_subscription_id.to_string();
+    if let Some(sender) = state.event_sender.clone() {
+        let watcher = SubscriptionWatcher::new(id.clone(), root.clone(), kinds, sender)
+            .map_err(|error| jsonrpc_error(-32011, error))?;
+        state.watchers.insert(id.clone(), watcher);
+    }
     state.subscriptions.insert(id.clone(), root);
     Ok(json!({ "subscriptionId": id }))
 }
@@ -189,6 +301,7 @@ fn watch_subscribe(state: &mut HelperState, params: Option<Value>) -> Result<Val
 fn watch_unsubscribe(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
     let params: WatchUnsubscribeParams = decode_params(params)?;
     state.subscriptions.remove(&params.subscription_id);
+    state.watchers.remove(&params.subscription_id);
     Ok(json!({ "ok": true }))
 }
 
@@ -540,11 +653,9 @@ mod tests {
         .expect("response");
         let value: Value = serde_json::from_str(&response).expect("json");
         assert_eq!(value["result"]["protocolVersion"], 1);
-        assert!(
-            value["result"]["capabilities"]["watchKinds"]
-                .as_array()
-                .expect("watch kinds")
-                .is_empty()
+        assert_eq!(
+            value["result"]["capabilities"]["watchKinds"],
+            json!(["files", "git"])
         );
         assert_eq!(value["result"]["capabilities"]["fs"]["read"], true);
     }

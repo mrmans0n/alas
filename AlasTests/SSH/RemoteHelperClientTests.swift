@@ -57,7 +57,7 @@ struct RemoteHelperClientTests {
         {"jsonrpc":"2.0","id":1,"result":{
           "name":"alas-helper",
           "protocolVersion":1,
-          "binaryVersion":"0.2.0",
+          "binaryVersion":"0.3.0",
           "capabilities":{"watchKinds":[],"fs":{"read":true,"write":true,"stat":true},"ping":true}
         }}
         """#.utf8))
@@ -95,6 +95,48 @@ struct RemoteHelperClientTests {
             kind: .files,
             paths: ["/srv/repo/README.md"]
         ))
+    }
+
+    @Test func subscriptionUpdatesUseStableClientIdAndReportChannelLoss() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let subscribe = Task {
+            try await client.subscribeWithUpdates(root: "/srv/repo", kinds: [.files, .git])
+        }
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        let requestId = try #require(request["id"] as? Int)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(requestId),"result":{"subscriptionId":"helper-9"}}"#.utf8))
+
+        let handle = try await subscribe.value
+        #expect(handle.subscriptionId == "client-1")
+        var updates = handle.updates.makeAsyncIterator()
+        #expect(await updates.next() == .available)
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"watch/event","params":{
+          "subscriptionId":"helper-9",
+          "root":"/srv/repo",
+          "kind":"files",
+          "paths":["/srv/repo/README.md"]
+        }}
+        """#.utf8))
+        #expect(await updates.next() == .event(RemoteHelperWatchEvent(
+            subscriptionId: "client-1",
+            root: "/srv/repo",
+            kind: .files,
+            paths: ["/srv/repo/README.md"]
+        )))
+
+        transport.send(exitStatus: 1)
+        #expect(await updates.next() == .unavailable)
     }
 
     @Test func jsonrpcErrorResponseStillSchedulesIdleShutdown() async throws {

@@ -101,7 +101,13 @@ final class EditorBuffer {
     @ObservationIgnored
     private var remotePollTask: Task<Void, Never>?
     @ObservationIgnored
+    private var remoteHelperSession: RemoteHelperWatchSession?
+    @ObservationIgnored
+    private var remoteConflictCheckInFlight = false
+    @ObservationIgnored
     private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
+    @ObservationIgnored
+    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
     @ObservationIgnored
     private var remoteLoadGeneration = 0
     @ObservationIgnored
@@ -551,7 +557,8 @@ final class EditorBuffer {
 
     func startWatching() {
         stopWatching()
-        if remoteHost != nil {
+        if let remoteHost {
+            startRemoteHelperWatching(host: remoteHost)
             startRemoteConflictPolling()
             return
         }
@@ -575,6 +582,8 @@ final class EditorBuffer {
     func stopWatching() {
         remotePollTask?.cancel()
         remotePollTask = nil
+        remoteHelperSession?.stop()
+        remoteHelperSession = nil
         watcherSource?.cancel()
         watcherSource = nil
         watcherFD = -1
@@ -583,29 +592,67 @@ final class EditorBuffer {
 
     private func startRemoteConflictPolling() {
         guard let host = remoteHost else { return }
-        let path = absoluteFileURL.path
+        remotePollTask?.cancel()
         remotePollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.remoteConflictPollNanos)
-                guard let self, !Task.isCancelled else { return }
-
+                let interval = self?.remoteHelperSession?.isAvailable == true
+                    ? Self.remoteHelperSafetyNetNanos
+                    : Self.remoteConflictPollNanos
                 do {
-                    guard let mtime = try await RemoteFileAccess.mtime(host: host, path: path) else {
-                        if self.dirty { self.conflict = .deletedOnDisk }
-                        continue
-                    }
-                    RemoteHostStatusStore.shared.reportSuccess(host: host)
-                    guard mtime > self.originalMtime else { continue }
-                    if self.dirty {
-                        self.conflict = .changedOnDisk
-                    } else {
-                        self.revert()
-                    }
+                    try await Task.sleep(nanoseconds: interval)
                 } catch {
-                    if case .connectionFailed = error as? RemoteFileAccessError {
-                        RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
-                    }
+                    return
                 }
+                guard let self, !Task.isCancelled else { return }
+                await checkRemoteConflict(host: host)
+                remoteHelperSession?.retryIfNeeded()
+            }
+        }
+    }
+
+    private func startRemoteHelperWatching(host: String) {
+        guard remoteHelperSession == nil else { return }
+        let session = RemoteHelperWatchSession(
+            host: host,
+            root: worktreeRoot.path,
+            kinds: [.files]
+        )
+        session.onEvent = { [weak self] event in
+            guard let self, event.kind == .files else { return }
+            let target = URL(fileURLWithPath: event.root)
+                .appendingPathComponent(relativePath)
+                .standardizedFileURL.path
+            guard event.paths.contains(where: {
+                URL(fileURLWithPath: $0).standardizedFileURL.path == target
+            }) else { return }
+            Task { @MainActor in await self.checkRemoteConflict(host: host) }
+        }
+        session.onAvailabilityChanged = { [weak self] _ in
+            self?.startRemoteConflictPolling()
+        }
+        remoteHelperSession = session
+        session.start()
+    }
+
+    private func checkRemoteConflict(host: String) async {
+        guard !remoteConflictCheckInFlight else { return }
+        remoteConflictCheckInFlight = true
+        defer { remoteConflictCheckInFlight = false }
+        do {
+            guard let mtime = try await RemoteFileAccess.mtime(host: host, path: absoluteFileURL.path) else {
+                if dirty { conflict = .deletedOnDisk }
+                return
+            }
+            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            guard mtime > originalMtime else { return }
+            if dirty {
+                conflict = .changedOnDisk
+            } else {
+                revert()
+            }
+        } catch {
+            if case .connectionFailed = error as? RemoteFileAccessError {
+                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
         }
     }
