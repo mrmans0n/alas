@@ -316,6 +316,11 @@ struct RemoteHelperClientTests {
             try await client.attachProc(procId: "acp-session-1")
         }
         try await waitUntil { transport.sentFrames.count == 2 }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[1]) as? [String: Any]
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["stdoutOffset"] as? Int == 12)
         transport.send(frame: Data(#"""
         {"jsonrpc":"2.0","id":2,"result":{
           "procId":"acp-session-1",

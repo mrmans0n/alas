@@ -705,14 +705,15 @@ actor RemoteHelperClient {
     }
 
     private func emitProcEvent(_ event: RemoteHelperProcEvent, procId: String) {
-        rememberProcOffsetIfNeeded(event, procId: procId)
         guard let attachment = activeProcAttachments[procId] else {
             if detachedProcIds.contains(procId) {
                 return
             }
+            rememberProcOffsetIfNeeded(event, procId: procId)
             earlyProcEvents[procId, default: []].append(event)
             return
         }
+        rememberProcOffsetIfNeeded(event, procId: procId)
         attachment.continuation.yield(event)
         if case .exited = event {
             attachment.continuation.finish()
