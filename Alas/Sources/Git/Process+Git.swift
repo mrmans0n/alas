@@ -30,6 +30,8 @@ extension Process {
         stdin: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
+        try validateLaunchConfiguration(executable: executable, cwd: cwd)
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
@@ -243,6 +245,8 @@ extension Process {
         env: [String: String]? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResultData {
+        try validateLaunchConfiguration(executable: executable, cwd: cwd)
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
@@ -323,6 +327,18 @@ extension Process {
             stdout: outAccum.snapshot(),
             stderr: String(data: errAccum.snapshot(), encoding: .utf8) ?? ""
         )
+    }
+}
+
+private func validateLaunchConfiguration(executable: String, cwd: URL?) throws {
+    guard FileManager.default.isExecutableFile(atPath: executable) else {
+        throw ProcessError.launchFailed("Executable is not runnable: \(executable)")
+    }
+
+    guard let cwd else { return }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+        throw ProcessError.launchFailed("Working directory does not exist: \(cwd.path)")
     }
 }
 
