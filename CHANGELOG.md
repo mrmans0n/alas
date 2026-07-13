@@ -6,9 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-07-14
+
 ### ✨ Features
 
-- Replace idle remote project polling with push-based helper file and git events (#752).
+- Replace idle remote project polling with push-based helper file and git events (#766).
+- Add an interactive SSH connection assistant (#769).
+- Add low-latency headless file-system and search operations (#770).
+- Add automatic comparison-base mode for Changes: Auto, Branch upstream, and Manual (#773).
+- Manage ACP adapters on SSH hosts (#772).
+
+### 🐛 Fixes
+
+- Bound the ACP transcript restore window (#771).
 
 ## [0.10.2] - 2026-07-13
 
