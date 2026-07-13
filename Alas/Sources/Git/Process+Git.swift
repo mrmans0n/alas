@@ -191,10 +191,14 @@ extension Process {
         stdin: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
+        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        if host == nil {
+            try validateWorkingDirectory(cwd)
+        }
         let invocation = GitInvocation.build(
             gitArgs: args,
             cwd: cwd,
-            host: RemoteHostRegistry.shared.host(forPath: cwd?.path)
+            host: host
         )
         return try await run(
             invocation.executable,
@@ -223,10 +227,14 @@ extension Process {
         cwd: URL? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResultData {
+        let host = RemoteHostRegistry.shared.host(forPath: cwd?.path)
+        if host == nil {
+            try validateWorkingDirectory(cwd)
+        }
         let invocation = GitInvocation.build(
             gitArgs: args,
             cwd: cwd,
-            host: RemoteHostRegistry.shared.host(forPath: cwd?.path)
+            host: host
         )
         return try await runData(
             invocation.executable,
@@ -335,6 +343,10 @@ private func validateLaunchConfiguration(executable: String, cwd: URL?) throws {
         throw ProcessError.launchFailed("Executable is not runnable: \(executable)")
     }
 
+    try validateWorkingDirectory(cwd)
+}
+
+private func validateWorkingDirectory(_ cwd: URL?) throws {
     guard let cwd else { return }
     var isDirectory: ObjCBool = false
     guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDirectory), isDirectory.boolValue else {
