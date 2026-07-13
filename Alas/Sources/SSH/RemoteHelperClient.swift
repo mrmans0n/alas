@@ -289,7 +289,6 @@ actor RemoteHelperClient {
         var continuation: AsyncStream<RemoteHelperProcEvent>.Continuation!
         let events = AsyncStream<RemoteHelperProcEvent> { continuation = $0 }
         activeProcAttachments[procId] = ActiveRemoteHelperProcAttachment(continuation: continuation)
-        continuation.yield(.available)
         for frame in result.stdoutFrames {
             if let data = Data(base64Encoded: frame.dataBase64) {
                 continuation.yield(.stdout(data, offset: frame.offset))
@@ -300,11 +299,19 @@ actor RemoteHelperClient {
                 continuation.yield(.stderr(data, offset: chunk.offset))
             }
         }
+        var didExit = false
         for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
             continuation.yield(event)
+            if case .exited = event {
+                didExit = true
+            }
         }
-        if !result.running {
+        if result.running, !didExit {
+            continuation.yield(.available)
+        } else if !didExit {
             continuation.yield(.exited(result.exitCode))
+            continuation.finish()
+            activeProcAttachments.removeValue(forKey: procId)
         }
         return RemoteHelperProcAttachHandle(procId: procId, events: events)
     }

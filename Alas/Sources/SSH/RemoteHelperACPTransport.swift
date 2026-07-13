@@ -64,6 +64,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         var attempt = 0
         while !Task.isCancelled && !state.isTerminated {
             do {
+                state.setWritesEnabled(false)
                 let client = await RemoteHelperClientPool.shared.client(for: host)
                 if !didSpawn {
                     let hello = try await client.hello()
@@ -87,13 +88,14 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     stderrOffset: stderrOffset
                 )
                 attempt = 0
-                await flushPendingWrites()
                 for await event in handle.events {
                     guard !Task.isCancelled, !state.isTerminated else { return }
                     switch event {
                     case .available:
+                        state.setWritesEnabled(true)
                         await flushPendingWrites()
                     case .unavailable:
+                        state.setWritesEnabled(false)
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
                         stdoutOffset = offset
@@ -102,6 +104,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         stderrOffset = offset
                         continuation?.yield(.stderr(data))
                     case .exited(let code):
+                        state.setWritesEnabled(false)
                         continuation?.yield(.exited(code ?? 0))
                         continuation?.finish()
                         return
@@ -109,6 +112,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 }
             } catch {
                 guard !Task.isCancelled, !state.isTerminated else { return }
+                state.setWritesEnabled(false)
                 let delay = ACPReconnectPolicy.delay(forAttempt: attempt) ?? 5
                 attempt += 1
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -118,6 +122,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
 
     private func flushPendingWrites() async {
         while !Task.isCancelled && !state.isTerminated {
+            guard state.writesEnabled else { return }
             let next = state.takeNextWrite()
             guard let next else { return }
             do {
@@ -138,12 +143,19 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         private let lock = NSLock()
         private var started = false
         private var terminated = false
+        private var canWrite = false
         private var pendingWrites: [Data] = []
 
         var isTerminated: Bool {
             lock.lock()
             defer { lock.unlock() }
             return terminated
+        }
+
+        var writesEnabled: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return canWrite && !terminated
         }
 
         func markStarted() -> Bool {
@@ -159,7 +171,14 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             defer { lock.unlock() }
             guard !terminated else { return false }
             terminated = true
+            canWrite = false
             return true
+        }
+
+        func setWritesEnabled(_ enabled: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            canWrite = enabled && !terminated
         }
 
         func enqueue(_ data: Data) -> Bool {

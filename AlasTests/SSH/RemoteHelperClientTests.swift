@@ -152,8 +152,8 @@ struct RemoteHelperClientTests {
 
         let handle = try await attach.value
         var iterator = handle.events.makeAsyncIterator()
-        #expect(await iterator.next() == .available)
         #expect(await iterator.next() == .stdout(Data(#"{"jsonrpc":"2.0"}"#.utf8), offset: 25))
+        #expect(await iterator.next() == .available)
 
         transport.send(frame: Data(#"""
         {"jsonrpc":"2.0","method":"proc/output","params":{
