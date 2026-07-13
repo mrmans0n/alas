@@ -13,7 +13,14 @@ final class ACPSlashPickerModel: ObservableObject {
     let allSuggestions: [ACPPromptSuggestion]
 
     init(suggestions: [ACPPromptSuggestion]) {
-        self.allSuggestions = suggestions
+        // De-duplicate by `command` (case-sensitive) keeping the first
+        // occurrence in original order. Some agents emit the same slash
+        // command more than once (e.g. across re-sent
+        // `available_commands_update` payloads); duplicates would otherwise
+        // render as repeated rows and, with element-based ForEach identity,
+        // as blank phantom rows.
+        var seen = Set<String>()
+        self.allSuggestions = suggestions.filter { seen.insert($0.command).inserted }
     }
 
     /// Score each suggestion by how well it matches the (lowercased)
@@ -103,7 +110,16 @@ struct ACPSlashPickerView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                     } else {
-                        ForEach(Array(items.enumerated()), id: \.element) { idx, s in
+                        // Identity is positional (offset == idx), matching
+                        // the row's `.id(idx)` and the index-based
+                        // `selectedIndex` / `scrollTo`. Using `\.element` here
+                        // would collide when the agent emits duplicate
+                        // commands and would disagree with `.id(idx)` when
+                        // the filtered list reorders on every keystroke —
+                        // the LazyVStack then recycles cells by element id but
+                        // re-identifies the row by index, leaving blank
+                        // recycled rows interspersed with live ones.
+                        ForEach(Array(items.enumerated()), id: \.offset) { idx, s in
                             row(s, isSelected: idx == model.selectedIndex)
                                 .id(idx)
                                 .contentShape(Rectangle())
