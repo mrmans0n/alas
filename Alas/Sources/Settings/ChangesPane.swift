@@ -13,12 +13,18 @@ struct ChangesPane: View {
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
 
-                SettingsGroup(title: "Commits section") {
+                SettingsGroup(title: "Comparison base") {
                     SettingsRow(
-                        name: "Track upstream branch",
-                        desc: "When on, the Commits section compares against your branch's remote tracking ref once you push, so it only lists unpushed commits. When off, it always compares against the base branch — you'll see every commit on this branch since it diverged from main."
+                        name: "Compare commits against",
+                        desc: comparisonModeDescription
                     ) {
-                        AlasToggle(on: state.bind(\.changes.trackUpstreamForCommits))
+                        Picker("", selection: state.bind(\.changes.comparisonMode)) {
+                            Text("Auto").tag(AppConfig.Changes.ChangesComparisonMode.auto)
+                            Text("Branch upstream").tag(AppConfig.Changes.ChangesComparisonMode.branchUpstream)
+                            Text("Manual").tag(AppConfig.Changes.ChangesComparisonMode.manual)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
                     }
                 }
 
@@ -70,6 +76,17 @@ struct ChangesPane: View {
                 }
             }
             .padding(.horizontal, 32).padding(.vertical, 24)
+        }
+    }
+
+    private var comparisonModeDescription: String {
+        switch state.config.changes.comparisonMode {
+        case .auto:
+            return "Compares against origin/<base> (falls back to your local base branch). Always shows this branch's own work and stays stable across rebases."
+        case .branchUpstream:
+            return "Compares against this branch's own remote tracking ref, so it only lists unpushed commits once you push."
+        case .manual:
+            return "Compares against the base branch you pick per worktree (via the base-branch selector), resolved locally first."
         }
     }
 
