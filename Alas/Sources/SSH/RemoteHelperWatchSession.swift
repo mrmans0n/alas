@@ -1,21 +1,57 @@
 import Foundation
 
+struct RemoteHelperRetryGate {
+    private let retryInterval: TimeInterval
+    private var lastAttemptAt: Date?
+    private(set) var isAvailable = false
+
+    init(retryInterval: TimeInterval) {
+        self.retryInterval = retryInterval
+    }
+
+    func shouldAttempt(now: Date) -> Bool {
+        guard !isAvailable else { return false }
+        if let lastAttemptAt, now.timeIntervalSince(lastAttemptAt) < retryInterval {
+            return false
+        }
+        return true
+    }
+
+    mutating func markAttempt(at date: Date) {
+        lastAttemptAt = date
+    }
+
+    mutating func setAvailable(_ available: Bool) -> Bool {
+        let wasAvailable = isAvailable
+        guard wasAvailable != available else { return false }
+        isAvailable = available
+        if available || wasAvailable {
+            lastAttemptAt = nil
+        }
+        return true
+    }
+
+    mutating func stop() {
+        isAvailable = false
+        lastAttemptAt = nil
+    }
+}
+
 @MainActor
 final class RemoteHelperWatchSession {
     var onEvent: ((RemoteHelperWatchEvent) -> Void)?
     var onAvailabilityChanged: ((Bool) -> Void)?
 
-    private(set) var isAvailable = false
+    var isAvailable: Bool { retryGate.isAvailable }
 
     private let host: String
     private let root: String
     private let kinds: [RemoteHelperWatchKind]
-    private let retryInterval: TimeInterval
+    private var retryGate: RemoteHelperRetryGate
     private var connectionTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
     private var client: RemoteHelperClient?
     private var handle: RemoteHelperWatchHandle?
-    private var lastAttemptAt: Date?
     private var generation = 0
 
     init(
@@ -27,7 +63,7 @@ final class RemoteHelperWatchSession {
         self.host = host
         self.root = root
         self.kinds = kinds
-        self.retryInterval = retryInterval
+        self.retryGate = RemoteHelperRetryGate(retryInterval: retryInterval)
     }
 
     func start() {
@@ -45,7 +81,7 @@ final class RemoteHelperWatchSession {
         let subscriptionId = handle?.subscriptionId
         self.client = nil
         handle = nil
-        isAvailable = false
+        retryGate.stop()
         if let client, let subscriptionId {
             Task {
                 _ = try? await client.unsubscribe(subscriptionId: subscriptionId)
@@ -55,22 +91,20 @@ final class RemoteHelperWatchSession {
 
     func retryIfNeeded(now: Date = Date()) {
         guard !isAvailable, retryTask == nil else { return }
-        if let lastAttemptAt, now.timeIntervalSince(lastAttemptAt) < retryInterval {
-            return
-        }
-        lastAttemptAt = now
+        guard retryGate.shouldAttempt(now: now) else { return }
         guard let client, handle != nil else {
             guard connectionTask == nil else { return }
             beginConnection(attemptDate: now)
             return
         }
+        retryGate.markAttempt(at: now)
         retryTask = Task { [weak self] in
             do {
                 _ = try await client.ping()
             } catch RemoteHelperClientError.notRunning {
                 // Keep the subscription registered locally so the next helper process can replay it.
             } catch {
-                await self?.dropStaleSubscription(client: client, subscriptionId: handle?.subscriptionId)
+                await self?.dropStaleSubscription(client: client, subscriptionId: self?.handle?.subscriptionId)
             }
             guard let self, !Task.isCancelled else { return }
             self.retryTask = nil
@@ -89,7 +123,7 @@ final class RemoteHelperWatchSession {
     }
 
     private func beginConnection(attemptDate: Date = Date()) {
-        lastAttemptAt = attemptDate
+        retryGate.markAttempt(at: attemptDate)
         generation &+= 1
         let attemptGeneration = generation
         connectionTask = Task { [weak self] in
@@ -134,8 +168,7 @@ final class RemoteHelperWatchSession {
     }
 
     private func setAvailable(_ available: Bool) {
-        guard isAvailable != available else { return }
-        isAvailable = available
+        guard retryGate.setAvailable(available) else { return }
         onAvailabilityChanged?(available)
     }
 }

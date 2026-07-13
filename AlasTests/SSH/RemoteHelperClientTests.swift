@@ -12,6 +12,30 @@ struct RemoteHelperClientTests {
         #expect(invocation.args.last?.contains("alas-helper\" serve") == true)
     }
 
+    @Test func retryGateThrottlesFailedAttempts() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var gate = RemoteHelperRetryGate(retryInterval: 300)
+
+        #expect(gate.shouldAttempt(now: start))
+        gate.markAttempt(at: start)
+
+        #expect(!gate.shouldAttempt(now: start.addingTimeInterval(10)))
+        #expect(gate.shouldAttempt(now: start.addingTimeInterval(301)))
+    }
+
+    @Test func retryGateClearsThrottleAfterLiveHelperDrops() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var gate = RemoteHelperRetryGate(retryInterval: 300)
+
+        gate.markAttempt(at: start)
+        let becameAvailable = gate.setAvailable(true)
+        let becameUnavailable = gate.setAvailable(false)
+
+        #expect(becameAvailable)
+        #expect(becameUnavailable)
+        #expect(gate.shouldAttempt(now: start.addingTimeInterval(10)))
+    }
+
     @Test func pingUsesJSONRPCNewlineTransport() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
