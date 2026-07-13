@@ -247,7 +247,7 @@ struct RemoteHelperClientTests {
 
         await client.detachProc(procId: "acp-session-1", stdoutOffset: 52, stderrOffset: 3)
         let secondAttach = Task {
-            try await client.attachProc(procId: "acp-session-1", attachAtEndIfOffsetUnknown: true)
+            try await client.attachProc(procId: "acp-session-1")
         }
         try await waitUntil { transport.sentFrames.count == 2 }
         let request = try #require(
@@ -313,7 +313,7 @@ struct RemoteHelperClientTests {
         """#.utf8))
 
         let reattach = Task {
-            try await client.attachProc(procId: "acp-session-1", attachAtEndIfOffsetUnknown: true)
+            try await client.attachProc(procId: "acp-session-1")
         }
         try await waitUntil { transport.sentFrames.count == 2 }
         transport.send(frame: Data(#"""
@@ -331,6 +331,40 @@ struct RemoteHelperClientTests {
         let reattachHandle = try await reattach.value
         var reattachIterator = reattachHandle.events.makeAsyncIterator()
         #expect(await reattachIterator.next() == .available)
+    }
+
+    @Test func procAttachWithoutRememberedOffsetRequestsReplayFromStart() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let attach = Task {
+            try await client.attachProc(procId: "acp-session-1")
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["stdoutOffset"] == nil)
+        #expect(params["stderrOffset"] == nil)
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":1,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":0,
+          "stdoutOffset":0,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        _ = try await attach.value
     }
 
     @Test func remoteHelperACPTransportFramesWritesAsNewlineDelimitedACP() {

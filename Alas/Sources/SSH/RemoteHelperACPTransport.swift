@@ -104,8 +104,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 let handle = try await client.attachProc(
                     procId: procId,
                     stdoutOffset: requestedStdoutOffset,
-                    stderrOffset: requestedStderrOffset,
-                    attachAtEndIfOffsetUnknown: true
+                    stderrOffset: requestedStderrOffset
                 )
                 stdinOffset = handle.stdinOffset
                 attempt = 0
