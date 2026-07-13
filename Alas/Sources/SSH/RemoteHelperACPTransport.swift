@@ -12,6 +12,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private var attachTask: Task<Void, Never>?
     private var stdoutOffset: UInt64 = 0
     private var stderrOffset: UInt64 = 0
+    private var stdinOffset: UInt64 = 0
 
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
 
@@ -51,10 +52,6 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     func terminate() {
         guard state.markTerminated() else { return }
         attachTask?.cancel()
-        Task { [host, procId] in
-            let client = await RemoteHelperClientPool.shared.client(for: host)
-            try? await client.killProc(procId: procId)
-        }
         continuation?.yield(.exited(0))
         continuation?.finish()
     }
@@ -131,13 +128,26 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     }
 
     private func flushPendingWrites() async {
+        guard state.beginFlushingWrites() else { return }
+        defer { state.endFlushingWrites() }
         while !Task.isCancelled && !state.isTerminated {
             guard state.writesEnabled else { return }
             let next = state.takeNextWrite()
             guard let next else { return }
             do {
                 let client = await RemoteHelperClientPool.shared.client(for: host)
-                try await client.writeProc(procId: procId, data: Self.frameForProcWrite(next))
+                stdinOffset = try await client.writeProc(
+                    procId: procId,
+                    data: Self.frameForProcWrite(next),
+                    expectedStdinOffset: stdinOffset
+                )
+            } catch RemoteHelperClientError.jsonrpc(let error) {
+                _ = state.markTerminated()
+                let message = "Remote helper failed to write ACP input: \(error.message)\n"
+                continuation?.yield(.stderr(Data(message.utf8)))
+                continuation?.yield(.exited(127))
+                continuation?.finish()
+                return
             } catch {
                 state.requeue(next)
                 return
@@ -170,6 +180,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         private var started = false
         private var terminated = false
         private var canWrite = false
+        private var isFlushingWrites = false
         private var pendingWrites: [Data] = []
 
         var isTerminated: Bool {
@@ -220,6 +231,20 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             defer { lock.unlock() }
             guard !pendingWrites.isEmpty else { return nil }
             return pendingWrites.removeFirst()
+        }
+
+        func beginFlushingWrites() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !isFlushingWrites, !terminated else { return false }
+            isFlushingWrites = true
+            return true
+        }
+
+        func endFlushingWrites() {
+            lock.lock()
+            defer { lock.unlock() }
+            isFlushingWrites = false
         }
 
         func requeue(_ data: Data) {

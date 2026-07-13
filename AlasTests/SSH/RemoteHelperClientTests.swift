@@ -207,6 +207,36 @@ struct RemoteHelperClientTests {
         #expect(framed == Data("{\"id\":1}\n".utf8))
     }
 
+    @Test func procWriteUsesExpectedOffsetAndReturnsAcknowledgedOffset() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let write = Task {
+            try await client.writeProc(
+                procId: "acp-session-1",
+                data: Data("hello\n".utf8),
+                expectedStdinOffset: 42
+            )
+        }
+
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        #expect(request["method"] as? String == "proc/write")
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["procId"] as? String == "acp-session-1")
+        #expect(params["expectedStdinOffset"] as? Int == 42)
+        #expect(params["dataBase64"] as? String == Data("hello\n".utf8).base64EncodedString())
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true,"stdinOffset":48}}"#.utf8))
+        #expect(try await write.value == 48)
+    }
+
     @Test func remoteHelperACPTransportOnlyRetriesTransientSpawnFailures() {
         #expect(RemoteHelperACPTransport.shouldRetrySpawnFailure(RemoteHelperClientError.notRunning))
         #expect(RemoteHelperACPTransport.shouldRetrySpawnFailure(RemoteHelperClientError.unavailable("ssh closed")))

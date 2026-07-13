@@ -334,15 +334,17 @@ actor RemoteHelperClient {
         return RemoteHelperProcAttachHandle(procId: procId, events: events)
     }
 
-    func writeProc(procId: String, data: Data) async throws {
-        let _: RemoteHelperProcWriteResult = try await request(
+    func writeProc(procId: String, data: Data, expectedStdinOffset: UInt64? = nil) async throws -> UInt64 {
+        let result: RemoteHelperProcWriteResult = try await request(
             method: "proc/write",
             params: RemoteHelperProcWriteParams(
                 procId: procId,
-                dataBase64: data.base64EncodedString()
+                dataBase64: data.base64EncodedString(),
+                expectedStdinOffset: expectedStdinOffset
             ),
             replaySubscriptionsOnStart: false
         )
+        return result.stdinOffset
     }
 
     func killProc(procId: String) async throws {

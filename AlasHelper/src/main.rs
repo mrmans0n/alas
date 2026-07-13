@@ -4,7 +4,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -131,6 +131,7 @@ struct ProcAttachParams {
 struct ProcWriteParams {
     proc_id: String,
     data_base64: String,
+    expected_stdin_offset: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -913,22 +914,26 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         .join(" ");
     let env_command = env_parts.join(" ");
     let script = format!(
-        "cd {cwd} && tail -n +1 -f {stdin} | {env_command} {argv} > {stdout} 2> {stderr}; status=$?; printf '%s\\n' \"$status\" > {exit}",
+        "cd {cwd} && exec {env_command} {argv}",
         cwd = shell_quote(cwd.to_string_lossy().as_ref()),
-        stdin = shell_quote(stdin_path.to_string_lossy().as_ref()),
-        stdout = shell_quote(stdout_path.to_string_lossy().as_ref()),
-        stderr = shell_quote(stderr_path.to_string_lossy().as_ref()),
-        exit = shell_quote(exit_path.to_string_lossy().as_ref()),
         env_command = env_command,
         argv = argv,
     );
+    let stdout_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&stdout_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("stdout open failed: {error}")))?;
+    let stderr_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&stderr_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("stderr open failed: {error}")))?;
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
         .arg(script)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -937,10 +942,11 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     let mut child = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
+    let child_stdin = child.stdin.take();
     std::fs::write(&pid_path, format!("{}\n", child.id()))
         .map_err(|error| jsonrpc_error(-32050, format!("pid write failed: {error}")))?;
     thread::spawn(move || {
-        let _ = child.wait();
+        pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_path);
     });
     state
         .subscriptions
@@ -1019,15 +1025,108 @@ fn proc_write(params: Option<Value>) -> Result<Value, HelperError> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(params.data_base64.as_bytes())
         .map_err(|error| jsonrpc_error(-32602, format!("invalid base64: {error}")))?;
+    let stdin_path = dir.join("stdin.log");
     let mut file = std::fs::OpenOptions::new()
+        .read(true)
         .append(true)
-        .open(dir.join("stdin.log"))
+        .open(&stdin_path)
         .map_err(|error| jsonrpc_error(-32052, format!("stdin open failed: {error}")))?;
+    let current_offset = file
+        .metadata()
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin metadata failed: {error}")))?
+        .len();
+    if let Some(expected_offset) = params.expected_stdin_offset {
+        if current_offset != expected_offset {
+            if input_log_already_contains(&mut file, expected_offset, &bytes)? {
+                return Ok(
+                    json!({ "ok": true, "stdinOffset": expected_offset + bytes.len() as u64 }),
+                );
+            }
+            return Err(jsonrpc_error(
+                -32053,
+                format!(
+                    "stdin offset mismatch: expected {expected_offset}, found {current_offset}"
+                ),
+            ));
+        }
+    }
     file.write_all(&bytes)
         .map_err(|error| jsonrpc_error(-32052, format!("stdin write failed: {error}")))?;
     file.flush()
         .map_err(|error| jsonrpc_error(-32052, format!("stdin flush failed: {error}")))?;
-    Ok(json!({ "ok": true }))
+    Ok(json!({ "ok": true, "stdinOffset": current_offset + bytes.len() as u64 }))
+}
+
+fn pump_proc_stdin_and_record_exit(
+    mut child: std::process::Child,
+    mut child_stdin: Option<std::process::ChildStdin>,
+    stdin_path: PathBuf,
+    exit_path: PathBuf,
+) {
+    let mut stdin_offset = 0_u64;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if let Some(stdin) = child_stdin.as_mut() {
+            if pump_proc_stdin_once(&stdin_path, &mut stdin_offset, stdin, &mut buffer).is_err() {
+                child_stdin = None;
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                drop(child_stdin.take());
+                let code = status.code().unwrap_or(2);
+                let _ = std::fs::write(&exit_path, format!("{code}\n"));
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                drop(child_stdin.take());
+                let _ = child.kill();
+                let _ = std::fs::write(&exit_path, "2\n");
+                break;
+            }
+        }
+    }
+}
+
+fn pump_proc_stdin_once(
+    path: &Path,
+    offset: &mut u64,
+    stdin: &mut std::process::ChildStdin,
+    buffer: &mut [u8],
+) -> io::Result<()> {
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(*offset))?;
+    loop {
+        let read = file.read(buffer)?;
+        if read == 0 {
+            break;
+        }
+        stdin.write_all(&buffer[..read])?;
+        *offset += read as u64;
+    }
+    stdin.flush()
+}
+
+fn input_log_already_contains(
+    file: &mut std::fs::File,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<bool, HelperError> {
+    let end = offset + bytes.len() as u64;
+    let len = file
+        .metadata()
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin metadata failed: {error}")))?
+        .len();
+    if len < end {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin seek failed: {error}")))?;
+    let mut existing = vec![0_u8; bytes.len()];
+    file.read_exact(&mut existing)
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin read failed: {error}")))?;
+    Ok(existing == bytes)
 }
 
 fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
@@ -1564,6 +1663,31 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn input_log_already_contains_detects_idempotent_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-input-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("stdin.log");
+        std::fs::write(&path, b"first\nsecond\n").expect("input log");
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(&path)
+            .expect("open input log");
+
+        assert!(input_log_already_contains(&mut file, 6, b"second\n").expect("contains check"));
+        assert!(!input_log_already_contains(&mut file, 6, b"other\n").expect("contains mismatch"));
+        assert!(
+            !input_log_already_contains(&mut file, 20, b"later\n").expect("contains beyond eof")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

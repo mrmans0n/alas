@@ -241,10 +241,12 @@ struct RemoteHelperProcAttachResult: Codable, Equatable, Sendable {
 struct RemoteHelperProcWriteParams: Codable, Equatable, Sendable {
     let procId: String
     let dataBase64: String
+    let expectedStdinOffset: UInt64?
 }
 
 struct RemoteHelperProcWriteResult: Codable, Equatable, Sendable {
     let ok: Bool
+    let stdinOffset: UInt64
 }
 
 struct RemoteHelperProcKillParams: Codable, Equatable, Sendable {
