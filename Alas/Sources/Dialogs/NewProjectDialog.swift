@@ -39,6 +39,9 @@ private struct ProjectDialog: View {
     }
     @State private var location: ProjectLocation = .local
     @State private var sshHost: String = ""
+    @State private var showHostPicker = false
+    @State private var sshHosts: [SSHConfigHost] = []
+    @State private var sshHostsLoading = false
     @State private var name: String = ""
     @State private var iconMode: ProjectIcon.Mode = .letter
     @State private var iconColor: String = ProjectIcon.defaultColor
@@ -106,7 +109,29 @@ private struct ProjectDialog: View {
                             }
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
-                                AlasField(text: $sshHost, placeholder: "Host from ~/.ssh/config, e.g. devbox", monospaced: true)
+                                HStack(spacing: 6) {
+                                    AlasField(text: $sshHost, placeholder: "devbox or user@host", monospaced: true)
+                                    Button(action: { showHostPicker.toggle() }) {
+                                        Image(systemName: "list.bullet")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(theme.color("fg-dim"))
+                                            .frame(width: 30, height: 28)
+                                            .background(theme.color("bg-2"))
+                                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                                .strokeBorder(theme.color("line"), lineWidth: 0.5))
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Choose a host from ~/.ssh/config")
+                                    .popover(isPresented: $showHostPicker, arrowEdge: .bottom) {
+                                        SSHHostPicker(
+                                            host: $sshHost,
+                                            hosts: sshHosts,
+                                            isLoading: sshHostsLoading,
+                                            isPresented: $showHostPicker
+                                        )
+                                    }
+                                }
                                 AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
                             }
                         }
@@ -147,6 +172,11 @@ private struct ProjectDialog: View {
                     await suggestName(for: new)
                     await loadAvatarPresetIfAvailable()
                 }
+            }
+        }
+        .onChange(of: showHostPicker) { _, isOpen in
+            if isOpen && sshHosts.isEmpty && !sshHostsLoading {
+                loadSSHHosts()
             }
         }
         .sheet(isPresented: $mcpManagerPresented) {
@@ -430,6 +460,16 @@ private struct ProjectDialog: View {
             if let suggested = try? await svc.suggestProjectName(url), name.isEmpty {
                 name = suggested
             }
+        }
+    }
+
+    private func loadSSHHosts() {
+        sshHostsLoading = true
+        Task {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let parsed = await Task.detached { SSHConfigParser.parse(home: home) }.value
+            sshHosts = parsed
+            sshHostsLoading = false
         }
     }
 
