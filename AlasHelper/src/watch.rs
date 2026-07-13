@@ -211,7 +211,11 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     };
     let relative = relative.to_string_lossy();
     let relative = relative.trim_matches('/');
-    if relative == "packed-refs" || relative.starts_with("refs/heads/") {
+    if relative == "packed-refs"
+        || relative == "refs/stash"
+        || relative == "logs/refs/stash"
+        || relative.starts_with("refs/heads/")
+    {
         return true;
     }
     if relative == "worktrees" {
@@ -286,6 +290,11 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/refs/heads/main"),
+            &info
+        ));
+        assert!(is_relevant_git_path(&root.join(".git/refs/stash"), &info));
+        assert!(is_relevant_git_path(
+            &root.join(".git/logs/refs/stash"),
             &info
         ));
         assert!(is_relevant_git_path(&root.join(".git/packed-refs"), &info));
