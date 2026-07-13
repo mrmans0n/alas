@@ -97,6 +97,39 @@ struct RemoteHelperClientTests {
         ))
     }
 
+    @Test func legacyWatchEventBufferDropsOldestEventsAtItsLimit() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let firstPing = Task { try await client.ping() }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8))
+        _ = try await firstPing.value
+
+        for index in 0 ... RemoteHelperClient.legacyWatchEventBufferLimit {
+            transport.send(frame: Data(#"""
+            {"jsonrpc":"2.0","method":"watch/event","params":{
+              "subscriptionId":"sub-\#(index)",
+              "root":"/srv/repo",
+              "kind":"files",
+              "paths":["/srv/repo/file-\#(index)"]
+            }}
+            """#.utf8))
+        }
+
+        let barrierPing = Task { try await client.ping() }
+        try await waitUntil { transport.sentFrames.count == 2 }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"result":{"ok":true}}"#.utf8))
+        _ = try await barrierPing.value
+
+        var iterator = client.watchEvents.makeAsyncIterator()
+        #expect(await iterator.next()?.subscriptionId == "sub-1")
+    }
+
     @Test func subscriptionUpdatesUseStableClientIdAndReportChannelLoss() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(

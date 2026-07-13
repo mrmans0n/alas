@@ -33,6 +33,7 @@ actor RemoteHelperClient {
     typealias TransportFactory = @Sendable () -> JSONRPCStdioTransporting
 
     static let defaultIdleShutdownNanoseconds: UInt64 = 600_000_000_000
+    static let legacyWatchEventBufferLimit = 64
 
     nonisolated let host: String
     nonisolated let watchEvents: AsyncStream<RemoteHelperWatchEvent>
@@ -63,7 +64,9 @@ actor RemoteHelperClient {
             Self.makeTransport(host: host)
         }
         var eventsCont: AsyncStream<RemoteHelperWatchEvent>.Continuation!
-        self.watchEvents = AsyncStream { eventsCont = $0 }
+        self.watchEvents = AsyncStream(
+            bufferingPolicy: .bufferingNewest(Self.legacyWatchEventBufferLimit)
+        ) { eventsCont = $0 }
         self.watchEventsCont = eventsCont
     }
 
