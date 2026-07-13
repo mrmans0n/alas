@@ -47,8 +47,8 @@ enum SSHConfigParser {
 
         var stanza: [Int] = []   // indices into `hosts` for the current Host stanza
 
-        for rawLine in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+        for rawLine in contents.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty || line.hasPrefix("#") { continue }
             guard let (keyword, value) = splitKeyword(line) else { continue }
 

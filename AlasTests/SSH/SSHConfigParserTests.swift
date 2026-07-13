@@ -79,4 +79,43 @@ struct SSHConfigParserTests {
         let hosts = SSHConfigParser.parse(home: home)
         #expect(hosts == [SSHConfigHost(alias: "devbox", hostName: "10.0.0.9", user: nil, port: nil)])
     }
+
+    @Test func followsIncludeGlobInOrder() throws {
+        let home = try makeHome(
+            config: """
+            Include config.d/*.conf
+            Host local-tail
+                HostName tail.example.com
+            """,
+            extraFiles: [
+                ".ssh/config.d/10-a.conf": "Host from-a\n    HostName a.example.com\n",
+                ".ssh/config.d/20-b.conf": "Host from-b\n    HostName b.example.com\n",
+                ".ssh/config.d/skip.txt": "Host should-not-load\n",
+            ]
+        )
+        let hosts = SSHConfigParser.parse(home: home)
+        #expect(hosts.map(\.alias) == ["from-a", "from-b", "local-tail"])
+    }
+
+    @Test func expandsTildeInclude() throws {
+        let home = try makeHome(
+            config: "Include ~/.ssh/extra\n",
+            extraFiles: [".ssh/extra": "Host tilde-host\n    HostName t.example.com\n"]
+        )
+        #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["tilde-host"])
+    }
+
+    @Test func includeCycleTerminates() throws {
+        let home = try makeHome(config: "Include config.d/loop\nHost base\n",
+            extraFiles: [".ssh/config.d/loop": "Include ../config\nHost loop-host\n"]
+        )
+        let hosts = SSHConfigParser.parse(home: home)
+        // Terminates (no infinite recursion) and captures each alias once.
+        #expect(Set(hosts.map(\.alias)) == ["base", "loop-host"])
+    }
+
+    @Test func handlesCRLFLineEndings() throws {
+        let home = try makeHome(config: "Host crlfbox\r\n    HostName 10.0.0.9\r\n    User me\r\n")
+        #expect(SSHConfigParser.parse(home: home) == [SSHConfigHost(alias: "crlfbox", hostName: "10.0.0.9", user: "me", port: nil)])
+    }
 }
