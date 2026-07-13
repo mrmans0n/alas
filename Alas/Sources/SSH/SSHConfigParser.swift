@@ -46,6 +46,12 @@ enum SSHConfigParser {
         guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return }
 
         var stanza: [Int] = []   // indices into `hosts` for the current Host stanza
+        // Directives are governed by the most recent Host/Match block. An
+        // `Include` inside a conditional block (any `Host`/`Match` other than
+        // the catch-all `Host *` / `Match all`) only applies when connecting
+        // to a matching host, so those aliases are not usable top-level — we
+        // skip them rather than offer hosts `ssh` would not resolve.
+        var conditionalScope = false
 
         for rawLine in contents.components(separatedBy: .newlines) {
             let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -56,12 +62,17 @@ enum SSHConfigParser {
             switch keyword.lowercased() {
             case "host":
                 stanza = []
-                for token in tokenize(value) where isPlainAlias(token) {
+                let tokens = tokenize(value)
+                conditionalScope = tokens != ["*"]
+                for token in tokens where isPlainAlias(token) {
                     guard !seenAliases.contains(token) else { continue }
                     seenAliases.insert(token)
                     hosts.append(SSHConfigHost(alias: token, hostName: nil, user: nil, port: nil))
                     stanza.append(hosts.count - 1)
                 }
+            case "match":
+                stanza = []
+                conditionalScope = tokenize(value).map { $0.lowercased() } != ["all"]
             case "hostname":
                 if let v = tokenize(value).first {
                     for i in stanza where hosts[i].hostName == nil { hosts[i].hostName = v }
@@ -75,6 +86,7 @@ enum SSHConfigParser {
                     for i in stanza where hosts[i].port == nil { hosts[i].port = p }
                 }
             case "include":
+                if conditionalScope { continue }
                 for pattern in tokenize(value) {
                     for file in expandInclude(pattern, home: home, fileManager: fileManager) {
                         parseFile(file, home: home, fileManager: fileManager,
@@ -126,8 +138,10 @@ enum SSHConfigParser {
         !token.isEmpty && !token.hasPrefix("!") && !token.contains("*") && !token.contains("?")
     }
 
-    /// Resolves an `Include` pattern to concrete files. Supports a glob only in
-    /// the final path component (covers `config.d/*`, `config.d/*.conf`).
+    /// Resolves an `Include` pattern to concrete files. Globs are expanded in
+    /// every path component (covers `config.d/*`, `config.d/*.conf`, and nested
+    /// `config.d/*/*.conf`); intermediate components only descend into
+    /// directories.
     private static func expandInclude(
         _ pattern: String, home: URL, fileManager: FileManager
     ) -> [URL] {
@@ -143,14 +157,32 @@ enum SSHConfigParser {
             base = home.appendingPathComponent(".ssh")   // user-config relative Includes → ~/.ssh
         }
         let comps = relative.split(separator: "/").map(String.init)
-        guard let last = comps.last else { return [] }
-        let dir = comps.dropLast().reduce(base) { $0.appendingPathComponent($1) }
-        if last.contains("*") || last.contains("?") {
-            guard let entries = try? fileManager.contentsOfDirectory(atPath: dir.path) else { return [] }
-            return entries.sorted()
-                .filter { fnmatch(last, $0, 0) == 0 }
-                .map { dir.appendingPathComponent($0) }
+        guard !comps.isEmpty else { return [] }
+
+        var current = [base]
+        for (index, comp) in comps.enumerated() {
+            let isLast = index == comps.count - 1
+            if comp.contains("*") || comp.contains("?") {
+                var next: [URL] = []
+                for dir in current {
+                    guard let entries = try? fileManager.contentsOfDirectory(atPath: dir.path) else { continue }
+                    for name in entries.sorted() where fnmatch(comp, name, 0) == 0 {
+                        let candidate = dir.appendingPathComponent(name)
+                        if isLast {
+                            next.append(candidate)
+                        } else {
+                            var isDir: ObjCBool = false
+                            if fileManager.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue {
+                                next.append(candidate)
+                            }
+                        }
+                    }
+                }
+                current = next
+            } else {
+                current = current.map { $0.appendingPathComponent(comp) }
+            }
         }
-        return [dir.appendingPathComponent(last)]
+        return current
     }
 }

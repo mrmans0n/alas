@@ -128,4 +128,40 @@ struct SSHConfigParserTests {
         #expect(SSHConfigParser.parse(home: home)
             == [SSHConfigHost(alias: "devbox", hostName: "10.0.0.7", user: nil, port: nil)])
     }
+
+    @Test func expandsGlobInEveryIncludeComponent() throws {
+        let home = try makeHome(
+            config: "Include config.d/*/*.conf\n",
+            extraFiles: [
+                ".ssh/config.d/providerA/prod.conf": "Host a-prod\n    HostName a.example.com\n",
+                ".ssh/config.d/providerB/prod.conf": "Host b-prod\n    HostName b.example.com\n",
+                ".ssh/config.d/providerA/notes.txt": "Host should-not-load\n",
+            ]
+        )
+        #expect(Set(SSHConfigParser.parse(home: home).map(\.alias)) == ["a-prod", "b-prod"])
+    }
+
+    @Test func skipsIncludeInsideConditionalHostBlock() throws {
+        let home = try makeHome(
+            config: """
+            Host top
+                HostName top.example.com
+            Host bastion
+                Include bastion.conf
+            """,
+            extraFiles: [".ssh/bastion.conf": "Host internal\n    HostName 10.1.1.1\n"]
+        )
+        // `internal` is conditionally included under `Host bastion`, so it is
+        // not a usable top-level alias and must not appear in the picker.
+        #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["top", "bastion"])
+    }
+
+    @Test func followsIncludeUnderWildcardHost() throws {
+        let home = try makeHome(
+            config: "Host *\n    Include common.conf\n",
+            extraFiles: [".ssh/common.conf": "Host common\n    HostName c.example.com\n"]
+        )
+        // `Host *` is unconditional, so its Include applies to every host.
+        #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["common"])
+    }
 }
