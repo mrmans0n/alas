@@ -766,8 +766,7 @@ struct RemoteHelperClientTests {
         let start = ContinuousClock.now
         while !predicate() {
             if ContinuousClock.now - start > timeout {
-                Issue.record("timed out waiting for predicate")
-                return
+                throw RemoteHelperClientTestTimeout("timed out waiting for predicate")
             }
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -780,11 +779,18 @@ struct RemoteHelperClientTests {
         let start = ContinuousClock.now
         while !(await predicate()) {
             if ContinuousClock.now - start > timeout {
-                Issue.record("timed out waiting for async predicate")
-                return
+                throw RemoteHelperClientTestTimeout("timed out waiting for async predicate")
             }
             try await Task.sleep(for: .milliseconds(10))
         }
+    }
+}
+
+private struct RemoteHelperClientTestTimeout: Error, CustomStringConvertible {
+    let description: String
+
+    init(_ description: String) {
+        self.description = description
     }
 }
 
