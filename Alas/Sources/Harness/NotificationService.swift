@@ -57,6 +57,20 @@ final class NotificationService {
         notificationAdder(req)
     }
 
+    func notifyACPQuestion(agent: AgentKind, body: String?,
+                           projectId: String, worktreeId: String, sessionId: String,
+                           requestId: String) {
+        let content = buildContent(agent: agent, body: questionBody(body),
+                                   title: "\(agent.displayName) has a question",
+                                   projectId: projectId, worktreeId: worktreeId, sessionId: sessionId)
+        let req = UNNotificationRequest(
+            identifier: "\(sessionId)-question-\(requestId)",
+            content: content,
+            trigger: nil
+        )
+        notificationAdder(req)
+    }
+
     func notifyHarnessFinished(agent: AgentKind, body: String?,
                                projectId: String, worktreeId: String, sessionId: String) {
         guard enabled else { return }
@@ -68,6 +82,11 @@ final class NotificationService {
     }
 
     // MARK: - Private helpers
+
+    private func questionBody(_ body: String?) -> String {
+        let trimmed = body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Session is waiting for an answer." : trimmed
+    }
 
     private func buildContent(agent: AgentKind, body: String, title: String,
                               projectId: String, worktreeId: String, sessionId: String) -> UNMutableNotificationContent {

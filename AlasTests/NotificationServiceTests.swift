@@ -52,6 +52,52 @@ struct NotificationServiceTests {
         #expect(requests[0].content.attachments.first?.identifier == "logo")
     }
 
+    @Test func acpQuestionUsesClickableQuestionNotificationRequest() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { request in
+            requests.append(request)
+        })
+
+        service.notifyACPQuestion(
+            agent: .codex,
+            body: "Which implementation path should I take?",
+            projectId: "project-1",
+            worktreeId: "worktree-1",
+            sessionId: "session-1",
+            requestId: "42"
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].identifier == "session-1-question-42")
+        #expect(requests[0].content.title == "Codex has a question")
+        #expect(requests[0].content.body == "Which implementation path should I take?")
+        #expect(requests[0].content.sound != nil)
+        #expect(requests[0].content.userInfo["projectId"] as? String == "project-1")
+        #expect(requests[0].content.userInfo["worktreeId"] as? String == "worktree-1")
+        #expect(requests[0].content.userInfo["sessionId"] as? String == "session-1")
+        #expect(requests[0].content.attachments.isEmpty == false)
+        #expect(requests[0].content.attachments.first?.identifier == "logo")
+    }
+
+    @Test func acpQuestionUsesFallbackBodyWhenBodyIsBlank() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { request in
+            requests.append(request)
+        })
+
+        service.notifyACPQuestion(
+            agent: .codex,
+            body: "   ",
+            projectId: "project-1",
+            worktreeId: "worktree-1",
+            sessionId: "session-1",
+            requestId: "42"
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].content.body == "Session is waiting for an answer.")
+    }
+
     @Test func finishEnabledFlagDoesNotDisableAwaitingNotifications() {
         var requests: [UNNotificationRequest] = []
         let service = NotificationService(notificationAdder: { request in

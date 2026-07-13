@@ -39,6 +39,7 @@ final class ACPSessionManager: ObservableObject {
     /// the user's unsaved edits rather than stale disk bytes.
     let onLiveBufferRead: ((String) -> String?)?
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
+    private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
@@ -274,6 +275,7 @@ final class ACPSessionManager: ObservableObject {
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
+         onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
@@ -289,6 +291,7 @@ final class ACPSessionManager: ObservableObject {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onSessionTitleUpdated = onSessionTitleUpdated
+        self.onInputAwaiting = onInputAwaiting
         self.mcpProjectContextProvider = mcpProjectContextProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         _ = hydratorPath
@@ -1993,6 +1996,9 @@ extension ACPSessionManager {
         let elicitationCoordinator = ACPElicitationCoordinator(
             session: session,
             client: connection.client,
+            onInputAwaiting: { [weak self] session, request in
+                self?.onInputAwaiting?(session, request)
+            },
             onInputResolved: { [weak self] in
                 self?.runners[sessionId]?.flushQueueIfIdle()
             }

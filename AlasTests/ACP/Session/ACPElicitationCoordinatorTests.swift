@@ -127,6 +127,101 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.pendingQuestion?.id == .number(1))
     }
 
+    @Test("awaiting input callback fires once per request id")
+    func awaitingInputCallbackFiresOncePerRequestId() async throws {
+        var notifications: [(ACPSession, ACPUserInputRequest)] = []
+        let (coordinator, session, client) = makeCoordinator(onInputAwaiting: { session, request in
+            notifications.append((session, request))
+        })
+        coordinator.start()
+        let params = ACPQuestionRequestParams.stub(title: "Need input")
+
+        client.emitQuestion(id: .number(42), params: params)
+        try await waitUntil {
+            notifications.count == 1 && session.transcript.pendingUserInputs.count == 1
+        }
+
+        client.emitQuestion(id: .number(42), params: params)
+        try await waitUntil { session.transcript.pendingUserInputs.count == 2 }
+
+        #expect(notifications.count == 1)
+        #expect(notifications[0].0.id == "local")
+        #expect(notifications[0].1.source == .cursor(id: .number(42), params: params))
+    }
+
+    @Test("awaiting input callback fires again when a resolved request id is reused")
+    func awaitingInputCallbackFiresAgainForReusedResolvedRequestId() async throws {
+        var notifications: [(ACPSession, ACPUserInputRequest)] = []
+        let (coordinator, session, client) = makeCoordinator(onInputAwaiting: { session, request in
+            notifications.append((session, request))
+        })
+        coordinator.start()
+        let params = ACPQuestionRequestParams.stub(title: "Need input")
+
+        client.emitQuestion(id: .number(42), params: params)
+        try await waitUntil {
+            notifications.count == 1 && session.transcript.pendingUserInputs.count == 1
+        }
+        let request = try #require(session.transcript.pendingUserInputs.first)
+
+        coordinator.respond(to: request.id, action: .submit(["q1": .string("o1")]))
+        try await waitUntil { session.transcript.pendingUserInputs.isEmpty }
+
+        client.emitQuestion(id: .number(42), params: params)
+
+        try await waitUntil { notifications.count == 2 }
+        #expect(session.transcript.pendingUserInputs.count == 1)
+        #expect(notifications.map { $0.1.source } == [
+            .cursor(id: .number(42), params: params),
+            .cursor(id: .number(42), params: params)
+        ])
+    }
+
+    @Test("awaiting input callback fires again when a cancelled request id is reused")
+    func awaitingInputCallbackFiresAgainForReusedCancelledRequestId() async throws {
+        var notifications: [(ACPSession, ACPUserInputRequest)] = []
+        let (coordinator, session, client) = makeCoordinator(onInputAwaiting: { session, request in
+            notifications.append((session, request))
+        })
+        coordinator.start()
+        let params = ACPQuestionRequestParams.stub(title: "Need input")
+
+        client.emitQuestion(id: .number(42), params: params)
+        try await waitUntil {
+            notifications.count == 1 && session.transcript.pendingUserInputs.count == 1
+        }
+
+        coordinator.cancelPendingInputs()
+        #expect(session.transcript.pendingUserInputs.isEmpty)
+
+        client.emitQuestion(id: .number(42), params: params)
+
+        try await waitUntil { notifications.count == 2 }
+        #expect(session.transcript.pendingUserInputs.count == 1)
+        #expect(notifications.map { $0.1.source } == [
+            .cursor(id: .number(42), params: params),
+            .cursor(id: .number(42), params: params)
+        ])
+    }
+
+    @Test("standard elicitation notifies awaiting input")
+    func standardElicitationNotifiesAwaitingInput() async throws {
+        var notifications: [(ACPSession, ACPUserInputRequest)] = []
+        let (coordinator, session, client) = makeCoordinator(onInputAwaiting: { session, request in
+            notifications.append((session, request))
+        })
+        coordinator.start()
+        let params = try decodeParams(#"""
+        {"requestId":1,"mode":"form","message":"Name","requestedSchema":{"properties":{}}}
+        """#)
+
+        client.emitElicitation(id: .string("elicitation-1"), params: params)
+
+        try await waitUntil { notifications.count == 1 }
+        #expect(notifications[0].0.id == session.id)
+        #expect(notifications[0].1.message == "Name")
+    }
+
     @Test("URL mode opens explicitly and waits for completion")
     func urlMode() async throws {
         var opened: URL?
@@ -249,6 +344,7 @@ struct ACPElicitationCoordinatorTests {
     }
 
     private func makeCoordinator(
+        onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
         launchBrowser: @escaping (URL) async -> Bool = { _ in true },
         navigateURL: @escaping (URL) -> Void = { _ in }
@@ -261,6 +357,7 @@ struct ACPElicitationCoordinatorTests {
                 client: client,
                 launchBrowser: launchBrowser,
                 navigateURL: navigateURL,
+                onInputAwaiting: onInputAwaiting,
                 onInputResolved: onInputResolved
             ),
             session,

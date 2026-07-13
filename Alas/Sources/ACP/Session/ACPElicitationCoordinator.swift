@@ -7,12 +7,14 @@ final class ACPElicitationCoordinator {
     private let client: ACPClient
     private let launchBrowser: (URL) async -> Bool
     private let navigateURL: (URL) -> Void
+    private let onInputAwaiting: (ACPSession, ACPUserInputRequest) -> Void
     private let onInputResolved: () -> Void
     private var questionsTask: Task<Void, Never>?
     private var elicitationsTask: Task<Void, Never>?
     private var completionsTask: Task<Void, Never>?
     private var pendingByToken: [UUID: ACPUserInputRequest] = [:]
     private var pendingInputPreviousStreamingState: ACPSession.StreamingState?
+    private var notifiedRequestIds: Set<JSONRPCID> = []
     private var didStop = false
 
     init(
@@ -32,12 +34,14 @@ final class ACPElicitationCoordinator {
             }
         },
         navigateURL: @escaping (URL) -> Void = { _ = NSWorkspace.shared.open($0) },
+        onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {}
     ) {
         self.session = session
         self.client = client
         self.launchBrowser = launchBrowser
         self.navigateURL = navigateURL
+        self.onInputAwaiting = onInputAwaiting
         self.onInputResolved = onInputResolved
     }
 
@@ -203,6 +207,9 @@ final class ACPElicitationCoordinator {
         let wasEmpty = pendingByToken.isEmpty
         pendingByToken[request.id] = request
         session.transcript.pendingUserInputs.append(request)
+        if notifiedRequestIds.insert(request.jsonRPCID).inserted {
+            onInputAwaiting(session, request)
+        }
         if wasEmpty, session.transcript.streamingState == .idle {
             pendingInputPreviousStreamingState = .idle
             session.transcript.streamingState = .awaitingInput
@@ -216,6 +223,7 @@ final class ACPElicitationCoordinator {
     private func removePending(token: UUID) -> ACPUserInputRequest? {
         guard let request = pendingByToken.removeValue(forKey: token) else { return nil }
         session.transcript.pendingUserInputs.removeAll { $0.id == token }
+        clearNotificationDedupeIfResolved(for: request)
         if case .cursor = request.source {
             session.transcript.pendingQuestion = session.transcript.pendingUserInputs.compactMap {
                 if case .cursor(let id, let params) = $0.source {
@@ -233,8 +241,16 @@ final class ACPElicitationCoordinator {
         pendingByToken.removeAll()
         session.transcript.pendingUserInputs.removeAll()
         session.transcript.pendingQuestion = nil
+        notifiedRequestIds.removeAll()
         restoreStreamingStateIfResolved()
         for request in pending { cancel(request) }
+    }
+
+    private func clearNotificationDedupeIfResolved(for request: ACPUserInputRequest) {
+        guard !pendingByToken.values.contains(where: { $0.jsonRPCID == request.jsonRPCID }) else {
+            return
+        }
+        notifiedRequestIds.remove(request.jsonRPCID)
     }
 
     private func restoreStreamingStateIfResolved() {

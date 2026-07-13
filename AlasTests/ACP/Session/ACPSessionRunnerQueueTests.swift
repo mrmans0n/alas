@@ -588,6 +588,7 @@ struct ACPSessionRunnerQueueTests {
         // the head to .sending and persisting.
         session1.markQueueHeadSending()
         runner1.persistQueue()
+        await runner1.flushPersistence()
         let persisted = try store.loadQueue(sessionId: "rt")
         #expect(persisted.count == 2)
         #expect(persisted[0].status == .sending)
