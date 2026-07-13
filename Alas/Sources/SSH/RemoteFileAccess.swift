@@ -175,7 +175,7 @@ enum RemoteFileAccess {
         expectedMtime: Date? = nil,
         expectedContent: String? = nil
     ) async throws -> Date {
-        if await helperIsInstalled(host: host) {
+        if await helperSupportsWrite(host: host, expectedContent: expectedContent) {
             let startedAt = CFAbsoluteTimeGetCurrent()
             do {
                 let client = await RemoteHelperClientPool.shared.client(for: host)
@@ -296,5 +296,12 @@ enum RemoteFileAccess {
 
     private static func helperIsInstalled(host: String) async -> Bool {
         await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil
+    }
+
+    private static func helperSupportsWrite(host: String, expectedContent: String?) async -> Bool {
+        guard let handshake = await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake else {
+            return false
+        }
+        return expectedContent == nil || handshake.supportsExpectedContentWrite
     }
 }
