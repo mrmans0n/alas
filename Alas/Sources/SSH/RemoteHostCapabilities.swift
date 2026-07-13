@@ -2,7 +2,7 @@ import Foundation
 
 /// What a remote host offers, probed once per host per app run. Drives
 /// BSD-vs-GNU tool choices and graceful degradation (`rg` fallback, zmx
-/// availability for remote terminals).
+/// availability, and the installed Alas helper handshake).
 struct RemoteHostCapabilities: Equatable {
     enum OS: Equatable {
         case linux
@@ -14,6 +14,7 @@ struct RemoteHostCapabilities: Equatable {
     let gitVersion: String?
     let hasRipgrep: Bool
     let hasZmx: Bool
+    let helperHandshake: RemoteHelperHandshake?
     /// Normalized machine architecture (`arm64` is represented as `aarch64`).
     let arch: String?
 
@@ -23,6 +24,10 @@ struct RemoteHostCapabilities: Equatable {
         "uname -s; git version 2>/dev/null; "
         + "command -v rg >/dev/null 2>&1 && echo rg=yes || echo rg=no; "
         + "(command -v zmx >/dev/null 2>&1 || [ -x \"$HOME/.alas/bin/zmx\" ]) && echo zmx=yes || echo zmx=no; "
+        + "if [ -x \"$HOME/.alas/bin/alas-helper\" ]; then "
+        + "helper_output=$(\"$HOME/.alas/bin/alas-helper\" version 2>/dev/null || true); "
+        + "[ -n \"$helper_output\" ] && printf 'helper=%s\\n' \"$helper_output\" || echo helper=no; "
+        + "else echo helper=no; fi; "
         + "echo \"arch=$(uname -m)\""
 
     static func parse(_ output: String) -> RemoteHostCapabilities {
@@ -30,6 +35,7 @@ struct RemoteHostCapabilities: Equatable {
         var gitVersion: String?
         var hasRipgrep = false
         var hasZmx = false
+        var helperHandshake: RemoteHelperHandshake?
         var arch: String?
 
         for line in output.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) {
@@ -46,6 +52,8 @@ struct RemoteHostCapabilities: Equatable {
                     let value = String(line.dropFirst("arch=".count))
                     guard !value.isEmpty else { continue }
                     arch = value == "arm64" ? "aarch64" : value
+                } else if line.hasPrefix("helper=") {
+                    helperHandshake = RemoteHelperHandshake.decode(String(line.dropFirst("helper=".count)))
                 }
             }
         }
@@ -55,6 +63,7 @@ struct RemoteHostCapabilities: Equatable {
             gitVersion: gitVersion,
             hasRipgrep: hasRipgrep,
             hasZmx: hasZmx,
+            helperHandshake: helperHandshake,
             arch: arch
         )
     }

@@ -214,6 +214,9 @@ targets:
       - name: Build zmx
         script: '"${SRCROOT}/scripts/build-zmx.sh"'
         basedOnDependencyAnalysis: false
+      - name: Build Alas Helper
+        script: '"${SRCROOT}/scripts/build-alas-helper.sh"'
+        basedOnDependencyAnalysis: false
       - name: Build fff
         script: '"${SRCROOT}/scripts/build-fff.sh"'
         basedOnDependencyAnalysis: false

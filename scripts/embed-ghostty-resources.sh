@@ -57,6 +57,31 @@ else
     exit 1
 fi
 
+# Alas remote helper. Keep separate per-platform slices because the app selects
+# one from the remote host's uname result before pushing it over scp.
+helper_destination_root="${destination_root}/alas-helper"
+rm -rf "${helper_destination_root}"
+mkdir -p "${helper_destination_root}"
+helper_targets=(
+    "linux-x86_64:x86_64-unknown-linux-musl"
+    "linux-aarch64:aarch64-unknown-linux-musl"
+    "macos-x86_64:x86_64-apple-darwin"
+    "macos-aarch64:aarch64-apple-darwin"
+)
+for mapping in "${helper_targets[@]}"; do
+    resource_dir="${mapping%%:*}"
+    rust_target="${mapping#*:}"
+    helper_source="${SRCROOT}/.build/alas-helper/${rust_target}/release/alas-helper"
+    if [ ! -x "${helper_source}" ]; then
+        echo "embed-ghostty-resources.sh: error: Alas helper binary not found at ${helper_source}" >&2
+        exit 1
+    fi
+    mkdir -p "${helper_destination_root}/${resource_dir}"
+    rsync -a "${helper_source}" "${helper_destination_root}/${resource_dir}/alas-helper"
+    chmod +x "${helper_destination_root}/${resource_dir}/alas-helper"
+done
+rsync -a "${SRCROOT}/AlasHelper/manifest.json" "${helper_destination_root}/manifest.json"
+
 # fff search backend dylib. Selection mirrors build-fff.sh.
 if [ -n "${ALAS_FFF_TARGET_ARCH:-}" ]; then
     fff_arch="${ALAS_FFF_TARGET_ARCH}"

@@ -49,7 +49,14 @@ final class AppState {
     @ObservationIgnored
     private var acpAuthTerminalExitHandlers: [String: () -> Void] = [:]
     @ObservationIgnored
-    private var promptedRemoteZmxHosts: Set<String> = []
+    private var attemptedRemoteHelperHosts: Set<String> = []
+    @ObservationIgnored
+    private var attemptedRemoteZmxHosts: Set<String> = []
+    @ObservationIgnored
+    private var remoteAccelerationProbeFailures: [String: Date] = [:]
+    @ObservationIgnored
+    private var remoteAccelerationTasks: [String: Task<Void, Never>] = [:]
+    private let remoteAccelerationProbeRetryDelay: TimeInterval = 30
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
@@ -752,6 +759,13 @@ final class AppState {
         selectedWorktreeId = id
         spacesManager.setLastSelectedWorktree(id)
         scheduleSpacesSave()
+        if let id,
+           let resolved = projectAndWorktree(withWorktreeId: id),
+           resolved.project.host != nil {
+            Task { @MainActor [weak self] in
+                await self?.prepareRemoteAccelerationIfNeeded(for: resolved.project)
+            }
+        }
     }
 
     @discardableResult
@@ -1909,7 +1923,7 @@ final class AppState {
         guard let project = projects.first(where: { $0.id == worktree.projectId }) else {
             throw NSError(domain: "AppState", code: 2)
         }
-        await prepareRemoteZmxIfNeeded(for: project)
+        await prepareRemoteAccelerationIfNeeded(for: project)
         return try openTerminalTab(
             for: worktree,
             startupScriptSuffix: startupScriptSuffix,
@@ -1980,46 +1994,112 @@ final class AppState {
         return tabs.appendTerminal(worktreeId: worktree.id, title: title, sessionId: opened.id)
     }
 
-    private func prepareRemoteZmxIfNeeded(for project: ProjectConfig) async {
-        guard config.terminal.keepSessionsAlive,
-              let host = project.host,
-              !promptedRemoteZmxHosts.contains(host),
-              !Set(UserDefaults.standard.stringArray(forKey: "remote.zmx.declinedHosts") ?? []).contains(host)
-        else { return }
-
-        promptedRemoteZmxHosts.insert(host)
-        guard let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host),
-              !capabilities.hasZmx,
-              let resources = Bundle.main.resourceURL,
-              RemoteZmxInstaller.bundledBinaryPath(
-                os: capabilities.os,
-                arch: capabilities.arch,
-                resourceURL: resources
-              ) != nil
-        else { return }
-
-        guard confirmPushZmx(host: host) else {
-            var declined = Set(UserDefaults.standard.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
-            declined.insert(host)
-            UserDefaults.standard.set(Array(declined).sorted(), forKey: "remote.zmx.declinedHosts")
+    private func prepareRemoteAccelerationIfNeeded(for project: ProjectConfig) async {
+        guard let host = project.host else { return }
+        if let running = remoteAccelerationTasks[host] {
+            await running.value
             return
         }
+        if let retryAfter = remoteAccelerationProbeFailures[host] {
+            guard retryAfter <= Date() else { return }
+            remoteAccelerationProbeFailures.removeValue(forKey: host)
+        }
+        let shouldAttemptHelper = !attemptedRemoteHelperHosts.contains(host)
+        let shouldAttemptZmx = config.terminal.keepSessionsAlive
+            && !attemptedRemoteZmxHosts.contains(host)
+        guard shouldAttemptHelper || shouldAttemptZmx else { return }
 
-        if await RemoteZmxInstaller.install(
-            host: host,
-            capabilities: capabilities,
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performRemoteAccelerationPreparation(host: host)
+        }
+        remoteAccelerationTasks[host] = task
+        await task.value
+        remoteAccelerationTasks.removeValue(forKey: host)
+    }
+
+    private func performRemoteAccelerationPreparation(host: String) async {
+        let shouldAttemptHelper = !attemptedRemoteHelperHosts.contains(host)
+        let shouldAttemptZmx = config.terminal.keepSessionsAlive
+            && !attemptedRemoteZmxHosts.contains(host)
+
+        guard let capabilities = await RemoteHostCapabilityStore.shared.capabilities(for: host) else {
+            remoteAccelerationProbeFailures[host] = Date().addingTimeInterval(remoteAccelerationProbeRetryDelay)
+            return
+        }
+        remoteAccelerationProbeFailures.removeValue(forKey: host)
+        if shouldAttemptHelper {
+            attemptedRemoteHelperHosts.insert(host)
+        }
+        if shouldAttemptZmx {
+            attemptedRemoteZmxHosts.insert(host)
+        }
+
+        guard let resources = Bundle.main.resourceURL else { return }
+
+        let bundledHandshake = RemoteHelperInstaller.bundledHandshake(resourceURL: resources)
+        let helperBinary = RemoteHelperInstaller.bundledBinaryPath(
+            os: capabilities.os,
+            arch: capabilities.arch,
             resourceURL: resources
-        ) {
+        )
+        let installHelper = shouldAttemptHelper && bundledHandshake.map {
+            helperBinary.map { FileManager.default.isExecutableFile(atPath: $0.path) } == true
+                && RemoteHelperInstaller.needsInstall(remote: capabilities.helperHandshake, bundled: $0)
+        } ?? false
+        let zmxBinary = RemoteZmxInstaller.bundledBinaryPath(
+            os: capabilities.os,
+            arch: capabilities.arch,
+            resourceURL: resources
+        )
+        let installZmx = shouldAttemptZmx
+            && !capabilities.hasZmx
+            && zmxBinary.map { FileManager.default.isExecutableFile(atPath: $0.path) } == true
+        guard installHelper || installZmx else { return }
+
+        let defaults = UserDefaults.standard
+        var allowed = Set(defaults.stringArray(forKey: "remote.acceleration.allowedHosts") ?? [])
+        let declined = Set(defaults.stringArray(forKey: "remote.acceleration.declinedHosts") ?? [])
+            .union(defaults.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
+        if !allowed.contains(host) {
+            guard !declined.contains(host), confirmRemoteAcceleration(host: host) else {
+                if !declined.contains(host) {
+                    var updated = declined
+                    updated.insert(host)
+                    defaults.set(Array(updated).sorted(), forKey: "remote.acceleration.declinedHosts")
+                }
+                return
+            }
+            allowed.insert(host)
+            defaults.set(Array(allowed).sorted(), forKey: "remote.acceleration.allowedHosts")
+        }
+
+        var installed = false
+        if installHelper {
+            installed = await RemoteHelperInstaller.install(
+                host: host,
+                capabilities: capabilities,
+                resourceURL: resources
+            )
+        }
+        if installZmx {
+            installed = await RemoteZmxInstaller.install(
+                host: host,
+                capabilities: capabilities,
+                resourceURL: resources
+            ) || installed
+        }
+        if installed {
             RemoteHostCapabilityStore.shared.invalidate(host: host)
         }
     }
 
-    private func confirmPushZmx(host: String) -> Bool {
+    private func confirmRemoteAcceleration(host: String) -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "Enable persistent terminals on \(host)?"
-        alert.informativeText = "Alas can install its zmx helper to ~/.alas/bin on \(host) so terminal sessions survive disconnects and app restarts."
-        alert.addButton(withTitle: "Install zmx")
+        alert.messageText = "Enable Alas remote acceleration on \(host)?"
+        alert.informativeText = "Alas can install its remote helper and, when persistent terminals are enabled, zmx to ~/.alas/bin on \(host)."
+        alert.addButton(withTitle: "Enable")
         alert.addButton(withTitle: "Not Now")
         return alert.runModal() == .alertFirstButtonReturn
     }

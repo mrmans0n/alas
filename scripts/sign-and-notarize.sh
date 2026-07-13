@@ -106,17 +106,29 @@ fi
 
 # Standalone executables embedded under Resources are not treated as nested code
 # by `codesign --deep`, so sign them explicitly before sealing the app bundle.
-zmx_path="$app_path/Contents/Resources/zmx/zmx"
-if [ -x "$zmx_path" ]; then
-  echo "==> Signing embedded zmx helper"
+sign_embedded_executable() {
+  local path="$1"
+  local label="$2"
+  if [ ! -x "$path" ]; then
+    return
+  fi
+
+  echo "==> Signing embedded $label"
   codesign \
     --force \
     --options runtime \
     --timestamp \
     --sign "$MACOS_SIGNING_IDENTITY" \
-    "$zmx_path"
-  codesign --verify --strict --verbose=2 "$zmx_path"
-fi
+    "$path"
+  codesign --verify --strict --verbose=2 "$path"
+}
+
+sign_embedded_executable "$app_path/Contents/Resources/zmx/zmx" "zmx helper"
+for helper_arch in macos-x86_64 macos-aarch64; do
+  sign_embedded_executable \
+    "$app_path/Contents/Resources/alas-helper/$helper_arch/alas-helper" \
+    "Alas helper ($helper_arch)"
+done
 
 echo "==> Signing $app_path"
 codesign \
