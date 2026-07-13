@@ -7,6 +7,7 @@ struct RightPaneView: View {
     let onSelectTreeFile: (FileTreeNode) -> Void
     let onSelectCommit: (CommitInfo) -> Void
     let onEditCommit: (CommitInfo, String) -> Void
+    let onReviewCommit: (CommitInfo) -> Void
     @Environment(\.theme) var theme
     @State private var rps: RightPaneState?
 
@@ -16,7 +17,8 @@ struct RightPaneView: View {
         onSelectChangedFile: @escaping (ChangedFile) -> Void,
         onSelectTreeFile: @escaping (FileTreeNode) -> Void,
         onSelectCommit: @escaping (CommitInfo) -> Void,
-        onEditCommit: @escaping (CommitInfo, String) -> Void
+        onEditCommit: @escaping (CommitInfo, String) -> Void,
+        onReviewCommit: @escaping (CommitInfo) -> Void
     ) {
         self.state = state
         self.worktree = worktree
@@ -24,6 +26,7 @@ struct RightPaneView: View {
         self.onSelectTreeFile = onSelectTreeFile
         self.onSelectCommit = onSelectCommit
         self.onEditCommit = onEditCommit
+        self.onReviewCommit = onReviewCommit
         // Resolve without activating: the cached state (if any) gives us
         // something to render immediately, and `.task` handles the mutating
         // activation + refresh off the view-update path.
@@ -66,7 +69,8 @@ struct RightPaneView: View {
                                 appState: state,
                                 onSelect: onSelectChangedFile,
                                 onSelectCommit: onSelectCommit,
-                                onEditCommit: onEditCommit
+                                onEditCommit: onEditCommit,
+                                onReviewCommit: onReviewCommit
                             )
                         case .files:
                             FilesTabView(

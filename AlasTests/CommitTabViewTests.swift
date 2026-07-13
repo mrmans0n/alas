@@ -39,6 +39,43 @@ struct CommitTabViewTests {
         #expect(target.revisionDescription == "abcdef1234567890")
     }
 
+    @Test func commitReviewContextMenuBuildsCommitReviewTarget() {
+        let worktree = Worktree(
+            id: "wt-1",
+            projectId: "project-1",
+            name: "feature",
+            branch: "feature",
+            path: URL(fileURLWithPath: "/repo"),
+            status: .clean,
+            lastActivity: Date(timeIntervalSince1970: 0)
+        )
+        let commit = CommitInfo(
+            sha: "abcdef1234567890",
+            shortSha: "abcdef1",
+            author: "Nacho Lopez",
+            authorInitials: "NL",
+            date: Date(timeIntervalSince1970: 1),
+            subject: "Add review sessions",
+            conventionalTag: nil,
+            filesChanged: 1,
+            insertions: 2,
+            deletions: 0
+        )
+
+        let target = RootView.commitReviewSessionTarget(worktree: worktree, commit: commit)
+
+        #expect(target.kind == .commit)
+        #expect(target.worktreeID == "wt-1")
+        #expect(target.repositoryPath == URL(fileURLWithPath: "/repo"))
+        #expect(target.title == "Review Add review sessions")
+        #expect(target.revisionDescription == "abcdef1234567890")
+        #expect(target.draftSessionID == .commit(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            sha: "abcdef1234567890"
+        ))
+    }
+
     @Test func commitReviewFeedbackTargetIncludesCommitSHA() {
         let sha = "abcdef1234567890abcdef1234567890abcdef12"
         let target = CommitReviewBody.reviewFeedbackTarget(

@@ -7,6 +7,7 @@ struct ChangesTabView: View {
     let onSelect: (ChangedFile) -> Void
     let onSelectCommit: (CommitInfo) -> Void
     let onEditCommit: (CommitInfo, String) -> Void
+    let onReviewCommit: (CommitInfo) -> Void
 
     private var conflicts: [ChangedFile] {
         rps.changes.filter { $0.conflict != nil }
@@ -197,6 +198,7 @@ struct ChangesTabView: View {
                         onEditCommit(commit, ref)
                     }
                 },
+                onReview: onReviewCommit,
                 onLoadOlder: { Task { @MainActor in await rps.loadOlder() } },
                 onSelectBaseBranch: { branch in
                     rps.selectBaseBranch(branch)

@@ -94,6 +94,7 @@ struct CommitsSectionView: View {
     let onSelect: (CommitInfo) -> Void
     let onCopySHA: (CommitInfo) -> Void
     let onEdit: (CommitInfo) -> Void
+    let onReview: (CommitInfo) -> Void
     let onLoadOlder: () -> Void
     let onSelectBaseBranch: (String) -> Void
     let onOpenBaseBranchSelector: () -> Void
@@ -162,6 +163,7 @@ struct CommitsSectionView: View {
                     onCopyMessage: { Clipboard.copy(commit.fullMessage) },
                     onOpenRemote: rps.commitsNeedPush ? nil : openRemoteAction(for: commit, remote: rps.primaryCommitRemote),
                     onEdit: { onEdit(commit) },
+                    onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) }
                 )
@@ -187,6 +189,7 @@ struct CommitsSectionView: View {
                     onCopySHA: { onCopySHA(commit) },
                     onCopyMessage: { Clipboard.copy(commit.fullMessage) },
                     onOpenRemote: openRemoteAction(for: commit, remote: rps.commitRemote),
+                    onReview: { onReview(commit) },
                     onCherryPick: { rps.requestCherryPick(sha: commit.sha) },
                     onRevert: { rps.runRevert(sha: commit.sha) }
                 )

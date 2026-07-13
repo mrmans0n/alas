@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct CommitRow: View {
+    enum ContextMenuAction: Hashable {
+        case edit
+        case review
+    }
+
     let commit: CommitInfo
     let isLast: Bool
     var isHistorical: Bool = false
@@ -9,6 +14,7 @@ struct CommitRow: View {
     var onCopyMessage: (() -> Void)? = nil
     var onOpenRemote: (() -> Void)? = nil
     var onEdit: (() -> Void)? = nil
+    var onReview: (() -> Void)? = nil
     var onCherryPick: (() -> Void)? = nil
     var onRevert: (() -> Void)? = nil
 
@@ -34,8 +40,15 @@ struct CommitRow: View {
         .buttonStyle(.plain)
         .copyFeedbackOverlay(message: copyFeedback.message)
         .contextMenu {
-            if let onEdit {
-                Button("Edit Commit…") { onEdit() }
+            ForEach(Self.leadingContextMenuActions(canEdit: onEdit != nil, canReview: onReview != nil), id: \.self) { action in
+                switch action {
+                case .edit:
+                    Button("Edit Commit…") { onEdit?() }
+                case .review:
+                    Button("Review Commit…") { onReview?() }
+                }
+            }
+            if onEdit != nil || onReview != nil {
                 Divider()
             }
             Button("Copy Commit SHA") { copySHA() }
@@ -64,6 +77,17 @@ struct CommitRow: View {
         } message: {
             Text("Create a new commit that reverses this commit.")
         }
+    }
+
+    static func leadingContextMenuActions(canEdit: Bool, canReview: Bool) -> [ContextMenuAction] {
+        var actions: [ContextMenuAction] = []
+        if canEdit {
+            actions.append(.edit)
+        }
+        if canReview {
+            actions.append(.review)
+        }
+        return actions
     }
 
     private var rail: some View {

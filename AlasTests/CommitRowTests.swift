@@ -61,6 +61,12 @@ struct CommitRowTests {
         #expect(commit.id == "aabbccdd11223344556677889900aabbccdd1122")
     }
 
+    @Test func contextMenuShowsReviewCommitImmediatelyAfterEditCommit() {
+        #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: true) == [.edit, .review])
+        #expect(CommitRow.leadingContextMenuActions(canEdit: false, canReview: true) == [.review])
+        #expect(CommitRow.leadingContextMenuActions(canEdit: true, canReview: false) == [.edit])
+    }
+
     @MainActor
     @Test func copyFeedbackShowsThenDismisses() async throws {
         let feedback = CopyFeedbackState(displayNanoseconds: 10_000_000)
