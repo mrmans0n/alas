@@ -7,6 +7,10 @@ import Foundation
 /// one round trip instead of a TCP+auth handshake, and the user
 /// authenticates (password / 2FA / FIDO touch) at most once per idle window.
 struct SSHCommand: Equatable {
+    enum ControlCommand: String {
+        case check
+    }
+
     /// Background probes must never hang on an interactive prompt; they
     /// fail fast instead (`BatchMode=yes`, short connect timeout).
     /// Interactive invocations (terminal surfaces, first-time connects
@@ -19,6 +23,7 @@ struct SSHCommand: Equatable {
 
     static let executable = "/usr/bin/ssh"
     static let scpExecutable = "/usr/bin/scp"
+    private static let controlPath = "~/.ssh/alas-%C"
 
     let host: String
     let mode: Mode
@@ -54,6 +59,13 @@ struct SSHCommand: Equatable {
         optionArgs + [host, remoteScript]
     }
 
+    /// Address an existing multiplexed master without opening a new SSH
+    /// connection. Used to tell whether an interactive first-contact flow
+    /// actually established the connection needed by background commands.
+    func controlArgv(_ command: ControlCommand) -> [String] {
+        ["-o", "ControlPath=\(Self.controlPath)", "-O", command.rawValue, host]
+    }
+
     /// scp rides the same multiplexed batch connection as remote commands.
     /// The destination is home-relative because scp does not reliably expand
     /// a quoted `~` on every server implementation.
@@ -67,7 +79,7 @@ struct SSHCommand: Equatable {
             "-o", "ControlMaster=auto",
             // %C is a short hash of (host, port, user); keeps the socket
             // path well under the ~104-byte unix-socket limit.
-            "-o", "ControlPath=~/.ssh/alas-%C",
+            "-o", "ControlPath=\(Self.controlPath)",
             "-o", "ControlPersist=10m",
             // Dead-peer detection on every invocation that might become
             // the master: ~15s (3 missed 5s keepalives).

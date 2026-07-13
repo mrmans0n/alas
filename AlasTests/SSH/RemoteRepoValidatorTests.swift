@@ -3,9 +3,8 @@ import Testing
 @testable import Alas
 
 struct RemoteRepoValidatorTests {
-    @Test func validateRunsInteractivePreflightBeforeBatchRepoCheck() async throws {
+    @Test func validateRunsOnlyBatchRepoCheck() async throws {
         let recorder = RemoteRepoValidatorRunner(results: [
-            ProcessResult(exitCode: 0, stdout: "", stderr: ""),
             ProcessResult(exitCode: 0, stdout: "true\n", stderr: ""),
         ])
 
@@ -18,17 +17,13 @@ struct RemoteRepoValidatorTests {
         )
 
         let calls = await recorder.calls
-        #expect(calls.count == 2)
+        #expect(calls.count == 1)
         #expect(calls[0].timeout == 30)
-        #expect(!calls[0].args.contains("BatchMode=yes"))
-        #expect(calls[0].args.contains("ConnectTimeout=30"))
-        #expect(calls[0].args.last?.contains("true") == true)
-        #expect(calls[1].timeout == 30)
-        #expect(calls[1].args.contains("BatchMode=yes"))
-        #expect(calls[1].args.last?.contains("git -C") == true)
+        #expect(calls[0].args.contains("BatchMode=yes"))
+        #expect(calls[0].args.last?.contains("git -C") == true)
     }
 
-    @Test func preflightFailureTellsUserToConnectFirst() async throws {
+    @Test func connectionFailurePreservesSSHDetail() async throws {
         let recorder = RemoteRepoValidatorRunner(results: [
             ProcessResult(exitCode: 255, stdout: "", stderr: "Host key verification failed."),
         ])
@@ -43,15 +38,62 @@ struct RemoteRepoValidatorTests {
             )
             Issue.record("Expected validation to fail")
         } catch let error as RemoteRepoValidationError {
-            guard case let .unreachable(message) = error else {
-                Issue.record("Expected unreachable error")
+            guard case let .connectionFailed(message) = error else {
+                Issue.record("Expected connection failure")
                 return
             }
-            #expect(message.contains("Run `/usr/bin/ssh"))
-            #expect(message.contains("ControlMaster=auto"))
-            #expect(message.contains("devbox"))
-            #expect(message.contains("Host key verification failed."))
+            #expect(message == "Host key verification failed.")
         }
+    }
+
+    @Test func interactiveSetupForcesTTYAndSharesControlMaster() {
+        let invocation = RemoteRepoValidator.interactiveSetupInvocation(host: "devbox")
+
+        #expect(invocation.executable == "/usr/bin/ssh")
+        #expect(invocation.args.first == "-tt")
+        #expect(invocation.args.contains("ControlMaster=auto"))
+        #expect(invocation.args.contains("ControlPath=~/.ssh/alas-%C"))
+        #expect(!invocation.args.contains("BatchMode=yes"))
+        #expect(invocation.args.last?.contains("true") == true)
+    }
+
+    @Test func waitsForControlMasterUntilItBecomesAvailable() async {
+        let recorder = RemoteRepoValidatorRunner(results: [
+            ProcessResult(exitCode: 255, stdout: "", stderr: "No control socket"),
+            ProcessResult(exitCode: 0, stdout: "Master running", stderr: ""),
+        ])
+
+        let connected = await RemoteRepoValidator.waitForActiveControlMaster(
+            host: "devbox",
+            attempts: 2,
+            retryDelay: .zero,
+            runner: { executable, args, timeout in
+                await recorder.run(executable: executable, args: args, timeout: timeout)
+            }
+        )
+
+        #expect(connected)
+        let calls = await recorder.calls
+        #expect(calls.count == 2)
+        #expect(calls.allSatisfy { $0.timeout == 5 })
+        #expect(calls.allSatisfy { $0.args.contains("-O") && $0.args.contains("check") })
+        #expect(calls.allSatisfy { $0.args.last == "devbox" })
+    }
+
+    @Test func controlMasterWaitIsBounded() async {
+        let recorder = RemoteRepoValidatorRunner(results: [])
+
+        let connected = await RemoteRepoValidator.waitForActiveControlMaster(
+            host: "devbox",
+            attempts: 2,
+            retryDelay: .zero,
+            runner: { executable, args, timeout in
+                await recorder.run(executable: executable, args: args, timeout: timeout)
+            }
+        )
+
+        #expect(!connected)
+        #expect(await recorder.calls.count == 2)
     }
 }
 

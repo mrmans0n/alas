@@ -81,6 +81,33 @@ final class TerminalService {
         }
     }
 
+    /// Create a short-lived terminal surface that is not registered as a
+    /// project session. First-contact SSH uses this to render OpenSSH's native
+    /// host-key, password, keyboard-interactive, and hardware-key prompts.
+    func makeTransientSurface(
+        cfg: AppConfig.Terminal,
+        theme: Theme,
+        executable: String,
+        args: [String],
+        onExit: @escaping () -> Void
+    ) throws -> AlasGhostty.SurfaceView {
+        try ensureApp(cfg: cfg, theme: theme)
+        guard let app else { throw NSError(domain: "TerminalService", code: 1) }
+
+        let surfaceConfig = GhosttyConfigBuilder.makeSurfaceConfiguration(
+            cwd: FileManager.default.homeDirectoryForCurrentUser,
+            env: ProcessInfo.processInfo.environment,
+            executable: executable,
+            args: args
+        )
+        let surface = AlasGhostty.SurfaceView(app: app, configuration: surfaceConfig)
+        surface.processExitHandler = { processAlive in
+            guard !processAlive else { return }
+            onExit()
+        }
+        return surface
+    }
+
     /// Create a new session for the given worktree and return it.
     /// `startupScriptSuffix`, when non-empty, is appended to the effective
     /// per-session startup script and runs after the user's normal init —

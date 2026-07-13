@@ -7,8 +7,18 @@ import AppKit
 /// the surface to first responder on attach; with multiple panes per tab, only
 /// the focused leaf should grab keyboard focus.
 struct GhosttyHost: NSViewRepresentable {
-    let session: TerminalSession
+    let surface: AlasGhostty.SurfaceView
     var isFocused: Bool = true
+
+    init(session: TerminalSession, isFocused: Bool = true) {
+        self.surface = session.surface
+        self.isFocused = isFocused
+    }
+
+    init(surface: AlasGhostty.SurfaceView, isFocused: Bool = true) {
+        self.surface = surface
+        self.isFocused = isFocused
+    }
 
     @MainActor
     func makeNSView(context: Context) -> NSView {
@@ -36,29 +46,29 @@ struct GhosttyHost: NSViewRepresentable {
 
     @MainActor
     private func attach(_ container: NSView, mayStealFromOtherContainer: Bool) {
-        for subview in container.subviews where subview !== session.surface {
+        for subview in container.subviews where subview !== surface {
             subview.removeFromSuperview()
         }
 
-        if session.surface.superview !== container {
-            if session.surface.superview != nil && !mayStealFromOtherContainer {
+        if surface.superview !== container {
+            if surface.superview != nil && !mayStealFromOtherContainer {
                 // Another container owns the surface; we're a stale updateNSView.
                 return
             }
-            session.surface.removeFromSuperview()
-            session.surface.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(session.surface)
+            surface.removeFromSuperview()
+            surface.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(surface)
             NSLayoutConstraint.activate([
-                session.surface.topAnchor.constraint(equalTo: container.topAnchor),
-                session.surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                session.surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                session.surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+                surface.topAnchor.constraint(equalTo: container.topAnchor),
+                surface.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                surface.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                surface.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             ])
         }
         guard isFocused else { return }
         DispatchQueue.main.async { [weak container] in
-            guard let container, container.window?.firstResponder !== session.surface else { return }
-            container.window?.makeFirstResponder(session.surface)
+            guard let container, container.window?.firstResponder !== surface else { return }
+            container.window?.makeFirstResponder(surface)
         }
     }
 }
