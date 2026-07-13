@@ -226,6 +226,7 @@ final class ACPSessionManager: ObservableObject {
     private let setupEvaluator: ACPSetupEvaluator
     private let remoteAdapterResolver: ACPRemoteAdapterResolver
     private let connectionFactory: ACPConnectionFactory
+    private let injectedConnectionFactory: ACPConnectionFactory?
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session task that prepends pre-tail messages after the initial
@@ -314,37 +315,8 @@ final class ACPSessionManager: ObservableObject {
                 setupCheck: setupCheck
             )
         }
-        self.connectionFactory = connectionFactory ?? { spec, host, worktreePath in
-            let client: ACPStdioClient
-            if let host {
-                let invocation = ACPRemoteLaunch.channelInvocation(
-                    host: host,
-                    worktreePath: worktreePath,
-                    command: spec.command,
-                    arguments: spec.arguments,
-                    nodeBinDirectory: spec.remoteNodeBinDirectory
-                )
-                // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
-                // HOME, and any host-specific connection configuration.
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: invocation.executable),
-                    arguments: invocation.args,
-                    environment: nil
-                )
-            } else if spec.command.hasPrefix("/") {
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: spec.command),
-                    arguments: spec.arguments,
-                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
-            } else {
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: "/usr/bin/env"),
-                    arguments: [spec.command] + spec.arguments,
-                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
-            }
-            try client.start()
-            return ACPConnection(client: client)
-        }
+        self.injectedConnectionFactory = connectionFactory
+        self.connectionFactory = connectionFactory ?? Self.makeStdioConnection
         let initialRecent = store.flatMap { try? $0.recentSessions() } ?? []
         self.recent = initialRecent
         self.persistedRows = Dictionary(uniqueKeysWithValues: initialRecent.map { ($0.id, $0) })
@@ -762,6 +734,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deleteSession(id: ACPSession.ID) {
+        killRemoteHelperACPProcIfPossible(sessionId: id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
@@ -1258,6 +1231,15 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private func killRemoteHelperACPProcIfPossible(sessionId: ACPSession.ID) {
+        guard let host = RemoteHostRegistry.shared.host(forPath: worktreePath) else { return }
+        let procId = Self.helperACPProcId(sessionId: sessionId)
+        Task {
+            let client = await RemoteHelperClientPool.shared.client(for: host)
+            try? await client.killProc(procId: procId)
+        }
+    }
+
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
         guard !row.archived else { return }
@@ -1352,6 +1334,89 @@ final class ACPSessionManager: ObservableObject {
     /// the payload can't be decoded.
     func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) async -> String? {
         try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
+    }
+
+    private static func makeStdioConnection(
+        spec: ACPLaunchSpec,
+        host: String?,
+        worktreePath: String
+    ) throws -> ACPConnection {
+        try makeDefaultConnection(
+            spec: spec,
+            host: host,
+            worktreePath: worktreePath,
+            sessionId: nil,
+            useHelperProc: false
+        )
+    }
+
+    private static func makeDefaultConnection(
+        spec: ACPLaunchSpec,
+        host: String?,
+        worktreePath: String,
+        sessionId: ACPSession.ID?,
+        useHelperProc: Bool
+    ) throws -> ACPConnection {
+        let client: ACPStdioClient
+        if let host, useHelperProc, let sessionId {
+            let transport = RemoteHelperACPTransport(
+                host: host,
+                procId: helperACPProcId(sessionId: sessionId),
+                command: spec.command,
+                arguments: spec.arguments,
+                cwd: worktreePath,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv)
+            )
+            client = ACPStdioClient.makeForTesting(transport: transport)
+        } else if let host {
+            let invocation = ACPRemoteLaunch.channelInvocation(
+                host: host,
+                worktreePath: worktreePath,
+                command: spec.command,
+                arguments: spec.arguments
+            )
+            // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
+            // HOME, and any host-specific connection configuration.
+            client = try ACPStdioClient(
+                executable: URL(fileURLWithPath: invocation.executable),
+                arguments: invocation.args,
+                environment: nil
+            )
+        } else if spec.command.hasPrefix("/") {
+            client = try ACPStdioClient(
+                executable: URL(fileURLWithPath: spec.command),
+                arguments: spec.arguments,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
+        } else {
+            client = try ACPStdioClient(
+                executable: URL(fileURLWithPath: "/usr/bin/env"),
+                arguments: [spec.command] + spec.arguments,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
+        }
+        try client.start()
+        return ACPConnection(client: client)
+    }
+
+    private static func helperACPProcId(sessionId: ACPSession.ID) -> String {
+        let allowed = sessionId.map { char -> Character in
+            if char.isLetter || char.isNumber || char == "-" || char == "_" {
+                return char
+            }
+            return "-"
+        }
+        return "acp-" + String(allowed)
+    }
+
+    private func remoteHelperSupportsProc(host: String) async -> Bool {
+        if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake == nil {
+            return false
+        }
+        do {
+            let client = await RemoteHelperClientPool.shared.client(for: host)
+            return try await client.hello().capabilities.proc == true
+        } catch {
+            return false
+        }
     }
 }
 
@@ -1991,7 +2056,22 @@ extension ACPSessionManager {
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
             let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
-            connection = try connectionFactory(launchSpec, host, worktreePath)
+            if let injectedConnectionFactory {
+                connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
+            } else {
+                let useHelperProc = if let host {
+                    await remoteHelperSupportsProc(host: host)
+                } else {
+                    false
+                }
+                connection = try Self.makeDefaultConnection(
+                    spec: launchSpec,
+                    host: host,
+                    worktreePath: worktreePath,
+                    sessionId: sessionId,
+                    useHelperProc: useHelperProc
+                )
+            }
         } catch {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg

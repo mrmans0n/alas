@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use watch::{SubscriptionWatcher, WatchKind, WatchNotification};
@@ -107,6 +108,52 @@ struct SearchCancelParams {
     search_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcSpawnParams {
+    proc_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    env: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcAttachParams {
+    proc_id: String,
+    stdout_offset: Option<u64>,
+    stderr_offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcWriteParams {
+    proc_id: String,
+    data_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcKillParams {
+    proc_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcMetadata {
+    proc_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+}
+
+#[derive(Debug)]
+struct ProcReplayFrame {
+    offset: u64,
+    data: Vec<u8>,
+}
+
 pub(crate) enum SearchNotification {
     Line {
         search_id: String,
@@ -120,10 +167,28 @@ pub(crate) enum SearchNotification {
     },
 }
 
+pub(crate) enum ProcNotification {
+    Stdout {
+        proc_id: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    Stderr {
+        proc_id: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    Exit {
+        proc_id: String,
+        exit_code: Option<i32>,
+    },
+}
+
 pub(crate) enum ServerMessage {
     Request(String),
     Watch(WatchNotification),
     Search(SearchNotification),
+    Proc(ProcNotification),
     InputClosed,
 }
 
@@ -146,6 +211,7 @@ fn capabilities() -> Value {
             "list": true
         },
         "search": true,
+        "proc": true,
         "ping": true
     })
 }
@@ -236,6 +302,10 @@ fn serve() -> io::Result<()> {
                 flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
                 write_search_notification(&mut stdout, &mut state, notification)?;
             }
+            Some(ServerMessage::Proc(notification)) => {
+                flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
+                write_proc_notification(&mut stdout, notification)?;
+            }
             Some(ServerMessage::InputClosed) => {
                 flush_watch_events(&mut stdout, &state, &mut pending_events)?;
                 break;
@@ -247,6 +317,48 @@ fn serve() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn write_proc_notification(
+    stdout: &mut impl Write,
+    notification: ProcNotification,
+) -> io::Result<()> {
+    let value = match notification {
+        ProcNotification::Stdout {
+            proc_id,
+            offset,
+            data,
+        } => json!({
+            "jsonrpc": "2.0",
+            "method": "proc/output",
+            "params": {
+                "procId": proc_id,
+                "stream": "stdout",
+                "offset": offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(data)
+            }
+        }),
+        ProcNotification::Stderr {
+            proc_id,
+            offset,
+            data,
+        } => json!({
+            "jsonrpc": "2.0",
+            "method": "proc/output",
+            "params": {
+                "procId": proc_id,
+                "stream": "stderr",
+                "offset": offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(data)
+            }
+        }),
+        ProcNotification::Exit { proc_id, exit_code } => json!({
+            "jsonrpc": "2.0",
+            "method": "proc/exit",
+            "params": { "procId": proc_id, "exitCode": exit_code }
+        }),
+    };
+    write_json_line(stdout, &value.to_string())
 }
 
 fn write_search_notification(
@@ -378,6 +490,11 @@ fn handle_request(
         "fs/list" => fs_list(state, params),
         "search/start" => search_start(state, params),
         "search/cancel" => search_cancel(state, params),
+        "proc/spawn" => proc_spawn(state, params),
+        "proc/attach" => proc_attach(state, params),
+        "proc/write" => proc_write(params),
+        "proc/kill" => proc_kill(params),
+        "proc/list" => proc_list(),
         _ => Err(jsonrpc_error(-32601, format!("method not found: {method}"))),
     }
 }
@@ -728,6 +845,430 @@ fn spawn_search(
             cancelled: was_cancelled,
         }));
     });
+}
+
+fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcSpawnParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let cwd = std::fs::canonicalize(&params.cwd)
+        .map_err(|error| jsonrpc_error(-32050, format!("invalid cwd: {error}")))?;
+    if !cwd.is_dir() {
+        return Err(jsonrpc_error(-32050, "cwd is not a directory"));
+    }
+    let dir = proc_dir(&params.proc_id)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| jsonrpc_error(-32050, format!("proc dir failed: {error}")))?;
+    let status = proc_status_in_dir(&dir);
+    if status.running {
+        return Ok(json!({
+            "procId": params.proc_id,
+            "running": true,
+            "exitCode": null
+        }));
+    }
+
+    let stdin_path = dir.join("stdin.log");
+    let stdout_path = dir.join("stdout.log");
+    let stderr_path = dir.join("stderr.log");
+    let exit_path = dir.join("exit");
+    let pid_path = dir.join("pid");
+    let _ = std::fs::remove_file(&exit_path);
+    std::fs::File::create(&stdin_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("stdin create failed: {error}")))?;
+    std::fs::File::create(&stdout_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("stdout create failed: {error}")))?;
+    std::fs::File::create(&stderr_path)
+        .map_err(|error| jsonrpc_error(-32050, format!("stderr create failed: {error}")))?;
+    let metadata = ProcMetadata {
+        proc_id: params.proc_id.clone(),
+        command: params.command.clone(),
+        args: params.args.clone(),
+        cwd: cwd.display().to_string(),
+    };
+    std::fs::write(
+        dir.join("meta.json"),
+        serde_json::to_vec(&metadata).expect("metadata serialization must succeed"),
+    )
+    .map_err(|error| jsonrpc_error(-32050, format!("metadata write failed: {error}")))?;
+
+    let mut env_parts: Vec<String> = vec!["env".to_string()];
+    env_parts.extend(
+        ACP_REMOTE_MARKER_SCRUB
+            .iter()
+            .flat_map(|key| ["-u".to_string(), (*key).to_string()]),
+    );
+    let mut env_keys: Vec<_> = params.env.keys().collect();
+    env_keys.sort();
+    for key in env_keys {
+        if !is_safe_env_key(key) {
+            return Err(jsonrpc_error(-32602, format!("invalid env key: {key}")));
+        }
+        let value = params.env.get(key).expect("key from map");
+        env_parts.push(format!("{}={}", key, shell_quote(value)));
+    }
+    let argv = std::iter::once(params.command.as_str())
+        .chain(params.args.iter().map(String::as_str))
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let env_command = env_parts.join(" ");
+    let script = format!(
+        "cd {cwd} && tail -n +1 -f {stdin} | {env_command} {argv} > {stdout} 2> {stderr}; status=$?; printf '%s\\n' \"$status\" > {exit}",
+        cwd = shell_quote(cwd.to_string_lossy().as_ref()),
+        stdin = shell_quote(stdin_path.to_string_lossy().as_ref()),
+        stdout = shell_quote(stdout_path.to_string_lossy().as_ref()),
+        stderr = shell_quote(stderr_path.to_string_lossy().as_ref()),
+        exit = shell_quote(exit_path.to_string_lossy().as_ref()),
+        env_command = env_command,
+        argv = argv,
+    );
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
+    std::fs::write(&pid_path, format!("{}\n", child.id()))
+        .map_err(|error| jsonrpc_error(-32050, format!("pid write failed: {error}")))?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    state
+        .subscriptions
+        .insert(format!("proc:{}", params.proc_id), cwd);
+    Ok(json!({
+        "procId": params.proc_id,
+        "running": true,
+        "exitCode": null
+    }))
+}
+
+fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcAttachParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let dir = proc_dir(&params.proc_id)?;
+    if !dir.is_dir() {
+        return Err(jsonrpc_error(-32051, "process not found"));
+    }
+    let stdout_offset = params.stdout_offset.unwrap_or(0);
+    let stderr_offset = params.stderr_offset.unwrap_or(0);
+    let stdout_frames = read_stdout_frames(&dir.join("stdout.log"), stdout_offset)?;
+    let stderr_chunk = read_file_tail(&dir.join("stderr.log"), stderr_offset)?;
+    let stdout_next_offset = stdout_frames
+        .last()
+        .map(|frame| frame.offset)
+        .unwrap_or(stdout_offset);
+    let stderr_next_offset = stderr_chunk
+        .as_ref()
+        .map(|(offset, _)| *offset)
+        .unwrap_or(stderr_offset);
+    if let Some(sender) = state.event_sender.clone() {
+        spawn_proc_stdout_tail(
+            params.proc_id.clone(),
+            dir.clone(),
+            stdout_next_offset,
+            sender.clone(),
+        );
+        spawn_proc_stderr_tail(params.proc_id.clone(), dir.clone(), stderr_next_offset, sender);
+    }
+    let status = proc_status_in_dir(&dir);
+    Ok(json!({
+        "procId": params.proc_id,
+        "running": status.running,
+        "exitCode": status.exit_code,
+        "stdoutOffset": stdout_next_offset,
+        "stderrOffset": stderr_next_offset,
+        "stdoutFrames": stdout_frames.into_iter().map(|frame| {
+            json!({
+                "offset": frame.offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(frame.data)
+            })
+        }).collect::<Vec<_>>(),
+        "stderrChunks": stderr_chunk.into_iter().map(|(offset, data)| {
+            json!({
+                "offset": offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(data)
+            })
+        }).collect::<Vec<_>>()
+    }))
+}
+
+fn proc_write(params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcWriteParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let dir = proc_dir(&params.proc_id)?;
+    if !dir.is_dir() {
+        return Err(jsonrpc_error(-32051, "process not found"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(params.data_base64.as_bytes())
+        .map_err(|error| jsonrpc_error(-32602, format!("invalid base64: {error}")))?;
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("stdin.log"))
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin open failed: {error}")))?;
+    file.write_all(&bytes)
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin write failed: {error}")))?;
+    file.flush()
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin flush failed: {error}")))?;
+    Ok(json!({ "ok": true }))
+}
+
+fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcKillParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let dir = proc_dir(&params.proc_id)?;
+    if let Some(pid) = read_pid(&dir) {
+        kill_process_group(pid);
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn proc_list() -> Result<Value, HelperError> {
+    let root = proc_root()?;
+    let mut entries = Vec::new();
+    let Ok(read_dir) = std::fs::read_dir(root) else {
+        return Ok(json!({ "entries": entries }));
+    };
+    for entry in read_dir.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(proc_id) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let status = proc_status_in_dir(&dir);
+        entries.push(json!({
+            "procId": proc_id,
+            "running": status.running,
+            "exitCode": status.exit_code
+        }));
+    }
+    Ok(json!({ "entries": entries }))
+}
+
+struct ProcStatus {
+    running: bool,
+    exit_code: Option<i32>,
+}
+
+fn proc_status_in_dir(dir: &Path) -> ProcStatus {
+    let exit_code = std::fs::read_to_string(dir.join("exit"))
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok());
+    let running = exit_code.is_none()
+        && read_pid(dir)
+            .map(pid_is_alive)
+            .unwrap_or(false);
+    ProcStatus { running, exit_code }
+}
+
+fn read_stdout_frames(path: &Path, offset: u64) -> Result<Vec<ProcReplayFrame>, HelperError> {
+    use std::io::{Read, Seek};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(jsonrpc_error(-32053, format!("stdout open failed: {error}"))),
+    };
+    file.seek(io::SeekFrom::Start(offset))
+        .map_err(|error| jsonrpc_error(-32053, format!("stdout seek failed: {error}")))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|error| jsonrpc_error(-32053, format!("stdout read failed: {error}")))?;
+    let mut frames = Vec::new();
+    let mut start = 0;
+    for (index, byte) in data.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        let end = index + 1;
+        let frame = data[start..index].to_vec();
+        frames.push(ProcReplayFrame {
+            offset: offset + end as u64,
+            data: frame,
+        });
+        start = end;
+    }
+    Ok(frames)
+}
+
+fn read_file_tail(path: &Path, offset: u64) -> Result<Option<(u64, Vec<u8>)>, HelperError> {
+    use std::io::{Read, Seek};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(jsonrpc_error(-32053, format!("stderr open failed: {error}"))),
+    };
+    file.seek(io::SeekFrom::Start(offset))
+        .map_err(|error| jsonrpc_error(-32053, format!("stderr seek failed: {error}")))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|error| jsonrpc_error(-32053, format!("stderr read failed: {error}")))?;
+    if data.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some((offset + data.len() as u64, data)))
+    }
+}
+
+fn spawn_proc_stdout_tail(
+    proc_id: String,
+    dir: PathBuf,
+    mut offset: u64,
+    sender: Sender<ServerMessage>,
+) {
+    thread::spawn(move || {
+        loop {
+            match read_stdout_frames(&dir.join("stdout.log"), offset) {
+                Ok(frames) if frames.is_empty() => {}
+                Ok(frames) => {
+                    for frame in frames {
+                        offset = frame.offset;
+                        if sender
+                            .send(ServerMessage::Proc(ProcNotification::Stdout {
+                                proc_id: proc_id.clone(),
+                                offset,
+                                data: frame.data,
+                            }))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+                Err(_) => return,
+            }
+            if proc_status_in_dir(&dir).exit_code.is_some() {
+                let _ = sender.send(ServerMessage::Proc(ProcNotification::Exit {
+                    proc_id,
+                    exit_code: proc_status_in_dir(&dir).exit_code,
+                }));
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+}
+
+fn spawn_proc_stderr_tail(
+    proc_id: String,
+    dir: PathBuf,
+    mut offset: u64,
+    sender: Sender<ServerMessage>,
+) {
+    thread::spawn(move || {
+        loop {
+            match read_file_tail(&dir.join("stderr.log"), offset) {
+                Ok(Some((next_offset, data))) => {
+                    offset = next_offset;
+                    if sender
+                        .send(ServerMessage::Proc(ProcNotification::Stderr {
+                            proc_id: proc_id.clone(),
+                            offset,
+                            data,
+                        }))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => return,
+            }
+            if proc_status_in_dir(&dir).exit_code.is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+}
+
+const ACP_REMOTE_MARKER_SCRUB: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE",
+    "CLAUDE_PROJECT_DIR",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_SESSION_ID",
+];
+
+fn validate_proc_id(proc_id: &str) -> Result<(), HelperError> {
+    if proc_id.is_empty()
+        || proc_id.len() > 128
+        || !proc_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(jsonrpc_error(-32602, "invalid procId"));
+    }
+    Ok(())
+}
+
+fn proc_root() -> Result<PathBuf, HelperError> {
+    let home = std::env::var("HOME").map_err(|_| jsonrpc_error(-32050, "HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".alas").join("procs"))
+}
+
+fn proc_dir(proc_id: &str) -> Result<PathBuf, HelperError> {
+    validate_proc_id(proc_id)?;
+    Ok(proc_root()?.join(proc_id))
+}
+
+fn read_pid(dir: &Path) -> Option<u32> {
+    std::fs::read_to_string(dir.join("pid"))
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    unsafe { libc_kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn kill_process_group(pid: u32) {
+    unsafe {
+        let _ = libc_kill(-(pid as i32), 15);
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) {}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+unsafe fn libc_kill(pid: i32, sig: i32) -> i32 {
+    unsafe { kill(pid, sig) }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn is_safe_env_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && !key.as_bytes()[0].is_ascii_digit()
 }
 
 fn contained_existing_path(state: &HelperState, path: &str) -> Result<PathBuf, HelperError> {

@@ -25,6 +25,7 @@ struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     let watchKinds: [RemoteHelperWatchKind]
     let fs: RemoteHelperFSCapabilities
     let search: Bool?
+    let proc: Bool?
     let ping: Bool
 }
 
@@ -200,4 +201,85 @@ enum RemoteHelperSearchEvent: Equatable, Sendable {
 struct RemoteHelperSearchHandle: Sendable {
     let searchId: String
     let events: AsyncThrowingStream<RemoteHelperSearchEvent, Error>
+}
+
+struct RemoteHelperProcSpawnParams: Codable, Equatable, Sendable {
+    let procId: String
+    let command: String
+    let args: [String]
+    let cwd: String
+    let env: [String: String]
+}
+
+struct RemoteHelperProcStatus: Codable, Equatable, Sendable {
+    let procId: String
+    let running: Bool
+    let exitCode: Int32?
+}
+
+struct RemoteHelperProcAttachParams: Codable, Equatable, Sendable {
+    let procId: String
+    let stdoutOffset: UInt64?
+    let stderrOffset: UInt64?
+}
+
+struct RemoteHelperProcReplayFrame: Codable, Equatable, Sendable {
+    let offset: UInt64
+    let dataBase64: String
+}
+
+struct RemoteHelperProcAttachResult: Codable, Equatable, Sendable {
+    let procId: String
+    let running: Bool
+    let exitCode: Int32?
+    let stdoutOffset: UInt64
+    let stderrOffset: UInt64
+    let stdoutFrames: [RemoteHelperProcReplayFrame]
+    let stderrChunks: [RemoteHelperProcReplayFrame]
+}
+
+struct RemoteHelperProcWriteParams: Codable, Equatable, Sendable {
+    let procId: String
+    let dataBase64: String
+}
+
+struct RemoteHelperProcWriteResult: Codable, Equatable, Sendable {
+    let ok: Bool
+}
+
+struct RemoteHelperProcKillParams: Codable, Equatable, Sendable {
+    let procId: String
+}
+
+struct RemoteHelperProcKillResult: Codable, Equatable, Sendable {
+    let ok: Bool
+}
+
+struct RemoteHelperProcListResult: Codable, Equatable, Sendable {
+    let entries: [RemoteHelperProcStatus]
+}
+
+struct RemoteHelperProcOutputParams: Codable, Equatable, Sendable {
+    let procId: String
+    let stream: String
+    let offset: UInt64
+    let dataBase64: String
+}
+
+struct RemoteHelperProcExitParams: Codable, Equatable, Sendable {
+    let procId: String
+    let exitCode: Int32?
+}
+
+enum RemoteHelperProcEvent: Equatable, Sendable {
+    case available
+    case unavailable
+    case stdout(Data, offset: UInt64)
+    case stderr(Data, offset: UInt64)
+    case exited(Int32?)
+}
+
+struct RemoteHelperProcAttachHandle: Sendable {
+    let procId: String
+    let events: AsyncStream<RemoteHelperProcEvent>
 }

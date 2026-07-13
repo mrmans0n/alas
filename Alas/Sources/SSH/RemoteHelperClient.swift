@@ -17,6 +17,10 @@ private struct ActiveRemoteHelperSearch {
     let continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation
 }
 
+private struct ActiveRemoteHelperProcAttachment {
+    let continuation: AsyncStream<RemoteHelperProcEvent>.Continuation
+}
+
 enum RemoteHelperClientError: Error, Equatable {
     case notRunning
     case unavailable(String)
@@ -58,6 +62,8 @@ actor RemoteHelperClient {
     private var activeSubscriptions: [String: ActiveRemoteHelperSubscription] = [:]
     private var activeSearches: [String: ActiveRemoteHelperSearch] = [:]
     private var earlySearchEvents: [String: [RemoteHelperSearchEvent]] = [:]
+    private var activeProcAttachments: [String: ActiveRemoteHelperProcAttachment] = [:]
+    private var earlyProcEvents: [String: [RemoteHelperProcEvent]] = [:]
     private var subscriptionReplayTask: Task<Void, Error>?
     private var subscriptionsNeedReplay = false
     private var lastExitStatus: Int32?
@@ -248,6 +254,84 @@ actor RemoteHelperClient {
         )
     }
 
+    func spawnProc(
+        procId: String,
+        command: String,
+        args: [String],
+        cwd: String,
+        env: [String: String]
+    ) async throws -> RemoteHelperProcStatus {
+        try await request(
+            method: "proc/spawn",
+            params: RemoteHelperProcSpawnParams(
+                procId: procId,
+                command: command,
+                args: args,
+                cwd: cwd,
+                env: env
+            )
+        )
+    }
+
+    func attachProc(
+        procId: String,
+        stdoutOffset: UInt64? = nil,
+        stderrOffset: UInt64? = nil
+    ) async throws -> RemoteHelperProcAttachHandle {
+        let result: RemoteHelperProcAttachResult = try await request(
+            method: "proc/attach",
+            params: RemoteHelperProcAttachParams(
+                procId: procId,
+                stdoutOffset: stdoutOffset,
+                stderrOffset: stderrOffset
+            )
+        )
+        var continuation: AsyncStream<RemoteHelperProcEvent>.Continuation!
+        let events = AsyncStream<RemoteHelperProcEvent> { continuation = $0 }
+        activeProcAttachments[procId] = ActiveRemoteHelperProcAttachment(continuation: continuation)
+        continuation.yield(.available)
+        for frame in result.stdoutFrames {
+            if let data = Data(base64Encoded: frame.dataBase64) {
+                continuation.yield(.stdout(data, offset: frame.offset))
+            }
+        }
+        for chunk in result.stderrChunks {
+            if let data = Data(base64Encoded: chunk.dataBase64) {
+                continuation.yield(.stderr(data, offset: chunk.offset))
+            }
+        }
+        for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
+            continuation.yield(event)
+        }
+        if !result.running {
+            continuation.yield(.exited(result.exitCode))
+        }
+        return RemoteHelperProcAttachHandle(procId: procId, events: events)
+    }
+
+    func writeProc(procId: String, data: Data) async throws {
+        let _: RemoteHelperProcWriteResult = try await request(
+            method: "proc/write",
+            params: RemoteHelperProcWriteParams(
+                procId: procId,
+                dataBase64: data.base64EncodedString()
+            ),
+            replaySubscriptionsOnStart: false
+        )
+    }
+
+    func killProc(procId: String) async throws {
+        let _: RemoteHelperProcKillResult = try await request(
+            method: "proc/kill",
+            params: RemoteHelperProcKillParams(procId: procId),
+            replaySubscriptionsOnStart: false
+        )
+    }
+
+    func listProcs() async throws -> RemoteHelperProcListResult {
+        try await request(method: "proc/list", params: RemoteHelperNoParams())
+    }
+
     func shutdown() {
         idleShutdownTask?.cancel()
         idleShutdownTask = nil
@@ -264,6 +348,12 @@ actor RemoteHelperClient {
         }
         activeSearches.removeAll()
         earlySearchEvents.removeAll()
+        for proc in activeProcAttachments.values {
+            proc.continuation.yield(.unavailable)
+            proc.continuation.finish()
+        }
+        activeProcAttachments.removeAll()
+        earlyProcEvents.removeAll()
         drainPending(with: RemoteHelperClientError.notRunning)
         dispatchTask?.cancel()
         dispatchTask = nil
@@ -494,6 +584,18 @@ actor RemoteHelperClient {
             )
             return
         }
+        if head.method == "proc/output",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperProcOutputParams>.self, from: data),
+           let event = env.params {
+            emitProcOutput(event)
+            return
+        }
+        if head.method == "proc/exit",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperProcExitParams>.self, from: data),
+           let event = env.params {
+            emitProcEvent(.exited(event.exitCode), procId: event.procId)
+            return
+        }
 
         guard head.method == "watch/event",
               let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperWatchEvent>.self, from: data),
@@ -531,6 +633,31 @@ actor RemoteHelperClient {
         }
     }
 
+    private func emitProcOutput(_ output: RemoteHelperProcOutputParams) {
+        guard let data = Data(base64Encoded: output.dataBase64) else { return }
+        switch output.stream {
+        case "stdout":
+            emitProcEvent(.stdout(data, offset: output.offset), procId: output.procId)
+        case "stderr":
+            emitProcEvent(.stderr(data, offset: output.offset), procId: output.procId)
+        default:
+            break
+        }
+    }
+
+    private func emitProcEvent(_ event: RemoteHelperProcEvent, procId: String) {
+        guard let attachment = activeProcAttachments[procId] else {
+            earlyProcEvents[procId, default: []].append(event)
+            return
+        }
+        attachment.continuation.yield(event)
+        if case .exited = event {
+            attachment.continuation.finish()
+            activeProcAttachments.removeValue(forKey: procId)
+            scheduleIdleShutdownIfPossible()
+        }
+    }
+
     private func handleExit(_ status: Int32) {
         lastExitStatus = status
         transport = nil
@@ -547,6 +674,11 @@ actor RemoteHelperClient {
         }
         activeSearches.removeAll()
         earlySearchEvents.removeAll()
+        for proc in activeProcAttachments.values {
+            proc.continuation.yield(.unavailable)
+        }
+        activeProcAttachments.removeAll()
+        earlyProcEvents.removeAll()
         if RemoteExec.isConnectionFailure(exitCode: status) {
             Task { @MainActor [host] in
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
@@ -567,6 +699,7 @@ actor RemoteHelperClient {
               pending.isEmpty,
               activeSubscriptions.isEmpty,
               activeSearches.isEmpty,
+              activeProcAttachments.isEmpty,
               transport != nil else { return }
         idleShutdownTask?.cancel()
         let delay = idleShutdownNanoseconds
@@ -577,7 +710,10 @@ actor RemoteHelperClient {
     }
 
     private func shutdownIfIdle() {
-        guard pending.isEmpty, activeSubscriptions.isEmpty, activeSearches.isEmpty else { return }
+        guard pending.isEmpty,
+              activeSubscriptions.isEmpty,
+              activeSearches.isEmpty,
+              activeProcAttachments.isEmpty else { return }
         shutdown()
     }
 
