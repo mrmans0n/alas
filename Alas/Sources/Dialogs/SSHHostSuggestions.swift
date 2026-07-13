@@ -27,13 +27,26 @@ enum SSHHostSuggestions {
     }
 
     /// A ready-to-paste `~/.ssh/config` stanza seeded with the typed name.
+    /// A `user@host` entry is split into `User`/`Host`, since OpenSSH matches
+    /// `Host` against the host part only and takes the user separately.
     static func snippet(for name: String) -> String {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        let alias = trimmed.isEmpty ? "<name>" : trimmed
+        var user: String?
+        var host = trimmed
+        if let at = trimmed.firstIndex(of: "@") {
+            let hostPart = String(trimmed[trimmed.index(after: at)...])
+            if !hostPart.isEmpty {
+                let userPart = String(trimmed[..<at])
+                if !userPart.isEmpty { user = userPart }
+                host = hostPart
+            }
+        }
+        let hostLine = host.isEmpty ? "<name>" : host
+        let userLine = user ?? "<you>"
         return """
-        Host \(alias)
+        Host \(hostLine)
             HostName <server-address>
-            User <you>
+            User \(userLine)
         """
     }
 }

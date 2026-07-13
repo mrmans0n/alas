@@ -28,4 +28,11 @@ struct SSHHostSuggestionsTests {
         #expect(SSHHostSuggestions.snippet(for: "staging42").contains("Host staging42"))
         #expect(SSHHostSuggestions.snippet(for: "  ").contains("Host <name>"))
     }
+
+    @Test func snippetSplitsUserFromHost() {
+        let s = SSHHostSuggestions.snippet(for: "me@dev")
+        #expect(s.contains("Host dev"))
+        #expect(s.contains("User me"))
+        #expect(!s.contains("me@dev"))
+    }
 }
