@@ -136,6 +136,7 @@ struct ACPSessionManagerSubmitTests {
             Issue.record("expected first block to be .text, got \(String(describing: head.blocks.first))")
         }
 
+        await mgr.flushPersistence()
         let persisted = try store.loadQueue(sessionId: session.id)
         #expect(persisted.count == 1)
         #expect(persisted.first?.id == head.id)

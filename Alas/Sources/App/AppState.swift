@@ -2971,6 +2971,43 @@ final class AppState {
         return nil
     }
 
+    private func acpQuestionNotificationBody(from params: ACPQuestionRequestParams) -> String? {
+        if let title = params.title?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !title.isEmpty {
+            return title
+        }
+        return params.questions
+            .map(\.prompt)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+    }
+
+    private func acpInputNotificationBody(from request: ACPUserInputRequest) -> String? {
+        switch request.source {
+        case .cursor(_, let params):
+            return acpQuestionNotificationBody(from: params)
+        case .elicitation:
+            let title = request.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !title.isEmpty { return title }
+            let message = request.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return message.isEmpty ? nil : message
+        }
+    }
+
+    private func notificationRequestId(for request: ACPUserInputRequest) -> String {
+        switch request.source {
+        case .cursor(let id, _), .elicitation(let id, _):
+            return notificationRequestId(for: id)
+        }
+    }
+
+    private func notificationRequestId(for id: JSONRPCID) -> String {
+        switch id {
+        case .number(let value): return String(value)
+        case .string(let value): return value
+        }
+    }
+
     private func projectPath(forWorktreeId id: String) -> String? {
         guard let worktree = worktree(withId: id) else { return nil }
         return projects.first(where: { $0.id == worktree.projectId })?.path
@@ -4030,6 +4067,20 @@ final class AppState {
                     worktreeId: worktree.id,
                     sessionId: sessionId,
                     title: title
+                )
+            },
+            onInputAwaiting: { [weak self] session, request in
+                guard let self,
+                      self.config.harness.notifyOnAwaiting,
+                      let resolved = self.projectAndWorktree(withWorktreeId: worktree.id)
+                else { return }
+                self.harness.notifications.notifyACPQuestion(
+                    agent: ACPHarnessBridge.agentKind(for: session.agentId),
+                    body: self.acpInputNotificationBody(from: request),
+                    projectId: resolved.project.id,
+                    worktreeId: resolved.worktree.id,
+                    sessionId: session.id,
+                    requestId: self.notificationRequestId(for: request)
                 )
             },
             mcpProjectContextProvider: { [weak self] in

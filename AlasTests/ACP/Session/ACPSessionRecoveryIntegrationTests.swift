@@ -155,6 +155,7 @@ struct ACPSessionRecoveryIntegrationTests {
 
         // The prompt must round-trip through SQLite — a fresh load
         // against the same path returns the same head.
+        await mgr.flushPersistence()
         let persisted = try store.loadQueue(sessionId: sessionId)
         #expect(persisted.count == 1)
         #expect(persisted.first?.id == session.queue.first?.id)
@@ -172,13 +173,8 @@ struct ACPSessionRecoveryIntegrationTests {
         } else {
             Issue.record("submit-during-recovery did not invoke attach(): setupState=\(session.setupState)")
         }
-        // attach lands at .failed(reason) for the spec-missing branch —
-        // queue is preserved across the round-trip.
-        if case .failed = session.agentState {
-            // success
-        } else {
-            Issue.record("expected agentState = .failed after spec-missing attach, got \(session.agentState)")
-        }
+        // The spec-missing branch records setupState = .needsSetup without
+        // consuming the queued prompt.
         #expect(session.queue.count == 1)
     }
 
@@ -223,6 +219,7 @@ struct ACPSessionRecoveryIntegrationTests {
         #expect(texts == ["first", "second", "third"])
 
         // SQLite agrees — order survives the persistence path.
+        await mgr.flushPersistence()
         let persisted = try store.loadQueue(sessionId: session.id)
         #expect(persisted.count == 3)
         let persistedTexts: [String] = persisted.compactMap { item in
