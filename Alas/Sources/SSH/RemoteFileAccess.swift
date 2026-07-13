@@ -79,7 +79,7 @@ enum RemoteFileAccess {
     }
 
     static func read(host: String, path: String) async throws -> RemoteReadResult {
-        if await helperIsInstalled(host: host) {
+        if await helperSupportsRead(host: host) {
             let startedAt = CFAbsoluteTimeGetCurrent()
             do {
                 let client = await RemoteHelperClientPool.shared.client(for: host)
@@ -296,6 +296,12 @@ enum RemoteFileAccess {
 
     private static func helperIsInstalled(host: String) async -> Bool {
         await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil
+    }
+
+    private static func helperSupportsRead(host: String) async -> Bool {
+        await RemoteHostCapabilityStore.shared.capabilities(for: host)?
+            .helperHandshake?
+            .supportsFilesystemV04Contract == true
     }
 
     private static func helperSupportsWrite(host: String, expectedContent: String?) async -> Bool {
