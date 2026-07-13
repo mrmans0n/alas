@@ -453,7 +453,18 @@ fn fs_read(state: &HelperState, params: Option<Value>) -> Result<Value, HelperEr
 fn fs_write(state: &HelperState, params: Option<Value>) -> Result<Value, HelperError> {
     let params: FsWriteParams = decode_params(params)?;
     let path = contained_write_path(state, &params.path)?;
-    if let Some(expected) = params.expected_mtime {
+    if let Some(expected) = params.expected_content.as_deref() {
+        let actual = std::fs::read(&path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                jsonrpc_error(-32030, "content target missing")
+            } else {
+                jsonrpc_error(-32020, format!("content check failed: {error}"))
+            }
+        })?;
+        if actual != expected.as_bytes() {
+            return Err(jsonrpc_error(-32030, "content mismatch"));
+        }
+    } else if let Some(expected) = params.expected_mtime {
         let metadata = std::fs::metadata(&path).map_err(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 jsonrpc_error(-32030, "mtime target missing")
@@ -465,18 +476,6 @@ fn fs_write(state: &HelperState, params: Option<Value>) -> Result<Value, HelperE
             && (actual - expected).abs() > 0.000_001
         {
             return Err(jsonrpc_error(-32030, "mtime mismatch"));
-        }
-    }
-    if let Some(expected) = params.expected_content {
-        let actual = std::fs::read(&path).map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                jsonrpc_error(-32030, "content target missing")
-            } else {
-                jsonrpc_error(-32020, format!("content check failed: {error}"))
-            }
-        })?;
-        if actual != expected.as_bytes() {
-            return Err(jsonrpc_error(-32030, "content mismatch"));
         }
     }
     write_replacing_path(&path, &params.content)?;
@@ -771,18 +770,7 @@ fn contained_write_path(state: &HelperState, path: &str) -> Result<PathBuf, Help
     let target = parent.join(file_name);
     match std::fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let canonical = std::fs::canonicalize(&target).map_err(|error| {
-                jsonrpc_error(-32020, format!("symlink target failed: {error}"))
-            })?;
-            if state
-                .subscriptions
-                .values()
-                .any(|root| canonical.starts_with(root))
-            {
-                Ok(canonical)
-            } else {
-                Err(jsonrpc_error(-32023, "path outside registered roots"))
-            }
+            Err(jsonrpc_error(-32025, "path is a symbolic link"))
         }
         Ok(_) => Ok(target),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(target),
@@ -1276,6 +1264,75 @@ mod tests {
     }
 
     #[test]
+    fn write_content_gate_accepts_matching_content_with_coarse_mtime() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-coarse-mtime-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "baseline").expect("file");
+        let actual = modified_seconds(&std::fs::metadata(&file).expect("metadata")).unwrap();
+        let coarse = if actual.fract() == 0.0 {
+            actual - 0.5
+        } else {
+            actual.floor()
+        };
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        fs_write(
+            &state,
+            Some(json!({
+                "path": file.display().to_string(),
+                "content": "editor",
+                "expectedMtime": coarse,
+                "expectedContent": "baseline"
+            })),
+        )
+        .expect("matching content should tolerate mtime precision");
+
+        assert_eq!(std::fs::read_to_string(&file).expect("content"), "editor");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_rejects_symlink_without_modifying_target() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-symlink-write-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let target = root.join("target.txt");
+        let link = root.join("link.txt");
+        std::fs::write(&target, "target").expect("target");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": link.display().to_string(),
+                "content": "editor"
+            })),
+        )
+        .expect_err("symlink writes must be rejected");
+
+        assert_eq!(error.code, -32025);
+        assert_eq!(std::fs::read_to_string(&target).expect("content"), "target");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn search_cancel_marks_the_server_side_operation() {
         let cancelled = Arc::new(AtomicBool::new(false));
         let mut state = HelperState::default();
@@ -1512,9 +1569,9 @@ mod tests {
                 "content": "changed"
             })),
         )
-        .expect_err("write should reject escaping symlink");
+        .expect_err("write should reject symlink");
 
-        assert_eq!(error.code, -32023);
+        assert_eq!(error.code, -32025);
         assert_eq!(
             std::fs::read_to_string(&outside_file).expect("outside content"),
             "original"

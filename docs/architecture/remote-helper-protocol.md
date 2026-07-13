@@ -116,8 +116,10 @@ Params:
 
 Result: `{"mtime": 1783940100.5}`
 
-`expectedMtime` and `expectedContent` are optional. When either provided baseline
-differs from the existing file, or the target file no longer exists, the helper
+`expectedMtime` and `expectedContent` are optional. When content is provided it
+is the authoritative baseline, avoiding false conflicts when a preceding exec
+read only observed integer-second mtimes. Otherwise the mtime is the baseline.
+When the selected baseline differs, or the target no longer exists, the helper
 returns an error instead of writing.
 
 `fs/stat`
@@ -187,11 +189,11 @@ line counts, and searches
 resolve existing target paths and require them to be under a registered root.
 `fs/write` resolves the parent directory and requires that parent to be under a
 registered root before writing. If the final path already exists as a symlink,
-the helper resolves the symlink target and rejects writes outside registered
-roots. Writes use a sibling temporary file plus rename, preserving the existing
-target mode when replacing a file, so hardlinks inside a registered root are
-replaced instead of mutating an outside shared inode. This catches symlink and
-hardlink escapes on the host that lexical path checks cannot see.
+the helper rejects the write. Writes use a sibling temporary file plus rename,
+preserving the existing target mode when replacing a file, so hardlinks inside a
+registered root are replaced instead of mutating an outside shared inode. This
+catches symlink and hardlink escapes on the host that lexical path checks cannot
+see.
 
 ## Errors
 
@@ -207,4 +209,4 @@ range:
 | `-32022` | no containment roots have been registered |
 | `-32023` | path is outside registered roots |
 | `-32025` | path is not a regular file |
-| `-32030` | `expectedMtime` did not match |
+| `-32030` | expected content or mtime baseline did not match |
