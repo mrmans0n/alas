@@ -23,7 +23,7 @@ enum SSHConfigParser {
         var hosts: [SSHConfigHost] = []
         var seenAliases = Set<String>()
         var visitedFiles = Set<String>()
-        parseFile(root, home: home, fileManager: fileManager,
+        parseFile(root, home: home, fileManager: fileManager, guards: [],
                   hosts: &hosts, seenAliases: &seenAliases,
                   visitedFiles: &visitedFiles, depth: 0)
         return hosts
@@ -33,6 +33,12 @@ enum SSHConfigParser {
         _ url: URL,
         home: URL,
         fileManager: FileManager,
+        // Host patterns governing this file's inclusion. An included file
+        // reached through `Host P` blocks carries those patterns; an alias it
+        // defines is only usable (bare `ssh <alias>`) if it matches every
+        // guard, so `Host bastion` → include of `Host internal` is dropped
+        // while `Host *.corp` → include of `Host dev.corp` is kept.
+        guards: [[String]],
         hosts: inout [SSHConfigHost],
         seenAliases: inout Set<String>,
         visitedFiles: inout Set<String>,
@@ -46,12 +52,12 @@ enum SSHConfigParser {
         guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return }
 
         var stanza: [Int] = []   // indices into `hosts` for the current Host stanza
-        // Directives are governed by the most recent Host/Match block. An
-        // `Include` inside a conditional block (any `Host`/`Match` other than
-        // the catch-all `Host *` / `Match all`) only applies when connecting
-        // to a matching host, so those aliases are not usable top-level — we
-        // skip them rather than offer hosts `ssh` would not resolve.
-        var conditionalScope = false
+        // Host patterns of the current block in THIS file (nil at file scope).
+        // Includes nested in a Host block extend the guard passed downward.
+        var currentHostPatterns: [String]?
+        // `Match` conditions depend on runtime state we can't evaluate, so any
+        // Include nested under a Match block is skipped rather than guessed.
+        var inMatchBlock = false
 
         for rawLine in contents.components(separatedBy: .newlines) {
             let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -63,8 +69,10 @@ enum SSHConfigParser {
             case "host":
                 stanza = []
                 let tokens = tokenize(value)
-                conditionalScope = tokens != ["*"]
+                currentHostPatterns = tokens
+                inMatchBlock = false
                 for token in tokens where isPlainAlias(token) {
+                    guard aliasMatchesGuards(token, guards) else { continue }
                     guard !seenAliases.contains(token) else { continue }
                     seenAliases.insert(token)
                     hosts.append(SSHConfigHost(alias: token, hostName: nil, user: nil, port: nil))
@@ -72,7 +80,8 @@ enum SSHConfigParser {
                 }
             case "match":
                 stanza = []
-                conditionalScope = tokenize(value).map { $0.lowercased() } != ["all"]
+                currentHostPatterns = nil
+                inMatchBlock = true
             case "hostname":
                 if let v = tokenize(value).first {
                     for i in stanza where hosts[i].hostName == nil { hosts[i].hostName = v }
@@ -86,10 +95,12 @@ enum SSHConfigParser {
                     for i in stanza where hosts[i].port == nil { hosts[i].port = p }
                 }
             case "include":
-                if conditionalScope { continue }
+                if inMatchBlock { continue }
+                var includeGuards = guards
+                if let patterns = currentHostPatterns { includeGuards.append(patterns) }
                 for pattern in tokenize(value) {
                     for file in expandInclude(pattern, home: home, fileManager: fileManager) {
-                        parseFile(file, home: home, fileManager: fileManager,
+                        parseFile(file, home: home, fileManager: fileManager, guards: includeGuards,
                                   hosts: &hosts, seenAliases: &seenAliases,
                                   visitedFiles: &visitedFiles, depth: depth + 1)
                     }
@@ -185,6 +196,27 @@ enum SSHConfigParser {
 
     private static func isPlainAlias(_ token: String) -> Bool {
         !token.isEmpty && !token.hasPrefix("!") && !token.contains("*") && !token.contains("?")
+    }
+
+    /// An alias is usable at the top level only if it satisfies every guard
+    /// (the `Host` patterns of the blocks that included its file). An empty
+    /// guard list — the main config — matches everything.
+    private static func aliasMatchesGuards(_ alias: String, _ guards: [[String]]) -> Bool {
+        guards.allSatisfy { hostPatternMatches(alias, $0) }
+    }
+
+    /// OpenSSH host-pattern match: the alias must match a positive pattern and
+    /// no negated (`!`) pattern.
+    private static func hostPatternMatches(_ alias: String, _ patterns: [String]) -> Bool {
+        var matched = false
+        for pattern in patterns {
+            if pattern.hasPrefix("!") {
+                if fnmatch(String(pattern.dropFirst()), alias, 0) == 0 { return false }
+            } else if fnmatch(pattern, alias, 0) == 0 {
+                matched = true
+            }
+        }
+        return matched
     }
 
     /// Resolves an `Include` pattern to concrete files. Globs are expanded in

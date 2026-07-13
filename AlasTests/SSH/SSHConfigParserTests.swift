@@ -156,6 +156,26 @@ struct SSHConfigParserTests {
         #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["top", "bastion"])
     }
 
+    @Test func keepsHostScopedIncludeAliasesMatchingGuard() throws {
+        let home = try makeHome(
+            config: """
+            Host *.corp
+                Include corp
+            """,
+            extraFiles: [".ssh/corp": """
+            Host dev.corp
+                HostName 10.2.2.2
+            Host other.example
+                HostName 10.3.3.3
+            """]
+        )
+        // `dev.corp` matches the guarding `*.corp` pattern and is usable via
+        // bare `ssh dev.corp`; `other.example` does not match and is dropped.
+        let hosts = SSHConfigParser.parse(home: home)
+        #expect(hosts.map(\.alias) == ["dev.corp"])
+        #expect(hosts.first?.hostName == "10.2.2.2")
+    }
+
     @Test func followsIncludeUnderWildcardHost() throws {
         let home = try makeHome(
             config: "Host *\n    Include common.conf\n",
