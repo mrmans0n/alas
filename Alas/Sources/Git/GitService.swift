@@ -638,12 +638,11 @@ extension GitService {
             }
             if let host = RemoteHostRegistry.shared.host(forPath: worktreePath.path) {
                 let directory = path.isEmpty ? worktreePath.path : worktreePath.appendingPathComponent(path).path
-                if let result = try? await RemoteExec.run(host: host, cwd: nil, command: "ls -1Ap " + SSHCommand.shellQuote(directory)), result.exitCode == 0 {
-                    for entry in RemoteFileStats.parseLsEntries(result.stdout) where entry.name != ".git" {
-                        let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
-                        if entry.isDirectory { directories.insert(fullPath) }
-                        if !paths.contains(fullPath) { paths.append(fullPath) }
-                    }
+                for entry in await RemoteFileStats.directoryEntries(host: host, path: directory)
+                    where entry.name != ".git" {
+                    let fullPath = path.isEmpty ? entry.name : path + "/" + entry.name
+                    if entry.isDirectory { directories.insert(fullPath) }
+                    if !paths.contains(fullPath) { paths.append(fullPath) }
                 }
             }
             let lazyDirectories = path.isEmpty ? directories : directories.subtracting([path])

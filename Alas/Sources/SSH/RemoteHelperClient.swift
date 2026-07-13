@@ -13,6 +13,10 @@ private struct ActiveRemoteHelperSubscription {
     let updatesContinuation: AsyncStream<RemoteHelperWatchUpdate>.Continuation
 }
 
+private struct ActiveRemoteHelperSearch {
+    let continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation
+}
+
 enum RemoteHelperClientError: Error, Equatable {
     case notRunning
     case unavailable(String)
@@ -23,7 +27,10 @@ enum RemoteHelperClientError: Error, Equatable {
         switch self {
         case .notRunning, .unavailable:
             return true
-        case .jsonrpc, .decoding:
+        case .jsonrpc(let error):
+            return error.code == -32601 || error.code == -32021
+                || error.code == -32022 || error.code == -32023
+        case .decoding:
             return false
         }
     }
@@ -49,6 +56,8 @@ actor RemoteHelperClient {
     private var nextClientSubscriptionId = 0
     private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
     private var activeSubscriptions: [String: ActiveRemoteHelperSubscription] = [:]
+    private var activeSearches: [String: ActiveRemoteHelperSearch] = [:]
+    private var earlySearchEvents: [String: [RemoteHelperSearchEvent]] = [:]
     private var subscriptionReplayTask: Task<Void, Error>?
     private var subscriptionsNeedReplay = false
     private var lastExitStatus: Int32?
@@ -168,15 +177,75 @@ actor RemoteHelperClient {
         try await request(method: "fs/read", params: RemoteHelperFSReadParams(path: path, offset: offset))
     }
 
-    func write(path: String, content: String, expectedMtime: Double? = nil) async throws -> RemoteHelperFSWriteResult {
+    func write(
+        path: String,
+        content: String,
+        expectedMtime: Double? = nil,
+        expectedContent: String? = nil
+    ) async throws -> RemoteHelperFSWriteResult {
         try await request(
             method: "fs/write",
-            params: RemoteHelperFSWriteParams(path: path, content: content, expectedMtime: expectedMtime)
+            params: RemoteHelperFSWriteParams(
+                path: path,
+                content: content,
+                expectedMtime: expectedMtime,
+                expectedContent: expectedContent
+            )
         )
     }
 
     func stat(paths: [String]) async throws -> RemoteHelperFSStatResult {
         try await request(method: "fs/stat", params: RemoteHelperFSStatParams(paths: paths))
+    }
+
+    func lineCounts(root: String, paths: [String]) async throws -> RemoteHelperFSLineCountsResult {
+        try await request(
+            method: "fs/line-counts",
+            params: RemoteHelperFSLineCountsParams(root: root, paths: paths)
+        )
+    }
+
+    func list(path: String) async throws -> RemoteHelperFSListResult {
+        try await request(method: "fs/list", params: RemoteHelperFSListParams(path: path))
+    }
+
+    func search(
+        root: String,
+        query: String,
+        caseSensitive: Bool,
+        wholeWord: Bool,
+        regex: Bool
+    ) async throws -> RemoteHelperSearchHandle {
+        let result: RemoteHelperSearchStartResult = try await request(
+            method: "search/start",
+            params: RemoteHelperSearchStartParams(
+                root: root,
+                query: query,
+                caseSensitive: caseSensitive,
+                wholeWord: wholeWord,
+                regex: regex
+            )
+        )
+        var continuation: AsyncThrowingStream<RemoteHelperSearchEvent, Error>.Continuation!
+        let events = AsyncThrowingStream<RemoteHelperSearchEvent, Error> { continuation = $0 }
+        activeSearches[result.searchId] = ActiveRemoteHelperSearch(
+            continuation: continuation
+        )
+        for event in earlySearchEvents.removeValue(forKey: result.searchId) ?? [] {
+            continuation.yield(event)
+            if case .complete = event {
+                continuation.finish()
+                activeSearches.removeValue(forKey: result.searchId)
+            }
+        }
+        return RemoteHelperSearchHandle(searchId: result.searchId, events: events)
+    }
+
+    func cancelSearch(searchId: String) async throws {
+        let _: RemoteHelperSearchCancelResult = try await request(
+            method: "search/cancel",
+            params: RemoteHelperSearchCancelParams(searchId: searchId)
+        )
     }
 
     func shutdown() {
@@ -190,6 +259,11 @@ actor RemoteHelperClient {
             subscription.updatesContinuation.finish()
         }
         activeSubscriptions.removeAll()
+        for search in activeSearches.values {
+            search.continuation.finish(throwing: RemoteHelperClientError.notRunning)
+        }
+        activeSearches.removeAll()
+        earlySearchEvents.removeAll()
         drainPending(with: RemoteHelperClientError.notRunning)
         dispatchTask?.cancel()
         dispatchTask = nil
@@ -405,6 +479,22 @@ actor RemoteHelperClient {
             return
         }
 
+        if head.method == "search/event",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperSearchEventParams>.self, from: data),
+           let event = env.params {
+            emitSearchEvent(.line(event.line), searchId: event.searchId)
+            return
+        }
+        if head.method == "search/complete",
+           let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperSearchCompleteParams>.self, from: data),
+           let event = env.params {
+            emitSearchEvent(
+                .complete(exitCode: event.exitCode, stderr: event.stderr, cancelled: event.cancelled),
+                searchId: event.searchId
+            )
+            return
+        }
+
         guard head.method == "watch/event",
               let env = try? JSONDecoder().decode(JSONRPCEnvelope<RemoteHelperWatchEvent>.self, from: data),
               let event = env.params
@@ -428,6 +518,19 @@ actor RemoteHelperClient {
         subscription.updatesContinuation.yield(.event(stableEvent))
     }
 
+    private func emitSearchEvent(_ event: RemoteHelperSearchEvent, searchId: String) {
+        guard let search = activeSearches[searchId] else {
+            earlySearchEvents[searchId, default: []].append(event)
+            return
+        }
+        search.continuation.yield(event)
+        if case .complete = event {
+            search.continuation.finish()
+            activeSearches.removeValue(forKey: searchId)
+            scheduleIdleShutdownIfPossible()
+        }
+    }
+
     private func handleExit(_ status: Int32) {
         lastExitStatus = status
         transport = nil
@@ -439,6 +542,11 @@ actor RemoteHelperClient {
         for subscription in activeSubscriptions.values {
             subscription.updatesContinuation.yield(.unavailable)
         }
+        for search in activeSearches.values {
+            search.continuation.finish(throwing: RemoteHelperClientError.notRunning)
+        }
+        activeSearches.removeAll()
+        earlySearchEvents.removeAll()
         if RemoteExec.isConnectionFailure(exitCode: status) {
             Task { @MainActor [host] in
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
@@ -455,7 +563,11 @@ actor RemoteHelperClient {
     }
 
     private func scheduleIdleShutdownIfPossible() {
-        guard idleShutdownNanoseconds > 0, pending.isEmpty, activeSubscriptions.isEmpty, transport != nil else { return }
+        guard idleShutdownNanoseconds > 0,
+              pending.isEmpty,
+              activeSubscriptions.isEmpty,
+              activeSearches.isEmpty,
+              transport != nil else { return }
         idleShutdownTask?.cancel()
         let delay = idleShutdownNanoseconds
         idleShutdownTask = Task { [weak self] in
@@ -465,7 +577,7 @@ actor RemoteHelperClient {
     }
 
     private func shutdownIfIdle() {
-        guard pending.isEmpty, activeSubscriptions.isEmpty else { return }
+        guard pending.isEmpty, activeSubscriptions.isEmpty, activeSearches.isEmpty else { return }
         shutdown()
     }
 

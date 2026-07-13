@@ -24,6 +24,7 @@ struct RemoteHelperHelloResult: Codable, Equatable, Sendable {
 struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     let watchKinds: [RemoteHelperWatchKind]
     let fs: RemoteHelperFSCapabilities
+    let search: Bool?
     let ping: Bool
 }
 
@@ -31,6 +32,8 @@ struct RemoteHelperFSCapabilities: Codable, Equatable, Sendable {
     let read: Bool
     let write: Bool
     let stat: Bool
+    let lineCounts: Bool?
+    let list: Bool?
 }
 
 enum RemoteHelperWatchKind: String, Codable, Equatable, Sendable {
@@ -88,19 +91,24 @@ struct RemoteHelperFSReadParams: Codable, Equatable, Sendable {
 }
 
 struct RemoteHelperFSReadResult: Codable, Equatable, Sendable {
-    let content: String
+    let kind: String?
+    let content: String?
+    let contentBase64: String?
     let mtime: Double?
+    let detail: String?
 }
 
 struct RemoteHelperFSWriteParams: Codable, Equatable, Sendable {
     let path: String
     let content: String
     let expectedMtime: Double?
+    let expectedContent: String?
 
-    init(path: String, content: String, expectedMtime: Double? = nil) {
+    init(path: String, content: String, expectedMtime: Double? = nil, expectedContent: String? = nil) {
         self.path = path
         self.content = content
         self.expectedMtime = expectedMtime
+        self.expectedContent = expectedContent
     }
 }
 
@@ -123,4 +131,73 @@ struct RemoteHelperFSStatEntry: Codable, Equatable, Sendable {
     let isFile: Bool
     let size: UInt64?
     let mtime: Double?
+}
+
+struct RemoteHelperFSLineCountsParams: Codable, Equatable, Sendable {
+    let root: String
+    let paths: [String]
+}
+
+struct RemoteHelperFSLineCountsResult: Codable, Equatable, Sendable {
+    let entries: [RemoteHelperFSLineCountEntry]
+}
+
+struct RemoteHelperFSLineCountEntry: Codable, Equatable, Sendable {
+    let path: String
+    let lineCount: Int
+}
+
+struct RemoteHelperFSListParams: Codable, Equatable, Sendable {
+    let path: String
+}
+
+struct RemoteHelperFSListResult: Codable, Equatable, Sendable {
+    let entries: [RemoteHelperFSListEntry]
+}
+
+struct RemoteHelperFSListEntry: Codable, Equatable, Sendable {
+    let name: String
+    let isDirectory: Bool
+}
+
+struct RemoteHelperSearchStartParams: Codable, Equatable, Sendable {
+    let root: String
+    let query: String
+    let caseSensitive: Bool
+    let wholeWord: Bool
+    let regex: Bool
+}
+
+struct RemoteHelperSearchStartResult: Codable, Equatable, Sendable {
+    let searchId: String
+}
+
+struct RemoteHelperSearchCancelParams: Codable, Equatable, Sendable {
+    let searchId: String
+}
+
+struct RemoteHelperSearchCancelResult: Codable, Equatable, Sendable {
+    let ok: Bool
+}
+
+struct RemoteHelperSearchEventParams: Codable, Equatable, Sendable {
+    let searchId: String
+    let line: String
+}
+
+struct RemoteHelperSearchCompleteParams: Codable, Equatable, Sendable {
+    let searchId: String
+    let exitCode: Int32
+    let stderr: String
+    let cancelled: Bool
+}
+
+enum RemoteHelperSearchEvent: Equatable, Sendable {
+    case line(String)
+    case complete(exitCode: Int32, stderr: String, cancelled: Bool)
+}
+
+struct RemoteHelperSearchHandle: Sendable {
+    let searchId: String
+    let events: AsyncThrowingStream<RemoteHelperSearchEvent, Error>
 }

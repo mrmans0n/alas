@@ -66,6 +66,23 @@ struct RemoteHostCapabilitiesTests {
         #expect(RemoteHostCapabilities.parse("Linux\nhelper=not-json").helperHandshake == nil)
     }
 
+    @Test func filesystemV04ContractRequiresHelperVersionFour() {
+        func handshake(_ version: String) -> RemoteHelperHandshake {
+            RemoteHelperHandshake(name: "alas-helper", protocolVersion: 1, binaryVersion: version)
+        }
+
+        #expect(!handshake("0.3.9").supportsFilesystemV04Contract)
+        #expect(!handshake("0.3.9").supportsExpectedContentWrite)
+        #expect(handshake("0.4.0").supportsFilesystemV04Contract)
+        #expect(handshake("0.4.0").supportsExpectedContentWrite)
+        #expect(handshake("0.10.0").supportsFilesystemV04Contract)
+        #expect(handshake("0.10.0").supportsExpectedContentWrite)
+        #expect(handshake("1.0.0").supportsFilesystemV04Contract)
+        #expect(handshake("1.0.0").supportsExpectedContentWrite)
+        #expect(!handshake("development").supportsFilesystemV04Contract)
+        #expect(!handshake("development").supportsExpectedContentWrite)
+    }
+
     @Test func parsesArchAndNormalizesArm64() {
         #expect(RemoteHostCapabilities.parse("Linux\narch=x86_64").arch == "x86_64")
         #expect(RemoteHostCapabilities.parse("Darwin\narch=arm64").arch == "aarch64")

@@ -1,11 +1,15 @@
 mod watch;
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use watch::{SubscriptionWatcher, WatchKind, WatchNotification};
@@ -36,8 +40,10 @@ struct HelperError {
 #[derive(Default)]
 struct HelperState {
     next_subscription_id: u64,
+    next_search_id: u64,
     subscriptions: HashMap<String, PathBuf>,
     watchers: HashMap<String, SubscriptionWatcher>,
+    searches: HashMap<String, Arc<AtomicBool>>,
     event_sender: Option<Sender<ServerMessage>>,
 }
 
@@ -66,6 +72,7 @@ struct FsWriteParams {
     path: String,
     content: String,
     expected_mtime: Option<f64>,
+    expected_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,9 +80,50 @@ struct FsStatParams {
     paths: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct FsLineCountsParams {
+    root: String,
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FsListParams {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchStartParams {
+    root: String,
+    query: String,
+    case_sensitive: bool,
+    whole_word: bool,
+    regex: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchCancelParams {
+    search_id: String,
+}
+
+pub(crate) enum SearchNotification {
+    Line {
+        search_id: String,
+        line: String,
+    },
+    Complete {
+        search_id: String,
+        exit_code: i32,
+        stderr: String,
+        cancelled: bool,
+    },
+}
+
 pub(crate) enum ServerMessage {
     Request(String),
     Watch(WatchNotification),
+    Search(SearchNotification),
     InputClosed,
 }
 
@@ -93,8 +141,11 @@ fn capabilities() -> Value {
         "fs": {
             "read": true,
             "write": true,
-            "stat": true
+            "stat": true,
+            "lineCounts": true,
+            "list": true
         },
+        "search": true,
         "ping": true
     })
 }
@@ -181,6 +232,10 @@ fn serve() -> io::Result<()> {
                     .extend(notification.paths);
                 flush_at.get_or_insert_with(|| Instant::now() + DEBOUNCE);
             }
+            Some(ServerMessage::Search(notification)) => {
+                flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
+                write_search_notification(&mut stdout, &mut state, notification)?;
+            }
             Some(ServerMessage::InputClosed) => {
                 flush_watch_events(&mut stdout, &state, &mut pending_events)?;
                 break;
@@ -192,6 +247,39 @@ fn serve() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn write_search_notification(
+    stdout: &mut impl Write,
+    state: &mut HelperState,
+    notification: SearchNotification,
+) -> io::Result<()> {
+    let value = match notification {
+        SearchNotification::Line { search_id, line } => json!({
+            "jsonrpc": "2.0",
+            "method": "search/event",
+            "params": { "searchId": search_id, "line": line }
+        }),
+        SearchNotification::Complete {
+            search_id,
+            exit_code,
+            stderr,
+            cancelled,
+        } => {
+            state.searches.remove(&search_id);
+            json!({
+                "jsonrpc": "2.0",
+                "method": "search/complete",
+                "params": {
+                    "searchId": search_id,
+                    "exitCode": exit_code,
+                    "stderr": stderr,
+                    "cancelled": cancelled
+                }
+            })
+        }
+    };
+    write_json_line(stdout, &value.to_string())
 }
 
 fn flush_due_watch_events(
@@ -286,6 +374,10 @@ fn handle_request(
         "fs/read" => fs_read(state, params),
         "fs/write" => fs_write(state, params),
         "fs/stat" => fs_stat(state, params),
+        "fs/line-counts" => fs_line_counts(state, params),
+        "fs/list" => fs_list(state, params),
+        "search/start" => search_start(state, params),
+        "search/cancel" => search_cancel(state, params),
         _ => Err(jsonrpc_error(-32601, format!("method not found: {method}"))),
     }
 }
@@ -325,26 +417,60 @@ fn watch_unsubscribe(state: &mut HelperState, params: Option<Value>) -> Result<V
 
 fn fs_read(state: &HelperState, params: Option<Value>) -> Result<Value, HelperError> {
     let params: FsReadParams = decode_params(params)?;
-    let path = contained_existing_path(state, &params.path)?;
+    let path = match contained_existing_path(state, &params.path) {
+        Ok(path) => path,
+        Err(error) if error.code == -32021 => return Ok(json!({ "kind": "missing" })),
+        Err(error) => return Err(error),
+    };
+    let source_metadata = std::fs::symlink_metadata(&params.path)
+        .map_err(|error| jsonrpc_error(-32020, format!("metadata failed: {error}")))?;
+    if source_metadata.file_type().is_symlink() {
+        return Ok(json!({ "kind": "symlink" }));
+    }
     let metadata = std::fs::metadata(&path)
         .map_err(|error| jsonrpc_error(-32020, format!("metadata failed: {error}")))?;
+    if metadata.is_dir() {
+        return Ok(json!({ "kind": "directory" }));
+    }
     if !metadata.is_file() {
-        return Err(jsonrpc_error(-32025, "path is not a regular file"));
+        return Ok(json!({ "kind": "unreadable", "detail": "path is not a regular file" }));
     }
     let bytes = std::fs::read(&path)
         .map_err(|error| jsonrpc_error(-32020, format!("read failed: {error}")))?;
     let offset = params.offset.unwrap_or(0) as usize;
-    let content = std::str::from_utf8(bytes.get(offset..).unwrap_or_default())
-        .map_err(|error| jsonrpc_error(-32024, format!("invalid utf-8: {error}")))?
-        .to_string();
+    let body = bytes.get(offset..).unwrap_or_default();
+    let content = base64::engine::general_purpose::STANDARD.encode(body);
+    let legacy_content = std::str::from_utf8(body).ok();
     let mtime = modified_seconds(&metadata);
-    Ok(json!({ "content": content, "mtime": mtime }))
+    Ok(json!({
+        "kind": "file",
+        "content": legacy_content,
+        "contentBase64": content,
+        "mtime": mtime
+    }))
 }
 
 fn fs_write(state: &HelperState, params: Option<Value>) -> Result<Value, HelperError> {
     let params: FsWriteParams = decode_params(params)?;
-    let path = contained_write_path(state, &params.path)?;
-    if let Some(expected) = params.expected_mtime {
+    let path = contained_write_path(state, &params.path).map_err(|error| {
+        if params.expected_content.is_some() && error.code == -32025 {
+            jsonrpc_error(-32030, "content target unreadable")
+        } else {
+            error
+        }
+    })?;
+    if let Some(expected) = params.expected_content.as_deref() {
+        let actual = std::fs::read(&path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                jsonrpc_error(-32030, "content target missing")
+            } else {
+                jsonrpc_error(-32030, format!("content target unreadable: {error}"))
+            }
+        })?;
+        if actual != expected.as_bytes() {
+            return Err(jsonrpc_error(-32030, "content mismatch"));
+        }
+    } else if let Some(expected) = params.expected_mtime {
         let metadata = std::fs::metadata(&path).map_err(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 jsonrpc_error(-32030, "mtime target missing")
@@ -352,10 +478,10 @@ fn fs_write(state: &HelperState, params: Option<Value>) -> Result<Value, HelperE
                 jsonrpc_error(-32020, format!("mtime failed: {error}"))
             }
         })?;
-        if let Some(actual) = modified_seconds(&metadata) {
-            if (actual - expected).abs() > 0.000_001 {
-                return Err(jsonrpc_error(-32030, "mtime mismatch"));
-            }
+        if let Some(actual) = modified_seconds(&metadata)
+            && (actual - expected).abs() > 0.000_001
+        {
+            return Err(jsonrpc_error(-32030, "mtime mismatch"));
         }
     }
     write_replacing_path(&path, &params.content)?;
@@ -396,6 +522,212 @@ fn fs_stat(state: &HelperState, params: Option<Value>) -> Result<Value, HelperEr
         }
     }
     Ok(json!({ "entries": entries }))
+}
+
+fn fs_line_counts(state: &HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: FsLineCountsParams = decode_params(params)?;
+    let root = contained_directory(state, &params.root)?;
+    let mut entries = Vec::with_capacity(params.paths.len());
+    for relative in params.paths {
+        let requested = root.join(&relative);
+        let requested = requested.to_string_lossy().into_owned();
+        let path = match contained_existing_path(state, &requested) {
+            Ok(path) => path,
+            Err(error) if error.code == -32021 => continue,
+            Err(error) => return Err(error),
+        };
+        let metadata = std::fs::metadata(&path)
+            .map_err(|error| jsonrpc_error(-32020, format!("metadata failed: {error}")))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let mut file = std::fs::File::open(&path)
+            .map_err(|error| jsonrpc_error(-32020, format!("open failed: {error}")))?;
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut count = 0_u64;
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|error| jsonrpc_error(-32020, format!("read failed: {error}")))?;
+            if read == 0 {
+                break;
+            }
+            count += buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
+        }
+        entries.push(json!({ "path": relative, "lineCount": count }));
+    }
+    Ok(json!({ "entries": entries }))
+}
+
+fn fs_list(state: &HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: FsListParams = decode_params(params)?;
+    let path = contained_directory(state, &params.path)?;
+    let mut entries = Vec::new();
+    let directory = std::fs::read_dir(path)
+        .map_err(|error| jsonrpc_error(-32020, format!("list failed: {error}")))?;
+    for entry in directory {
+        let entry =
+            entry.map_err(|error| jsonrpc_error(-32020, format!("list failed: {error}")))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| jsonrpc_error(-32020, format!("file type failed: {error}")))?;
+        entries.push(json!({
+            "name": entry.file_name().to_string_lossy(),
+            "isDirectory": file_type.is_dir()
+        }));
+    }
+    entries.sort_by(|left, right| left["name"].as_str().cmp(&right["name"].as_str()));
+    Ok(json!({ "entries": entries }))
+}
+
+fn contained_directory(state: &HelperState, path: &str) -> Result<PathBuf, HelperError> {
+    let path = contained_existing_path(state, path)?;
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| jsonrpc_error(-32020, format!("metadata failed: {error}")))?;
+    if !metadata.is_dir() {
+        return Err(jsonrpc_error(-32025, "path is not a directory"));
+    }
+    Ok(path)
+}
+
+fn search_start(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: SearchStartParams = decode_params(params)?;
+    let root = contained_directory(state, &params.root)?;
+    let sender = state
+        .event_sender
+        .clone()
+        .ok_or_else(|| jsonrpc_error(-32040, "search channel unavailable"))?;
+    state.next_search_id += 1;
+    let search_id = state.next_search_id.to_string();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    state.searches.insert(search_id.clone(), cancelled.clone());
+    spawn_search(search_id.clone(), root, params, cancelled, sender);
+    Ok(json!({ "searchId": search_id }))
+}
+
+fn search_cancel(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: SearchCancelParams = decode_params(params)?;
+    if let Some(cancelled) = state.searches.get(&params.search_id) {
+        cancelled.store(true, Ordering::Release);
+    }
+    Ok(json!({ "ok": true }))
+}
+
+fn spawn_search(
+    search_id: String,
+    root: PathBuf,
+    params: SearchStartParams,
+    cancelled: Arc<AtomicBool>,
+    sender: Sender<ServerMessage>,
+) {
+    std::thread::spawn(move || {
+        let mut command = Command::new("rg");
+        command.current_dir(root).args([
+            "--json",
+            "--hidden",
+            "--glob",
+            "!.git",
+            "--max-count=200",
+            "--max-columns=400",
+        ]);
+        command.arg(if params.case_sensitive {
+            "--case-sensitive"
+        } else {
+            "--smart-case"
+        });
+        if params.whole_word {
+            command.arg("--word-regexp");
+        }
+        if !params.regex {
+            command.arg("--fixed-strings");
+        }
+        command
+            .arg("--")
+            .arg(params.query)
+            .arg(".")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = sender.send(ServerMessage::Search(SearchNotification::Complete {
+                    search_id,
+                    exit_code: 127,
+                    stderr: error.to_string(),
+                    cancelled: false,
+                }));
+                return;
+            }
+        };
+        let stdout = child.stdout.take().expect("piped stdout");
+        let stderr = child.stderr.take().expect("piped stderr");
+        let (line_sender, line_receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if line_sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let stderr_reader = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stderr);
+            let mut bytes = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            while let Ok(read) = reader.read(&mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                let remaining = 8192_usize.saturating_sub(bytes.len());
+                bytes.extend_from_slice(&chunk[..read.min(remaining)]);
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        });
+
+        let mut exit_code = None;
+        loop {
+            loop {
+                match line_receiver.try_recv() {
+                    Ok(line) => {
+                        let _ = sender.send(ServerMessage::Search(SearchNotification::Line {
+                            search_id: search_id.clone(),
+                            line,
+                        }));
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => break,
+                }
+            }
+            if cancelled.load(Ordering::Acquire) {
+                let _ = child.kill();
+            }
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    exit_code = Some(status.code().unwrap_or(2));
+                    break;
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => {
+                    let _ = child.kill();
+                    break;
+                }
+            }
+        }
+        for line in line_receiver {
+            let _ = sender.send(ServerMessage::Search(SearchNotification::Line {
+                search_id: search_id.clone(),
+                line,
+            }));
+        }
+        let stderr = stderr_reader.join().unwrap_or_default();
+        let was_cancelled = cancelled.load(Ordering::Acquire);
+        let _ = sender.send(ServerMessage::Search(SearchNotification::Complete {
+            search_id,
+            exit_code: exit_code.unwrap_or(2),
+            stderr,
+            cancelled: was_cancelled,
+        }));
+    });
 }
 
 fn contained_existing_path(state: &HelperState, path: &str) -> Result<PathBuf, HelperError> {
@@ -444,18 +776,7 @@ fn contained_write_path(state: &HelperState, path: &str) -> Result<PathBuf, Help
     let target = parent.join(file_name);
     match std::fs::symlink_metadata(&target) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let canonical = std::fs::canonicalize(&target).map_err(|error| {
-                jsonrpc_error(-32020, format!("symlink target failed: {error}"))
-            })?;
-            if state
-                .subscriptions
-                .values()
-                .any(|root| canonical.starts_with(root))
-            {
-                Ok(canonical)
-            } else {
-                Err(jsonrpc_error(-32023, "path outside registered roots"))
-            }
+            Err(jsonrpc_error(-32025, "path is a symbolic link"))
         }
         Ok(_) => Ok(target),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(target),
@@ -792,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_invalid_utf8() {
+    fn read_returns_binary_content_as_base64() {
         let root = std::env::temp_dir().join(format!(
             "alas-helper-invalid-utf8-{}-{}",
             std::process::id(),
@@ -807,20 +1128,21 @@ mod tests {
             "1".to_string(),
             std::fs::canonicalize(&root).expect("canonical root"),
         );
-        let error = fs_read(
+        let result = fs_read(
             &state,
             Some(json!({
                 "path": file.display().to_string()
             })),
         )
-        .expect_err("invalid utf-8 should be rejected");
+        .expect("binary read");
 
-        assert_eq!(error.code, -32024);
+        assert_eq!(result["kind"], "file");
+        assert_eq!(result["contentBase64"], "//4=");
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn read_rejects_non_regular_file() {
+    fn read_identifies_directory() {
         let root = std::env::temp_dir().join(format!(
             "alas-helper-non-regular-{}-{}",
             std::process::id(),
@@ -834,16 +1156,241 @@ mod tests {
             "1".to_string(),
             std::fs::canonicalize(&root).expect("canonical root"),
         );
-        let error = fs_read(
+        let result = fs_read(
             &state,
             Some(json!({
                 "path": directory.display().to_string()
             })),
         )
-        .expect_err("non-regular files should be rejected");
+        .expect("directory result");
+
+        assert_eq!(result["kind"], "directory");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn line_counts_are_unbounded_and_list_preserves_names() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-stats-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(root.join("folder")).expect("root");
+        std::fs::write(root.join("a file.txt"), "one\ntwo\n").expect("file");
+
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+        let counts = fs_line_counts(
+            &state,
+            Some(json!({
+                "root": root.display().to_string(),
+                "paths": ["a file.txt", "missing.txt"]
+            })),
+        )
+        .expect("line counts");
+        assert_eq!(
+            counts["entries"],
+            json!([{"path": "a file.txt", "lineCount": 2}])
+        );
+
+        let listing = fs_list(&state, Some(json!({ "path": root.display().to_string() })))
+            .expect("directory listing");
+        assert_eq!(listing["entries"][0]["name"], "a file.txt");
+        assert_eq!(listing["entries"][1]["name"], "folder");
+        assert_eq!(listing["entries"][1]["isDirectory"], true);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_mtime_gate_rejects_changed_target_before_replace() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-mtime-conflict-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "external").expect("file");
+        let actual = modified_seconds(&std::fs::metadata(&file).expect("metadata")).unwrap();
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": file.display().to_string(),
+                "content": "editor",
+                "expectedMtime": actual - 1.0
+            })),
+        )
+        .expect_err("stale mtime must conflict");
+
+        assert_eq!(error.code, -32030);
+        assert_eq!(std::fs::read_to_string(&file).expect("content"), "external");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_content_gate_rejects_changed_target_with_matching_mtime() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-content-conflict-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "external").expect("file");
+        let actual = modified_seconds(&std::fs::metadata(&file).expect("metadata")).unwrap();
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": file.display().to_string(),
+                "content": "editor",
+                "expectedMtime": actual,
+                "expectedContent": "baseline"
+            })),
+        )
+        .expect_err("changed content must conflict even when mtime matches");
+
+        assert_eq!(error.code, -32030);
+        assert_eq!(std::fs::read_to_string(&file).expect("content"), "external");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_content_gate_accepts_matching_content_with_coarse_mtime() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-coarse-mtime-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "baseline").expect("file");
+        let actual = modified_seconds(&std::fs::metadata(&file).expect("metadata")).unwrap();
+        let coarse = if actual.fract() == 0.0 {
+            actual - 0.5
+        } else {
+            actual.floor()
+        };
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        fs_write(
+            &state,
+            Some(json!({
+                "path": file.display().to_string(),
+                "content": "editor",
+                "expectedMtime": coarse,
+                "expectedContent": "baseline"
+            })),
+        )
+        .expect("matching content should tolerate mtime precision");
+
+        assert_eq!(std::fs::read_to_string(&file).expect("content"), "editor");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_content_gate_treats_directory_as_conflict() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-directory-conflict-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        let directory = root.join("file.txt");
+        std::fs::create_dir_all(&directory).expect("directory");
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": directory.display().to_string(),
+                "content": "editor",
+                "expectedContent": "baseline"
+            })),
+        )
+        .expect_err("unreadable baseline must conflict");
+
+        assert_eq!(error.code, -32030);
+        assert!(directory.is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_rejects_symlink_without_modifying_target() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-symlink-write-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let target = root.join("target.txt");
+        let link = root.join("link.txt");
+        std::fs::write(&target, "target").expect("target");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": link.display().to_string(),
+                "content": "editor"
+            })),
+        )
+        .expect_err("symlink writes must be rejected");
 
         assert_eq!(error.code, -32025);
+        let guarded_error = fs_write(
+            &state,
+            Some(json!({
+                "path": link.display().to_string(),
+                "content": "editor",
+                "expectedContent": "target"
+            })),
+        )
+        .expect_err("guarded symlink writes must conflict");
+        assert_eq!(guarded_error.code, -32030);
+        assert_eq!(std::fs::read_to_string(&target).expect("content"), "target");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn search_cancel_marks_the_server_side_operation() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut state = HelperState::default();
+        state
+            .searches
+            .insert("search-1".to_string(), cancelled.clone());
+
+        let result = search_cancel(&mut state, Some(json!({ "searchId": "search-1" })))
+            .expect("cancel response");
+
+        assert_eq!(result["ok"], true);
+        assert!(cancelled.load(Ordering::Acquire));
     }
 
     #[test]
@@ -1068,9 +1615,9 @@ mod tests {
                 "content": "changed"
             })),
         )
-        .expect_err("write should reject escaping symlink");
+        .expect_err("write should reject symlink");
 
-        assert_eq!(error.code, -32023);
+        assert_eq!(error.code, -32025);
         assert_eq!(
             std::fs::read_to_string(&outside_file).expect("outside content"),
             "original"
