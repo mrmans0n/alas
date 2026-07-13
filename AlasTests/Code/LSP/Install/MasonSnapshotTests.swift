@@ -123,6 +123,21 @@ struct MasonSnapshotTests {
         ])
     }
 
+    @Test("packages for extension returns all ranked matches")
+    func packagesForExtensionReturnsAllRankedMatches() {
+        let packages = (0..<(MasonSnapshot.maxResults + 10)).flatMap { idx in
+            [
+                package(id: "pkg-\(idx)", languageId: "bar", extensions: ["foo"]),
+                package(id: "pkg-\(idx)", languageId: "bar", extensions: ["foo"]),
+            ]
+        }
+        let snap = MasonSnapshot(packages: packages)
+
+        let results = snap.packages(forFileExtension: "foo")
+
+        #expect(results.count == (MasonSnapshot.maxResults + 10) * 2)
+    }
+
     private func package(
         id: String,
         languageId: String,

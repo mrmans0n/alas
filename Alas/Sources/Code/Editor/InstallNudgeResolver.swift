@@ -103,19 +103,24 @@ struct InstallNudgeResolver {
         guard !dismissedInstallNudges.contains(dismissalKey) else { return nil }
         guard !registry.disabledUserDefinedEntryClaims(fileExtension: ext) else { return nil }
 
-        let options = masonSnapshot.packages(forFileExtension: ext).compactMap { package -> InstallNudgeOption? in
-            guard !package.recipes.isEmpty else { return nil }
+        var options: [InstallNudgeOption] = []
+        var seenPackageIds = Set<String>()
+        options.reserveCapacity(MasonSnapshot.maxResults)
+        for package in masonSnapshot.packages(forFileExtension: ext) {
+            guard !package.recipes.isEmpty else { continue }
             let available = installerHost.allAvailable(in: package.recipes)
-            guard !available.isEmpty else { return nil }
+            guard !available.isEmpty else { continue }
             let config = LanguageServerConfig.prefilled(from: package)
-            guard availabilityStatus(config) == .notInstalled else { return nil }
-            return InstallNudgeOption(
+            guard availabilityStatus(config) == .notInstalled else { continue }
+            guard seenPackageIds.insert(package.masonId).inserted else { continue }
+            options.append(InstallNudgeOption(
                 package: package,
                 language: config.language,
                 displayName: package.displayName,
                 command: config.command,
                 available: available
-            )
+            ))
+            if options.count >= MasonSnapshot.maxResults { break }
         }
         guard let selected = options.first else { return nil }
 
