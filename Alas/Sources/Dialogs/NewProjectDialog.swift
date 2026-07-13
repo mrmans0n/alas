@@ -123,6 +123,7 @@ private struct ProjectDialog: View {
                                     }
                                     .buttonStyle(.plain)
                                     .help("Choose a host from ~/.ssh/config")
+                                    .accessibilityLabel("Choose SSH host")
                                     .popover(isPresented: $showHostPicker, arrowEdge: .bottom) {
                                         SSHHostPicker(
                                             host: $sshHost,

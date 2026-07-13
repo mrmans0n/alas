@@ -32,8 +32,8 @@ struct SSHHostPicker: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(filtered) { host in
-                            row(host)
+                        ForEach(filtered) { configHost in
+                            row(configHost)
                         }
                     }
                 }
@@ -79,7 +79,9 @@ struct SSHHostPicker: View {
 
     private var guidanceFooter: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("No match in ~/.ssh/config. Type any user@host directly, or add an entry:")
+            Text(hosts.isEmpty
+                ? "No hosts found in ~/.ssh/config. Type any user@host directly, or add an entry:"
+                : "No match in ~/.ssh/config. Type any user@host directly, or add an entry:")
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg-dim"))
                 .fixedSize(horizontal: false, vertical: true)
