@@ -26,6 +26,41 @@ private enum ProjectDialogMode {
     case edit(ProjectConfig)
 }
 
+private struct SSHConnectionIssue {
+    enum Kind: Equatable {
+        case needsInteraction
+        case nonInteractiveUnavailable
+    }
+
+    let kind: Kind
+    let detail: String
+
+    var title: String {
+        switch kind {
+        case .needsInteraction:
+            "SSH connection needs attention"
+        case .nonInteractiveUnavailable:
+            "Non-interactive SSH is unavailable"
+        }
+    }
+
+    var message: String {
+        switch kind {
+        case .needsInteraction:
+            "Connect in an Alas terminal to accept host keys or complete authentication."
+        case .nonInteractiveUnavailable:
+            "Alas connected interactively, but the server still rejected the non-interactive channel required for remote projects. The account may require a terminal for every command."
+        }
+    }
+}
+
+private enum SSHSetupStatus: Equatable {
+    case connecting
+    case verifying
+    case failed(String)
+    case incompatible(String)
+}
+
 private struct ProjectDialog: View {
     @Bindable var state: AppState
     @Binding var presented: Bool
@@ -63,6 +98,11 @@ private struct ProjectDialog: View {
     @State private var mcpManagerPresented = false
     @State private var isValidating = false
     @State private var errorMessage: String?
+    @State private var sshConnectionIssue: SSHConnectionIssue?
+    @State private var sshSetupPresented = false
+    @State private var sshSetupSurface: AlasGhostty.SurfaceView?
+    @State private var sshSetupStatus: SSHSetupStatus = .connecting
+    @State private var sshSetupAttemptID = UUID()
 
     private let palette = [
         "#5fb7c4", "#c89d6f", "#9789c7", "#7fb978", "#d77b88",
@@ -152,7 +192,9 @@ private struct ProjectDialog: View {
                     Divider().padding(.vertical, 4)
                     integrationsSection
                 }
-                if let errorMessage {
+                if let sshConnectionIssue {
+                    sshConnectionIssueField(sshConnectionIssue)
+                } else if let errorMessage {
                     errorField(errorMessage)
                 }
             },
@@ -180,8 +222,26 @@ private struct ProjectDialog: View {
                 loadSSHHosts()
             }
         }
+        .onChange(of: sshHost) { _, _ in
+            sshConnectionIssue = nil
+            errorMessage = nil
+        }
+        .onChange(of: location) { _, _ in
+            sshConnectionIssue = nil
+            errorMessage = nil
+        }
         .sheet(isPresented: $mcpManagerPresented) {
             ProjectMCPServerManager(servers: $mcpServers)
+        }
+        .sheet(isPresented: $sshSetupPresented, onDismiss: dismissSSHSetup) {
+            SSHConnectionAssistant(
+                host: sshHost.trimmingCharacters(in: .whitespacesAndNewlines),
+                surface: sshSetupSurface,
+                status: sshSetupStatus,
+                onCancel: { sshSetupPresented = false },
+                onRetry: startSSHSetup
+            )
+            .environment(\.theme, theme)
         }
     }
 
@@ -340,8 +400,69 @@ private struct ProjectDialog: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
-    // Errors here can carry SSH stderr or a setup command the user needs to
-    // paste into a terminal, so the field is selectable with a Copy button.
+    private func sshConnectionIssueField(_ issue: SSHConnectionIssue) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: issue.kind == .needsInteraction ? "terminal" : "exclamationmark.triangle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(issue.kind == .needsInteraction ? theme.color("accent") : .red)
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(issue.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(theme.color("fg"))
+                    Text(issue.message)
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                if issue.kind == .needsInteraction {
+                    AlasButton(
+                        title: "Connect",
+                        icon: "terminal",
+                        style: .primary,
+                        action: startSSHSetup
+                    )
+                }
+            }
+            if !issue.detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                DisclosureGroup("SSH details") {
+                    copyableSSHDetail(issue.detail)
+                        .padding(.top, 6)
+                }
+                .font(.system(size: 11))
+                .foregroundColor(theme.color("fg-dim"))
+            }
+        }
+        .padding(10)
+        .background(theme.color("bg-0"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func copyableSSHDetail(_ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(detail.trimmingCharacters(in: .whitespacesAndNewlines))
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundColor(theme.color("fg-muted"))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: { copyToPasteboard(detail) }) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .buttonStyle(.plain)
+            .help("Copy SSH details")
+            .accessibilityLabel("Copy SSH details")
+        }
+    }
+
     private func errorField(_ message: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(message)
@@ -351,8 +472,7 @@ private struct ProjectDialog: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(message, forType: .string)
+                copyToPasteboard(message)
             }) {
                 Image(systemName: "doc.on.doc")
                     .font(.system(size: 11))
@@ -369,6 +489,11 @@ private struct ProjectDialog: View {
                 .strokeBorder(theme.color("line"), lineWidth: 0.5)
         )
         .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func copyToPasteboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     private var startupScriptsSection: some View {
@@ -578,22 +703,9 @@ private struct ProjectDialog: View {
         case .add:
             isValidating = true
             errorMessage = nil
+            sshConnectionIssue = nil
             Task {
-                do {
-                    let url = URL(fileURLWithPath: path)
-                    try await state.addProject(
-                        path: url,
-                        displayName: name,
-                        icon: draftIcon,
-                        host: location == .remoteSSH
-                            ? sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
-                            : nil,
-                        id: pendingProjectId
-                    )
-                    presented = false
-                } catch {
-                    errorMessage = error.localizedDescription
-                }
+                await addProject(afterInteractiveSetup: false)
                 isValidating = false
             }
         case .edit(let project):
@@ -617,6 +729,185 @@ private struct ProjectDialog: View {
                 mcpServers: mcpServers
             )
             presented = false
+        }
+    }
+
+    private func addProject(afterInteractiveSetup: Bool) async {
+        do {
+            let url = URL(fileURLWithPath: path)
+            try await state.addProject(
+                path: url,
+                displayName: name,
+                icon: draftIcon,
+                host: location == .remoteSSH
+                    ? sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : nil,
+                id: pendingProjectId
+            )
+            sshSetupPresented = false
+            presented = false
+        } catch let validationError as RemoteRepoValidationError {
+            switch validationError {
+            case .connectionFailed(let detail):
+                let issue = SSHConnectionIssue(
+                    kind: afterInteractiveSetup ? .nonInteractiveUnavailable : .needsInteraction,
+                    detail: detail
+                )
+                sshConnectionIssue = issue
+                if afterInteractiveSetup {
+                    sshSetupStatus = .incompatible(issue.message)
+                }
+            case .notARepository:
+                sshConnectionIssue = nil
+                errorMessage = validationError.localizedDescription
+                sshSetupPresented = false
+            }
+        } catch {
+            sshConnectionIssue = nil
+            errorMessage = error.localizedDescription
+            sshSetupPresented = false
+        }
+    }
+
+    private func startSSHSetup() {
+        let host = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else { return }
+
+        let attemptID = UUID()
+        sshSetupAttemptID = attemptID
+        sshSetupStatus = .connecting
+        errorMessage = nil
+        let invocation = RemoteRepoValidator.interactiveSetupInvocation(host: host)
+        do {
+            sshSetupSurface = try state.terminal.makeTransientSurface(
+                cfg: state.config.terminal,
+                theme: theme,
+                executable: invocation.executable,
+                args: invocation.args,
+                onExit: {
+                    Task { @MainActor in
+                        handleSSHSetupExit(attemptID: attemptID, host: host)
+                    }
+                }
+            )
+            sshSetupPresented = true
+        } catch {
+            sshConnectionIssue = nil
+            errorMessage = "Could not open the SSH connection terminal: \(error.localizedDescription)"
+        }
+    }
+
+    private func handleSSHSetupExit(attemptID: UUID, host: String) {
+        guard sshSetupAttemptID == attemptID, sshSetupStatus == .connecting else { return }
+        sshSetupStatus = .verifying
+        Task {
+            let connected = await RemoteRepoValidator.waitForActiveControlMaster(host: host)
+            guard sshSetupAttemptID == attemptID else { return }
+            guard connected else {
+                sshSetupStatus = .failed(
+                    "SSH did not establish a reusable connection. Review the terminal output and retry."
+                )
+                return
+            }
+            isValidating = true
+            await addProject(afterInteractiveSetup: true)
+            isValidating = false
+        }
+    }
+
+    private func dismissSSHSetup() {
+        sshSetupAttemptID = UUID()
+        sshSetupSurface?.processExitHandler = nil
+        sshSetupSurface = nil
+        if sshSetupStatus == .verifying {
+            sshSetupStatus = .connecting
+        }
+    }
+}
+
+private struct SSHConnectionAssistant: View {
+    let host: String
+    let surface: AlasGhostty.SurfaceView?
+    let status: SSHSetupStatus
+    let onCancel: () -> Void
+    let onRetry: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        DialogContainer(
+            title: "Connect to \(host)",
+            subtitle: "Complete the SSH prompts below. Alas will continue when the connection is ready.",
+            width: 760,
+            content: {
+                Group {
+                    if let surface {
+                        GhosttyHost(surface: surface)
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(height: 380)
+                .background(Color.black)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+
+                statusView
+            },
+            cancelTitle: "Cancel",
+            confirmTitle: confirmTitle,
+            confirmStyle: confirmEnabled ? .primary : .normal,
+            onCancel: onCancel,
+            onConfirm: confirmAction,
+            confirmEnabled: confirmEnabled
+        )
+    }
+
+    @ViewBuilder
+    private var statusView: some View {
+        switch status {
+        case .connecting:
+            Label("Waiting for SSH", systemImage: "terminal")
+                .foregroundColor(theme.color("fg-muted"))
+        case .verifying:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Verifying the non-interactive connection…")
+            }
+            .foregroundColor(theme.color("fg-muted"))
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundColor(.red)
+        case .incompatible(let message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundColor(.red)
+        }
+    }
+
+    private var confirmTitle: String {
+        switch status {
+        case .failed: "Retry"
+        case .incompatible: "Close"
+        case .connecting, .verifying: "Waiting…"
+        }
+    }
+
+    private var confirmEnabled: Bool {
+        switch status {
+        case .failed, .incompatible: true
+        case .connecting, .verifying: false
+        }
+    }
+
+    private func confirmAction() {
+        switch status {
+        case .failed: onRetry()
+        case .incompatible: onCancel()
+        case .connecting, .verifying: break
         }
     }
 }
