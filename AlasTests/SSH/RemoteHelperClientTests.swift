@@ -207,6 +207,17 @@ struct RemoteHelperClientTests {
         #expect(framed == Data("{\"id\":1}\n".utf8))
     }
 
+    @Test func remoteHelperACPTransportOnlyRetriesTransientSpawnFailures() {
+        #expect(RemoteHelperACPTransport.shouldRetrySpawnFailure(RemoteHelperClientError.notRunning))
+        #expect(RemoteHelperACPTransport.shouldRetrySpawnFailure(RemoteHelperClientError.unavailable("ssh closed")))
+        #expect(!RemoteHelperACPTransport.shouldRetrySpawnFailure(RemoteHelperClientError.decoding("bad response")))
+        #expect(!RemoteHelperACPTransport.shouldRetrySpawnFailure(RemoteHelperClientError.jsonrpc(JSONRPCError(
+            code: -32050,
+            message: "spawn failed",
+            data: nil
+        ))))
+    }
+
     @Test func searchStreamsEventsArrivingImmediatelyAfterStart() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(

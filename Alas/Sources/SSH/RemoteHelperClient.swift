@@ -21,7 +21,7 @@ private struct ActiveRemoteHelperProcAttachment {
     let continuation: AsyncStream<RemoteHelperProcEvent>.Continuation
 }
 
-enum RemoteHelperClientError: Error, Equatable {
+enum RemoteHelperClientError: LocalizedError, Equatable {
     case notRunning
     case unavailable(String)
     case jsonrpc(JSONRPCError)
@@ -36,6 +36,19 @@ enum RemoteHelperClientError: Error, Equatable {
                 || error.code == -32022 || error.code == -32023
         case .decoding:
             return false
+        }
+    }
+
+    var errorDescription: String? {
+        switch self {
+        case .notRunning:
+            return "Remote helper is not running."
+        case .unavailable(let message):
+            return message
+        case .jsonrpc(let error):
+            return "Remote helper error \(error.code): \(error.message)"
+        case .decoding(let message):
+            return "Remote helper decoding failed: \(message)"
         }
     }
 }

@@ -73,13 +73,25 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         continuation?.finish()
                         return
                     }
-                    _ = try await client.spawnProc(
-                        procId: procId,
-                        command: command,
-                        args: arguments,
-                        cwd: cwd,
-                        env: environment
-                    )
+                    do {
+                        _ = try await client.spawnProc(
+                            procId: procId,
+                            command: command,
+                            args: arguments,
+                            cwd: cwd,
+                            env: environment
+                        )
+                    } catch {
+                        guard Self.shouldRetrySpawnFailure(error) else {
+                            state.setWritesEnabled(false)
+                            let message = "Remote helper failed to launch ACP process: \(error.localizedDescription)\n"
+                            continuation?.yield(.stderr(Data(message.utf8)))
+                            continuation?.yield(.exited(127))
+                            continuation?.finish()
+                            return
+                        }
+                        throw error
+                    }
                     didSpawn = true
                 }
                 let handle = try await client.attachProc(
@@ -137,6 +149,16 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
 
     static func frameForProcWrite(_ data: Data) -> Data {
         JSONRPCNewlineFramer.encode(data)
+    }
+
+    static func shouldRetrySpawnFailure(_ error: Error) -> Bool {
+        guard let error = error as? RemoteHelperClientError else { return false }
+        switch error {
+        case .notRunning, .unavailable:
+            return true
+        case .jsonrpc, .decoding:
+            return false
+        }
     }
 
     private final class State: @unchecked Sendable {
