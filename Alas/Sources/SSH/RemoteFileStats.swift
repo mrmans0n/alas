@@ -20,6 +20,12 @@ enum RemoteFileStats {
         }
     }
 
+    static func lineCountDictionary(_ entries: [RemoteHelperFSLineCountEntry]) -> [String: Int] {
+        entries.reduce(into: [:]) { counts, entry in
+            counts[entry.path] = entry.lineCount
+        }
+    }
+
     static func lineCounts(host: String, cwd: String, paths: [String]) async -> [String: Int] {
         guard !paths.isEmpty else { return [:] }
         if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake != nil {
@@ -28,7 +34,7 @@ enum RemoteFileStats {
                 let client = await RemoteHelperClientPool.shared.client(for: host)
                 let result = try await client.lineCounts(root: cwd, paths: paths)
                 RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper", startedAt: startedAt)
-                return Dictionary(uniqueKeysWithValues: result.entries.map { ($0.path, $0.lineCount) })
+                return lineCountDictionary(result.entries)
             } catch let error as RemoteHelperClientError where !error.shouldFallbackToRemoteExec {
                 RemoteOperationTiming.log("fs/line-counts", host: host, transport: "helper", startedAt: startedAt)
                 logger.debug("helper line counts failed: \(String(describing: error), privacy: .public)")
