@@ -131,35 +131,42 @@ enum SSHConfigParser {
     }
 
     /// Splits a directive value into arguments the way ssh_config does:
-    /// double quotes group an argument containing spaces (and are removed),
-    /// and a backslash escapes a following space, tab, quote, or backslash
-    /// (so `Application\ Support` stays one token). Other backslashes are
-    /// preserved literally.
+    /// single or double quotes group an argument containing spaces (and are
+    /// removed — a quote of the other kind inside stays literal), and a
+    /// backslash escapes a following space, tab, quote, or backslash (so
+    /// `Application\ Support` stays one token). Other backslashes are kept.
     private static func tokenize(_ value: String) -> [String] {
         let chars = Array(value)
         var tokens: [String] = []
         var current = ""
         var hasToken = false
-        var inQuotes = false
+        var quoteChar: Character?
         var i = 0
         while i < chars.count {
             let ch = chars[i]
             if ch == "\\", i + 1 < chars.count {
                 let next = chars[i + 1]
-                if next == " " || next == "\t" || next == "\"" || next == "\\" {
+                if next == " " || next == "\t" || next == "\"" || next == "'" || next == "\\" {
                     current.append(next)
                     hasToken = true
                     i += 2
                     continue
                 }
             }
-            if ch == "\"" {
-                inQuotes.toggle()
+            if let open = quoteChar {
+                if ch == open {
+                    quoteChar = nil
+                    hasToken = true
+                    i += 1
+                    continue
+                }
+            } else if ch == "\"" || ch == "'" {
+                quoteChar = ch
                 hasToken = true
                 i += 1
                 continue
             }
-            if (ch == " " || ch == "\t") && !inQuotes {
+            if (ch == " " || ch == "\t") && quoteChar == nil {
                 if hasToken {
                     tokens.append(current)
                     current = ""

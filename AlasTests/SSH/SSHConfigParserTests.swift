@@ -180,4 +180,16 @@ struct SSHConfigParserTests {
         // A backslash-escaped space is part of the path, not an argument break.
         #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["from-escaped"])
     }
+
+    @Test func stripsSingleQuotesFromTokens() throws {
+        let home = try makeHome(
+            config: "Include 'extra hosts.conf'\nHost 'devbox'\n    HostName 10.0.0.7\n",
+            extraFiles: [".ssh/extra hosts.conf": "Host from-sq\n    HostName s.example.com\n"]
+        )
+        // OpenSSH strips single quotes too: the alias and the quoted Include
+        // path with a space must both resolve unquoted.
+        let hosts = SSHConfigParser.parse(home: home)
+        #expect(hosts.map(\.alias) == ["from-sq", "devbox"])
+        #expect(hosts.first(where: { $0.alias == "devbox" })?.hostName == "10.0.0.7")
+    }
 }
