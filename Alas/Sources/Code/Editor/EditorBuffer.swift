@@ -635,18 +635,17 @@ final class EditorBuffer {
 
     private func startRemoteHelperWatching(host: String) {
         guard remoteHelperSession == nil else { return }
+        let watchedRoot = absoluteFileURL.deletingLastPathComponent()
+        let targetPath = absoluteFileURL.standardizedFileURL.path
         let session = RemoteHelperWatchSession(
             host: host,
-            root: worktreeRoot.path,
+            root: watchedRoot.path,
             kinds: [.files]
         )
         session.onEvent = { [weak self] event in
             guard let self, event.kind == .files else { return }
-            let target = URL(fileURLWithPath: event.root)
-                .appendingPathComponent(relativePath)
-                .standardizedFileURL.path
             guard event.paths.contains(where: {
-                URL(fileURLWithPath: $0).standardizedFileURL.path == target
+                URL(fileURLWithPath: $0).standardizedFileURL.path == targetPath
             }) else { return }
             Task { @MainActor in await self.checkRemoteConflict(host: host) }
         }

@@ -166,6 +166,7 @@ fn serve() -> io::Result<()> {
 
         match message {
             Some(ServerMessage::Request(line)) => {
+                flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
                 if line.trim().is_empty() {
                     continue;
                 }
@@ -191,6 +192,23 @@ fn serve() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn flush_due_watch_events(
+    stdout: &mut impl Write,
+    state: &HelperState,
+    pending: &mut HashMap<(String, WatchKind), HashSet<String>>,
+    flush_at: &mut Option<Instant>,
+) -> io::Result<bool> {
+    let Some(deadline) = *flush_at else {
+        return Ok(false);
+    };
+    if deadline > Instant::now() {
+        return Ok(false);
+    }
+    flush_watch_events(stdout, state, pending)?;
+    *flush_at = None;
+    Ok(true)
 }
 
 fn write_json_line(stdout: &mut impl Write, line: &str) -> io::Result<()> {
@@ -670,6 +688,30 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn due_watch_events_flush_before_processing_more_requests() {
+        let mut state = HelperState::default();
+        state
+            .subscriptions
+            .insert("1".to_string(), PathBuf::from("/repo"));
+        let mut pending = HashMap::from([(
+            ("1".to_string(), WatchKind::Files),
+            HashSet::from(["/repo/file.txt".to_string()]),
+        )]);
+        let mut flush_at = Some(Instant::now() - Duration::from_millis(1));
+        let mut output = Vec::new();
+
+        let did_flush = flush_due_watch_events(&mut output, &state, &mut pending, &mut flush_at)
+            .expect("flush due watch events");
+
+        assert!(did_flush);
+        assert!(flush_at.is_none());
+        assert!(pending.is_empty());
+        let output = String::from_utf8(output).expect("utf8 output");
+        assert!(output.contains(r#""method":"watch/event""#));
+        assert!(output.contains("/repo/file.txt"));
     }
 
     #[test]
