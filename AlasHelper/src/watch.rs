@@ -83,6 +83,14 @@ impl SubscriptionWatcher {
                     .watch(&info.common_dir, RecursiveMode::Recursive)
                     .map_err(|error| format!("watch git dir failed: {error}"))?;
             }
+            if info.worktree_dir != info.common_dir
+                && !info.worktree_dir.starts_with(&root)
+                && !info.worktree_dir.starts_with(&info.common_dir)
+            {
+                watcher
+                    .watch(&info.worktree_dir, RecursiveMode::Recursive)
+                    .map_err(|error| format!("watch worktree git dir failed: {error}"))?;
+            }
         }
         Ok(Self { _watcher: watcher })
     }
@@ -91,11 +99,12 @@ impl SubscriptionWatcher {
 #[derive(Clone, Debug)]
 struct GitInfo {
     common_dir: PathBuf,
+    worktree_dir: PathBuf,
 }
 
 fn resolve_git_info(root: &Path) -> Option<GitInfo> {
     let output = Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
+        .args(["rev-parse", "--git-common-dir", "--absolute-git-dir"])
         .current_dir(root)
         .output()
         .ok()?;
@@ -105,17 +114,24 @@ fn resolve_git_info(root: &Path) -> Option<GitInfo> {
     let stdout = String::from_utf8(output.stdout).ok()?;
     let mut lines = stdout.lines();
     let common = lines.next()?.trim();
-    if common.is_empty() {
+    let worktree = lines.next()?.trim();
+    if common.is_empty() || worktree.is_empty() {
         return None;
     }
-    let common_dir = if Path::new(common).is_absolute() {
-        PathBuf::from(common)
-    } else {
-        root.join(common)
-    };
     Some(GitInfo {
-        common_dir: canonical_or_normalized(&common_dir),
+        common_dir: resolve_git_path(root, common),
+        worktree_dir: resolve_git_path(root, worktree),
     })
+}
+
+fn resolve_git_path(root: &Path, path: &str) -> PathBuf {
+    let path = Path::new(path);
+    let resolved = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    canonical_or_normalized(&resolved)
 }
 
 fn canonical_or_normalized(path: &Path) -> PathBuf {
@@ -149,6 +165,7 @@ fn classify_paths(
         if kinds.contains(&WatchKind::Files)
             && path.starts_with(root)
             && !git_info.is_some_and(|info| path.starts_with(&info.common_dir))
+            && !git_info.is_some_and(|info| path.starts_with(&info.worktree_dir))
         {
             file_paths.insert(path.display().to_string());
         }
@@ -157,17 +174,27 @@ fn classify_paths(
 }
 
 fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
+    if path
+        .extension()
+        .is_some_and(|extension| extension == "lock")
+    {
+        return false;
+    }
+    if let Ok(relative) = path.strip_prefix(&info.worktree_dir) {
+        let relative = relative.to_string_lossy();
+        let relative = relative.trim_matches('/');
+        if matches!(
+            relative,
+            "HEAD" | "index" | "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "REBASE_HEAD"
+        ) {
+            return true;
+        }
+    }
     let Ok(relative) = path.strip_prefix(&info.common_dir) else {
         return false;
     };
     let relative = relative.to_string_lossy();
     let relative = relative.trim_matches('/');
-    if relative.ends_with(".lock") {
-        return false;
-    }
-    if relative == "HEAD" {
-        return true;
-    }
     if relative == "packed-refs" || relative.starts_with("refs/heads/") {
         return true;
     }
@@ -188,6 +215,7 @@ mod tests {
     fn git_info(root: &Path) -> GitInfo {
         GitInfo {
             common_dir: root.join(".git"),
+            worktree_dir: root.join(".git"),
         }
     }
 
@@ -205,9 +233,32 @@ mod tests {
             &info
         ));
         assert!(is_relevant_git_path(&root.join(".git/packed-refs"), &info));
-        assert!(!is_relevant_git_path(&root.join(".git/index"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/index"), &info));
+        assert!(is_relevant_git_path(&root.join(".git/MERGE_HEAD"), &info));
         assert!(!is_relevant_git_path(&root.join(".git/index.lock"), &info));
         assert!(!is_relevant_git_path(&root.join("src/main.rs"), &info));
+    }
+
+    #[test]
+    fn linked_worktree_index_and_operation_state_are_git_events() {
+        let root = Path::new("/repo");
+        let info = GitInfo {
+            common_dir: root.join(".git"),
+            worktree_dir: root.join(".git/worktrees/feature"),
+        };
+
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/index"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/CHERRY_PICK_HEAD"),
+            &info
+        ));
+        assert!(!is_relevant_git_path(
+            &root.join(".git/worktrees/other/index"),
+            &info
+        ));
     }
 
     #[test]
@@ -227,6 +278,12 @@ mod tests {
         );
 
         assert_eq!(files, HashSet::from(["/repo/README.md".to_string()]));
-        assert_eq!(git, HashSet::from(["/repo/.git/HEAD".to_string()]));
+        assert_eq!(
+            git,
+            HashSet::from([
+                "/repo/.git/HEAD".to_string(),
+                "/repo/.git/index".to_string()
+            ])
+        );
     }
 }
