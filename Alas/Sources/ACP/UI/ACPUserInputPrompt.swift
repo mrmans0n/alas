@@ -124,18 +124,12 @@ struct ACPUserInputPrompt: View {
         case "string" where field.schema.format == "date" || field.schema.format == "date-time":
             dateField(field)
         case "string":
-            TextField(
-                field.label,
-                text: Binding(
-                    get: { formState.textValues[field.key] ?? "" },
-                    set: {
-                        formState.textValues[field.key] = $0
-                        formState.markTouched(field.key)
-                    }
-                )
-            )
-            .textFieldStyle(.roundedBorder)
-            .focused($focusedField, equals: field.key)
+            TextField(field.label, text: textBinding(for: field))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .alasFieldChrome(theme: theme)
+                .focused($focusedField, equals: field.key)
         case "number", "integer":
             numericField(field)
         case "boolean":
@@ -203,18 +197,12 @@ struct ACPUserInputPrompt: View {
 
     private func numericField(_ field: ACPUserInputField) -> some View {
         HStack(spacing: 6) {
-            TextField(
-                field.label,
-                text: Binding(
-                    get: { formState.textValues[field.key] ?? "" },
-                    set: {
-                        formState.textValues[field.key] = $0
-                        formState.markTouched(field.key)
-                    }
-                )
-            )
-            .textFieldStyle(.roundedBorder)
-            .focused($focusedField, equals: field.key)
+            TextField(field.label, text: textBinding(for: field))
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundColor(theme.color("fg"))
+                .alasFieldChrome(theme: theme)
+                .focused($focusedField, equals: field.key)
             Button {
                 step(field, delta: -1)
             } label: {
@@ -228,6 +216,16 @@ struct ACPUserInputPrompt: View {
             }
             .help("Increase")
         }
+    }
+
+    private func textBinding(for field: ACPUserInputField) -> Binding<String> {
+        Binding(
+            get: { formState.textValues[field.key] ?? "" },
+            set: {
+                formState.textValues[field.key] = $0
+                formState.markTouched(field.key)
+            }
+        )
     }
 
     @ViewBuilder

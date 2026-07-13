@@ -21,7 +21,7 @@ struct AlasField: View {
                 onSubmit: onSubmit,
                 inputFilter: inputFilter
             )
-            .fieldChrome(theme: theme)
+            .alasFieldChrome(theme: theme)
         } else {
             let field = TextField(placeholder, text: $text)
                 .textFieldStyle(.plain)
@@ -36,17 +36,17 @@ struct AlasField: View {
                         .accessibilityHidden(true)
                     field
                 }
-                .fieldChrome(theme: theme)
+                .alasFieldChrome(theme: theme)
             } else {
                 field
-                    .fieldChrome(theme: theme)
+                    .alasFieldChrome(theme: theme)
             }
         }
     }
 }
 
-private extension View {
-    func fieldChrome(theme: Theme) -> some View {
+extension View {
+    func alasFieldChrome(theme: Theme) -> some View {
         padding(.horizontal, 10)
             .frame(height: 28)
             .background(theme.color("bg-1"))
