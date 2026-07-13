@@ -8,6 +8,7 @@ xcuserdata/
 !*.xcworkspace/xcshareddata/swiftpm/Package.resolved
 .swiftpm/
 .build/
+AlasHelper/target/
 
 # macOS
 .DS_Store

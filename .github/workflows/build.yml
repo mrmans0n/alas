@@ -79,6 +79,9 @@ jobs:
       - name: Test build-ghostty.sh harness
         run: bash scripts/tests/build-ghostty/run.sh
 
+      - name: Test build-alas-helper.sh harness
+        run: bash scripts/tests/build-alas-helper/run.sh
+
       - name: Compute Ghostty cache key inputs
         # Submodules track their HEAD via .git/modules/... in the parent repo, so
         # `ThirdParty/ghostty/.git` is a *file* (not a dir) and hashFiles can't

@@ -8,12 +8,18 @@ struct RemoteHostCapabilitiesTests {
         git version 2.43.0
         rg=yes
         zmx=yes
+        helper={"name":"alas-helper","protocolVersion":1,"binaryVersion":"0.1.0"}
         """
         let capabilities = RemoteHostCapabilities.parse(output)
         #expect(capabilities.os == .linux)
         #expect(capabilities.gitVersion == "2.43.0")
         #expect(capabilities.hasRipgrep)
         #expect(capabilities.hasZmx)
+        #expect(capabilities.helperHandshake == RemoteHelperHandshake(
+            name: "alas-helper",
+            protocolVersion: 1,
+            binaryVersion: "0.1.0"
+        ))
     }
 
     @Test func parsesMacHostWithoutTools() {
@@ -28,6 +34,7 @@ struct RemoteHostCapabilitiesTests {
         #expect(capabilities.gitVersion == "2.39.5")
         #expect(!capabilities.hasRipgrep)
         #expect(!capabilities.hasZmx)
+        #expect(capabilities.helperHandshake == nil)
     }
 
     @Test func missingGitYieldsNilVersion() {
@@ -48,6 +55,15 @@ struct RemoteHostCapabilitiesTests {
 
     @Test func probeCommandChecksInstalledZmxFallback() {
         #expect(RemoteHostCapabilities.probeCommand.contains("[ -x \"$HOME/.alas/bin/zmx\" ]"))
+    }
+
+    @Test func probeCommandRequestsHelperHandshake() {
+        #expect(RemoteHostCapabilities.probeCommand.contains("alas-helper\" version 2>/dev/null"))
+        #expect(RemoteHostCapabilities.probeCommand.contains("printf 'helper=%s\\n'"))
+    }
+
+    @Test func malformedHelperHandshakeIsUnavailable() {
+        #expect(RemoteHostCapabilities.parse("Linux\nhelper=not-json").helperHandshake == nil)
     }
 
     @Test func parsesArchAndNormalizesArm64() {
