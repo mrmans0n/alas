@@ -1155,19 +1155,20 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
     }
     let stdout_offset = requested_log_offset(&dir.join("stdout.log"), params.stdout_offset);
     let stderr_offset = requested_log_offset(&dir.join("stderr.log"), params.stderr_offset);
-    let stdout_frames = read_stdout_frames(&dir.join("stdout.log"), stdout_offset)?;
-    let stderr_chunk = read_file_tail(&dir.join("stderr.log"), stderr_offset)?;
+    let mut stdout_frames = Vec::new();
+    let mut stderr_chunk = None;
+    let mut stdout_next_offset = stdout_offset;
+    let mut stderr_next_offset = stderr_offset;
+    collect_proc_replay(
+        &dir,
+        &mut stdout_next_offset,
+        &mut stderr_next_offset,
+        &mut stdout_frames,
+        &mut stderr_chunk,
+    )?;
     let stdin_offset = std::fs::metadata(dir.join("stdin.log"))
         .map(|metadata| metadata.len())
         .unwrap_or(0);
-    let stdout_next_offset = stdout_frames
-        .last()
-        .map(|frame| frame.offset)
-        .unwrap_or(stdout_offset);
-    let stderr_next_offset = stderr_chunk
-        .as_ref()
-        .map(|(offset, _)| *offset)
-        .unwrap_or(stderr_offset);
     let status = proc_status_in_dir(&dir);
     if status.running {
         if let Some(sender) = state.event_sender.clone() {
@@ -1180,6 +1181,14 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
                 sender,
             );
         }
+    } else {
+        collect_proc_replay(
+            &dir,
+            &mut stdout_next_offset,
+            &mut stderr_next_offset,
+            &mut stdout_frames,
+            &mut stderr_chunk,
+        )?;
     }
     Ok(json!({
         "procId": params.proc_id,
@@ -1201,6 +1210,31 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
             })
         }).collect::<Vec<_>>()
     }))
+}
+
+fn collect_proc_replay(
+    dir: &Path,
+    stdout_offset: &mut u64,
+    stderr_offset: &mut u64,
+    stdout_frames: &mut Vec<ProcReplayFrame>,
+    stderr_chunk: &mut Option<(u64, Vec<u8>)>,
+) -> Result<(), HelperError> {
+    let frames = read_stdout_frames(&dir.join("stdout.log"), *stdout_offset)?;
+    if let Some(frame) = frames.last() {
+        *stdout_offset = frame.offset;
+    }
+    stdout_frames.extend(frames);
+
+    if let Some((next_offset, data)) = read_file_tail(&dir.join("stderr.log"), *stderr_offset)? {
+        *stderr_offset = next_offset;
+        if let Some((offset, existing)) = stderr_chunk.as_mut() {
+            *offset = next_offset;
+            existing.extend(data);
+        } else {
+            *stderr_chunk = Some((next_offset, data));
+        }
+    }
+    Ok(())
 }
 
 fn ensure_proc_tailers(
@@ -1936,6 +1970,11 @@ fn system_time_seconds(time: SystemTime) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn append_to_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+        file.write_all(bytes)
+    }
 
     #[test]
     fn bundled_manifest_matches_handshake() {
@@ -2676,6 +2715,49 @@ mod tests {
             }
             other => panic!("unexpected third message: {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_replay_can_be_collected_again_before_terminal_attach_returns() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-terminal-replay-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("stdout.log"), b"early\n").expect("stdout");
+        std::fs::write(root.join("stderr.log"), b"early err").expect("stderr");
+        let mut stdout_offset = 0;
+        let mut stderr_offset = 0;
+        let mut stdout_frames = Vec::new();
+        let mut stderr_chunk = None;
+
+        collect_proc_replay(
+            &root,
+            &mut stdout_offset,
+            &mut stderr_offset,
+            &mut stdout_frames,
+            &mut stderr_chunk,
+        )
+        .expect("initial replay");
+        append_to_file(&root.join("stdout.log"), b"final\n").expect("stdout append");
+        append_to_file(&root.join("stderr.log"), b" final err").expect("stderr append");
+        collect_proc_replay(
+            &root,
+            &mut stdout_offset,
+            &mut stderr_offset,
+            &mut stdout_frames,
+            &mut stderr_chunk,
+        )
+        .expect("terminal replay");
+
+        assert_eq!(stdout_frames.len(), 2);
+        assert_eq!(stdout_frames[0].offset, 6);
+        assert_eq!(stdout_frames[0].data, b"early");
+        assert_eq!(stdout_frames[1].offset, 12);
+        assert_eq!(stdout_frames[1].data, b"final");
+        assert_eq!(stderr_chunk, Some((19, b"early err final err".to_vec())));
         let _ = std::fs::remove_dir_all(root);
     }
 
