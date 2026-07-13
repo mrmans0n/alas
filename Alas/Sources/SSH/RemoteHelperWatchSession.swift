@@ -65,10 +65,27 @@ final class RemoteHelperWatchSession {
             return
         }
         retryTask = Task { [weak self] in
-            _ = try? await client.ping()
+            do {
+                _ = try await client.ping()
+            } catch RemoteHelperClientError.notRunning {
+                // Keep the subscription registered locally so the next helper process can replay it.
+            } catch {
+                await self?.dropStaleSubscription(client: client, subscriptionId: handle?.subscriptionId)
+            }
             guard let self, !Task.isCancelled else { return }
             self.retryTask = nil
         }
+    }
+
+    private func dropStaleSubscription(client: RemoteHelperClient, subscriptionId: String?) async {
+        generation &+= 1
+        connectionTask?.cancel()
+        connectionTask = nil
+        self.client = nil
+        handle = nil
+        setAvailable(false)
+        guard let subscriptionId else { return }
+        await client.dropLocalSubscription(subscriptionId: subscriptionId)
     }
 
     private func beginConnection(attemptDate: Date = Date()) {

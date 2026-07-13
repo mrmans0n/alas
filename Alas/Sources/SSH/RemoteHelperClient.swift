@@ -157,6 +157,13 @@ actor RemoteHelperClient {
         return result
     }
 
+    func dropLocalSubscription(subscriptionId: String) {
+        guard let subscription = activeSubscriptions.removeValue(forKey: subscriptionId) else { return }
+        subscription.updatesContinuation.yield(.unavailable)
+        subscription.updatesContinuation.finish()
+        scheduleIdleShutdownIfPossible()
+    }
+
     func read(path: String, offset: UInt64? = nil) async throws -> RemoteHelperFSReadResult {
         try await request(method: "fs/read", params: RemoteHelperFSReadParams(path: path, offset: offset))
     }

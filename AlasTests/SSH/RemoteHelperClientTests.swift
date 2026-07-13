@@ -706,6 +706,56 @@ struct RemoteHelperClientTests {
         #expect((try await secondRead.value).content == "ok")
     }
 
+    @Test func dropLocalSubscriptionRemovesStaleReplayBlocker() async throws {
+        let firstTransport = FakeJSONRPCTransport()
+        let secondTransport = FakeJSONRPCTransport()
+        let queue = RemoteHelperTransportQueue([firstTransport, secondTransport])
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 60_000_000_000,
+            transportFactory: { queue.next() }
+        )
+
+        let subscribe = Task {
+            try await client.subscribe(root: "/deleted-repo", kinds: [.files])
+        }
+        try await waitUntil { firstTransport.sentFrames.count == 1 }
+        firstTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"subscriptionId":"stale-sub"}}"#.utf8))
+        #expect((try await subscribe.value).subscriptionId == "client-1")
+
+        firstTransport.send(exitStatus: 1)
+        try await waitUntilAsync {
+            await client.lastObservedExitStatus() == 1
+        }
+
+        let failedRead = Task {
+            try await client.read(path: "/other-repo/file.txt")
+        }
+        try await waitUntil { secondTransport.sentFrames.count == 1 }
+        let failedReplay = try #require(
+            JSONSerialization.jsonObject(with: secondTransport.sentFrames[0]) as? [String: Any]
+        )
+        #expect(failedReplay["method"] as? String == "watch/subscribe")
+        let failedReplayId = try #require(failedReplay["id"] as? Int)
+        secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(failedReplayId),"error":{"code":-32010,"message":"invalid root"}}"#.utf8))
+        await #expect(throws: RemoteHelperClientError.self) {
+            try await failedRead.value
+        }
+
+        await client.dropLocalSubscription(subscriptionId: "client-1")
+        let read = Task {
+            try await client.read(path: "/other-repo/file.txt")
+        }
+        try await waitUntil { secondTransport.sentFrames.count == 2 }
+        let readRequest = try #require(
+            JSONSerialization.jsonObject(with: secondTransport.sentFrames[1]) as? [String: Any]
+        )
+        #expect(readRequest["method"] as? String == "fs/read")
+        let readId = try #require(readRequest["id"] as? Int)
+        secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(readId),"result":{"content":"ok","mtime":null}}"#.utf8))
+        #expect((try await read.value).content == "ok")
+    }
+
     @Test func unsubscribeAfterHelperExitDropsSubscriptionWithoutReplay() async throws {
         let firstTransport = FakeJSONRPCTransport()
         let secondTransport = FakeJSONRPCTransport()
