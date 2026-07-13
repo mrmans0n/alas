@@ -3,17 +3,24 @@ import Testing
 @testable import Alas
 
 struct GitInvocationTests {
-    @Test func localInvocationIsUnchangedFromToday() {
+    @Test func localInvocationUsesGitCWithoutProcessWorkingDirectory() {
         let inv = GitInvocation.build(
             gitArgs: ["status", "--porcelain=v2"],
             cwd: URL(fileURLWithPath: "/Users/n/repo"),
             host: nil
         )
         #expect(inv.executable == "/usr/bin/env")
-        #expect(inv.args == ["git", "status", "--porcelain=v2"])
-        #expect(inv.cwd == URL(fileURLWithPath: "/Users/n/repo"))
+        #expect(inv.args == ["git", "-C", "/Users/n/repo", "status", "--porcelain=v2"])
+        #expect(inv.cwd == nil)
         #expect(inv.env?["GIT_OPTIONAL_LOCKS"] == "0")
         #expect(inv.env?["LC_ALL"] == "C")
+    }
+
+    @Test func localInvocationWithoutCwdKeepsOriginalArguments() {
+        let inv = GitInvocation.build(gitArgs: ["--version"], cwd: nil, host: nil)
+
+        #expect(inv.args == ["git", "--version"])
+        #expect(inv.cwd == nil)
     }
 
     @Test func remoteInvocationRunsSSHBatch() {

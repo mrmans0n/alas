@@ -179,6 +179,33 @@ struct ProcessGitTests {
         #expect(result.stdout.contains("git version"))
     }
 
+    @Test func gitInvocationSurvivesWorkingDirectoryDeletionBeforeLaunch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-deleted-git-cwd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let invocation = GitInvocation.build(gitArgs: ["status", "--porcelain"], cwd: directory, host: nil)
+        try FileManager.default.removeItem(at: directory)
+
+        let result = try await Process.run(
+            invocation.executable,
+            args: invocation.args,
+            cwd: invocation.cwd,
+            env: invocation.env
+        )
+
+        #expect(result.exitCode != 0)
+        #expect(!result.stderr.isEmpty)
+    }
+
+    @Test func gitWithMissingWorkingDirectoryStillThrowsLaunchFailed() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-missing-git-cwd-\(UUID().uuidString)")
+
+        await #expect(throws: ProcessError.self) {
+            _ = try await Process.git(["status", "--porcelain"], cwd: directory)
+        }
+    }
+
     @Test func gitEnvPrefersResolvedShellPath() {
         let prior = ShellEnvResolver.shared.resolvedPath
         ShellEnvResolver.shared.resolvedPath = "/custom/shell/bin"

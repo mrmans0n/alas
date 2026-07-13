@@ -9,11 +9,15 @@ struct GitInvocation: Equatable {
 
     static func build(gitArgs: [String], cwd: URL?, host: String?) -> GitInvocation {
         guard let host else {
+            // Keep Foundation's launch cwd unset: a worktree can disappear after
+            // preflight, while `git -C` reports that race as a normal exit.
+            let localArgs = cwd.map { ["git", "-C", $0.path] + gitArgs }
+                ?? ["git"] + gitArgs
             return GitInvocation(
                 executable: "/usr/bin/env",
-                args: ["git"] + gitArgs,
+                args: localArgs,
                 env: Process.gitEnv(),
-                cwd: cwd
+                cwd: nil
             )
         }
 
