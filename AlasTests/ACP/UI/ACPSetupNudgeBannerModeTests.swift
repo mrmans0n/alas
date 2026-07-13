@@ -12,6 +12,39 @@ struct ACPSetupNudgeBannerModeTests {
         #expect(copy == "Claude Code requires the ACP adapter to be installed.")
     }
 
+    @Test("remote copy names the SSH host")
+    func remoteHostCopy() {
+        #expect(ACPSetupNudgeBannerCopy.idleMessage(
+            mode: .install,
+            agentDisplayName: "Codex",
+            targetHost: "mini.lan"
+        ) == "Codex requires the ACP adapter to be installed on mini.lan.")
+        #expect(ACPSetupNudgeBannerCopy.installingMessage(
+            mode: .update(current: "1.0.0", latest: "1.1.0"),
+            agentDisplayName: "Codex",
+            targetHost: "mini.lan"
+        ) == "Updating Codex adapter on mini.lan…")
+        #expect(ACPSetupNudgeBannerCopy.installedMessage(
+            mode: .install,
+            agentDisplayName: "Codex",
+            targetHost: "mini.lan"
+        ) == "Codex adapter installed on mini.lan — connecting…")
+    }
+
+    @Test("setup dismissals are isolated by adapter target")
+    func targetAwareDismissals() {
+        let local = ACPAdapterUpdateKey(target: .local, agentID: "codex")
+        let hostA = ACPAdapterUpdateKey(target: .ssh(host: "host-a"), agentID: "codex")
+        let hostB = ACPAdapterUpdateKey(target: .ssh(host: "host-b"), agentID: "codex")
+
+        let values = [ACPSetupNudgeDismissal.storageKey(for: hostA)]
+        #expect(ACPSetupNudgeDismissal.isDismissed(values, key: hostA))
+        #expect(!ACPSetupNudgeDismissal.isDismissed(values, key: hostB))
+        #expect(!ACPSetupNudgeDismissal.isDismissed(values, key: local))
+        #expect(ACPSetupNudgeDismissal.isDismissed(["codex"], key: local))
+        #expect(!ACPSetupNudgeDismissal.isDismissed(["codex"], key: hostA))
+    }
+
     @Test("update mode idle copy shows both versions")
     func updateIdleCopy() {
         let copy = ACPSetupNudgeBannerCopy.idleMessage(

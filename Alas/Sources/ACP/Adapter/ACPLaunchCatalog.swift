@@ -9,13 +9,13 @@ enum ACPLaunchCatalog {
         // claude-agent-sdk and so advertises opus-4-7 / sonnet-4-6 /
         // haiku-4-6). The binary on PATH is `claude-agent-acp`.
         ACPLaunchSpec(
-            agentID: "claude",
-            command: "claude-agent-acp",
+            agentID: ACPManagedAdapterDescriptor.claude.agentID,
+            command: ACPManagedAdapterDescriptor.claude.binaryName,
             arguments: [],
             extraEnv: [:],
             setupCheck: .binaryOnPathOrNpmPackage(
-                binary: "claude-agent-acp",
-                npmPackage: "@agentclientprotocol/claude-agent-acp"),
+                binary: ACPManagedAdapterDescriptor.claude.binaryName,
+                npmPackage: ACPManagedAdapterDescriptor.claude.packageName),
             supportsModelSelection: true,
             supportsModeSelection: true),
 
@@ -65,11 +65,11 @@ enum ACPLaunchCatalog {
         // (The claude rename above didn't need this — its binary name changed.)
         // Requires OPENAI_API_KEY or CODEX_API_KEY in the environment.
         ACPLaunchSpec(
-            agentID: "codex",
-            command: "codex-acp",
+            agentID: ACPManagedAdapterDescriptor.codex.agentID,
+            command: ACPManagedAdapterDescriptor.codex.binaryName,
             arguments: [],
             extraEnv: [:],
-            setupCheck: .npxPackage(name: "@agentclientprotocol/codex-acp"),
+            setupCheck: .npxPackage(name: ACPManagedAdapterDescriptor.codex.packageName),
             supportsModelSelection: false,
             supportsModeSelection: false),
 
@@ -90,13 +90,13 @@ enum ACPLaunchCatalog {
         // to ACP over stdio. Internally spawns `pi --mode rpc`.
         // First-time auth via `pi-acp --terminal-login`.
         ACPLaunchSpec(
-            agentID: "pi",
-            command: "pi-acp",
+            agentID: ACPManagedAdapterDescriptor.pi.agentID,
+            command: ACPManagedAdapterDescriptor.pi.binaryName,
             arguments: [],
             extraEnv: [:],
             setupCheck: .binaryOnPathOrNpmPackage(
-                binary: "pi-acp",
-                npmPackage: "pi-acp"),
+                binary: ACPManagedAdapterDescriptor.pi.binaryName,
+                npmPackage: ACPManagedAdapterDescriptor.pi.packageName),
             supportsModelSelection: false,
             supportsModeSelection: false),
     ]

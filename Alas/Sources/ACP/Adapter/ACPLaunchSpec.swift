@@ -8,6 +8,27 @@ struct ACPLaunchSpec: Equatable {
     let setupCheck: ACPSetupCheck
     let supportsModelSelection: Bool
     let supportsModeSelection: Bool
+    let remoteNodeBinDirectory: String?
+
+    init(
+        agentID: String,
+        command: String,
+        arguments: [String],
+        extraEnv: [String: String],
+        setupCheck: ACPSetupCheck,
+        supportsModelSelection: Bool,
+        supportsModeSelection: Bool,
+        remoteNodeBinDirectory: String? = nil
+    ) {
+        self.agentID = agentID
+        self.command = command
+        self.arguments = arguments
+        self.extraEnv = extraEnv
+        self.setupCheck = setupCheck
+        self.supportsModelSelection = supportsModelSelection
+        self.supportsModeSelection = supportsModeSelection
+        self.remoteNodeBinDirectory = remoteNodeBinDirectory
+    }
 
     /// The npm package that installs/updates this adapter, when the setup
     /// check exposes one. Binary-only adapters (gemini, opencode,
@@ -23,7 +44,10 @@ struct ACPLaunchSpec: Equatable {
     /// A copy of this spec with `command` replaced and all other fields
     /// unchanged. Used to launch a resolved absolute path through the
     /// launcher's existing absolute-path branch.
-    func overridingCommand(_ command: String) -> ACPLaunchSpec {
+    func overridingCommand(
+        _ command: String,
+        remoteNodeBinDirectory: String? = nil
+    ) -> ACPLaunchSpec {
         ACPLaunchSpec(
             agentID: agentID,
             command: command,
@@ -31,6 +55,7 @@ struct ACPLaunchSpec: Equatable {
             extraEnv: extraEnv,
             setupCheck: setupCheck,
             supportsModelSelection: supportsModelSelection,
-            supportsModeSelection: supportsModeSelection)
+            supportsModeSelection: supportsModeSelection,
+            remoteNodeBinDirectory: remoteNodeBinDirectory)
     }
 }

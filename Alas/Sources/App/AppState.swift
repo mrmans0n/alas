@@ -60,6 +60,7 @@ final class AppState {
     let rightPaneStore = RightPaneStore()
     let harness = HarnessService()
     let acpAdapterUpdateStore = ACPAdapterUpdateStore()
+    let acpAdapterInstallCoordinator = ACPAdapterInstallCoordinator()
 
     // MARK: Remote control
     /// Paired-device registry backed by an on-disk JSON store. Lazy so the

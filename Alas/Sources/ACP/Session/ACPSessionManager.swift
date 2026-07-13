@@ -17,6 +17,11 @@ private enum ACPMirrorRefreshPolicy {
 @MainActor
 final class ACPSessionManager: ObservableObject {
     typealias ACPSetupEvaluator = @MainActor (_ spec: ACPLaunchSpec) async -> ACPSetupResult
+    typealias ACPRemoteAdapterResolver = @MainActor (
+        _ host: String,
+        _ descriptor: ACPManagedAdapterDescriptor,
+        _ setupCheck: ACPSetupCheck
+    ) async -> ACPRemoteAdapterResolution
     typealias ACPConnectionFactory = @MainActor (
         _ spec: ACPLaunchSpec,
         _ host: String?,
@@ -219,7 +224,9 @@ final class ACPSessionManager: ObservableObject {
     private var draftFlushHandoffs: [ACPSession.ID: DraftFlushHandoff] = [:]
     private static let draftDebounceNanos: UInt64 = 300_000_000
     private let setupEvaluator: ACPSetupEvaluator
+    private let remoteAdapterResolver: ACPRemoteAdapterResolver
     private let connectionFactory: ACPConnectionFactory
+    private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session task that prepends pre-tail messages after the initial
     /// tail-only paint applied by `applyHydration`. Tracked so tests (and
@@ -278,6 +285,7 @@ final class ACPSessionManager: ObservableObject {
          onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)? = nil,
          changeNotifier: ACPChangeNotifier? = nil,
          setupEvaluator: ACPSetupEvaluator? = nil,
+         remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil)
     {
@@ -299,6 +307,13 @@ final class ACPSessionManager: ObservableObject {
             let checker = ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             return await checker.evaluate(spec.setupCheck)
         }
+        self.remoteAdapterResolver = remoteAdapterResolver ?? { host, descriptor, setupCheck in
+            await ACPRemoteAdapterManagement().resolve(
+                host: host,
+                descriptor: descriptor,
+                setupCheck: setupCheck
+            )
+        }
         self.connectionFactory = connectionFactory ?? { spec, host, worktreePath in
             let client: ACPStdioClient
             if let host {
@@ -306,7 +321,8 @@ final class ACPSessionManager: ObservableObject {
                     host: host,
                     worktreePath: worktreePath,
                     command: spec.command,
-                    arguments: spec.arguments
+                    arguments: spec.arguments,
+                    nodeBinDirectory: spec.remoteNodeBinDirectory
                 )
                 // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
                 // HOME, and any host-specific connection configuration.
@@ -2531,6 +2547,16 @@ extension ACPSessionManager {
     /// launch falls back to PATH-based `/usr/bin/env <command>`.
     private func resolvedLaunchSpec(for spec: ACPLaunchSpec, host: String?) async -> ACPLaunchSpec {
         if let host {
+            if ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) != nil {
+                let key = remoteAdapterKey(host: host, agentID: spec.agentID)
+                guard let resolved = resolvedRemoteAdapters[key] else {
+                    return spec
+                }
+                return spec.overridingCommand(
+                    resolved.adapterPath,
+                    remoteNodeBinDirectory: resolved.nodeBinDirectory
+                )
+            }
             guard let command = ACPRemoteLaunch.launchPathProbeCommand(for: spec),
                   let probe = try? await RemoteExec.run(host: host, cwd: nil, command: command),
                   probe.exitCode == 0
@@ -2555,6 +2581,22 @@ extension ACPSessionManager {
             return await setupEvaluator(spec)
         }
 
+        if let descriptor = ACPManagedAdapterDescriptor.descriptor(for: spec.agentID) {
+            let key = remoteAdapterKey(host: host, agentID: spec.agentID)
+            let resolution = await remoteAdapterResolver(host, descriptor, spec.setupCheck)
+            switch resolution {
+            case .ready(let resolved):
+                resolvedRemoteAdapters[key] = resolved
+                return .ready
+            case .missing(let reason):
+                resolvedRemoteAdapters.removeValue(forKey: key)
+                return .missing(reason: reason)
+            case .error(let message):
+                resolvedRemoteAdapters.removeValue(forKey: key)
+                return .error(message: message)
+            }
+        }
+
         do {
             let probe = try await RemoteExec.run(
                 host: host,
@@ -2568,6 +2610,10 @@ extension ACPSessionManager {
         } catch {
             return .error(message: "Could not verify \(spec.command) on \(host): \(error.localizedDescription)")
         }
+    }
+
+    private func remoteAdapterKey(host: String, agentID: String) -> String {
+        "\(host)\u{0}\(agentID)"
     }
 
     private func handleAuthRequiredRunner(

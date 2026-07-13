@@ -7,9 +7,11 @@ protocol ACPAdapterInstaller {
 }
 
 enum ACPInstallError: LocalizedError {
+    case unsupportedAgent(String)
     case nonZeroExit(Int32, stderr: String)
     var errorDescription: String? {
         switch self {
+        case .unsupportedAgent(let agentID): return "No ACP adapter installer is available for \(agentID)."
         case .nonZeroExit(let code, let stderr): return "install failed (exit \(code)): \(stderr)"
         }
     }
@@ -52,5 +54,12 @@ enum ACPInstallerRegistry {
         case "pi":     return PiACPInstaller()
         default: return nil
         }
+    }
+
+    static func install(agentID: String) async throws {
+        guard let installer = installer(for: agentID) else {
+            throw ACPInstallError.unsupportedAgent(agentID)
+        }
+        try await installer.install()
     }
 }

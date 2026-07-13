@@ -30,6 +30,34 @@ struct ACPRemoteLaunchTests {
         #expect(script.contains("'codex-acp'"))
     }
 
+    @Test func resolvedAdapterPrependsExactNodeBinAndStillScrubsMarkers() {
+        let command = ACPRemoteLaunch.agentCommand(
+            command: "/home/dev/.alas/acp/codex/bin/codex-acp",
+            arguments: [],
+            nodeBinDirectory: "/home/dev/node versions/v22/bin"
+        )
+
+        #expect(command.hasPrefix("PATH='/home/dev/node versions/v22/bin':\"$PATH\" && export PATH && env "))
+        #expect(command.contains("-u CLAUDECODE"))
+        #expect(command.hasSuffix("'/home/dev/.alas/acp/codex/bin/codex-acp'"))
+    }
+
+    @Test func resolvedAdapterKeepsNodePathInCwdAndList() {
+        let invocation = ACPRemoteLaunch.channelInvocation(
+            host: "devbox",
+            worktreePath: "/srv/repo",
+            command: "codex-acp",
+            arguments: [],
+            nodeBinDirectory: "/managed/node/bin"
+        )
+
+        let script = invocation.args.last ?? ""
+        #expect(script.contains(
+            "cd '\\''/srv/repo'\\'' && PATH='\\''/managed/node/bin'\\'':\"$PATH\" && export PATH && env "
+        ))
+        #expect(!script.contains("cd '\\''/srv/repo'\\'' && PATH='\\''/managed/node/bin'\\'':\"$PATH\";"))
+    }
+
     @Test func setupProbeUsesFirstWordOfCommand() {
         #expect(ACPRemoteLaunch.setupProbeCommand(command: "gemini --experimental-acp")
             == "command -v 'gemini'")

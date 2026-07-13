@@ -2,13 +2,42 @@ import Foundation
 
 struct ACPAdapterVersionChecker: Sendable {
     typealias Runner = @Sendable (_ command: String, _ args: [String]) async throws -> (status: Int32, stdout: String)
+    typealias RemoteRunner = @Sendable (
+        _ host: String,
+        _ cwd: String?,
+        _ command: String,
+        _ pathPolicy: SSHCommand.PathPolicy
+    ) async throws -> ProcessResult
+    typealias NodeResolver = @Sendable (_ host: String) async throws -> ACPRemoteNodeEnvironment
+
+    static let managedSourceExitCode: Int32 = 0
+    static let globalSourceExitCode: Int32 = 40
+    static let malformedSourceExitCode: Int32 = 41
 
     let timeout: TimeInterval
     let runner: Runner
+    let remoteRunner: RemoteRunner
+    let nodeResolver: NodeResolver
 
-    init(timeout: TimeInterval = 5, runner: @escaping Runner = ACPAdapterVersionChecker.defaultRunner) {
+    init(
+        timeout: TimeInterval = 5,
+        runner: @escaping Runner = ACPAdapterVersionChecker.defaultRunner,
+        remoteRunner: @escaping RemoteRunner = { host, cwd, command, pathPolicy in
+            try await RemoteExec.run(
+                host: host,
+                cwd: cwd,
+                command: command,
+                pathPolicy: pathPolicy
+            )
+        },
+        nodeResolver: @escaping NodeResolver = { host in
+            try await ACPRemoteNodeEnvironmentResolver().resolve(host: host)
+        }
+    ) {
         self.timeout = timeout
         self.runner = runner
+        self.remoteRunner = remoteRunner
+        self.nodeResolver = nodeResolver
     }
 
     func check(packageName: String) async -> AdapterUpdateState {
@@ -22,6 +51,101 @@ struct ACPAdapterVersionChecker: Sendable {
         }
         guard let r = result else { return .unknown }
         return Self.parse(packageName: packageName, status: r.status, stdout: r.stdout)
+    }
+
+    func check(host: String, descriptor: ACPManagedAdapterDescriptor) async -> AdapterUpdateState {
+        let environment: ACPRemoteNodeEnvironment
+        do {
+            environment = try await nodeResolver(host)
+        } catch {
+            return .unknown
+        }
+
+        let sourceResult: ProcessResult
+        do {
+            sourceResult = try await remoteRunner(
+                host,
+                nil,
+                Self.remoteSourceProbeCommand(descriptor: descriptor),
+                .inherited
+            )
+        } catch {
+            return .unknown
+        }
+        guard !RemoteExec.isConnectionFailure(exitCode: sourceResult.exitCode) else {
+            return .unknown
+        }
+
+        let command: String
+        switch sourceResult.exitCode {
+        case Self.managedSourceExitCode:
+            command = Self.remoteManagedCheckCommand(
+                descriptor: descriptor,
+                environment: environment
+            )
+        case Self.globalSourceExitCode:
+            command = Self.remoteGlobalCheckCommand(
+                descriptor: descriptor,
+                environment: environment
+            )
+        default:
+            return .unknown
+        }
+
+        let result: ProcessResult
+        do {
+            result = try await remoteRunner(host, nil, command, .inherited)
+        } catch {
+            return .unknown
+        }
+        guard !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
+            return .unknown
+        }
+        return Self.parse(
+            packageName: descriptor.packageName,
+            status: result.exitCode,
+            stdout: result.stdout
+        )
+    }
+
+    static func remoteSourceProbeCommand(descriptor: ACPManagedAdapterDescriptor) -> String {
+        let prefix = ACPRemoteAdapterManagement.managedPrefix(for: descriptor)
+        return """
+        prefix=\(prefix)
+        package=\(SSHCommand.shellQuote(descriptor.packageName))
+        candidate="$prefix/lib/node_modules/$package"
+        if [ -d "$candidate" ]; then
+            exit \(managedSourceExitCode)
+        fi
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+            exit \(malformedSourceExitCode)
+        fi
+        exit \(globalSourceExitCode)
+        """
+    }
+
+    static func remoteManagedCheckCommand(
+        descriptor: ACPManagedAdapterDescriptor,
+        environment: ACPRemoteNodeEnvironment
+    ) -> String {
+        let prefix = ACPRemoteAdapterManagement.managedPrefix(for: descriptor)
+        return """
+        PATH=\(SSHCommand.shellQuote(environment.binDirectory)):"$PATH"
+        export PATH
+        prefix=\(prefix)
+        \(SSHCommand.shellQuote(environment.npmPath)) outdated -g \(SSHCommand.shellQuote(descriptor.packageName)) --json --prefix "$prefix"
+        """
+    }
+
+    static func remoteGlobalCheckCommand(
+        descriptor: ACPManagedAdapterDescriptor,
+        environment: ACPRemoteNodeEnvironment
+    ) -> String {
+        """
+        PATH=\(SSHCommand.shellQuote(environment.binDirectory)):"$PATH"
+        export PATH
+        \(SSHCommand.shellQuote(environment.npmPath)) outdated -g \(SSHCommand.shellQuote(descriptor.packageName)) --json
+        """
     }
 
     /// Pure parser exposed for tests and reuse.

@@ -116,6 +116,71 @@ struct ACPAdapterUpdateStoreTests {
         #expect(await counter.value() == 1)
     }
 
+    @Test("checkOrCompute coalesces the same target and agent key")
+    func targetAwareCheckOrComputeCoalesces() async {
+        let store = ACPAdapterUpdateStore(
+            fileURL: tempFile(),
+            successTTL: 60, failureTTL: 60,
+            now: { Date() })
+        let key = ACPAdapterUpdateKey(target: .ssh(host: "build-a"), agentID: "codex")
+
+        actor Counter {
+            var n = 0
+            func inc() { n += 1 }
+            func value() -> Int { n }
+        }
+        let counter = Counter()
+
+        async let a = store.checkOrCompute(key: key) {
+            await counter.inc()
+            try? await Task.sleep(for: .milliseconds(50))
+            return .upToDate
+        }
+        async let b = store.checkOrCompute(key: key) {
+            await counter.inc()
+            try? await Task.sleep(for: .milliseconds(50))
+            return .upToDate
+        }
+
+        let results = await (a, b)
+        #expect(results.0 == .upToDate)
+        #expect(results.1 == .upToDate)
+        #expect(await counter.value() == 1)
+    }
+
+    @Test("checkOrCompute runs independently for the same agent on two SSH hosts")
+    func targetAwareCheckOrComputeIsIndependent() async {
+        let store = ACPAdapterUpdateStore(
+            fileURL: tempFile(),
+            successTTL: 60, failureTTL: 60,
+            now: { Date() })
+        let hostA = ACPAdapterUpdateKey(target: .ssh(host: "build-a"), agentID: "codex")
+        let hostB = ACPAdapterUpdateKey(target: .ssh(host: "build-b"), agentID: "codex")
+
+        actor Counter {
+            var n = 0
+            func inc() { n += 1 }
+            func value() -> Int { n }
+        }
+        let counter = Counter()
+
+        async let a = store.checkOrCompute(key: hostA) {
+            await counter.inc()
+            try? await Task.sleep(for: .milliseconds(50))
+            return .upToDate
+        }
+        async let b = store.checkOrCompute(key: hostB) {
+            await counter.inc()
+            try? await Task.sleep(for: .milliseconds(50))
+            return .available(current: "1", latest: "2")
+        }
+
+        let results = await (a, b)
+        #expect(results.0 == .upToDate)
+        #expect(results.1 == .available(current: "1", latest: "2"))
+        #expect(await counter.value() == 2)
+    }
+
     @Test("corrupt on-disk JSON is treated as missing, not fatal")
     func corruptFileIsRecovered() async throws {
         let url = tempFile()
@@ -143,5 +208,107 @@ struct ACPAdapterUpdateStoreTests {
         let b = ACPAdapterUpdateStore(fileURL: url, successTTL: 60, failureTTL: 60, now: now)
         #expect(await b.read(agentID: "claude") == .available(current: "1", latest: "2"))
         #expect(await b.isDismissed(agentID: "claude", latest: "2"))
+    }
+
+    @Test("remote target state persists across store instances")
+    func remoteStatePersistsAcrossInstances() async {
+        let url = tempFile()
+        let now = { Date() }
+        let key = ACPAdapterUpdateKey(target: .ssh(host: "dev.user@host:22"), agentID: "codex")
+        let a = ACPAdapterUpdateStore(fileURL: url, successTTL: 60, failureTTL: 60, now: now)
+        await a.write(key: key, state: .available(current: "1", latest: "2"))
+        await a.dismiss(key: key, latest: "2")
+
+        let b = ACPAdapterUpdateStore(fileURL: url, successTTL: 60, failureTTL: 60, now: now)
+        #expect(await b.read(key: key) == .available(current: "1", latest: "2"))
+        #expect(await b.isDismissed(key: key, latest: "2"))
+        #expect(await b.read(key: .init(target: .local, agentID: "codex")) == nil)
+    }
+
+    @Test("cache entries are isolated by target")
+    func cacheIsTargetIsolated() async {
+        let store = ACPAdapterUpdateStore(
+            fileURL: tempFile(),
+            successTTL: 60, failureTTL: 60,
+            now: { Date() })
+        let local = ACPAdapterUpdateKey(target: .local, agentID: "codex")
+        let hostA = ACPAdapterUpdateKey(target: .ssh(host: "host-a"), agentID: "codex")
+        let hostB = ACPAdapterUpdateKey(target: .ssh(host: "host-b"), agentID: "codex")
+
+        await store.write(key: local, state: .upToDate)
+        await store.write(key: hostA, state: .available(current: "1", latest: "2"))
+
+        #expect(await store.read(key: local) == .upToDate)
+        #expect(await store.read(key: hostA) == .available(current: "1", latest: "2"))
+        #expect(await store.read(key: hostB) == nil)
+    }
+
+    @Test("dismissals are isolated by target")
+    func dismissalsAreTargetIsolated() async {
+        let store = ACPAdapterUpdateStore(
+            fileURL: tempFile(),
+            successTTL: 60, failureTTL: 60,
+            now: { Date() })
+        let local = ACPAdapterUpdateKey(target: .local, agentID: "codex")
+        let remote = ACPAdapterUpdateKey(target: .ssh(host: "dev@host:22"), agentID: "codex")
+
+        await store.dismiss(key: remote, latest: "1.2.3")
+
+        #expect(await store.isDismissed(key: remote, latest: "1.2.3"))
+        #expect(await store.isDismissed(key: local, latest: "1.2.3") == false)
+    }
+
+    @Test("TTL timestamps are independent by target")
+    func ttlIsTargetIsolated() async {
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let store = ACPAdapterUpdateStore(
+            fileURL: tempFile(),
+            successTTL: 10, failureTTL: 5,
+            now: { clock })
+        let hostA = ACPAdapterUpdateKey(target: .ssh(host: "host-a"), agentID: "codex")
+        let hostB = ACPAdapterUpdateKey(target: .ssh(host: "host-b"), agentID: "codex")
+
+        await store.write(key: hostA, state: .upToDate)
+        clock = clock.addingTimeInterval(6)
+        await store.write(key: hostB, state: .upToDate)
+        clock = clock.addingTimeInterval(5)
+
+        #expect(await store.read(key: hostA) == nil)
+        #expect(await store.read(key: hostB) == .upToDate)
+    }
+
+    @Test("existing agent-only local entries remain readable and preserve dismissal state")
+    func readsLegacyLocalEntry() async throws {
+        let url = tempFile()
+        let checkedAt = Date(timeIntervalSince1970: 1_000)
+        let legacyJSON = """
+        {
+          "entries" : {
+            "codex" : {
+              "checkedAt" : "1970-01-01T00:16:40Z",
+              "dismissedLatest" : "2.0.0",
+              "state" : { "kind" : "upToDate" }
+            }
+          }
+        }
+        """
+        try #require(legacyJSON.data(using: .utf8)).write(to: url)
+        let store = ACPAdapterUpdateStore(
+            fileURL: url,
+            successTTL: 60, failureTTL: 60,
+            now: { checkedAt })
+        let local = ACPAdapterUpdateKey(target: .local, agentID: "codex")
+        let remote = ACPAdapterUpdateKey(target: .ssh(host: "host-a"), agentID: "codex")
+
+        #expect(await store.read(key: local) == .upToDate)
+        #expect(await store.isDismissed(key: local, latest: "2.0.0"))
+        #expect(await store.read(key: remote) == nil)
+
+        await store.write(key: local, state: .available(current: "1", latest: "2"))
+        #expect(await store.isDismissed(key: local, latest: "2.0.0"))
+
+        let persisted = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let entries = persisted?["entries"] as? [String: Any]
+        #expect(entries?[local.storageKey] != nil)
     }
 }

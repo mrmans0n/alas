@@ -9,9 +9,15 @@ struct RemoteExecInvocation: Equatable {
 /// through `Process.git` (host-aware via `RemoteHostRegistry`); this is for
 /// everything else a remote project needs: capability probes, `ls`, `wc`.
 enum RemoteExec {
-    static func invocation(host: String, cwd: String?, command: String) -> RemoteExecInvocation {
-        let script = cwd.map { SSHCommand.remoteScript(cwd: $0, command: command) }
-            ?? SSHCommand.remoteScript(command: command)
+    static func invocation(
+        host: String,
+        cwd: String?,
+        command: String,
+        pathPolicy: SSHCommand.PathPolicy = .augmented
+    ) -> RemoteExecInvocation {
+        let script = cwd.map {
+            SSHCommand.remoteScript(cwd: $0, command: command, pathPolicy: pathPolicy)
+        } ?? SSHCommand.remoteScript(command: command, pathPolicy: pathPolicy)
         let ssh = SSHCommand(host: host, mode: .batch)
         return RemoteExecInvocation(
             executable: SSHCommand.executable,
@@ -23,9 +29,15 @@ enum RemoteExec {
         host: String,
         cwd: String?,
         command: String,
-        timeout: TimeInterval = Process.defaultTimeout
+        timeout: TimeInterval = Process.defaultTimeout,
+        pathPolicy: SSHCommand.PathPolicy = .augmented
     ) async throws -> ProcessResult {
-        let invocation = invocation(host: host, cwd: cwd, command: command)
+        let invocation = invocation(
+            host: host,
+            cwd: cwd,
+            command: command,
+            pathPolicy: pathPolicy
+        )
         return try await Process.run(invocation.executable, args: invocation.args, timeout: timeout)
     }
 
@@ -34,9 +46,15 @@ enum RemoteExec {
         host: String,
         cwd: String?,
         command: String,
-        timeout: TimeInterval = Process.defaultTimeout
+        timeout: TimeInterval = Process.defaultTimeout,
+        pathPolicy: SSHCommand.PathPolicy = .augmented
     ) async throws -> ProcessResultData {
-        let invocation = invocation(host: host, cwd: cwd, command: command)
+        let invocation = invocation(
+            host: host,
+            cwd: cwd,
+            command: command,
+            pathPolicy: pathPolicy
+        )
         return try await Process.runData(
             invocation.executable,
             args: invocation.args,

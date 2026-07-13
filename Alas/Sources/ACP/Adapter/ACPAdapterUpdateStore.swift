@@ -1,12 +1,12 @@
 import Foundation
 
-/// Per-`agentID` store for ACP adapter update checks.
+/// Per-target, per-`agentID` store for ACP adapter update checks.
 ///
 /// Owns three things:
 ///   1. TTL-cached results of the last version check (success = 24h, failure = 30m).
-///   2. Per-agent dismissal of a specific `latest` version (banner stays hidden
+///   2. Per-target dismissal of a specific `latest` version (banner stays hidden
 ///      until npm publishes something newer than the dismissed version).
-///   3. Coalescing of concurrent in-flight version checks per `agentID`.
+///   3. Coalescing of concurrent in-flight version checks per target and `agentID`.
 ///
 /// Backed by a small JSON file under Application Support.
 actor ACPAdapterUpdateStore {
@@ -44,40 +44,43 @@ actor ACPAdapterUpdateStore {
 
     // MARK: - Public API
 
-    func read(agentID: String) -> AdapterUpdateState? {
+    func read(key: ACPAdapterUpdateKey) -> AdapterUpdateState? {
         loadIfNeeded()
-        guard let entry = entries[agentID] else { return nil }
+        guard let entry = entry(for: key) else { return nil }
         let ttl: TimeInterval = (entry.state == .unknown) ? failureTTL : successTTL
         if now().timeIntervalSince(entry.checkedAt) > ttl { return nil }
         return entry.state
     }
 
-    func write(agentID: String, state: AdapterUpdateState) {
+    func write(key: ACPAdapterUpdateKey, state: AdapterUpdateState) {
         loadIfNeeded()
         let timestamp = now()
-        var entry = entries[agentID] ?? Entry(checkedAt: timestamp, state: state, dismissedLatest: nil)
+        var entry = entry(for: key) ?? Entry(checkedAt: timestamp, state: state, dismissedLatest: nil)
         entry.checkedAt = timestamp
         entry.state = state
-        entries[agentID] = entry
+        entries[key.storageKey] = entry
         persist()
     }
 
-    func dismiss(agentID: String, latest: String) {
+    func dismiss(key: ACPAdapterUpdateKey, latest: String) {
         loadIfNeeded()
-        var entry = entries[agentID] ?? Entry(checkedAt: now(), state: .unknown, dismissedLatest: nil)
+        var entry = entry(for: key) ?? Entry(checkedAt: now(), state: .unknown, dismissedLatest: nil)
         entry.dismissedLatest = latest
-        entries[agentID] = entry
+        entries[key.storageKey] = entry
         persist()
     }
 
-    func isDismissed(agentID: String, latest: String) -> Bool {
+    func isDismissed(key: ACPAdapterUpdateKey, latest: String) -> Bool {
         loadIfNeeded()
-        return entries[agentID]?.dismissedLatest == latest
+        return entry(for: key)?.dismissedLatest == latest
     }
 
-    func clear(agentID: String) {
+    func clear(key: ACPAdapterUpdateKey) {
         loadIfNeeded()
-        entries.removeValue(forKey: agentID)
+        entries.removeValue(forKey: key.storageKey)
+        if key.target == .local {
+            entries.removeValue(forKey: key.agentID)
+        }
         persist()
     }
 
@@ -85,20 +88,52 @@ actor ACPAdapterUpdateStore {
     /// the result, and returns it. Concurrent callers for the same
     /// `agentID` share one in-flight task.
     func checkOrCompute(
-        agentID: String,
+        key: ACPAdapterUpdateKey,
         compute: @Sendable @escaping () async -> AdapterUpdateState
     ) async -> AdapterUpdateState {
-        if let cached = read(agentID: agentID) { return cached }
-        if let existing = inFlight[agentID] { return await existing.value }
+        if let cached = read(key: key) { return cached }
+        let storageKey = key.storageKey
+        if let existing = inFlight[storageKey] { return await existing.value }
 
         let task = Task { @Sendable in await compute() }
-        inFlight[agentID] = task
+        inFlight[storageKey] = task
         let result = await task.value
         // removeValue and write run in one synchronous actor turn — no suspension between them,
         // so a third caller cannot observe a state where inFlight is empty and the cache is stale.
-        inFlight.removeValue(forKey: agentID)
-        write(agentID: agentID, state: result)
+        inFlight.removeValue(forKey: storageKey)
+        write(key: key, state: result)
         return result
+    }
+
+    // Local-only overloads preserve existing call sites while target-aware
+    // routing is introduced incrementally.
+    func read(agentID: String) -> AdapterUpdateState? {
+        read(key: .init(target: .local, agentID: agentID))
+    }
+
+    func write(agentID: String, state: AdapterUpdateState) {
+        write(key: .init(target: .local, agentID: agentID), state: state)
+    }
+
+    func dismiss(agentID: String, latest: String) {
+        dismiss(key: .init(target: .local, agentID: agentID), latest: latest)
+    }
+
+    func isDismissed(agentID: String, latest: String) -> Bool {
+        isDismissed(key: .init(target: .local, agentID: agentID), latest: latest)
+    }
+
+    func clear(agentID: String) {
+        clear(key: .init(target: .local, agentID: agentID))
+    }
+
+    func checkOrCompute(
+        agentID: String,
+        compute: @Sendable @escaping () async -> AdapterUpdateState
+    ) async -> AdapterUpdateState {
+        await checkOrCompute(
+            key: .init(target: .local, agentID: agentID),
+            compute: compute)
     }
 
     // MARK: - Persistence
@@ -110,6 +145,14 @@ actor ACPAdapterUpdateStore {
               let shape = try? JSONDecoder.iso8601.decode(DiskShape.self, from: data)
         else { return }
         entries = shape.entries
+    }
+
+    private func entry(for key: ACPAdapterUpdateKey) -> Entry? {
+        if let current = entries[key.storageKey] {
+            return current
+        }
+        guard key.target == .local else { return nil }
+        return entries[key.agentID]
     }
 
     private func persist() {

@@ -21,6 +21,11 @@ struct SSHCommand: Equatable {
         case interactive
     }
 
+    enum PathPolicy: Equatable, Sendable {
+        case augmented
+        case inherited
+    }
+
     static let executable = "/usr/bin/ssh"
     static let scpExecutable = "/usr/bin/scp"
     private static let controlPath = "~/.ssh/alas-%C"
@@ -40,14 +45,25 @@ struct SSHCommand: Equatable {
     /// it reaches our script. Keep that layer to a simple `/bin/sh` launch
     /// so users with fish/csh login shells can still run the POSIX snippets
     /// generated throughout the remote stack.
-    static func remoteScript(cwd: String, command: String) -> String {
-        remoteScript(command: "cd \(shellQuote(cwd)) && \(command)")
+    static func remoteScript(
+        cwd: String,
+        command: String,
+        pathPolicy: PathPolicy = .augmented
+    ) -> String {
+        remoteScript(
+            command: "cd \(shellQuote(cwd)) && \(command)",
+            pathPolicy: pathPolicy
+        )
     }
 
     /// Remote-side script without a working-directory change (probes that
     /// must not assume `cwd` exists, e.g. repo validation via `git -C`).
-    static func remoteScript(command: String) -> String {
-        "/bin/sh -c \(shellQuote(remotePathPrelude + command))"
+    static func remoteScript(
+        command: String,
+        pathPolicy: PathPolicy = .augmented
+    ) -> String {
+        let prelude = pathPolicy == .augmented ? remotePathPrelude : ""
+        return "/bin/sh -c \(shellQuote(prelude + command))"
     }
 
     private static let remotePathPrelude =

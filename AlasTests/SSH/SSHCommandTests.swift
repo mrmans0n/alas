@@ -29,6 +29,25 @@ struct SSHCommandTests {
         #expect(script == "/bin/sh -c 'PATH=\"$HOME/.alas/bin:$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"; export PATH; git --version'")
     }
 
+    @Test func inheritedPathPolicyOmitsAugmentedPathPrelude() {
+        let script = SSHCommand.remoteScript(
+            command: "command -v npm",
+            pathPolicy: .inherited
+        )
+        #expect(script == "/bin/sh -c 'command -v npm'")
+        #expect(!script.contains(".alas/bin"))
+    }
+
+    @Test func inheritedPathPolicyWithCwdStillUsesPOSIXShell() {
+        let script = SSHCommand.remoteScript(
+            cwd: "/srv/repo",
+            command: "command -v npm",
+            pathPolicy: .inherited
+        )
+        let innerCommand = "cd \(SSHCommand.shellQuote("/srv/repo")) && command -v npm"
+        #expect(script == "/bin/sh -c \(SSHCommand.shellQuote(innerCommand))")
+    }
+
     @Test func remoteScriptTopLevelIsSafeForNonPOSIXLoginShells() {
         let script = SSHCommand.remoteScript(command: "f='x'; [ -e \"$f\" ]")
         #expect(script.hasPrefix("/bin/sh -c "))
