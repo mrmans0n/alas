@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-13
+
+### ✨ Features
+
+- Add remote helper bootstrap and RPC channel support (#755, #759).
+- Pick remote SSH hosts from `~/.ssh/config` (#760).
+- Add commit review context menu (#763).
+
+### 🐛 Fixes
+
+- Match elicitation text field styling (#756).
+- Repair blank rows in the slash-command picker (#757).
+- Cap Mason extension install options to avoid ANRs (#761).
+- Fix remote helper replay timeout crashes (#762).
+- Guard Git subprocess launch configuration (#764).
+
+### 🏗️ Internal
+
+- Update Rust to v1.97.0 (#758).
+
 ## [0.10.0] - 2026-07-13
 
 ### ✨ Features
