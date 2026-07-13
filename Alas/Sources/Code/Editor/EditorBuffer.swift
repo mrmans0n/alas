@@ -2,6 +2,29 @@ import AppKit
 import Foundation
 import Observation
 
+struct RemoteConflictCheckCoalescer {
+    private var isChecking = false
+    private var hasPendingCheck = false
+
+    mutating func beginOrMarkPending() -> Bool {
+        guard !isChecking else {
+            hasPendingCheck = true
+            return false
+        }
+        isChecking = true
+        return true
+    }
+
+    mutating func finishCheck() -> Bool {
+        guard hasPendingCheck else {
+            isChecking = false
+            return false
+        }
+        hasPendingCheck = false
+        return true
+    }
+}
+
 /// Editor buffer for one open worktree file. Owns the live `NSTextStorage` displayed by
 /// `CodeTextView`, plus the original-on-disk snapshot used for dirty
 /// detection, save normalization, and conflict resolution.
@@ -103,7 +126,7 @@ final class EditorBuffer {
     @ObservationIgnored
     private var remoteHelperSession: RemoteHelperWatchSession?
     @ObservationIgnored
-    private var remoteConflictCheckInFlight = false
+    private var remoteConflictChecks = RemoteConflictCheckCoalescer()
     @ObservationIgnored
     private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
     @ObservationIgnored
@@ -635,9 +658,13 @@ final class EditorBuffer {
     }
 
     private func checkRemoteConflict(host: String) async {
-        guard !remoteConflictCheckInFlight else { return }
-        remoteConflictCheckInFlight = true
-        defer { remoteConflictCheckInFlight = false }
+        guard remoteConflictChecks.beginOrMarkPending() else { return }
+        repeat {
+            await checkRemoteConflictOnce(host: host)
+        } while remoteConflictChecks.finishCheck()
+    }
+
+    private func checkRemoteConflictOnce(host: String) async {
         do {
             guard let mtime = try await RemoteFileAccess.mtime(host: host, path: absoluteFileURL.path) else {
                 if dirty { conflict = .deletedOnDisk }

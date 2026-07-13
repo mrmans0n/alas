@@ -186,7 +186,11 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
         if matches!(
             relative,
             "HEAD" | "index" | "MERGE_HEAD" | "CHERRY_PICK_HEAD" | "REVERT_HEAD" | "REBASE_HEAD"
-        ) {
+        ) || relative == "rebase-merge"
+            || relative.starts_with("rebase-merge/")
+            || relative == "rebase-apply"
+            || relative.starts_with("rebase-apply/")
+        {
             return true;
         }
     }
@@ -253,6 +257,14 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/worktrees/feature/CHERRY_PICK_HEAD"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/rebase-merge/git-rebase-todo"),
+            &info
+        ));
+        assert!(is_relevant_git_path(
+            &root.join(".git/worktrees/feature/rebase-apply/rebasing"),
             &info
         ));
         assert!(!is_relevant_git_path(

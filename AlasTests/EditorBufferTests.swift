@@ -21,6 +21,22 @@ struct EditorBufferTests {
         return url
     }
 
+    @Test func remoteConflictChecksCoalesceAnOverlappingRequest() {
+        var checks = RemoteConflictCheckCoalescer()
+
+        let initialCheck = checks.beginOrMarkPending()
+        let overlappingCheck = checks.beginOrMarkPending()
+        let shouldRepeat = checks.finishCheck()
+        let isDrained = !checks.finishCheck()
+        let nextCheck = checks.beginOrMarkPending()
+
+        #expect(initialCheck)
+        #expect(!overlappingCheck)
+        #expect(shouldRepeat)
+        #expect(isDrained)
+        #expect(nextCheck)
+    }
+
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "hello\nworld\n", perms: 0o644)

@@ -92,7 +92,7 @@ Notification:
 
 `files` events contain changed paths under the worktree root. `git` events are
 limited to state that invalidates project or changes-pane data: main or linked
-worktree HEAD and index changes, merge/cherry-pick/revert state, worktree
+worktree HEAD and index changes, merge/rebase/cherry-pick/revert state, worktree
 topology changes, branch refs, and packed refs. Transient lockfiles and
 unrelated git metadata are ignored. Events are grouped by subscription and kind
 for 250 ms before the helper sends one notification.
