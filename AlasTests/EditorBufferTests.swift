@@ -37,6 +37,51 @@ struct EditorBufferTests {
         #expect(nextCheck)
     }
 
+    @Test func remoteHelperFileWatchMatchesCanonicalEventRootByRelativePath() {
+        let matcher = RemoteHelperFileWatchMatcher(
+            targetURL: URL(fileURLWithPath: "/symlinked/repo/Sources/App.swift"),
+            watchedRootURL: URL(fileURLWithPath: "/symlinked/repo/Sources")
+        )
+        let event = RemoteHelperWatchEvent(
+            subscriptionId: "sub",
+            root: "/real/repo/Sources",
+            kind: .files,
+            paths: ["/real/repo/Sources/App.swift"]
+        )
+
+        #expect(matcher.matches(event: event))
+    }
+
+    @Test func remoteHelperFileWatchIgnoresSiblingUnderCanonicalEventRoot() {
+        let matcher = RemoteHelperFileWatchMatcher(
+            targetURL: URL(fileURLWithPath: "/symlinked/repo/Sources/App.swift"),
+            watchedRootURL: URL(fileURLWithPath: "/symlinked/repo/Sources")
+        )
+        let event = RemoteHelperWatchEvent(
+            subscriptionId: "sub",
+            root: "/real/repo/Sources",
+            kind: .files,
+            paths: ["/real/repo/Sources/Other.swift"]
+        )
+
+        #expect(!matcher.matches(event: event))
+    }
+
+    @Test func remoteHelperFileWatchMatchesSameAbsolutePath() {
+        let matcher = RemoteHelperFileWatchMatcher(
+            targetURL: URL(fileURLWithPath: "/repo/Sources/App.swift"),
+            watchedRootURL: URL(fileURLWithPath: "/repo/Sources")
+        )
+        let event = RemoteHelperWatchEvent(
+            subscriptionId: "sub",
+            root: "/repo/Sources",
+            kind: .files,
+            paths: ["/repo/Sources/App.swift"]
+        )
+
+        #expect(matcher.matches(event: event))
+    }
+
     @Test func coldLoadCapturesContentMtimeAndPerms() async throws {
         let root = tempWorktree()
         let url = try writeFile(root, "a.txt", "hello\nworld\n", perms: 0o644)

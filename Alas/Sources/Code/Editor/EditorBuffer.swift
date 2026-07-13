@@ -25,6 +25,62 @@ struct RemoteConflictCheckCoalescer {
     }
 }
 
+struct RemoteHelperFileWatchMatcher {
+    private let targetPath: String
+    private let targetRelativePath: String?
+
+    init(targetURL: URL, watchedRootURL: URL) {
+        targetPath = Self.normalizedPath(targetURL.path)
+        targetRelativePath = Self.relativePath(of: targetURL.path, under: watchedRootURL.path)
+    }
+
+    func matches(event: RemoteHelperWatchEvent) -> Bool {
+        event.paths.contains { eventPath in
+            let normalizedEventPath = Self.normalizedPath(eventPath)
+            if normalizedEventPath == targetPath { return true }
+            guard
+                let targetRelativePath,
+                let eventRelativePath = Self.relativePath(of: normalizedEventPath, under: event.root)
+            else {
+                return false
+            }
+            return eventRelativePath == targetRelativePath
+        }
+    }
+
+    private static func relativePath(of path: String, under root: String) -> String? {
+        let path = normalizedPath(path)
+        let root = normalizedPath(root)
+        guard !root.isEmpty, path != root else { return nil }
+        let prefix = root == "/" ? root : root + "/"
+        guard path.hasPrefix(prefix) else { return nil }
+        return String(path.dropFirst(prefix.count))
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        guard !path.isEmpty else { return path }
+        let isAbsolute = path.hasPrefix("/")
+        var components: [String] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            switch component {
+            case ".":
+                continue
+            case "..":
+                if !components.isEmpty {
+                    components.removeLast()
+                } else if !isAbsolute {
+                    components.append(String(component))
+                }
+            default:
+                components.append(String(component))
+            }
+        }
+        let joined = components.joined(separator: "/")
+        if isAbsolute { return "/" + joined }
+        return joined
+    }
+}
+
 /// Editor buffer for one open worktree file. Owns the live `NSTextStorage` displayed by
 /// `CodeTextView`, plus the original-on-disk snapshot used for dirty
 /// detection, save normalization, and conflict resolution.
@@ -636,7 +692,10 @@ final class EditorBuffer {
     private func startRemoteHelperWatching(host: String) {
         guard remoteHelperSession == nil else { return }
         let watchedRoot = absoluteFileURL.deletingLastPathComponent()
-        let targetPath = absoluteFileURL.standardizedFileURL.path
+        let fileWatchMatcher = RemoteHelperFileWatchMatcher(
+            targetURL: absoluteFileURL,
+            watchedRootURL: watchedRoot
+        )
         let session = RemoteHelperWatchSession(
             host: host,
             root: watchedRoot.path,
@@ -644,9 +703,7 @@ final class EditorBuffer {
         )
         session.onEvent = { [weak self] event in
             guard let self, event.kind == .files else { return }
-            guard event.paths.contains(where: {
-                URL(fileURLWithPath: $0).standardizedFileURL.path == targetPath
-            }) else { return }
+            guard fileWatchMatcher.matches(event: event) else { return }
             Task { @MainActor in await self.checkRemoteConflict(host: host) }
         }
         session.onAvailabilityChanged = { [weak self] _ in
