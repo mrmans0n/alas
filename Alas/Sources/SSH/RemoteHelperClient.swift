@@ -299,14 +299,14 @@ actor RemoteHelperClient {
                 continuation.yield(.stderr(data, offset: chunk.offset))
             }
         }
-        var didExit = false
+        var replayedExit = false
         for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
             continuation.yield(event)
             if case .exited = event {
-                didExit = true
+                replayedExit = true
             }
         }
-        if didExit {
+        if replayedExit {
             continuation.finish()
             activeProcAttachments.removeValue(forKey: procId)
             scheduleIdleShutdownIfPossible()
