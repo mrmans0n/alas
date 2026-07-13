@@ -125,9 +125,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             } catch {
                 guard !Task.isCancelled, !state.isTerminated else { return }
                 state.setWritesEnabled(false)
-                let delay = ACPReconnectPolicy.delay(forAttempt: attempt) ?? 5
-                attempt += 1
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                await Self.sleepBeforeRetry(attempt: &attempt)
             }
         }
     }
@@ -159,6 +157,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         case .jsonrpc, .decoding:
             return false
         }
+    }
+
+    private static func sleepBeforeRetry(attempt: inout Int) async {
+        let delay = ACPReconnectPolicy.delay(forAttempt: attempt) ?? 5
+        attempt += 1
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
     }
 
     private final class State: @unchecked Sendable {

@@ -211,8 +211,8 @@ fn capabilities() -> Value {
             "list": true
         },
         "search": true,
-        "proc": true,
-        "ping": true
+        "ping": true,
+        "proc": true
     })
 }
 
