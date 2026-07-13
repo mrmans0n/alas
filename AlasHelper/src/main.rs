@@ -167,6 +167,7 @@ struct ProcReplayFrame {
     data: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub(crate) enum SearchNotification {
     Line {
         search_id: String,
@@ -180,6 +181,7 @@ pub(crate) enum SearchNotification {
     },
 }
 
+#[derive(Debug)]
 pub(crate) enum ProcNotification {
     Stdout {
         proc_id: String,
@@ -197,6 +199,7 @@ pub(crate) enum ProcNotification {
     },
 }
 
+#[derive(Debug)]
 pub(crate) enum ServerMessage {
     Request(String),
     Watch(WatchNotification),
@@ -1451,22 +1454,34 @@ fn spawn_proc_tail(
             }
             let status = proc_status_in_dir(&dir);
             if !status.running {
-                let _ = drain_proc_output_once(
+                finish_proc_tail(
                     &proc_id,
                     &dir,
                     &sender,
                     &mut stdout_offset,
                     &mut stderr_offset,
+                    status.exit_code,
                 );
-                let _ = sender.send(ServerMessage::Proc(ProcNotification::Exit {
-                    proc_id,
-                    exit_code: status.exit_code,
-                }));
                 return;
             }
             thread::sleep(Duration::from_millis(50));
         }
     });
+}
+
+fn finish_proc_tail(
+    proc_id: &str,
+    dir: &Path,
+    sender: &Sender<ServerMessage>,
+    stdout_offset: &mut u64,
+    stderr_offset: &mut u64,
+    exit_code: Option<i32>,
+) {
+    let _ = drain_proc_output_once(proc_id, dir, sender, stdout_offset, stderr_offset);
+    let _ = sender.send(ServerMessage::Proc(ProcNotification::Exit {
+        proc_id: proc_id.to_string(),
+        exit_code,
+    }));
 }
 
 fn drain_proc_output_once(
@@ -2518,6 +2533,63 @@ mod tests {
         ));
         assert!(script.contains("-u CLAUDECODE"));
         assert!(script.ends_with("'codex-acp'"));
+    }
+
+    #[test]
+    fn proc_tail_finishes_after_draining_stdout_and_stderr() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-tail-finish-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("stdout.log"), b"out\n").expect("stdout");
+        std::fs::write(root.join("stderr.log"), b"err").expect("stderr");
+        let (sender, receiver) = mpsc::channel();
+        let mut stdout_offset = 0;
+        let mut stderr_offset = 0;
+
+        finish_proc_tail(
+            "acp-session-1",
+            &root,
+            &sender,
+            &mut stdout_offset,
+            &mut stderr_offset,
+            Some(7),
+        );
+
+        match receiver.try_recv().expect("stdout message") {
+            ServerMessage::Proc(ProcNotification::Stdout {
+                proc_id,
+                offset,
+                data,
+            }) => {
+                assert_eq!(proc_id, "acp-session-1");
+                assert_eq!(offset, 4);
+                assert_eq!(data, b"out");
+            }
+            other => panic!("unexpected first message: {other:?}"),
+        }
+        match receiver.try_recv().expect("stderr message") {
+            ServerMessage::Proc(ProcNotification::Stderr {
+                proc_id,
+                offset,
+                data,
+            }) => {
+                assert_eq!(proc_id, "acp-session-1");
+                assert_eq!(offset, 3);
+                assert_eq!(data, b"err");
+            }
+            other => panic!("unexpected second message: {other:?}"),
+        }
+        match receiver.try_recv().expect("exit message") {
+            ServerMessage::Proc(ProcNotification::Exit { proc_id, exit_code }) => {
+                assert_eq!(proc_id, "acp-session-1");
+                assert_eq!(exit_code, Some(7));
+            }
+            other => panic!("unexpected third message: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
