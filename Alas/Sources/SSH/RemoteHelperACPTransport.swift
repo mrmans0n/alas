@@ -1,6 +1,8 @@
 import Foundation
 
 final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransporting {
+    private static let attachAtEndOffset = UInt64.max
+
     private let host: String
     private let procId: String
     private let command: String
@@ -95,11 +97,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     }
                     didSpawn = true
                 }
-                let handle = try await client.attachProc(
-                    procId: procId,
-                    stdoutOffset: stdoutOffset,
-                    stderrOffset: stderrOffset
-                )
+                    let requestedStdoutOffset = stdoutOffset == 0 ? Self.attachAtEndOffset : stdoutOffset
+                    let handle = try await client.attachProc(
+                        procId: procId,
+                        stdoutOffset: requestedStdoutOffset,
+                        stderrOffset: stderrOffset
+                    )
                 stdinOffset = handle.stdinOffset
                 attempt = 0
                 for await event in handle.events {

@@ -970,9 +970,12 @@ fn spawn_proc_supervisor(dir: &Path) -> Result<(), HelperError> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command
+    let mut supervisor = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("supervisor spawn failed: {error}")))?;
+    thread::spawn(move || {
+        let _ = supervisor.wait();
+    });
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
@@ -1144,7 +1147,7 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
     if !dir.is_dir() {
         return Err(jsonrpc_error(-32051, "process not found"));
     }
-    let stdout_offset = params.stdout_offset.unwrap_or(0);
+    let stdout_offset = requested_log_offset(&dir.join("stdout.log"), params.stdout_offset);
     let stderr_offset = params.stderr_offset.unwrap_or(0);
     let stdout_frames = read_stdout_frames(&dir.join("stdout.log"), stdout_offset)?;
     let stderr_chunk = read_file_tail(&dir.join("stderr.log"), stderr_offset)?;
@@ -1561,6 +1564,18 @@ fn read_pid(dir: &Path) -> Option<u32> {
     std::fs::read_to_string(dir.join("pid"))
         .ok()
         .and_then(|value| value.trim().parse::<u32>().ok())
+}
+
+fn file_len(path: &Path) -> io::Result<u64> {
+    Ok(std::fs::metadata(path)?.len())
+}
+
+fn requested_log_offset(path: &Path, requested_offset: Option<u64>) -> u64 {
+    match requested_offset {
+        Some(u64::MAX) => file_len(path).unwrap_or(0),
+        Some(offset) => offset,
+        None => 0,
+    }
 }
 
 #[cfg(unix)]
@@ -2589,6 +2604,23 @@ mod tests {
             }
             other => panic!("unexpected third message: {other:?}"),
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn max_requested_log_offset_attaches_at_current_end() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-offset-end-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("stdout.log");
+        std::fs::write(&path, b"old response\n").expect("stdout");
+
+        assert_eq!(requested_log_offset(&path, Some(u64::MAX)), 13);
+        assert_eq!(requested_log_offset(&path, Some(4)), 4);
+        assert_eq!(requested_log_offset(&path, None), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 
