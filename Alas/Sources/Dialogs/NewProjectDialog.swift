@@ -153,7 +153,7 @@ private struct ProjectDialog: View {
                     integrationsSection
                 }
                 if let errorMessage {
-                    Text(errorMessage).font(.system(size: 11)).foregroundColor(.red)
+                    errorField(errorMessage)
                 }
             },
             cancelTitle: "Cancel",
@@ -338,6 +338,37 @@ private struct ProjectDialog: View {
                     .strokeBorder(theme.color("line"), lineWidth: 0.5)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    // Errors here can carry SSH stderr or a setup command the user needs to
+    // paste into a terminal, so the field is selectable with a Copy button.
+    private func errorField(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(.red)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message, forType: .string)
+            }) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .buttonStyle(.plain)
+            .help("Copy error")
+            .accessibilityLabel("Copy error message")
+        }
+        .padding(8)
+        .background(theme.color("bg-0"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
     private var startupScriptsSection: some View {
