@@ -150,6 +150,15 @@ struct ProcMetadata {
     cwd: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcSupervisorLaunch {
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    env: HashMap<String, String>,
+}
+
 #[derive(Debug)]
 struct ProcReplayFrame {
     offset: u64,
@@ -219,7 +228,9 @@ fn capabilities() -> Value {
 }
 
 fn main() {
-    let command = std::env::args().nth(1);
+    let mut args = std::env::args();
+    let _program = args.next();
+    let command = args.next();
     match command.as_deref() {
         None | Some("version") => {
             println!(
@@ -230,6 +241,16 @@ fn main() {
         Some("serve") => {
             if let Err(error) = serve() {
                 eprintln!("alas-helper: {error}");
+                std::process::exit(1);
+            }
+        }
+        Some("proc-supervise") => {
+            let Some(dir) = args.next() else {
+                eprintln!("usage: alas-helper proc-supervise <proc-dir>");
+                std::process::exit(2);
+            };
+            if let Err(error) = proc_supervise(PathBuf::from(dir)) {
+                eprintln!("alas-helper proc-supervise: {}", error.message);
                 std::process::exit(1);
             }
         }
@@ -881,12 +902,10 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     let exit_path = dir.join("exit");
     let pid_path = dir.join("pid");
     let _ = std::fs::remove_file(&exit_path);
-    std::fs::File::create(&stdin_path)
-        .map_err(|error| jsonrpc_error(-32050, format!("stdin create failed: {error}")))?;
-    std::fs::File::create(&stdout_path)
-        .map_err(|error| jsonrpc_error(-32050, format!("stdout create failed: {error}")))?;
-    std::fs::File::create(&stderr_path)
-        .map_err(|error| jsonrpc_error(-32050, format!("stderr create failed: {error}")))?;
+    let _ = std::fs::remove_file(&pid_path);
+    create_restrictive_empty_file(&stdin_path, "stdin")?;
+    create_restrictive_empty_file(&stdout_path, "stdout")?;
+    create_restrictive_empty_file(&stderr_path, "stderr")?;
     let metadata = ProcMetadata {
         proc_id: params.proc_id.clone(),
         command: params.command.clone(),
@@ -899,40 +918,80 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     )
     .map_err(|error| jsonrpc_error(-32050, format!("metadata write failed: {error}")))?;
 
-    let mut env_parts: Vec<String> = vec!["env".to_string()];
-    env_parts.extend(
-        ACP_REMOTE_MARKER_SCRUB
-            .iter()
-            .flat_map(|key| ["-u".to_string(), (*key).to_string()]),
-    );
-    let mut env_keys: Vec<_> = params.env.keys().collect();
-    env_keys.sort();
-    for key in env_keys {
+    for key in params.env.keys() {
         if !is_safe_env_key(key) {
             return Err(jsonrpc_error(-32602, format!("invalid env key: {key}")));
         }
-        let value = params.env.get(key).expect("key from map");
-        env_parts.push(format!("{}={}", key, shell_quote(value)));
     }
-    let argv = std::iter::once(params.command.as_str())
-        .chain(params.args.iter().map(String::as_str))
-        .map(shell_quote)
-        .collect::<Vec<_>>()
-        .join(" ");
-    let env_command = env_parts.join(" ");
-    let script = format!(
-        "cd {cwd} && exec {env_command} {argv}",
-        cwd = shell_quote(cwd.to_string_lossy().as_ref()),
-        env_command = env_command,
-        argv = argv,
-    );
+    let launch = ProcSupervisorLaunch {
+        command: params.command,
+        args: params.args,
+        cwd: cwd.display().to_string(),
+        env: params.env,
+    };
+    write_restrictive_bytes(
+        &dir.join("launch.json"),
+        &serde_json::to_vec(&launch).expect("launch serialization must succeed"),
+        "launch",
+    )?;
+    spawn_proc_supervisor(&dir)?;
+    state
+        .subscriptions
+        .insert(format!("proc:{}", params.proc_id), cwd);
+    let status = proc_status_in_dir(&dir);
+    Ok(json!({
+        "procId": params.proc_id,
+        "running": status.running,
+        "exitCode": status.exit_code
+    }))
+}
+
+fn spawn_proc_supervisor(dir: &Path) -> Result<(), HelperError> {
+    let exe = std::env::current_exe()
+        .map_err(|error| jsonrpc_error(-32050, format!("helper path failed: {error}")))?;
+    let mut command = Command::new(exe);
+    command
+        .arg("proc-supervise")
+        .arg(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command
+        .spawn()
+        .map_err(|error| jsonrpc_error(-32050, format!("supervisor spawn failed: {error}")))?;
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if dir.join("pid").is_file() || dir.join("exit").is_file() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(jsonrpc_error(-32050, "supervisor did not start process"))
+}
+
+fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
+    let launch_path = dir.join("launch.json");
+    let launch: ProcSupervisorLaunch = serde_json::from_slice(
+        &std::fs::read(&launch_path)
+            .map_err(|error| jsonrpc_error(-32050, format!("launch read failed: {error}")))?,
+    )
+    .map_err(|error| jsonrpc_error(-32050, format!("launch decode failed: {error}")))?;
+    let _ = std::fs::remove_file(&launch_path);
+
+    let script = proc_launch_script(&launch.cwd, &launch.command, &launch.args, &launch.env)?;
     let stdout_file = std::fs::OpenOptions::new()
         .append(true)
-        .open(&stdout_path)
+        .open(dir.join("stdout.log"))
         .map_err(|error| jsonrpc_error(-32050, format!("stdout open failed: {error}")))?;
     let stderr_file = std::fs::OpenOptions::new()
         .append(true)
-        .open(&stderr_path)
+        .open(dir.join("stderr.log"))
         .map_err(|error| jsonrpc_error(-32050, format!("stderr open failed: {error}")))?;
     let mut command = Command::new("/bin/sh");
     command
@@ -950,19 +1009,90 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
     let child_stdin = child.stdin.take();
-    std::fs::write(&pid_path, format!("{}\n", child.id()))
+    std::fs::write(dir.join("pid"), format!("{}\n", child.id()))
         .map_err(|error| jsonrpc_error(-32050, format!("pid write failed: {error}")))?;
-    thread::spawn(move || {
-        pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_path);
-    });
-    state
-        .subscriptions
-        .insert(format!("proc:{}", params.proc_id), cwd);
-    Ok(json!({
-        "procId": params.proc_id,
-        "running": true,
-        "exitCode": null
-    }))
+    pump_proc_stdin_and_record_exit(child, child_stdin, dir.join("stdin.log"), dir.join("exit"));
+    Ok(())
+}
+
+fn proc_launch_script(
+    cwd: &str,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+) -> Result<String, HelperError> {
+    let mut env_parts: Vec<String> = vec!["env".to_string()];
+    env_parts.extend(
+        ACP_REMOTE_MARKER_SCRUB
+            .iter()
+            .flat_map(|key| ["-u".to_string(), (*key).to_string()]),
+    );
+    let mut env_keys: Vec<_> = env.keys().collect();
+    env_keys.sort();
+    for key in env_keys {
+        if !is_safe_env_key(key) {
+            return Err(jsonrpc_error(-32602, format!("invalid env key: {key}")));
+        }
+        let value = env.get(key).expect("key from map");
+        env_parts.push(format!("{}={}", key, shell_quote(value)));
+    }
+    let argv = std::iter::once(command)
+        .chain(args.iter().map(String::as_str))
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok(format!(
+        "cd {cwd} && exec {env_command} {argv}",
+        cwd = shell_quote(cwd),
+        env_command = env_parts.join(" "),
+        argv = argv,
+    ))
+}
+
+fn create_restrictive_empty_file(path: &Path, label: &str) -> Result<(), HelperError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} create failed: {error}")))?;
+    drop(file);
+    set_restrictive_file_permissions(path, label)
+}
+
+fn write_restrictive_bytes(path: &Path, bytes: &[u8], label: &str) -> Result<(), HelperError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} create failed: {error}")))?;
+    file.write_all(bytes)
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} write failed: {error}")))?;
+    file.flush()
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} flush failed: {error}")))?;
+    drop(file);
+    set_restrictive_file_permissions(path, label)
+}
+
+#[cfg(unix)]
+fn set_restrictive_file_permissions(path: &Path, label: &str) -> Result<(), HelperError> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} chmod failed: {error}")))
+}
+
+#[cfg(not(unix))]
+fn set_restrictive_file_permissions(_path: &Path, _label: &str) -> Result<(), HelperError> {
+    Ok(())
 }
 
 fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
@@ -2248,6 +2378,58 @@ mod tests {
 
         let mode = std::fs::metadata(&temp)
             .expect("temp metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_log_creation_forces_restrictive_permissions() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-log-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("stdin.log");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o666)
+            .open(&path)
+            .expect("permissive input log");
+        drop(file);
+
+        create_restrictive_empty_file(&path, "stdin").expect("restrictive log");
+
+        let metadata = std::fs::metadata(&path).expect("log metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(metadata.len(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_launch_file_uses_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-launch-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("launch.json");
+
+        write_restrictive_bytes(&path, br#"{"env":{"TOKEN":"secret"}}"#, "launch")
+            .expect("launch write");
+
+        let mode = std::fs::metadata(&path)
+            .expect("launch metadata")
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
