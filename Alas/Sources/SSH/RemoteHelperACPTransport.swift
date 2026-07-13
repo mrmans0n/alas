@@ -149,7 +149,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 continuation?.finish()
                 return
             } catch {
-                state.requeue(next)
+                state.requeueForOffsetGuardedRetry(next)
                 return
             }
         }
@@ -247,7 +247,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             isFlushingWrites = false
         }
 
-        func requeue(_ data: Data) {
+        func requeueForOffsetGuardedRetry(_ data: Data) {
             lock.lock()
             defer { lock.unlock() }
             guard !terminated else { return }
