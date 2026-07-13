@@ -161,6 +161,93 @@ struct InstallNudgeResolverTests {
         #expect(resolver.nudgeData(forAbsolutePath: "/tmp/app.js") == nil)
     }
 
+    @Test("Mason fallback scans past unavailable matches before selecting")
+    func masonFallbackScansPastUnavailableMatchesBeforeSelecting() {
+        let skipped = (0..<(MasonSnapshot.maxResults + 5)).map { idx in
+            package(
+                id: String(format: "a-skip-%02d", idx),
+                languageId: "bar",
+                extensions: ["foo"],
+                command: String(format: "a-skip-%02d", idx)
+            )
+        }
+        let installable = package(
+            id: "z-installable",
+            languageId: "bar",
+            extensions: ["foo"],
+            command: "z-installable"
+        )
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: skipped + [installable]),
+            availabilityStatus: { config in
+                config.command.hasPrefix("a-skip-") ? .available : .notInstalled
+            }
+        )
+
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/file.foo")
+
+        #expect(nudge?.masonPackage?.masonId == "z-installable")
+    }
+
+    @Test("Mason fallback caps installable options")
+    func masonFallbackCapsInstallableOptions() {
+        let packages = (0..<(MasonSnapshot.maxResults + 10)).map { idx in
+            package(
+                id: String(format: "pkg-%02d", idx),
+                languageId: "bar",
+                extensions: ["foo"],
+                command: String(format: "pkg-%02d", idx)
+            )
+        }
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: packages),
+            availabilityStatus: { _ in .notInstalled }
+        )
+
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/file.foo")
+
+        #expect(nudge?.masonOptions.count == MasonSnapshot.maxResults)
+    }
+
+    @Test("Mason fallback deduplicates after installability filtering")
+    func masonFallbackDeduplicatesAfterInstallabilityFiltering() {
+        let alreadyAvailable = package(
+            id: "duplicate",
+            languageId: "bar",
+            extensions: ["foo"],
+            command: "already-available"
+        )
+        let installable = package(
+            id: "duplicate",
+            languageId: "bar",
+            extensions: ["foo"],
+            command: "installable"
+        )
+        let resolver = InstallNudgeResolver(
+            registry: LanguageServerRegistry(userDefined: []),
+            userDefinedRecipes: [:],
+            dismissedInstallNudges: [],
+            installerHost: InstallerHost(detected: [.brew: DetectedInstaller(kind: .brew, executable: "/opt/homebrew/bin/brew")]),
+            masonSnapshot: MasonSnapshot(packages: [alreadyAvailable, installable]),
+            availabilityStatus: { config in
+                config.command == "already-available" ? .available : .notInstalled
+            }
+        )
+
+        let nudge = resolver.nudgeData(forAbsolutePath: "/tmp/file.foo")
+
+        #expect(nudge?.command == "installable")
+        #expect(nudge?.masonOptions.map(\.id) == ["duplicate"])
+    }
+
     private func package(
         id: String,
         languageId: String,
