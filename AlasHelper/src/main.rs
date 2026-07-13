@@ -870,10 +870,10 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     }
     state
         .proc_tailers
-        .remove(&format!("{}:stdout", params.proc_id));
+        .remove(&proc_tailer_key(&params.proc_id, "stdout"));
     state
         .proc_tailers
-        .remove(&format!("{}:stderr", params.proc_id));
+        .remove(&proc_tailer_key(&params.proc_id, "stderr"));
 
     let stdin_path = dir.join("stdin.log");
     let stdout_path = dir.join("stdout.log");
@@ -992,7 +992,7 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
         if let Some(sender) = state.event_sender.clone() {
             if state
                 .proc_tailers
-                .insert(format!("{}:stdout", params.proc_id))
+                .insert(proc_tailer_key(&params.proc_id, "stdout"))
             {
                 spawn_proc_stdout_tail(
                     params.proc_id.clone(),
@@ -1003,7 +1003,7 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
             }
             if state
                 .proc_tailers
-                .insert(format!("{}:stderr", params.proc_id))
+                .insert(proc_tailer_key(&params.proc_id, "stderr"))
             {
                 spawn_proc_stderr_tail(
                     params.proc_id.clone(),
@@ -1293,6 +1293,10 @@ fn spawn_proc_stdout_tail(
             thread::sleep(Duration::from_millis(50));
         }
     });
+}
+
+fn proc_tailer_key(proc_id: &str, stream: &str) -> String {
+    format!("{proc_id}:{stream}")
 }
 
 fn spawn_proc_stderr_tail(
