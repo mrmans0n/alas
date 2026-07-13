@@ -182,7 +182,8 @@ enum RemoteFileAccess {
                 let result = try await client.write(
                     path: path,
                     content: content,
-                    expectedMtime: expectedMtime?.timeIntervalSince1970
+                    expectedMtime: expectedMtime?.timeIntervalSince1970,
+                    expectedContent: expectedContent
                 )
                 RemoteOperationTiming.log("fs/write", host: host, transport: "helper", startedAt: startedAt)
                 guard let seconds = result.mtime else {

@@ -72,6 +72,7 @@ struct FsWriteParams {
     path: String,
     content: String,
     expected_mtime: Option<f64>,
+    expected_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -464,6 +465,18 @@ fn fs_write(state: &HelperState, params: Option<Value>) -> Result<Value, HelperE
             && (actual - expected).abs() > 0.000_001
         {
             return Err(jsonrpc_error(-32030, "mtime mismatch"));
+        }
+    }
+    if let Some(expected) = params.expected_content {
+        let actual = std::fs::read(&path).map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                jsonrpc_error(-32030, "content target missing")
+            } else {
+                jsonrpc_error(-32020, format!("content check failed: {error}"))
+            }
+        })?;
+        if actual != expected.as_bytes() {
+            return Err(jsonrpc_error(-32030, "content mismatch"));
         }
     }
     write_replacing_path(&path, &params.content)?;
@@ -1223,6 +1236,39 @@ mod tests {
             })),
         )
         .expect_err("stale mtime must conflict");
+
+        assert_eq!(error.code, -32030);
+        assert_eq!(std::fs::read_to_string(&file).expect("content"), "external");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn write_content_gate_rejects_changed_target_with_matching_mtime() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-content-conflict-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let file = root.join("file.txt");
+        std::fs::write(&file, "external").expect("file");
+        let actual = modified_seconds(&std::fs::metadata(&file).expect("metadata")).unwrap();
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": file.display().to_string(),
+                "content": "editor",
+                "expectedMtime": actual,
+                "expectedContent": "baseline"
+            })),
+        )
+        .expect_err("changed content must conflict even when mtime matches");
 
         assert_eq!(error.code, -32030);
         assert_eq!(std::fs::read_to_string(&file).expect("content"), "external");

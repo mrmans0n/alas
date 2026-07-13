@@ -177,10 +177,20 @@ actor RemoteHelperClient {
         try await request(method: "fs/read", params: RemoteHelperFSReadParams(path: path, offset: offset))
     }
 
-    func write(path: String, content: String, expectedMtime: Double? = nil) async throws -> RemoteHelperFSWriteResult {
+    func write(
+        path: String,
+        content: String,
+        expectedMtime: Double? = nil,
+        expectedContent: String? = nil
+    ) async throws -> RemoteHelperFSWriteResult {
         try await request(
             method: "fs/write",
-            params: RemoteHelperFSWriteParams(path: path, content: content, expectedMtime: expectedMtime)
+            params: RemoteHelperFSWriteParams(
+                path: path,
+                content: content,
+                expectedMtime: expectedMtime,
+                expectedContent: expectedContent
+            )
         )
     }
 

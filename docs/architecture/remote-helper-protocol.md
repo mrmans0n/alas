@@ -111,14 +111,14 @@ or `unreadable`.
 Params:
 
 ```json
-{"path":"/srv/repo/README.md","content":"...","expectedMtime":1783940000.25}
+{"path":"/srv/repo/README.md","content":"...","expectedMtime":1783940000.25,"expectedContent":"old content"}
 ```
 
 Result: `{"mtime": 1783940100.5}`
 
-`expectedMtime` is optional. When provided and the existing file mtime differs,
-or the target file no longer exists, the helper returns an error instead of
-writing.
+`expectedMtime` and `expectedContent` are optional. When either provided baseline
+differs from the existing file, or the target file no longer exists, the helper
+returns an error instead of writing.
 
 `fs/stat`
 

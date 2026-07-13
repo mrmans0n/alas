@@ -273,10 +273,20 @@ struct RemoteHelperClientTests {
         )
 
         let write = Task {
-            try await client.write(path: "/repo/file.txt", content: "new", expectedMtime: 1)
+            try await client.write(
+                path: "/repo/file.txt",
+                content: "new",
+                expectedMtime: 1,
+                expectedContent: "old"
+            )
         }
 
         try await waitUntil { !transport.sentFrames.isEmpty }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        let params = try #require(request["params"] as? [String: Any])
+        #expect(params["expectedContent"] as? String == "old")
         transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"error":{"code":-32030,"message":"mtime mismatch"}}"#.utf8))
         await #expect(throws: RemoteHelperClientError.self) {
             try await write.value

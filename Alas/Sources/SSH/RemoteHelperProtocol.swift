@@ -102,11 +102,13 @@ struct RemoteHelperFSWriteParams: Codable, Equatable, Sendable {
     let path: String
     let content: String
     let expectedMtime: Double?
+    let expectedContent: String?
 
-    init(path: String, content: String, expectedMtime: Double? = nil) {
+    init(path: String, content: String, expectedMtime: Double? = nil, expectedContent: String? = nil) {
         self.path = path
         self.content = content
         self.expectedMtime = expectedMtime
+        self.expectedContent = expectedContent
     }
 }
 
