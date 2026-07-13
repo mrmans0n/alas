@@ -164,4 +164,20 @@ struct SSHConfigParserTests {
         // `Host *` is unconditional, so its Include applies to every host.
         #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["common"])
     }
+
+    @Test func stripsQuotesFromHostAlias() throws {
+        let home = try makeHome(config: "Host \"devbox\"\n    HostName 10.0.0.7\n")
+        // Quotes must be removed so the alias matches what `ssh` resolves.
+        #expect(SSHConfigParser.parse(home: home)
+            == [SSHConfigHost(alias: "devbox", hostName: "10.0.0.7", user: nil, port: nil)])
+    }
+
+    @Test func handlesEscapedSpaceInIncludePath() throws {
+        let home = try makeHome(
+            config: "Include dir\\ with\\ space/extra.conf\n",
+            extraFiles: [".ssh/dir with space/extra.conf": "Host from-escaped\n    HostName e.example.com\n"]
+        )
+        // A backslash-escaped space is part of the path, not an argument break.
+        #expect(SSHConfigParser.parse(home: home).map(\.alias) == ["from-escaped"])
+    }
 }

@@ -130,8 +130,50 @@ enum SSHConfigParser {
         return line
     }
 
+    /// Splits a directive value into arguments the way ssh_config does:
+    /// double quotes group an argument containing spaces (and are removed),
+    /// and a backslash escapes a following space, tab, quote, or backslash
+    /// (so `Application\ Support` stays one token). Other backslashes are
+    /// preserved literally.
     private static func tokenize(_ value: String) -> [String] {
-        value.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        let chars = Array(value)
+        var tokens: [String] = []
+        var current = ""
+        var hasToken = false
+        var inQuotes = false
+        var i = 0
+        while i < chars.count {
+            let ch = chars[i]
+            if ch == "\\", i + 1 < chars.count {
+                let next = chars[i + 1]
+                if next == " " || next == "\t" || next == "\"" || next == "\\" {
+                    current.append(next)
+                    hasToken = true
+                    i += 2
+                    continue
+                }
+            }
+            if ch == "\"" {
+                inQuotes.toggle()
+                hasToken = true
+                i += 1
+                continue
+            }
+            if (ch == " " || ch == "\t") && !inQuotes {
+                if hasToken {
+                    tokens.append(current)
+                    current = ""
+                    hasToken = false
+                }
+                i += 1
+                continue
+            }
+            current.append(ch)
+            hasToken = true
+            i += 1
+        }
+        if hasToken { tokens.append(current) }
+        return tokens
     }
 
     private static func isPlainAlias(_ token: String) -> Bool {
