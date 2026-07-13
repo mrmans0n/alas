@@ -41,17 +41,24 @@ final class ACPTranscript: ObservableObject {
     /// async load is still running.
     @Published var isBackfillingOlderMessages: Bool = false
 
-    /// Render window: `ACPMessageList` draws `messages[visibleHead...]`.
+    /// Render window: `ACPMessageList` draws `messages[visibleHead..<visibleTail]`.
     /// Reset to `max(0, messages.count - tailWindow)` after hydration so
     /// long transcripts paint quickly; user can scroll up or click the
     /// "Earlier messages…" affordance to reveal older rows in chunks of
     /// `tailWindow`.
     @Published var visibleHead: Int = 0
+    /// Exclusive upper bound of the render window. `nil` means the live tail.
+    /// Non-tail restored anchors use this to avoid asking SwiftUI to keep every
+    /// newer transcript row in a single lazy-stack layout pass.
+    @Published var visibleTail: Int?
 
     /// Number of rows revealed per backfill step. Tuned for chat-style
     /// content where a screenful is a few rows; bigger steps feel like
     /// loading state, smaller steps require too many clicks.
     static let tailWindow: Int = 30
+    /// Upper bound for non-tail render windows. A few chunks gives enough room
+    /// for natural scrolling while keeping `ForEach` input bounded.
+    static let maxVisibleRows: Int = tailWindow * 3
 
     /// Stable ids of streaming text rows whose prompt has completed. A
     /// later ACP text chunk must start a fresh row instead of appending
@@ -129,13 +136,43 @@ final class ACPTranscript: ObservableObject {
     /// after hydration applies a transcript. No-op for transcripts shorter
     /// than `tailWindow`.
     func resetWindowToTail() {
-        setVisibleHead(max(0, messages.count - Self.tailWindow))
+        setVisibleWindow(head: max(0, messages.count - Self.tailWindow), tail: nil)
     }
 
     /// Reveal one more `tailWindow`-sized chunk of older messages.
     /// Clamps at zero. Idempotent at the head.
     func stepHeadBack() {
-        visibleHead = max(0, visibleHead - Self.tailWindow)
+        let currentTail = visibleTailBound
+        let newHead = max(0, visibleHead - Self.tailWindow)
+        let boundedTail = min(messages.count, newHead + Self.maxVisibleRows)
+        setVisibleWindow(head: newHead, tail: min(currentTail, boundedTail))
+    }
+
+    /// Reveal one more chunk of newer messages while keeping the row currently
+    /// near the viewport top inside the bounded window when possible.
+    func stepTailForward(preserving preservedIndex: Int?) {
+        let currentTail = visibleTailBound
+        guard currentTail < messages.count else { return }
+        var newTail = min(messages.count, currentTail + Self.tailWindow)
+        if let preservedIndex,
+           preservedIndex >= visibleHead,
+           preservedIndex < currentTail {
+            let preservingTail = min(newTail, preservedIndex + Self.maxVisibleRows)
+            if preservingTail > currentTail {
+                newTail = preservingTail
+            }
+        }
+        guard newTail > currentTail else { return }
+        let boundedHead = max(0, newTail - Self.maxVisibleRows)
+        setVisibleWindow(head: boundedHead, tail: newTail)
+    }
+
+    /// Restore around a remembered non-tail row without rendering the entire
+    /// suffix from that row to the transcript tail.
+    func setVisibleWindow(containing index: Int) {
+        let head = max(0, min(index, messages.count))
+        let tail = min(messages.count, head + Self.maxVisibleRows)
+        setVisibleWindow(head: head, tail: tail)
     }
 
     /// Move the render window head, dropping markdown caches for any message
@@ -143,16 +180,7 @@ final class ACPTranscript: ObservableObject {
     /// than the current `visibleHead`. Use this instead of writing
     /// `visibleHead` directly when advancing the window.
     func setVisibleHead(_ newHead: Int) {
-        let clamped = max(0, min(newHead, messages.count))
-        guard clamped != visibleHead else { return }
-        guard clamped > visibleHead else {
-            visibleHead = clamped
-            return
-        }
-        for i in visibleHead..<clamped {
-            trimHiddenMessage(at: i)
-        }
-        visibleHead = clamped
+        setVisibleWindow(head: newHead, tail: nil)
     }
 
     /// Shift the render window after hidden messages are prepended at the
@@ -161,10 +189,37 @@ final class ACPTranscript: ObservableObject {
     func shiftVisibleHeadAfterPrepending(_ insertedCount: Int) {
         guard insertedCount > 0 else { return }
         let shiftedHead = max(0, min(visibleHead + insertedCount, messages.count))
+        let shiftedTail = visibleTail.map { max(shiftedHead, min($0 + insertedCount, messages.count)) }
         for i in 0..<shiftedHead {
             trimHiddenMessage(at: i)
         }
         visibleHead = shiftedHead
+        visibleTail = shiftedTail
+    }
+
+    var visibleTailBound: Int {
+        max(visibleHead, min(visibleTail ?? messages.count, messages.count))
+    }
+
+    private func setVisibleWindow(head newHead: Int, tail newTail: Int?) {
+        let clampedHead = max(0, min(newHead, messages.count))
+        let clampedTail = newTail.map { max(clampedHead, min($0, messages.count)) }
+        let normalizedTail = clampedTail
+        guard clampedHead != visibleHead || normalizedTail != visibleTail else { return }
+        if clampedHead > visibleHead {
+            for i in visibleHead..<clampedHead {
+                trimHiddenMessage(at: i)
+            }
+        }
+        let oldTail = visibleTailBound
+        let newTail = normalizedTail ?? messages.count
+        if newTail < oldTail {
+            for i in newTail..<oldTail {
+                trimHiddenMessage(at: i)
+            }
+        }
+        visibleHead = clampedHead
+        visibleTail = normalizedTail
     }
 
     private func trimHiddenMessage(at index: Int) {

@@ -81,6 +81,25 @@ struct ACPTranscriptMarkdownCacheEvictionTests {
         }
     }
 
+    @Test("stepping head back drops caches for rows trimmed from the tail")
+    func stepHeadBackDropsRowsTrimmedFromTail() {
+        let t = ACPTranscript()
+        for i in 0..<200 { t.messages.append(.systemNotice(id: UUID(), text: "\(i)")) }
+        let ids = t.messages.map(\.stableId)
+        for id in ids {
+            t.markdownCache(forMessage: id).update(with: id)
+        }
+
+        t.setVisibleWindow(containing: 110)
+        t.stepHeadBack()
+
+        #expect(t.visibleHead == 80)
+        #expect(t.visibleTail == 170)
+        for id in ids[170..<200] {
+            #expect(!t.hasMarkdownCacheForTests(messageId: id))
+        }
+    }
+
     @Test("resetMarkdownCaches empties the cache map")
     func resetClears() {
         let t = ACPTranscript()
