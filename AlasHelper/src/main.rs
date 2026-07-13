@@ -452,13 +452,19 @@ fn fs_read(state: &HelperState, params: Option<Value>) -> Result<Value, HelperEr
 
 fn fs_write(state: &HelperState, params: Option<Value>) -> Result<Value, HelperError> {
     let params: FsWriteParams = decode_params(params)?;
-    let path = contained_write_path(state, &params.path)?;
+    let path = contained_write_path(state, &params.path).map_err(|error| {
+        if params.expected_content.is_some() && error.code == -32025 {
+            jsonrpc_error(-32030, "content target unreadable")
+        } else {
+            error
+        }
+    })?;
     if let Some(expected) = params.expected_content.as_deref() {
         let actual = std::fs::read(&path).map_err(|error| {
             if error.kind() == io::ErrorKind::NotFound {
                 jsonrpc_error(-32030, "content target missing")
             } else {
-                jsonrpc_error(-32020, format!("content check failed: {error}"))
+                jsonrpc_error(-32030, format!("content target unreadable: {error}"))
             }
         })?;
         if actual != expected.as_bytes() {
@@ -1301,6 +1307,36 @@ mod tests {
     }
 
     #[test]
+    fn write_content_gate_treats_directory_as_conflict() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-directory-conflict-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        let directory = root.join("file.txt");
+        std::fs::create_dir_all(&directory).expect("directory");
+        let mut state = HelperState::default();
+        state.subscriptions.insert(
+            "1".to_string(),
+            std::fs::canonicalize(&root).expect("canonical root"),
+        );
+
+        let error = fs_write(
+            &state,
+            Some(json!({
+                "path": directory.display().to_string(),
+                "content": "editor",
+                "expectedContent": "baseline"
+            })),
+        )
+        .expect_err("unreadable baseline must conflict");
+
+        assert_eq!(error.code, -32030);
+        assert!(directory.is_dir());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn write_rejects_symlink_without_modifying_target() {
         let root = std::env::temp_dir().join(format!(
             "alas-helper-symlink-write-{}-{}",
@@ -1328,6 +1364,16 @@ mod tests {
         .expect_err("symlink writes must be rejected");
 
         assert_eq!(error.code, -32025);
+        let guarded_error = fs_write(
+            &state,
+            Some(json!({
+                "path": link.display().to_string(),
+                "content": "editor",
+                "expectedContent": "target"
+            })),
+        )
+        .expect_err("guarded symlink writes must conflict");
+        assert_eq!(guarded_error.code, -32030);
         assert_eq!(std::fs::read_to_string(&target).expect("content"), "target");
         let _ = std::fs::remove_dir_all(root);
     }

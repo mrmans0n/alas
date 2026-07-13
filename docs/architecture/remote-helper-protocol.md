@@ -119,8 +119,8 @@ Result: `{"mtime": 1783940100.5}`
 `expectedMtime` and `expectedContent` are optional. When content is provided it
 is the authoritative baseline, avoiding false conflicts when a preceding exec
 read only observed integer-second mtimes. Otherwise the mtime is the baseline.
-When the selected baseline differs, or the target no longer exists, the helper
-returns an error instead of writing.
+When the selected baseline differs, cannot be read, or the target no longer
+exists, the helper returns a conflict error instead of writing.
 
 `fs/stat`
 
