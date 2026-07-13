@@ -21,6 +21,11 @@ private struct ActiveRemoteHelperProcAttachment {
     let continuation: AsyncStream<RemoteHelperProcEvent>.Continuation
 }
 
+private struct RemoteHelperProcOffsets {
+    var stdout: UInt64
+    var stderr: UInt64
+}
+
 enum RemoteHelperClientError: LocalizedError, Equatable {
     case notRunning
     case unavailable(String)
@@ -77,6 +82,8 @@ actor RemoteHelperClient {
     private var earlySearchEvents: [String: [RemoteHelperSearchEvent]] = [:]
     private var activeProcAttachments: [String: ActiveRemoteHelperProcAttachment] = [:]
     private var earlyProcEvents: [String: [RemoteHelperProcEvent]] = [:]
+    private var procOffsets: [String: RemoteHelperProcOffsets] = [:]
+    private var detachedProcIds: Set<String> = []
     private var subscriptionReplayTask: Task<Void, Error>?
     private var subscriptionsNeedReplay = false
     private var lastExitStatus: Int32?
@@ -291,31 +298,42 @@ actor RemoteHelperClient {
     func attachProc(
         procId: String,
         stdoutOffset: UInt64? = nil,
-        stderrOffset: UInt64? = nil
+        stderrOffset: UInt64? = nil,
+        attachAtEndIfOffsetUnknown: Bool = false
     ) async throws -> RemoteHelperProcAttachHandle {
+        let rememberedOffsets = procOffsets[procId]
+        let requestedStdoutOffset = stdoutOffset
+            ?? rememberedOffsets?.stdout
+            ?? (attachAtEndIfOffsetUnknown ? UInt64.max : nil)
+        let requestedStderrOffset = stderrOffset ?? rememberedOffsets?.stderr
         let result: RemoteHelperProcAttachResult = try await request(
             method: "proc/attach",
             params: RemoteHelperProcAttachParams(
                 procId: procId,
-                stdoutOffset: stdoutOffset,
-                stderrOffset: stderrOffset
+                stdoutOffset: requestedStdoutOffset,
+                stderrOffset: requestedStderrOffset
             )
         )
         var continuation: AsyncStream<RemoteHelperProcEvent>.Continuation!
         let events = AsyncStream<RemoteHelperProcEvent> { continuation = $0 }
+        detachedProcIds.remove(procId)
         activeProcAttachments[procId] = ActiveRemoteHelperProcAttachment(continuation: continuation)
         for frame in result.stdoutFrames {
             if let data = Data(base64Encoded: frame.dataBase64) {
+                rememberProcOffset(procId: procId, stream: "stdout", offset: frame.offset)
                 continuation.yield(.stdout(data, offset: frame.offset))
             }
         }
         for chunk in result.stderrChunks {
             if let data = Data(base64Encoded: chunk.dataBase64) {
+                rememberProcOffset(procId: procId, stream: "stderr", offset: chunk.offset)
                 continuation.yield(.stderr(data, offset: chunk.offset))
             }
         }
+        rememberProcOffsets(procId: procId, stdout: result.stdoutOffset, stderr: result.stderrOffset)
         var replayedExit = false
         for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
+            rememberProcOffsetIfNeeded(event, procId: procId)
             continuation.yield(event)
             if case .exited = event {
                 replayedExit = true
@@ -338,6 +356,16 @@ actor RemoteHelperClient {
             stdinOffset: result.stdinOffset,
             events: events
         )
+    }
+
+    func detachProc(procId: String, stdoutOffset: UInt64, stderrOffset: UInt64) {
+        rememberProcOffsets(procId: procId, stdout: stdoutOffset, stderr: stderrOffset)
+        earlyProcEvents.removeValue(forKey: procId)
+        detachedProcIds.insert(procId)
+        if let attachment = activeProcAttachments.removeValue(forKey: procId) {
+            attachment.continuation.finish()
+        }
+        scheduleIdleShutdownIfPossible()
     }
 
     func writeProc(procId: String, data: Data, expectedStdinOffset: UInt64? = nil) async throws -> UInt64 {
@@ -387,6 +415,7 @@ actor RemoteHelperClient {
         }
         activeProcAttachments.removeAll()
         earlyProcEvents.removeAll()
+        detachedProcIds.removeAll()
         drainPending(with: RemoteHelperClientError.notRunning)
         dispatchTask?.cancel()
         dispatchTask = nil
@@ -679,7 +708,11 @@ actor RemoteHelperClient {
     }
 
     private func emitProcEvent(_ event: RemoteHelperProcEvent, procId: String) {
+        rememberProcOffsetIfNeeded(event, procId: procId)
         guard let attachment = activeProcAttachments[procId] else {
+            if detachedProcIds.contains(procId) {
+                return
+            }
             earlyProcEvents[procId, default: []].append(event)
             return
         }
@@ -712,11 +745,43 @@ actor RemoteHelperClient {
         }
         activeProcAttachments.removeAll()
         earlyProcEvents.removeAll()
+        detachedProcIds.removeAll()
         if RemoteExec.isConnectionFailure(exitCode: status) {
             Task { @MainActor [host] in
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
         }
+    }
+
+    private func rememberProcOffsetIfNeeded(_ event: RemoteHelperProcEvent, procId: String) {
+        switch event {
+        case .stdout(_, let offset):
+            rememberProcOffset(procId: procId, stream: "stdout", offset: offset)
+        case .stderr(_, let offset):
+            rememberProcOffset(procId: procId, stream: "stderr", offset: offset)
+        case .available, .unavailable, .exited:
+            break
+        }
+    }
+
+    private func rememberProcOffset(procId: String, stream: String, offset: UInt64) {
+        var offsets = procOffsets[procId] ?? RemoteHelperProcOffsets(stdout: 0, stderr: 0)
+        switch stream {
+        case "stdout":
+            offsets.stdout = offset
+        case "stderr":
+            offsets.stderr = offset
+        default:
+            return
+        }
+        procOffsets[procId] = offsets
+    }
+
+    private func rememberProcOffsets(procId: String, stdout: UInt64, stderr: UInt64) {
+        var offsets = procOffsets[procId] ?? RemoteHelperProcOffsets(stdout: 0, stderr: 0)
+        offsets.stdout = stdout
+        offsets.stderr = stderr
+        procOffsets[procId] = offsets
     }
 
     private func drainPending(with error: Error) {

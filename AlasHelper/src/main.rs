@@ -153,6 +153,13 @@ struct ProcMetadata {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct ProcPidMetadata {
+    pid: u32,
+    process_group_id: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ProcSupervisorLaunch {
     command: String,
     args: Vec<String>,
@@ -1022,8 +1029,7 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
     let child = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
-    std::fs::write(dir.join("pid"), format!("{}\n", child.id()))
-        .map_err(|error| jsonrpc_error(-32050, format!("pid write failed: {error}")))?;
+    write_proc_pid(&dir, child.id())?;
     run_supervised_proc_child(child, dir.join("stdin.log"), dir.join("exit"));
     Ok(())
 }
@@ -1334,7 +1340,7 @@ fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
     let params: ProcKillParams = decode_params(params)?;
     validate_proc_id(&params.proc_id)?;
     let dir = proc_dir(&params.proc_id)?;
-    if let Some(pid) = read_pid(&dir) {
+    if let Some(pid) = verified_proc_pid(&dir) {
         kill_process_group(pid);
     }
     Ok(json!({ "ok": true }))
@@ -1373,7 +1379,7 @@ fn proc_status_in_dir(dir: &Path) -> ProcStatus {
     let exit_code = std::fs::read_to_string(dir.join("exit"))
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok());
-    let running = exit_code.is_none() && read_pid(dir).map(pid_is_alive).unwrap_or(false);
+    let running = exit_code.is_none() && verified_proc_pid(dir).is_some();
     ProcStatus { running, exit_code }
 }
 
@@ -1563,7 +1569,55 @@ fn proc_dir(proc_id: &str) -> Result<PathBuf, HelperError> {
 fn read_pid(dir: &Path) -> Option<u32> {
     std::fs::read_to_string(dir.join("pid"))
         .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
+        .and_then(|value| value.split_whitespace().next()?.parse::<u32>().ok())
+}
+
+fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
+    write_restrictive_bytes(
+        dir.join("pid").as_path(),
+        format!("{pid}\n").as_bytes(),
+        "pid",
+    )?;
+    let metadata = ProcPidMetadata {
+        pid,
+        process_group_id: current_process_group_id(pid),
+    };
+    write_restrictive_bytes(
+        dir.join("pid.json").as_path(),
+        &serde_json::to_vec(&metadata).expect("pid metadata serialization must succeed"),
+        "pid metadata",
+    )
+}
+
+fn read_proc_pid_metadata(dir: &Path) -> Option<ProcPidMetadata> {
+    serde_json::from_slice(&std::fs::read(dir.join("pid.json")).ok()?).ok()
+}
+
+fn verified_proc_pid(dir: &Path) -> Option<u32> {
+    let pid = read_pid(dir)?;
+    if !pid_is_alive(pid) {
+        mark_stale_proc_pid(dir);
+        return None;
+    }
+    let Some(metadata) = read_proc_pid_metadata(dir) else {
+        return Some(pid);
+    };
+    if metadata.pid != pid {
+        mark_stale_proc_pid(dir);
+        return None;
+    }
+    if let Some(expected_pgid) = metadata.process_group_id {
+        if current_process_group_id(pid) != Some(expected_pgid) {
+            mark_stale_proc_pid(dir);
+            return None;
+        }
+    }
+    Some(pid)
+}
+
+fn mark_stale_proc_pid(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join("pid"));
+    let _ = std::fs::remove_file(dir.join("pid.json"));
 }
 
 fn file_len(path: &Path) -> io::Result<u64> {
@@ -1571,9 +1625,10 @@ fn file_len(path: &Path) -> io::Result<u64> {
 }
 
 fn requested_log_offset(path: &Path, requested_offset: Option<u64>) -> u64 {
+    let len = file_len(path).unwrap_or(0);
     match requested_offset {
-        Some(u64::MAX) => file_len(path).unwrap_or(0),
-        Some(offset) => offset,
+        Some(u64::MAX) => len,
+        Some(offset) => offset.min(len),
         None => 0,
     }
 }
@@ -1589,6 +1644,17 @@ fn pid_is_alive(_pid: u32) -> bool {
 }
 
 #[cfg(unix)]
+fn current_process_group_id(pid: u32) -> Option<u32> {
+    let pgid = unsafe { libc_getpgid(pid as i32) };
+    if pgid >= 0 { Some(pgid as u32) } else { None }
+}
+
+#[cfg(not(unix))]
+fn current_process_group_id(_pid: u32) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
 fn kill_process_group(pid: u32) {
     unsafe {
         let _ = libc_kill(-(pid as i32), 15);
@@ -1601,11 +1667,17 @@ fn kill_process_group(_pid: u32) {}
 #[cfg(unix)]
 unsafe extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
+    fn getpgid(pid: i32) -> i32;
 }
 
 #[cfg(unix)]
 unsafe fn libc_kill(pid: i32, sig: i32) -> i32 {
     unsafe { kill(pid, sig) }
+}
+
+#[cfg(unix)]
+unsafe fn libc_getpgid(pid: i32) -> i32 {
+    unsafe { getpgid(pid) }
 }
 
 fn shell_quote(value: &str) -> String {
@@ -2620,7 +2692,71 @@ mod tests {
 
         assert_eq!(requested_log_offset(&path, Some(u64::MAX)), 13);
         assert_eq!(requested_log_offset(&path, Some(4)), 4);
+        assert_eq!(requested_log_offset(&path, Some(99)), 13);
         assert_eq!(requested_log_offset(&path, None), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_pid_metadata_uses_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-pid-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+
+        write_proc_pid(&root, std::process::id()).expect("pid write");
+
+        let pid_mode = std::fs::metadata(root.join("pid"))
+            .expect("pid metadata")
+            .permissions()
+            .mode();
+        let pid_json_mode = std::fs::metadata(root.join("pid.json"))
+            .expect("pid json metadata")
+            .permissions()
+            .mode();
+        assert_eq!(pid_mode & 0o777, 0o600);
+        assert_eq!(pid_json_mode & 0o777, 0o600);
+        assert_eq!(verified_proc_pid(&root), Some(std::process::id()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_status_rejects_pid_with_mismatched_process_group() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-stale-pid-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let pid = std::process::id();
+        write_restrictive_bytes(
+            root.join("pid").as_path(),
+            format!("{pid}\n").as_bytes(),
+            "pid",
+        )
+        .expect("pid write");
+        let wrong_group = current_process_group_id(pid).unwrap_or(pid).wrapping_add(1);
+        let metadata = ProcPidMetadata {
+            pid,
+            process_group_id: Some(wrong_group),
+        };
+        write_restrictive_bytes(
+            root.join("pid.json").as_path(),
+            &serde_json::to_vec(&metadata).expect("pid metadata"),
+            "pid metadata",
+        )
+        .expect("pid metadata write");
+
+        let status = proc_status_in_dir(&root);
+        assert!(!status.running);
+        assert!(!root.join("pid").exists());
+        assert!(!root.join("pid.json").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

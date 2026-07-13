@@ -1,8 +1,6 @@
 import Foundation
 
 final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransporting {
-    private static let attachAtEndOffset = UInt64.max
-
     private let host: String
     private let procId: String
     private let command: String
@@ -57,6 +55,10 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     func terminate() {
         guard state.markTerminated() else { return }
         attachTask?.cancel()
+        Task { [host, procId, stdoutOffset, stderrOffset] in
+            let client = await RemoteHelperClientPool.shared.client(for: host)
+            await client.detachProc(procId: procId, stdoutOffset: stdoutOffset, stderrOffset: stderrOffset)
+        }
         continuation?.yield(.exited(0))
         continuation?.finish()
     }
@@ -97,12 +99,14 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     }
                     didSpawn = true
                 }
-                    let requestedStdoutOffset = stdoutOffset == 0 ? Self.attachAtEndOffset : stdoutOffset
-                    let handle = try await client.attachProc(
-                        procId: procId,
-                        stdoutOffset: requestedStdoutOffset,
-                        stderrOffset: stderrOffset
-                    )
+                let requestedStdoutOffset = stdoutOffset == 0 ? nil : stdoutOffset
+                let requestedStderrOffset = stderrOffset == 0 ? nil : stderrOffset
+                let handle = try await client.attachProc(
+                    procId: procId,
+                    stdoutOffset: requestedStdoutOffset,
+                    stderrOffset: requestedStderrOffset,
+                    attachAtEndIfOffsetUnknown: true
+                )
                 stdinOffset = handle.stdinOffset
                 attempt = 0
                 for await event in handle.events {
