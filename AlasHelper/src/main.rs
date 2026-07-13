@@ -893,6 +893,9 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     }
     state
         .proc_tailers
+        .remove(&proc_tailer_key(&params.proc_id, "io"));
+    state
+        .proc_tailers
         .remove(&proc_tailer_key(&params.proc_id, "stdout"));
     state
         .proc_tailers
@@ -914,11 +917,11 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         args: params.args.clone(),
         cwd: cwd.display().to_string(),
     };
-    std::fs::write(
-        dir.join("meta.json"),
-        serde_json::to_vec(&metadata).expect("metadata serialization must succeed"),
-    )
-    .map_err(|error| jsonrpc_error(-32050, format!("metadata write failed: {error}")))?;
+    write_restrictive_bytes(
+        &dir.join("meta.json"),
+        &serde_json::to_vec(&metadata).expect("metadata serialization must succeed"),
+        "metadata",
+    )?;
 
     for key in params.env.keys() {
         if !is_safe_env_key(key) {
@@ -1003,12 +1006,8 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
         .open(dir.join("stderr.log"))
         .map_err(|error| jsonrpc_error(-32050, format!("stderr open failed: {error}")))?;
     let mut command = Command::new("/bin/sh");
-    command
-        .arg("-c")
-        .arg(script)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
+    command.arg("-c").arg(script);
+    configure_proc_child_stdio(&mut command, stdout_file, stderr_file);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1021,6 +1020,17 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
         .map_err(|error| jsonrpc_error(-32050, format!("pid write failed: {error}")))?;
     run_supervised_proc_child(child, dir.join("stdin.log"), dir.join("exit"));
     Ok(())
+}
+
+fn configure_proc_child_stdio(
+    command: &mut Command,
+    stdout_file: std::fs::File,
+    stderr_file: std::fs::File,
+) {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
 }
 
 fn run_supervised_proc_child(
@@ -1189,24 +1199,11 @@ fn ensure_proc_tailers(
     stderr_offset: u64,
     sender: Sender<ServerMessage>,
 ) {
-    if state
-        .proc_tailers
-        .insert(proc_tailer_key(proc_id, "stdout"))
-    {
-        spawn_proc_stdout_tail(
+    if state.proc_tailers.insert(proc_tailer_key(proc_id, "io")) {
+        spawn_proc_tail(
             proc_id.to_string(),
             dir.to_path_buf(),
             stdout_offset,
-            sender.clone(),
-        );
-    }
-    if state
-        .proc_tailers
-        .insert(proc_tailer_key(proc_id, "stderr"))
-    {
-        spawn_proc_stderr_tail(
-            proc_id.to_string(),
-            dir.to_path_buf(),
             stderr_offset,
             sender,
         );
@@ -1432,35 +1429,35 @@ fn read_file_tail(path: &Path, offset: u64) -> Result<Option<(u64, Vec<u8>)>, He
     }
 }
 
-fn spawn_proc_stdout_tail(
+fn spawn_proc_tail(
     proc_id: String,
     dir: PathBuf,
-    mut offset: u64,
+    mut stdout_offset: u64,
+    mut stderr_offset: u64,
     sender: Sender<ServerMessage>,
 ) {
     thread::spawn(move || {
         loop {
-            match read_stdout_frames(&dir.join("stdout.log"), offset) {
-                Ok(frames) if frames.is_empty() => {}
-                Ok(frames) => {
-                    for frame in frames {
-                        offset = frame.offset;
-                        if sender
-                            .send(ServerMessage::Proc(ProcNotification::Stdout {
-                                proc_id: proc_id.clone(),
-                                offset,
-                                data: frame.data,
-                            }))
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                }
-                Err(_) => return,
+            if drain_proc_output_once(
+                &proc_id,
+                &dir,
+                &sender,
+                &mut stdout_offset,
+                &mut stderr_offset,
+            )
+            .is_err()
+            {
+                return;
             }
             let status = proc_status_in_dir(&dir);
             if !status.running {
+                let _ = drain_proc_output_once(
+                    &proc_id,
+                    &dir,
+                    &sender,
+                    &mut stdout_offset,
+                    &mut stderr_offset,
+                );
                 let _ = sender.send(ServerMessage::Proc(ProcNotification::Exit {
                     proc_id,
                     exit_code: status.exit_code,
@@ -1472,41 +1469,47 @@ fn spawn_proc_stdout_tail(
     });
 }
 
-fn proc_tailer_key(proc_id: &str, stream: &str) -> String {
-    format!("{proc_id}:{stream}")
+fn drain_proc_output_once(
+    proc_id: &str,
+    dir: &Path,
+    sender: &Sender<ServerMessage>,
+    stdout_offset: &mut u64,
+    stderr_offset: &mut u64,
+) -> Result<(), ()> {
+    match read_stdout_frames(&dir.join("stdout.log"), *stdout_offset) {
+        Ok(frames) => {
+            for frame in frames {
+                *stdout_offset = frame.offset;
+                sender
+                    .send(ServerMessage::Proc(ProcNotification::Stdout {
+                        proc_id: proc_id.to_string(),
+                        offset: *stdout_offset,
+                        data: frame.data,
+                    }))
+                    .map_err(|_| ())?;
+            }
+        }
+        Err(_) => return Err(()),
+    }
+    match read_file_tail(&dir.join("stderr.log"), *stderr_offset) {
+        Ok(Some((next_offset, data))) => {
+            *stderr_offset = next_offset;
+            sender
+                .send(ServerMessage::Proc(ProcNotification::Stderr {
+                    proc_id: proc_id.to_string(),
+                    offset: *stderr_offset,
+                    data,
+                }))
+                .map_err(|_| ())?;
+        }
+        Ok(None) => {}
+        Err(_) => return Err(()),
+    }
+    Ok(())
 }
 
-fn spawn_proc_stderr_tail(
-    proc_id: String,
-    dir: PathBuf,
-    mut offset: u64,
-    sender: Sender<ServerMessage>,
-) {
-    thread::spawn(move || {
-        loop {
-            match read_file_tail(&dir.join("stderr.log"), offset) {
-                Ok(Some((next_offset, data))) => {
-                    offset = next_offset;
-                    if sender
-                        .send(ServerMessage::Proc(ProcNotification::Stderr {
-                            proc_id: proc_id.clone(),
-                            offset,
-                            data,
-                        }))
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                Ok(None) => {}
-                Err(_) => return,
-            }
-            if !proc_status_in_dir(&dir).running {
-                return;
-            }
-            thread::sleep(Duration::from_millis(100));
-        }
-    });
+fn proc_tailer_key(proc_id: &str, stream: &str) -> String {
+    format!("{proc_id}:{stream}")
 }
 
 const ACP_REMOTE_MARKER_SCRUB: &[&str] = &[
@@ -2459,6 +2462,40 @@ mod tests {
 
         let mode = std::fs::metadata(&path)
             .expect("launch metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_metadata_file_uses_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-meta-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("meta.json");
+
+        let metadata = ProcMetadata {
+            proc_id: "acp-session-1".to_string(),
+            command: "codex-acp".to_string(),
+            args: vec!["--stdio".to_string()],
+            cwd: "/private/repo".to_string(),
+        };
+        write_restrictive_bytes(
+            &path,
+            &serde_json::to_vec(&metadata).expect("metadata"),
+            "metadata",
+        )
+        .expect("metadata write");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata file")
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
