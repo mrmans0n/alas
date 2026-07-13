@@ -15,6 +15,20 @@ struct ProcessGitTests {
         #expect(result.exitCode == 1)
     }
 
+    @Test func invalidWorkingDirectoryThrowsLaunchFailed() async throws {
+        let missing = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("alas-missing-cwd-\(UUID().uuidString)")
+
+        do {
+            _ = try await Process.run("/bin/echo", args: ["hi"], cwd: missing)
+            Issue.record("expected launch failure")
+        } catch ProcessError.launchFailed(let message) {
+            #expect(!message.isEmpty)
+        } catch {
+            Issue.record("wrong error: \(error)")
+        }
+    }
+
     @Test func gitVersionRuns() async throws {
         let result = try await Process.run("/usr/bin/env", args: ["git", "--version"])
         #expect(result.exitCode == 0)
