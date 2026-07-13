@@ -665,6 +665,7 @@ final class EditorBuffer {
     }
 
     private func checkRemoteConflictOnce(host: String) async {
+        guard !remoteSaveInFlight else { return }
         do {
             guard let mtime = try await RemoteFileAccess.mtime(host: host, path: absoluteFileURL.path) else {
                 if dirty { conflict = .deletedOnDisk }

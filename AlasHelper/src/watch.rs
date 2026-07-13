@@ -211,10 +211,12 @@ fn is_relevant_git_path(path: &Path, info: &GitInfo) -> bool {
     };
     let relative = relative.to_string_lossy();
     let relative = relative.trim_matches('/');
-    if relative == "packed-refs"
+    if relative == "FETCH_HEAD"
+        || relative == "packed-refs"
         || relative == "refs/stash"
         || relative == "logs/refs/stash"
         || relative.starts_with("refs/heads/")
+        || relative.starts_with("refs/remotes/")
     {
         return true;
     }
@@ -290,6 +292,11 @@ mod tests {
         ));
         assert!(is_relevant_git_path(
             &root.join(".git/refs/heads/main"),
+            &info
+        ));
+        assert!(is_relevant_git_path(&root.join(".git/FETCH_HEAD"), &info));
+        assert!(is_relevant_git_path(
+            &root.join(".git/refs/remotes/origin/main"),
             &info
         ));
         assert!(is_relevant_git_path(&root.join(".git/refs/stash"), &info));
