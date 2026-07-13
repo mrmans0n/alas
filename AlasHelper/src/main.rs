@@ -868,6 +868,12 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
             "exitCode": null
         }));
     }
+    state
+        .proc_tailers
+        .remove(&format!("{}:stdout", params.proc_id));
+    state
+        .proc_tailers
+        .remove(&format!("{}:stderr", params.proc_id));
 
     let stdin_path = dir.join("stdin.log");
     let stdout_path = dir.join("stdout.log");
@@ -1276,10 +1282,11 @@ fn spawn_proc_stdout_tail(
                 }
                 Err(_) => return,
             }
-            if proc_status_in_dir(&dir).exit_code.is_some() {
+            let status = proc_status_in_dir(&dir);
+            if !status.running {
                 let _ = sender.send(ServerMessage::Proc(ProcNotification::Exit {
                     proc_id,
-                    exit_code: proc_status_in_dir(&dir).exit_code,
+                    exit_code: status.exit_code,
                 }));
                 return;
             }
@@ -1313,7 +1320,7 @@ fn spawn_proc_stderr_tail(
                 Ok(None) => {}
                 Err(_) => return,
             }
-            if proc_status_in_dir(&dir).exit_code.is_some() {
+            if !proc_status_in_dir(&dir).running {
                 return;
             }
             thread::sleep(Duration::from_millis(100));
