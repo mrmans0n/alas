@@ -209,6 +209,7 @@ struct RemoteHelperProcSpawnParams: Codable, Equatable, Sendable {
     let args: [String]
     let cwd: String
     let env: [String: String]
+    let pathPrefixDirectories: [String]
 }
 
 struct RemoteHelperProcStatus: Codable, Equatable, Sendable {

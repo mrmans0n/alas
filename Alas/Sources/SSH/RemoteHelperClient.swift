@@ -272,7 +272,8 @@ actor RemoteHelperClient {
         command: String,
         args: [String],
         cwd: String,
-        env: [String: String]
+        env: [String: String],
+        pathPrefixDirectories: [String] = []
     ) async throws -> RemoteHelperProcStatus {
         try await request(
             method: "proc/spawn",
@@ -281,7 +282,8 @@ actor RemoteHelperClient {
                 command: command,
                 args: args,
                 cwd: cwd,
-                env: env
+                env: env,
+                pathPrefixDirectories: pathPrefixDirectories
             )
         )
     }

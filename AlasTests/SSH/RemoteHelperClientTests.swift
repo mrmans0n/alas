@@ -104,7 +104,8 @@ struct RemoteHelperClientTests {
                 command: "codex-acp",
                 args: ["--stdio"],
                 cwd: "/srv/repo",
-                env: ["PATH": "/usr/bin"]
+                env: ["PATH": "/usr/bin"],
+                pathPrefixDirectories: ["/managed/node/bin"]
             )
         }
 
@@ -117,6 +118,7 @@ struct RemoteHelperClientTests {
         #expect(params["procId"] as? String == "acp-session-1")
         #expect(params["command"] as? String == "codex-acp")
         #expect(params["cwd"] as? String == "/srv/repo")
+        #expect(params["pathPrefixDirectories"] as? [String] == ["/managed/node/bin"])
 
         transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"procId":"acp-session-1","running":true,"exitCode":null}}"#.utf8))
         #expect(try await spawn.value == RemoteHelperProcStatus(

@@ -7,6 +7,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private let arguments: [String]
     private let cwd: String
     private let environment: [String: String]
+    private let pathPrefixDirectories: [String]
     private let state = State()
     private var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation?
     private var attachTask: Task<Void, Never>?
@@ -22,7 +23,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         command: String,
         arguments: [String],
         cwd: String,
-        environment: [String: String]
+        environment: [String: String],
+        pathPrefixDirectories: [String] = []
     ) {
         self.host = host
         self.procId = procId
@@ -30,6 +32,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         self.arguments = arguments
         self.cwd = cwd
         self.environment = environment
+        self.pathPrefixDirectories = pathPrefixDirectories
         var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
         self.incoming = AsyncStream { continuation = $0 }
         self.continuation = continuation
@@ -76,7 +79,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                             command: command,
                             args: arguments,
                             cwd: cwd,
-                            env: environment
+                            env: environment,
+                            pathPrefixDirectories: pathPrefixDirectories
                         )
                     } catch {
                         guard Self.shouldRetrySpawnFailure(error) else {

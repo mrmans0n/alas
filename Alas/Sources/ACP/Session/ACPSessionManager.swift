@@ -1365,7 +1365,8 @@ final class ACPSessionManager: ObservableObject {
                 command: spec.command,
                 arguments: spec.arguments,
                 cwd: worktreePath,
-                environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv)
+                environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv),
+                pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? []
             )
             client = ACPStdioClient.makeForTesting(transport: transport)
         } else if let host {
@@ -1373,7 +1374,8 @@ final class ACPSessionManager: ObservableObject {
                 host: host,
                 worktreePath: worktreePath,
                 command: spec.command,
-                arguments: spec.arguments
+                arguments: spec.arguments,
+                nodeBinDirectory: spec.remoteNodeBinDirectory
             )
             // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
             // HOME, and any host-specific connection configuration.

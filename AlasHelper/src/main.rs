@@ -117,6 +117,7 @@ struct ProcSpawnParams {
     args: Vec<String>,
     cwd: String,
     env: HashMap<String, String>,
+    path_prefix_directories: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,6 +158,7 @@ struct ProcSupervisorLaunch {
     args: Vec<String>,
     cwd: String,
     env: HashMap<String, String>,
+    path_prefix_directories: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -928,6 +930,7 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         args: params.args,
         cwd: cwd.display().to_string(),
         env: params.env,
+        path_prefix_directories: params.path_prefix_directories.unwrap_or_default(),
     };
     write_restrictive_bytes(
         &dir.join("launch.json"),
@@ -984,7 +987,13 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
     .map_err(|error| jsonrpc_error(-32050, format!("launch decode failed: {error}")))?;
     let _ = std::fs::remove_file(&launch_path);
 
-    let script = proc_launch_script(&launch.cwd, &launch.command, &launch.args, &launch.env)?;
+    let script = proc_launch_script(
+        &launch.cwd,
+        &launch.command,
+        &launch.args,
+        &launch.env,
+        &launch.path_prefix_directories,
+    )?;
     let stdout_file = std::fs::OpenOptions::new()
         .append(true)
         .open(dir.join("stdout.log"))
@@ -1005,14 +1014,22 @@ fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command
+    let child = command
         .spawn()
         .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
-    let child_stdin = child.stdin.take();
     std::fs::write(dir.join("pid"), format!("{}\n", child.id()))
         .map_err(|error| jsonrpc_error(-32050, format!("pid write failed: {error}")))?;
-    pump_proc_stdin_and_record_exit(child, child_stdin, dir.join("stdin.log"), dir.join("exit"));
+    run_supervised_proc_child(child, dir.join("stdin.log"), dir.join("exit"));
     Ok(())
+}
+
+fn run_supervised_proc_child(
+    mut child: std::process::Child,
+    stdin_path: PathBuf,
+    exit_path: PathBuf,
+) {
+    let child_stdin = Option::take(&mut child.stdin);
+    pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_path);
 }
 
 fn proc_launch_script(
@@ -1020,6 +1037,7 @@ fn proc_launch_script(
     command: &str,
     args: &[String],
     env: &HashMap<String, String>,
+    path_prefix_directories: &[String],
 ) -> Result<String, HelperError> {
     let mut env_parts: Vec<String> = vec!["env".to_string()];
     env_parts.extend(
@@ -1041,9 +1059,20 @@ fn proc_launch_script(
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
+    let path_prefix = if path_prefix_directories.is_empty() {
+        String::new()
+    } else {
+        let joined = path_prefix_directories
+            .iter()
+            .map(|directory| shell_quote(directory))
+            .collect::<Vec<_>>()
+            .join(":");
+        format!("PATH={joined}:\"$PATH\" && export PATH && ")
+    };
     Ok(format!(
-        "cd {cwd} && exec {env_command} {argv}",
+        "cd {cwd} && {path_prefix}exec {env_command} {argv}",
         cwd = shell_quote(cwd),
+        path_prefix = path_prefix,
         env_command = env_parts.join(" "),
         argv = argv,
     ))
@@ -2434,6 +2463,24 @@ mod tests {
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_launch_script_prepends_path_prefix_before_scrubbed_env() {
+        let script = proc_launch_script(
+            "/srv/repo",
+            "codex-acp",
+            &[],
+            &HashMap::new(),
+            &["/managed/node/bin".to_string()],
+        )
+        .expect("script");
+
+        assert!(script.starts_with(
+            "cd '/srv/repo' && PATH='/managed/node/bin':\"$PATH\" && export PATH && exec env "
+        ));
+        assert!(script.contains("-u CLAUDECODE"));
+        assert!(script.ends_with("'codex-acp'"));
     }
 
     #[cfg(unix)]
