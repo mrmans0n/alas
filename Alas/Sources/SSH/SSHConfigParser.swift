@@ -48,8 +48,9 @@ enum SSHConfigParser {
         var stanza: [Int] = []   // indices into `hosts` for the current Host stanza
 
         for rawLine in contents.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty || line.hasPrefix("#") { continue }
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            let line = stripInlineComment(trimmed)
+            if line.isEmpty { continue }
             guard let (keyword, value) = splitKeyword(line) else { continue }
 
             switch keyword.lowercased() {
@@ -99,6 +100,22 @@ enum SSHConfigParser {
         while let first = rest.first, isSep(first) { rest = rest.dropFirst() }
         let value = String(String.UnicodeScalarView(rest))
         return key.isEmpty ? nil : (key, value)
+    }
+
+    /// Removes an inline `# comment`. OpenSSH treats an unquoted `#` that
+    /// starts a token as the beginning of a comment; we don't track quotes,
+    /// so we strip from the first `#` at the start of the line or following
+    /// whitespace (a mid-token `#`, e.g. `foo#bar`, is preserved).
+    private static func stripInlineComment(_ line: String) -> String {
+        var prevWasSpace = true   // start of line is a token boundary
+        for (offset, scalar) in line.unicodeScalars.enumerated() {
+            if scalar == "#" && prevWasSpace {
+                let idx = line.unicodeScalars.index(line.unicodeScalars.startIndex, offsetBy: offset)
+                return String(line.unicodeScalars[..<idx]).trimmingCharacters(in: .whitespaces)
+            }
+            prevWasSpace = (scalar == " " || scalar == "\t")
+        }
+        return line
     }
 
     private static func tokenize(_ value: String) -> [String] {

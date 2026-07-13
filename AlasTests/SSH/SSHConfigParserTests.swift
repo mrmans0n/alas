@@ -118,4 +118,14 @@ struct SSHConfigParserTests {
         let home = try makeHome(config: "Host crlfbox\r\n    HostName 10.0.0.9\r\n    User me\r\n")
         #expect(SSHConfigParser.parse(home: home) == [SSHConfigHost(alias: "crlfbox", hostName: "10.0.0.9", user: "me", port: nil)])
     }
+
+    @Test func stripsInlineComments() throws {
+        let home = try makeHome(config: """
+        Host devbox # staging box
+            HostName 10.0.0.7 # main interface
+        """)
+        // The inline comments must not become extra aliases or corrupt HostName.
+        #expect(SSHConfigParser.parse(home: home)
+            == [SSHConfigHost(alias: "devbox", hostName: "10.0.0.7", user: nil, port: nil)])
+    }
 }
