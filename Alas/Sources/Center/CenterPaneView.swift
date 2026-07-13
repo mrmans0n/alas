@@ -303,7 +303,7 @@ struct CenterPaneView: View {
     }
 
     private var rightPaneActivationKey: String {
-        "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.trackUpstreamForCommits)"
+        "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)"
     }
 
     @discardableResult
@@ -311,7 +311,7 @@ struct CenterPaneView: View {
         state.rightPaneStore.state(
             for: worktree,
             baseBranch: state.config.worktrees.baseBranch,
-            trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
+            comparisonMode: state.config.changes.comparisonMode
         )
     }
 

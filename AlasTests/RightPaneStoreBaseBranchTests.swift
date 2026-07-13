@@ -58,7 +58,7 @@ struct RightPaneStoreBaseBranchTests {
         _ = try await Process.git(["update-ref", "refs/remotes/origin/release/1.0", head], cwd: repo)
 
         let store = RightPaneStore(git: GitService())
-        let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", trackUpstreamForCommits: false)
+        let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/release/1.0")
 
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -73,7 +73,7 @@ struct RightPaneStoreBaseBranchTests {
         // resolver would return the local branch; our direct origin probe must
         // fall back to the configured base branch instead.
         let store = RightPaneStore(git: GitService())
-        let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", trackUpstreamForCommits: false)
+        let state = store.state(for: makeWorktree(at: repo, branch: "release/1.0"), baseBranch: "release/1.0", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/release/1.0")
 
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -86,7 +86,7 @@ struct RightPaneStoreBaseBranchTests {
 
         let store = RightPaneStore(git: GitService())
         let wt = makeWorktree(at: repo, branch: "main")
-        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: wt, baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
         #expect(state.lastConfigBaseBranch == "main")
 
@@ -98,7 +98,7 @@ struct RightPaneStoreBaseBranchTests {
         // store must not reset baseBranch back to the non-existent origin/main
         // or re-trigger fallback probes each time.
         for _ in 0..<3 {
-            _ = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+            _ = store.state(for: wt, baseBranch: "main", comparisonMode: .manual)
             try await Task.sleep(nanoseconds: 50_000_000)
             #expect(state.baseBranch == "main")
             #expect(state.lastConfigBaseBranch == "main")
@@ -114,7 +114,7 @@ struct RightPaneStoreBaseBranchTests {
         _ = try await Process.git(["update-ref", "refs/remotes/origin/main", head], cwd: repo)
 
         let store = RightPaneStore(git: GitService())
-        let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
 
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -126,7 +126,7 @@ struct RightPaneStoreBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: repo) }
 
         let store = RightPaneStore(git: GitService())
-        let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
 
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -142,7 +142,7 @@ struct RightPaneStoreBaseBranchTests {
         _ = try await Process.git(["branch", "develop"], cwd: repo)
 
         let store = RightPaneStore(git: GitService())
-        let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: makeWorktree(at: repo, branch: "main"), baseBranch: "main", comparisonMode: .manual)
         #expect(state.baseBranch == "origin/main")
 
         state.selectBaseBranch("develop")

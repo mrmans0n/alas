@@ -3208,7 +3208,7 @@ final class AppState {
         let rps = rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
-            trackUpstreamForCommits: config.changes.trackUpstreamForCommits
+            comparisonMode: config.changes.comparisonMode
         )
         rps.reveal(path: path)
     }
@@ -3572,7 +3572,7 @@ final class AppState {
             let baseBranch = rightPaneStore.state(
                 for: worktree,
                 baseBranch: config.worktrees.baseBranch,
-                trackUpstreamForCommits: config.changes.trackUpstreamForCommits
+                comparisonMode: config.changes.comparisonMode
             ).baseBranch
             let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
                 forBaseBranch: baseBranch,
@@ -4405,7 +4405,9 @@ extension AppState: RemoteSessionsProvider {
             async let commits = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: config.worktrees.baseBranch,
-                resolution: config.changes.trackUpstreamForCommits ? .upstreamThenBase : .baseLocalFirst
+                resolution: GitService.BaseResolution.forCommits(
+                    mode: config.changes.comparisonMode, userOverrodeBaseBranch: false
+                )
             )
             let (changes, commitResult) = try await (status, commits)
             return RemoteWorktreeSummaryBuilder.make(

@@ -372,8 +372,9 @@ struct CommitEditorTabView: View {
         let currentSha = tabState.currentSha
         let baseRef = tabState.baseRef
         let prompt = appState.config.changes.prompt
-        let commitsResolution: GitService.BaseResolution =
-            appState.config.changes.trackUpstreamForCommits ? .upstreamThenBase : .baseLocalFirst
+        let commitsResolution = GitService.BaseResolution.forCommits(
+            mode: appState.config.changes.comparisonMode, userOverrodeBaseBranch: false
+        )
 
         busy = true
         error = nil
