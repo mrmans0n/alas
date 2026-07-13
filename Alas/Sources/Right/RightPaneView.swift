@@ -185,14 +185,14 @@ struct RightPaneView: View {
         // expected escape hatch — switching away and back should surface current
         // state. Activation happens inside the task, not during body evaluation,
         // so `RightPaneStore` mutations don't run inside a view update.
-        .task(id: "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.trackUpstreamForCommits)") {
+        .task(id: "\(worktree.id)\u{0000}\(worktree.branch)\u{0000}\(state.config.worktrees.baseBranch)\u{0000}\(state.config.changes.comparisonMode.rawValue)") {
             if rps?.worktree.id != worktree.id {
                 rps = nil
             }
             let activated = state.rightPaneStore.state(
                 for: worktree,
                 baseBranch: state.config.worktrees.baseBranch,
-                trackUpstreamForCommits: state.config.changes.trackUpstreamForCommits
+                comparisonMode: state.config.changes.comparisonMode
             )
             rps = activated
             await activated.refresh()

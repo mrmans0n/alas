@@ -200,7 +200,7 @@ struct RightPaneStateBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let wt = makeWorktree(at: repo, branch: "feature")
         let state = RightPaneState(worktree: wt, baseBranch: "main")
-        state.trackUpstreamForCommits = true
+        state.comparisonMode = .branchUpstream
 
         await state.refresh()
 
@@ -212,7 +212,7 @@ struct RightPaneStateBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: repo) }
         let wt = makeWorktree(at: repo, branch: "feature")
         let state = RightPaneState(worktree: wt, baseBranch: "main")
-        state.trackUpstreamForCommits = true
+        state.comparisonMode = .branchUpstream
 
         await state.refresh()
 
@@ -240,33 +240,33 @@ struct RightPaneStateBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let wt = makeWorktree(at: repo, branch: "feature")
         let store = RightPaneStore()
-        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: true)
+        let state = store.state(for: wt, baseBranch: "main", comparisonMode: .branchUpstream)
 
         state.selectBaseBranch("develop")
         try await Task.sleep(for: .milliseconds(200))
         #expect(state.baseBranch == "develop")
         #expect(state.userOverrodeBaseBranch)
 
-        _ = store.state(for: wt, baseBranch: "develop", trackUpstreamForCommits: true)
+        _ = store.state(for: wt, baseBranch: "develop", comparisonMode: .branchUpstream)
         try await Task.sleep(for: .milliseconds(600))
 
         #expect(!state.userOverrodeBaseBranch)
         #expect(state.comparisonRef == "origin/feature")
     }
 
-    @Test func storeRefreshesWhenTrackUpstreamForCommitsToggles() async throws {
+    @Test func storeRefreshesWhenComparisonModeToggles() async throws {
         let (repo, root) = try await createTestRepoWithUpstream()
         defer { try? FileManager.default.removeItem(at: root) }
         let wt = makeWorktree(at: repo, branch: "feature")
         let store = RightPaneStore()
-        let state = store.state(for: wt, baseBranch: "master", trackUpstreamForCommits: true)
+        let state = store.state(for: wt, baseBranch: "master", comparisonMode: .branchUpstream)
         try await waitUntil { state.comparisonRef == "origin/feature" }
         #expect(state.comparisonRef == "origin/feature")
 
-        _ = store.state(for: wt, baseBranch: "master", trackUpstreamForCommits: false)
+        _ = store.state(for: wt, baseBranch: "master", comparisonMode: .manual)
         try await waitUntil { state.comparisonRef == "master" }
         #expect(state.comparisonRef == "master")
-        #expect(state.trackUpstreamForCommits == false)
+        #expect(state.comparisonMode == .manual)
     }
 
     @Test func commitEditorComparisonRefReturnsOnlyResolvedRef() async throws {
@@ -274,7 +274,7 @@ struct RightPaneStateBaseBranchTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let wt = makeWorktree(at: tmp, branch: "feature")
         let store = RightPaneStore()
-        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: wt, baseBranch: "main", comparisonMode: .manual)
 
         #expect(store.commitEditorComparisonRef(worktreeId: wt.id) == nil)
 
@@ -289,7 +289,7 @@ struct RightPaneStateBaseBranchTests {
         try "dirty\n".write(to: tmp.appendingPathComponent("stale.txt"), atomically: true, encoding: .utf8)
         let wt = makeWorktree(at: tmp, branch: "main")
         let store = RightPaneStore()
-        let state = store.state(for: wt, baseBranch: "main", trackUpstreamForCommits: false)
+        let state = store.state(for: wt, baseBranch: "main", comparisonMode: .manual)
         try await waitUntil { state.hasLoadedSnapshot && !state.displayChanges.isEmpty }
 
         store.invalidateSnapshot(worktreeId: wt.id)

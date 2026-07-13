@@ -61,12 +61,12 @@ final class RightPaneStore {
 
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "right-pane-store")
 
-    func state(for worktree: Worktree, baseBranch: String, trackUpstreamForCommits: Bool) -> RightPaneState {
+    func state(for worktree: Worktree, baseBranch: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode) -> RightPaneState {
         let id = worktree.id
         let result: RightPaneState
         let rawDefault = Self.effectiveBaseBranch(worktree: worktree, baseBranch: baseBranch)
         if let existing = states[id] {
-            let trackUpstreamChanged = existing.trackUpstreamForCommits != trackUpstreamForCommits
+            let comparisonModeChanged = existing.comparisonMode != comparisonMode
 
             // Settings change: the configured base branch changed. Reset to the
             // new default unless the user picked a branch themselves.
@@ -117,8 +117,8 @@ final class RightPaneStore {
                     )
                 }
             }
-            if trackUpstreamChanged {
-                existing.trackUpstreamForCommits = trackUpstreamForCommits
+            if comparisonModeChanged {
+                existing.comparisonMode = comparisonMode
                 Task { @MainActor in await existing.refresh() }
             }
             result = existing
@@ -134,7 +134,7 @@ final class RightPaneStore {
             new.baseBranch = rawDefault
             new.lastConfigBaseBranch = baseBranch
             new.lastEffectiveBaseBranch = rawDefault
-            new.trackUpstreamForCommits = trackUpstreamForCommits
+            new.comparisonMode = comparisonMode
             new.isAwaitingBaseBranchProbe = shouldDeferInitialRefresh
             new.closeDiffTabs = { [weak self] paths in
                 guard let app = self?.appState else { return }

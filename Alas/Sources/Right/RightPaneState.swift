@@ -167,12 +167,10 @@ final class RightPaneState {
     @ObservationIgnored
     var isAwaitingBaseBranchProbe: Bool = false
 
-    /// Mirrors `AppConfig.changes.trackUpstreamForCommits`. Synced by
-    /// `RightPaneStore` on every `state(for:)` call. When false (the
-    /// default) — or when `userOverrodeBaseBranch` is true — `refresh()`
-    /// passes `ignoreUpstream: true` to `commitsAhead`, so the Commits
-    /// section compares HEAD against the base branch instead of `@{u}`.
-    var trackUpstreamForCommits: Bool = false
+    /// Mirrors `AppConfig.changes.comparisonMode`. Synced by `RightPaneStore`
+    /// on every `state(for:)` call. Combined with `userOverrodeBaseBranch`, it
+    /// selects the `BaseResolution` `refresh()` passes to `commitsAhead`.
+    var comparisonMode: AppConfig.Changes.ChangesComparisonMode = .auto
 
     var pendingDiscard: PendingDiscard? = nil
     var pendingCherryPickSHA: String? = nil
@@ -587,7 +585,12 @@ final class RightPaneState {
             self.olderCommits = []
             self.hasMoreOlder = true
             self.isLoadingOlder = false
-            let ignoreUpstream = userOverrodeBaseBranch || !trackUpstreamForCommits
+            let commitsResolution = GitService.BaseResolution.forCommits(
+                mode: comparisonMode, userOverrodeBaseBranch: userOverrodeBaseBranch
+            )
+            let reviewLoopResolution = GitService.BaseResolution.forReviewLoopBase(
+                mode: comparisonMode, userOverrodeBaseBranch: userOverrodeBaseBranch
+            )
             async let s = git.status(worktreePath: worktree.path)
             async let statusRaw = Process.git(
                 ["status", "--porcelain=v2", "-z", "--untracked-files=all"],
@@ -596,12 +599,12 @@ final class RightPaneState {
             async let c = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: baseBranch,
-                ignoreUpstream: ignoreUpstream
+                resolution: commitsResolution
             )
             async let reviewLoopBase = git.commitsAhead(
                 at: worktree.path,
                 baseBranch: baseBranch,
-                ignoreUpstream: true
+                resolution: reviewLoopResolution
             )
             async let br = git.currentBranch(worktreePath: worktree.path)
             async let upstream = git.resolveUpstreamRef(worktreePath: worktree.path)

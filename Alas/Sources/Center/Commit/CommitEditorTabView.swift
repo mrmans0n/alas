@@ -372,7 +372,14 @@ struct CommitEditorTabView: View {
         let currentSha = tabState.currentSha
         let baseRef = tabState.baseRef
         let prompt = appState.config.changes.prompt
-        let ignoreUpstream = !appState.config.changes.trackUpstreamForCommits
+        // The editor compares against the tab's already-selected `baseRef`, so
+        // it uses that ref as given (local-first) instead of re-resolving it
+        // origin-first the way Auto does for the Commits list — otherwise a
+        // manual override like `develop` would silently become `origin/develop`
+        // and change the nearby-commit context. Branch-upstream mode still
+        // compares against the branch's own upstream.
+        let commitsResolution: GitService.BaseResolution =
+            appState.config.changes.comparisonMode == .branchUpstream ? .upstreamThenBase : .baseLocalFirst
 
         busy = true
         error = nil
@@ -387,7 +394,7 @@ struct CommitEditorTabView: View {
                 let nearbyCommits = try await git.commitsAhead(
                     at: worktreePath,
                     baseBranch: baseRef,
-                    ignoreUpstream: ignoreUpstream
+                    resolution: commitsResolution
                 ).commits
                 let payload = CommitContextBuilder.buildForCommitEdit(
                     branch: branch,
