@@ -1225,22 +1225,22 @@ extension GitService {
         // Step 2: If no upstream ref was chosen, resolve the base branch.
         // Slash-named bases are ambiguous, so always resolve local first for
         // them; simple names follow the requested preference.
-        func refExists(_ ref: String) async -> Bool {
-            let r = try? await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: worktree)
-            return r?.exitCode == 0
+        func refExists(_ ref: String) async throws -> Bool {
+            let r = try await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: worktree)
+            return r.exitCode == 0
         }
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
             if base.contains("/") {
-                if await refExists("refs/heads/\(base)") {
+                if try await refExists("refs/heads/\(base)") {
                     baseName = base
-                } else if await refExists("refs/remotes/\(base)") {
+                } else if try await refExists("refs/remotes/\(base)") {
                     baseName = base
                 }
             }
             if baseName == nil {
-                let localExists = await refExists("refs/heads/\(base)")
-                let originExists = await refExists("refs/remotes/origin/\(base)")
+                let localExists = try await refExists("refs/heads/\(base)")
+                let originExists = try await refExists("refs/remotes/origin/\(base)")
                 switch resolution {
                 case .baseLocalFirst:
                     if localExists { baseName = base }
