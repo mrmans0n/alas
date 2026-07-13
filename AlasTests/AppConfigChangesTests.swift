@@ -167,6 +167,34 @@ struct AppConfigChangesTests {
         #expect(decoded.changes.trackUpstreamForCommits == true)
     }
 
+    private func decodeChanges(mutating: ([String: Any]) -> [String: Any]) throws -> AppConfig.Changes {
+        let data = try JSONEncoder().encode(AppConfig.defaults)
+        var obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        obj["changes"] = mutating(obj["changes"] as! [String: Any])
+        let mutated = try JSONSerialization.data(withJSONObject: obj)
+        return try JSONDecoder().decode(AppConfig.self, from: mutated).changes
+    }
+
+    @Test func migratesLegacyTrackUpstreamTrueToBranchUpstream() throws {
+        let changes = try decodeChanges { var c = $0; c.removeValue(forKey: "comparisonMode"); c["trackUpstreamForCommits"] = true; return c }
+        #expect(changes.comparisonMode == .branchUpstream)
+    }
+
+    @Test func migratesLegacyTrackUpstreamFalseToAuto() throws {
+        let changes = try decodeChanges { var c = $0; c.removeValue(forKey: "comparisonMode"); c["trackUpstreamForCommits"] = false; return c }
+        #expect(changes.comparisonMode == .auto)
+    }
+
+    @Test func defaultsToAutoWhenNeitherKeyPresent() throws {
+        let changes = try decodeChanges { var c = $0; c.removeValue(forKey: "comparisonMode"); c.removeValue(forKey: "trackUpstreamForCommits"); return c }
+        #expect(changes.comparisonMode == .auto)
+    }
+
+    @Test func explicitComparisonModeWinsOverLegacyBool() throws {
+        let changes = try decodeChanges { var c = $0; c["comparisonMode"] = "manual"; c["trackUpstreamForCommits"] = true; return c }
+        #expect(changes.comparisonMode == .manual)
+    }
+
     @Test func defaultsHaveDiffDisplayPreferences() {
         #expect(AppConfig.defaults.changes.diffLayoutMode == .split)
         #expect(AppConfig.defaults.changes.diffWrapLines == false)

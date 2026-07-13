@@ -310,13 +310,24 @@ struct AppConfig: Codable, Equatable {
         /// (default), it always compares against `worktrees.baseBranch`,
         /// so the list stays stable across pushes.
         var trackUpstreamForCommits: Bool
+        /// How the Commits section chooses its comparison base.
+        /// - `auto` (default): compare against `origin/<base>` (falls back to
+        ///   local `<base>`); stable across rebases.
+        /// - `branchUpstream`: compare against the branch's own `@{u}`.
+        /// - `manual`: compare against the per-worktree selected base branch.
+        enum ChangesComparisonMode: String, Codable {
+            case auto
+            case branchUpstream
+            case manual
+        }
+        var comparisonMode: ChangesComparisonMode
         var diffLayoutMode: DiffLayoutMode
         var diffWrapLines: Bool
         var diffShowWhitespace: Bool
 
         enum CodingKeys: String, CodingKey {
             case aiToolId, prompt, reviewRequestPrompt, mergeBulkResolvePrompt,
-                 mergeSingleResolvePrompt, trackUpstreamForCommits,
+                 mergeSingleResolvePrompt, trackUpstreamForCommits, comparisonMode,
                  diffLayoutMode, diffWrapLines, diffShowWhitespace
         }
     }
@@ -431,6 +442,7 @@ struct AppConfig: Codable, Equatable {
             mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
             mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
             trackUpstreamForCommits: false,
+            comparisonMode: .auto,
             diffLayoutMode: .split,
             diffWrapLines: false,
             diffShowWhitespace: false
@@ -659,6 +671,12 @@ extension AppConfig {
             let singleResolve = (try? changesContainer.decode(String.self, forKey: .mergeSingleResolvePrompt))
                 ?? AppConfig.defaultMergeSingleResolvePrompt
             let trackUpstream = (try? changesContainer.decode(Bool.self, forKey: .trackUpstreamForCommits)) ?? false
+            let comparisonMode: Changes.ChangesComparisonMode = {
+                if let explicit = try? changesContainer.decode(Changes.ChangesComparisonMode.self, forKey: .comparisonMode) {
+                    return explicit
+                }
+                return trackUpstream ? .branchUpstream : .auto
+            }()
             let diffLayoutMode = (try? changesContainer.decode(DiffLayoutMode.self, forKey: .diffLayoutMode)) ?? .split
             let diffWrapLines = (try? changesContainer.decode(Bool.self, forKey: .diffWrapLines)) ?? false
             let diffShowWhitespace = (try? changesContainer.decode(Bool.self, forKey: .diffShowWhitespace)) ?? false
@@ -669,6 +687,7 @@ extension AppConfig {
                 mergeBulkResolvePrompt: bulkResolve,
                 mergeSingleResolvePrompt: singleResolve,
                 trackUpstreamForCommits: trackUpstream,
+                comparisonMode: comparisonMode,
                 diffLayoutMode: diffLayoutMode,
                 diffWrapLines: diffWrapLines,
                 diffShowWhitespace: diffShowWhitespace
@@ -681,6 +700,7 @@ extension AppConfig {
                 mergeBulkResolvePrompt: AppConfig.defaultMergeBulkResolvePrompt,
                 mergeSingleResolvePrompt: AppConfig.defaultMergeSingleResolvePrompt,
                 trackUpstreamForCommits: false,
+                comparisonMode: .auto,
                 diffLayoutMode: .split,
                 diffWrapLines: false,
                 diffShowWhitespace: false
