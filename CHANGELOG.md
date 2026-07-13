@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Replace idle remote project polling with push-based helper file and git events (#752).
+
 ## [0.10.2] - 2026-07-13
 
 ### ✨ Features

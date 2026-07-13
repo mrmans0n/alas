@@ -75,4 +75,21 @@ struct RemoteWorktreePollTests {
         let delta = RemoteWorktreePoll.classify(old: old, new: new)
         #expect(delta?.topologyChanged == true)
     }
+
+    @Test func tickGateCoalescesOverlappingTicks() {
+        var gate = RemoteProjectGitTickGate()
+        let firstBegin = gate.beginOrMarkPending()
+        let overlappingBegin = gate.beginOrMarkPending()
+        let firstFinishNeedsFollowUp = gate.finishTick()
+        let secondFinishReleases = gate.finishTick()
+        let secondBegin = gate.beginOrMarkPending()
+        let finalFinishReleases = gate.finishTick()
+
+        #expect(firstBegin)
+        #expect(!overlappingBegin)
+        #expect(firstFinishNeedsFollowUp)
+        #expect(!secondFinishReleases)
+        #expect(secondBegin)
+        #expect(!finalFinishReleases)
+    }
 }

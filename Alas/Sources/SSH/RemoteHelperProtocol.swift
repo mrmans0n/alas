@@ -66,6 +66,17 @@ struct RemoteHelperWatchEvent: Codable, Equatable, Sendable {
     let paths: [String]
 }
 
+enum RemoteHelperWatchUpdate: Equatable, Sendable {
+    case available
+    case unavailable
+    case event(RemoteHelperWatchEvent)
+}
+
+struct RemoteHelperWatchHandle: Sendable {
+    let subscriptionId: String
+    let updates: AsyncStream<RemoteHelperWatchUpdate>
+}
+
 struct RemoteHelperFSReadParams: Codable, Equatable, Sendable {
     let path: String
     let offset: UInt64?

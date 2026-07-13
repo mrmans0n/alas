@@ -9,6 +9,8 @@ private struct ActiveRemoteHelperSubscription {
     let params: RemoteHelperWatchSubscribeParams
     var helperSubscriptionId: String
     var helperGeneration: Int
+    let updates: AsyncStream<RemoteHelperWatchUpdate>
+    let updatesContinuation: AsyncStream<RemoteHelperWatchUpdate>.Continuation
 }
 
 enum RemoteHelperClientError: Error, Equatable {
@@ -31,6 +33,7 @@ actor RemoteHelperClient {
     typealias TransportFactory = @Sendable () -> JSONRPCStdioTransporting
 
     static let defaultIdleShutdownNanoseconds: UInt64 = 600_000_000_000
+    static let legacyWatchEventBufferLimit = 64
 
     nonisolated let host: String
     nonisolated let watchEvents: AsyncStream<RemoteHelperWatchEvent>
@@ -61,7 +64,9 @@ actor RemoteHelperClient {
             Self.makeTransport(host: host)
         }
         var eventsCont: AsyncStream<RemoteHelperWatchEvent>.Continuation!
-        self.watchEvents = AsyncStream { eventsCont = $0 }
+        self.watchEvents = AsyncStream(
+            bufferingPolicy: .bufferingNewest(Self.legacyWatchEventBufferLimit)
+        ) { eventsCont = $0 }
         self.watchEventsCont = eventsCont
     }
 
@@ -96,24 +101,39 @@ actor RemoteHelperClient {
         root: String,
         kinds: [RemoteHelperWatchKind]
     ) async throws -> RemoteHelperWatchSubscribeResult {
+        let handle = try await subscribeWithUpdates(root: root, kinds: kinds)
+        return RemoteHelperWatchSubscribeResult(subscriptionId: handle.subscriptionId)
+    }
+
+    func subscribeWithUpdates(
+        root: String,
+        kinds: [RemoteHelperWatchKind]
+    ) async throws -> RemoteHelperWatchHandle {
         let helperResult: RemoteHelperWatchSubscribeResult = try await request(
             method: "watch/subscribe",
             params: RemoteHelperWatchSubscribeParams(root: root, kinds: kinds)
         )
         let params = RemoteHelperWatchSubscribeParams(root: root, kinds: kinds)
         let clientSubscriptionId = makeClientSubscriptionId(avoiding: helperResult.subscriptionId)
+        var updatesContinuation: AsyncStream<RemoteHelperWatchUpdate>.Continuation!
+        let updates = AsyncStream<RemoteHelperWatchUpdate> { updatesContinuation = $0 }
         activeSubscriptions[clientSubscriptionId] = ActiveRemoteHelperSubscription(
             params: params,
             helperSubscriptionId: helperResult.subscriptionId,
-            helperGeneration: generation
+            helperGeneration: generation,
+            updates: updates,
+            updatesContinuation: updatesContinuation
         )
-        return RemoteHelperWatchSubscribeResult(subscriptionId: clientSubscriptionId)
+        updatesContinuation.yield(.available)
+        return RemoteHelperWatchHandle(subscriptionId: clientSubscriptionId, updates: updates)
     }
 
     func unsubscribe(subscriptionId: String) async throws -> RemoteHelperWatchUnsubscribeResult {
-        let helperSubscriptionId = activeSubscriptions[subscriptionId]?.helperSubscriptionId ?? subscriptionId
+        let subscription = activeSubscriptions[subscriptionId]
+        let helperSubscriptionId = subscription?.helperSubscriptionId ?? subscriptionId
         guard transport != nil else {
             activeSubscriptions.removeValue(forKey: subscriptionId)
+            subscription?.updatesContinuation.finish()
             scheduleIdleShutdownIfPossible()
             return RemoteHelperWatchUnsubscribeResult(ok: true)
         }
@@ -127,12 +147,21 @@ actor RemoteHelperClient {
             )
         } catch RemoteHelperClientError.notRunning {
             activeSubscriptions.removeValue(forKey: subscriptionId)
+            subscription?.updatesContinuation.finish()
             scheduleIdleShutdownIfPossible()
             return RemoteHelperWatchUnsubscribeResult(ok: true)
         }
         activeSubscriptions.removeValue(forKey: subscriptionId)
+        subscription?.updatesContinuation.finish()
         scheduleIdleShutdownIfPossible()
         return result
+    }
+
+    func dropLocalSubscription(subscriptionId: String) {
+        guard let subscription = activeSubscriptions.removeValue(forKey: subscriptionId) else { return }
+        subscription.updatesContinuation.yield(.unavailable)
+        subscription.updatesContinuation.finish()
+        scheduleIdleShutdownIfPossible()
     }
 
     func read(path: String, offset: UInt64? = nil) async throws -> RemoteHelperFSReadResult {
@@ -156,6 +185,10 @@ actor RemoteHelperClient {
         subscriptionReplayTask?.cancel()
         subscriptionReplayTask = nil
         subscriptionsNeedReplay = false
+        for subscription in activeSubscriptions.values {
+            subscription.updatesContinuation.yield(.unavailable)
+            subscription.updatesContinuation.finish()
+        }
         activeSubscriptions.removeAll()
         drainPending(with: RemoteHelperClientError.notRunning)
         dispatchTask?.cancel()
@@ -316,8 +349,11 @@ actor RemoteHelperClient {
                 activeSubscriptions[clientSubscriptionId] = ActiveRemoteHelperSubscription(
                     params: subscription.params,
                     helperSubscriptionId: result.subscriptionId,
-                    helperGeneration: replayGeneration
+                    helperGeneration: replayGeneration,
+                    updates: subscription.updates,
+                    updatesContinuation: subscription.updatesContinuation
                 )
+                subscription.updatesContinuation.yield(.available)
             }
 
             guard shouldRestartReplay else {
@@ -375,7 +411,21 @@ actor RemoteHelperClient {
         else {
             return
         }
-        watchEventsCont.yield(event)
+        guard let (clientSubscriptionId, subscription) = activeSubscriptions.first(where: {
+            $0.value.helperGeneration == generation
+                && $0.value.helperSubscriptionId == event.subscriptionId
+        }) else {
+            watchEventsCont.yield(event)
+            return
+        }
+        let stableEvent = RemoteHelperWatchEvent(
+            subscriptionId: clientSubscriptionId,
+            root: event.root,
+            kind: event.kind,
+            paths: event.paths
+        )
+        watchEventsCont.yield(stableEvent)
+        subscription.updatesContinuation.yield(.event(stableEvent))
     }
 
     private func handleExit(_ status: Int32) {
@@ -386,6 +436,9 @@ actor RemoteHelperClient {
         idleShutdownTask?.cancel()
         idleShutdownTask = nil
         drainPending(with: RemoteHelperClientError.notRunning)
+        for subscription in activeSubscriptions.values {
+            subscription.updatesContinuation.yield(.unavailable)
+        }
         if RemoteExec.isConnectionFailure(exitCode: status) {
             Task { @MainActor [host] in
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)

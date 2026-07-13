@@ -5,9 +5,33 @@ enum RemotePollCadence {
     static let activeInterval: TimeInterval = 5
     static let inactiveInterval: TimeInterval = 45
     static let maxBackoff: TimeInterval = 300
+    static let helperSafetyNetInterval: TimeInterval = 300
 
     static func nextDelay(succeeded: Bool, appActive: Bool, previous: TimeInterval) -> TimeInterval {
         succeeded ? (appActive ? activeInterval : inactiveInterval) : min(previous * 2, maxBackoff)
+    }
+}
+
+struct RemoteProjectGitTickGate {
+    private var isTicking = false
+    private var hasPendingTick = false
+
+    mutating func beginOrMarkPending() -> Bool {
+        guard !isTicking else {
+            hasPendingTick = true
+            return false
+        }
+        isTicking = true
+        return true
+    }
+
+    mutating func finishTick() -> Bool {
+        guard hasPendingTick else {
+            isTicking = false
+            return false
+        }
+        hasPendingTick = false
+        return true
     }
 }
 
@@ -19,7 +43,9 @@ final class RemoteProjectGitWatcher {
     private let projectPath: URL
     private let host: String?
     private var pollTask: Task<Void, Never>?
+    private var helperSession: RemoteHelperWatchSession?
     private var lastEntries: [RemoteWorktreePollEntry]?
+    private var tickGate = RemoteProjectGitTickGate()
 
     init(projectPath: URL) {
         self.projectPath = projectPath
@@ -27,12 +53,44 @@ final class RemoteProjectGitWatcher {
     }
 
     func start() {
-        guard pollTask == nil else { return }
+        guard pollTask == nil, helperSession == nil else { return }
+        if let host {
+            let session = RemoteHelperWatchSession(
+                host: host,
+                root: projectPath.path,
+                kinds: [.git]
+            )
+            session.onEvent = { [weak self] event in
+                guard event.kind == .git else { return }
+                Task { @MainActor in _ = await self?.runTick() }
+            }
+            session.onAvailabilityChanged = { [weak self] _ in
+                self?.restartPolling()
+            }
+            helperSession = session
+            session.start()
+        }
+        restartPolling()
+    }
+
+    private func restartPolling() {
+        pollTask?.cancel()
         pollTask = Task { [weak self] in
             var delay = RemotePollCadence.activeInterval
             while !Task.isCancelled {
                 guard let self else { return }
-                let succeeded = await tick()
+                if helperSession?.isAvailable == true {
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(RemotePollCadence.helperSafetyNetInterval * 1_000_000_000))
+                    } catch {
+                        return
+                    }
+                    guard !Task.isCancelled else { return }
+                    _ = await runTick()
+                    continue
+                }
+                let succeeded = await runTick()
+                helperSession?.retryIfNeeded()
                 delay = RemotePollCadence.nextDelay(
                     succeeded: succeeded,
                     appActive: NSApp?.isActive ?? true,
@@ -46,9 +104,20 @@ final class RemoteProjectGitWatcher {
     func stop() {
         pollTask?.cancel()
         pollTask = nil
+        helperSession?.stop()
+        helperSession = nil
     }
 
-    private func tick() async -> Bool {
+    private func runTick() async -> Bool {
+        guard tickGate.beginOrMarkPending() else { return true }
+        var succeeded = true
+        repeat {
+            succeeded = await tickOnce()
+        } while tickGate.finishTick()
+        return succeeded
+    }
+
+    private func tickOnce() async -> Bool {
         let result = try? await Process.git(["worktree", "list", "--porcelain"], cwd: projectPath)
         guard let result, !RemoteExec.isConnectionFailure(exitCode: result.exitCode) else {
             if let host { RemoteHostStatusStore.shared.reportConnectionFailure(host: host) }

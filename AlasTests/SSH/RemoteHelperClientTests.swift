@@ -12,6 +12,30 @@ struct RemoteHelperClientTests {
         #expect(invocation.args.last?.contains("alas-helper\" serve") == true)
     }
 
+    @Test func retryGateThrottlesFailedAttempts() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var gate = RemoteHelperRetryGate(retryInterval: 300)
+
+        #expect(gate.shouldAttempt(now: start))
+        gate.markAttempt(at: start)
+
+        #expect(!gate.shouldAttempt(now: start.addingTimeInterval(10)))
+        #expect(gate.shouldAttempt(now: start.addingTimeInterval(301)))
+    }
+
+    @Test func retryGateClearsThrottleAfterLiveHelperDrops() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var gate = RemoteHelperRetryGate(retryInterval: 300)
+
+        gate.markAttempt(at: start)
+        let becameAvailable = gate.setAvailable(true)
+        let becameUnavailable = gate.setAvailable(false)
+
+        #expect(becameAvailable)
+        #expect(becameUnavailable)
+        #expect(gate.shouldAttempt(now: start.addingTimeInterval(10)))
+    }
+
     @Test func pingUsesJSONRPCNewlineTransport() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
@@ -57,7 +81,7 @@ struct RemoteHelperClientTests {
         {"jsonrpc":"2.0","id":1,"result":{
           "name":"alas-helper",
           "protocolVersion":1,
-          "binaryVersion":"0.2.0",
+          "binaryVersion":"0.3.0",
           "capabilities":{"watchKinds":[],"fs":{"read":true,"write":true,"stat":true},"ping":true}
         }}
         """#.utf8))
@@ -95,6 +119,81 @@ struct RemoteHelperClientTests {
             kind: .files,
             paths: ["/srv/repo/README.md"]
         ))
+    }
+
+    @Test func legacyWatchEventBufferDropsOldestEventsAtItsLimit() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let firstPing = Task { try await client.ping() }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8))
+        _ = try await firstPing.value
+
+        for index in 0 ... RemoteHelperClient.legacyWatchEventBufferLimit {
+            transport.send(frame: Data(#"""
+            {"jsonrpc":"2.0","method":"watch/event","params":{
+              "subscriptionId":"sub-\#(index)",
+              "root":"/srv/repo",
+              "kind":"files",
+              "paths":["/srv/repo/file-\#(index)"]
+            }}
+            """#.utf8))
+        }
+
+        let barrierPing = Task { try await client.ping() }
+        try await waitUntil { transport.sentFrames.count == 2 }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"result":{"ok":true}}"#.utf8))
+        _ = try await barrierPing.value
+
+        var iterator = client.watchEvents.makeAsyncIterator()
+        #expect(await iterator.next()?.subscriptionId == "sub-1")
+    }
+
+    @Test func subscriptionUpdatesUseStableClientIdAndReportChannelLoss() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let subscribe = Task {
+            try await client.subscribeWithUpdates(root: "/srv/repo", kinds: [.files, .git])
+        }
+        try await waitUntil { !transport.sentFrames.isEmpty }
+        let request = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[0]) as? [String: Any]
+        )
+        let requestId = try #require(request["id"] as? Int)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(requestId),"result":{"subscriptionId":"helper-9"}}"#.utf8))
+
+        let handle = try await subscribe.value
+        #expect(handle.subscriptionId == "client-1")
+        var updates = handle.updates.makeAsyncIterator()
+        #expect(await updates.next() == .available)
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"watch/event","params":{
+          "subscriptionId":"helper-9",
+          "root":"/srv/repo",
+          "kind":"files",
+          "paths":["/srv/repo/README.md"]
+        }}
+        """#.utf8))
+        #expect(await updates.next() == .event(RemoteHelperWatchEvent(
+            subscriptionId: "client-1",
+            root: "/srv/repo",
+            kind: .files,
+            paths: ["/srv/repo/README.md"]
+        )))
+
+        transport.send(exitStatus: 1)
+        #expect(await updates.next() == .unavailable)
     }
 
     @Test func jsonrpcErrorResponseStillSchedulesIdleShutdown() async throws {
@@ -629,6 +728,56 @@ struct RemoteHelperClientTests {
         let readId = try #require(readRequest["id"] as? Int)
         secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(readId),"result":{"content":"ok","mtime":null}}"#.utf8))
         #expect((try await secondRead.value).content == "ok")
+    }
+
+    @Test func dropLocalSubscriptionRemovesStaleReplayBlocker() async throws {
+        let firstTransport = FakeJSONRPCTransport()
+        let secondTransport = FakeJSONRPCTransport()
+        let queue = RemoteHelperTransportQueue([firstTransport, secondTransport])
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 60_000_000_000,
+            transportFactory: { queue.next() }
+        )
+
+        let subscribe = Task {
+            try await client.subscribe(root: "/deleted-repo", kinds: [.files])
+        }
+        try await waitUntil { firstTransport.sentFrames.count == 1 }
+        firstTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"subscriptionId":"stale-sub"}}"#.utf8))
+        #expect((try await subscribe.value).subscriptionId == "client-1")
+
+        firstTransport.send(exitStatus: 1)
+        try await waitUntilAsync {
+            await client.lastObservedExitStatus() == 1
+        }
+
+        let failedRead = Task {
+            try await client.read(path: "/other-repo/file.txt")
+        }
+        try await waitUntil { secondTransport.sentFrames.count == 1 }
+        let failedReplay = try #require(
+            JSONSerialization.jsonObject(with: secondTransport.sentFrames[0]) as? [String: Any]
+        )
+        #expect(failedReplay["method"] as? String == "watch/subscribe")
+        let failedReplayId = try #require(failedReplay["id"] as? Int)
+        secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(failedReplayId),"error":{"code":-32010,"message":"invalid root"}}"#.utf8))
+        await #expect(throws: RemoteHelperClientError.self) {
+            try await failedRead.value
+        }
+
+        await client.dropLocalSubscription(subscriptionId: "client-1")
+        let read = Task {
+            try await client.read(path: "/other-repo/file.txt")
+        }
+        try await waitUntil { secondTransport.sentFrames.count == 2 }
+        let readRequest = try #require(
+            JSONSerialization.jsonObject(with: secondTransport.sentFrames[1]) as? [String: Any]
+        )
+        #expect(readRequest["method"] as? String == "fs/read")
+        let readId = try #require(readRequest["id"] as? Int)
+        secondTransport.send(frame: Data(#"{"jsonrpc":"2.0","id":\#(readId),"result":{"content":"ok","mtime":null}}"#.utf8))
+        #expect((try await read.value).content == "ok")
     }
 
     @Test func unsubscribeAfterHelperExitDropsSubscriptionWithoutReplay() async throws {

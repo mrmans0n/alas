@@ -253,8 +253,11 @@ final class RightPaneState {
     @ObservationIgnored
     private let reviewLoopRemoteRefreshMinimumInterval: TimeInterval = 45
     @ObservationIgnored private var remotePollTask: Task<Void, Never>?
+    @ObservationIgnored private var remoteHelperSession: RemoteHelperWatchSession?
+    @ObservationIgnored private let remoteEventDebouncer = DebounceTimer(interval: 0.5, maxWait: 2.0)
     @ObservationIgnored private var remoteFingerprint: String?
     private static let remotePollIntervalNanos: UInt64 = 7 * 1_000_000_000
+    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
 
     /// True iff the "behind base" chip should be shown.
     var showBehindBaseChip: Bool {
@@ -284,12 +287,16 @@ final class RightPaneState {
         watcher.onChange = { [weak self] in
             Task { @MainActor in await self?.refresh() }
         }
+        remoteEventDebouncer.onFire = { [weak self] in
+            Task { @MainActor in await self?.refresh() }
+        }
     }
 
     func start() {
         if !worktree.path.isRemoteAlasPath {
             watcher.start()
         } else {
+            startRemoteHelperWatching()
             startRemotePolling()
         }
         Task { @MainActor in await self.refresh() }
@@ -314,15 +321,45 @@ final class RightPaneState {
         syncStatusTimer = nil
         remotePollTask?.cancel()
         remotePollTask = nil
+        remoteHelperSession?.stop()
+        remoteHelperSession = nil
+        remoteEventDebouncer.cancel()
+    }
+
+    private func startRemoteHelperWatching() {
+        guard remoteHelperSession == nil,
+              let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path)
+        else { return }
+        let session = RemoteHelperWatchSession(
+            host: host,
+            root: worktree.path.path,
+            kinds: [.files, .git]
+        )
+        session.onEvent = { [weak self] _ in
+            self?.remoteEventDebouncer.poke()
+        }
+        session.onAvailabilityChanged = { [weak self] _ in
+            self?.startRemotePolling()
+        }
+        remoteHelperSession = session
+        session.start()
     }
 
     private func startRemotePolling() {
         remotePollTask?.cancel()
         remotePollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.remotePollIntervalNanos)
+                let interval = self?.remoteHelperSession?.isAvailable == true
+                    ? Self.remoteHelperSafetyNetNanos
+                    : Self.remotePollIntervalNanos
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
                 guard let self, !Task.isCancelled, NSApp?.isActive ?? true else { continue }
                 await remotePollTick()
+                remoteHelperSession?.retryIfNeeded()
             }
         }
     }

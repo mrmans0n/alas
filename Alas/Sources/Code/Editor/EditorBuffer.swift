@@ -2,6 +2,85 @@ import AppKit
 import Foundation
 import Observation
 
+struct RemoteConflictCheckCoalescer {
+    private var isChecking = false
+    private var hasPendingCheck = false
+
+    mutating func beginOrMarkPending() -> Bool {
+        guard !isChecking else {
+            hasPendingCheck = true
+            return false
+        }
+        isChecking = true
+        return true
+    }
+
+    mutating func finishCheck() -> Bool {
+        guard hasPendingCheck else {
+            isChecking = false
+            return false
+        }
+        hasPendingCheck = false
+        return true
+    }
+}
+
+struct RemoteHelperFileWatchMatcher {
+    private let targetPath: String
+    private let targetRelativePath: String?
+
+    init(targetURL: URL, watchedRootURL: URL) {
+        targetPath = Self.normalizedPath(targetURL.path)
+        targetRelativePath = Self.relativePath(of: targetURL.path, under: watchedRootURL.path)
+    }
+
+    func matches(event: RemoteHelperWatchEvent) -> Bool {
+        event.paths.contains { eventPath in
+            let normalizedEventPath = Self.normalizedPath(eventPath)
+            if normalizedEventPath == targetPath { return true }
+            guard
+                let targetRelativePath,
+                let eventRelativePath = Self.relativePath(of: normalizedEventPath, under: event.root)
+            else {
+                return false
+            }
+            return eventRelativePath == targetRelativePath
+        }
+    }
+
+    private static func relativePath(of path: String, under root: String) -> String? {
+        let path = normalizedPath(path)
+        let root = normalizedPath(root)
+        guard !root.isEmpty, path != root else { return nil }
+        let prefix = root == "/" ? root : root + "/"
+        guard path.hasPrefix(prefix) else { return nil }
+        return String(path.dropFirst(prefix.count))
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        guard !path.isEmpty else { return path }
+        let isAbsolute = path.hasPrefix("/")
+        var components: [String] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            switch component {
+            case ".":
+                continue
+            case "..":
+                if !components.isEmpty {
+                    components.removeLast()
+                } else if !isAbsolute {
+                    components.append(String(component))
+                }
+            default:
+                components.append(String(component))
+            }
+        }
+        let joined = components.joined(separator: "/")
+        if isAbsolute { return "/" + joined }
+        return joined
+    }
+}
+
 /// Editor buffer for one open worktree file. Owns the live `NSTextStorage` displayed by
 /// `CodeTextView`, plus the original-on-disk snapshot used for dirty
 /// detection, save normalization, and conflict resolution.
@@ -101,7 +180,13 @@ final class EditorBuffer {
     @ObservationIgnored
     private var remotePollTask: Task<Void, Never>?
     @ObservationIgnored
+    private var remoteHelperSession: RemoteHelperWatchSession?
+    @ObservationIgnored
+    private var remoteConflictChecks = RemoteConflictCheckCoalescer()
+    @ObservationIgnored
     private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
+    @ObservationIgnored
+    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
     @ObservationIgnored
     private var remoteLoadGeneration = 0
     @ObservationIgnored
@@ -551,7 +636,8 @@ final class EditorBuffer {
 
     func startWatching() {
         stopWatching()
-        if remoteHost != nil {
+        if let remoteHost {
+            startRemoteHelperWatching(host: remoteHost)
             startRemoteConflictPolling()
             return
         }
@@ -575,6 +661,8 @@ final class EditorBuffer {
     func stopWatching() {
         remotePollTask?.cancel()
         remotePollTask = nil
+        remoteHelperSession?.stop()
+        remoteHelperSession = nil
         watcherSource?.cancel()
         watcherSource = nil
         watcherFD = -1
@@ -583,29 +671,72 @@ final class EditorBuffer {
 
     private func startRemoteConflictPolling() {
         guard let host = remoteHost else { return }
-        let path = absoluteFileURL.path
+        remotePollTask?.cancel()
         remotePollTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.remoteConflictPollNanos)
-                guard let self, !Task.isCancelled else { return }
-
+                let interval = self?.remoteHelperSession?.isAvailable == true
+                    ? Self.remoteHelperSafetyNetNanos
+                    : Self.remoteConflictPollNanos
                 do {
-                    guard let mtime = try await RemoteFileAccess.mtime(host: host, path: path) else {
-                        if self.dirty { self.conflict = .deletedOnDisk }
-                        continue
-                    }
-                    RemoteHostStatusStore.shared.reportSuccess(host: host)
-                    guard mtime > self.originalMtime else { continue }
-                    if self.dirty {
-                        self.conflict = .changedOnDisk
-                    } else {
-                        self.revert()
-                    }
+                    try await Task.sleep(nanoseconds: interval)
                 } catch {
-                    if case .connectionFailed = error as? RemoteFileAccessError {
-                        RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
-                    }
+                    return
                 }
+                guard let self, !Task.isCancelled else { return }
+                await checkRemoteConflict(host: host)
+                remoteHelperSession?.retryIfNeeded()
+            }
+        }
+    }
+
+    private func startRemoteHelperWatching(host: String) {
+        guard remoteHelperSession == nil else { return }
+        let watchedRoot = absoluteFileURL.deletingLastPathComponent()
+        let fileWatchMatcher = RemoteHelperFileWatchMatcher(
+            targetURL: absoluteFileURL,
+            watchedRootURL: watchedRoot
+        )
+        let session = RemoteHelperWatchSession(
+            host: host,
+            root: watchedRoot.path,
+            kinds: [.files]
+        )
+        session.onEvent = { [weak self] event in
+            guard let self, event.kind == .files else { return }
+            guard fileWatchMatcher.matches(event: event) else { return }
+            Task { @MainActor in await self.checkRemoteConflict(host: host) }
+        }
+        session.onAvailabilityChanged = { [weak self] _ in
+            self?.startRemoteConflictPolling()
+        }
+        remoteHelperSession = session
+        session.start()
+    }
+
+    private func checkRemoteConflict(host: String) async {
+        guard remoteConflictChecks.beginOrMarkPending() else { return }
+        repeat {
+            await checkRemoteConflictOnce(host: host)
+        } while remoteConflictChecks.finishCheck()
+    }
+
+    private func checkRemoteConflictOnce(host: String) async {
+        guard !remoteSaveInFlight else { return }
+        do {
+            guard let mtime = try await RemoteFileAccess.mtime(host: host, path: absoluteFileURL.path) else {
+                if dirty { conflict = .deletedOnDisk }
+                return
+            }
+            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            guard mtime > originalMtime else { return }
+            if dirty {
+                conflict = .changedOnDisk
+            } else {
+                revert()
+            }
+        } catch {
+            if case .connectionFailed = error as? RemoteFileAccessError {
+                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
         }
     }
