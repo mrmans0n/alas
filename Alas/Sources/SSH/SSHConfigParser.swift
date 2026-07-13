@@ -22,10 +22,10 @@ enum SSHConfigParser {
         let root = configPath ?? home.appendingPathComponent(".ssh/config")
         var hosts: [SSHConfigHost] = []
         var seenAliases = Set<String>()
-        var visitedFiles = Set<String>()
+        var activeFiles = Set<String>()
         parseFile(root, home: home, fileManager: fileManager, guards: [],
                   hosts: &hosts, seenAliases: &seenAliases,
-                  visitedFiles: &visitedFiles, depth: 0)
+                  activeFiles: &activeFiles, depth: 0)
         return hosts
     }
 
@@ -41,13 +41,18 @@ enum SSHConfigParser {
         guards: [[String]],
         hosts: inout [SSHConfigHost],
         seenAliases: inout Set<String>,
-        visitedFiles: inout Set<String>,
+        activeFiles: inout Set<String>,
         depth: Int
     ) {
         guard depth <= maxIncludeDepth else { return }
+        // Recursion-stack cycle guard: block only files that are ancestors in
+        // the current Include chain, and release on exit. The same file may be
+        // included from several contexts (e.g. under different `Host` guards),
+        // and each must be re-parsed so guard-filtered aliases aren't lost.
         let canonical = url.standardizedFileURL.resolvingSymlinksInPath().path
-        guard !visitedFiles.contains(canonical) else { return }
-        visitedFiles.insert(canonical)
+        guard !activeFiles.contains(canonical) else { return }
+        activeFiles.insert(canonical)
+        defer { activeFiles.remove(canonical) }
 
         guard let contents = try? String(contentsOf: url, encoding: .utf8) else { return }
 
@@ -102,7 +107,7 @@ enum SSHConfigParser {
                     for file in expandInclude(pattern, home: home, fileManager: fileManager) {
                         parseFile(file, home: home, fileManager: fileManager, guards: includeGuards,
                                   hosts: &hosts, seenAliases: &seenAliases,
-                                  visitedFiles: &visitedFiles, depth: depth + 1)
+                                  activeFiles: &activeFiles, depth: depth + 1)
                     }
                 }
             default:

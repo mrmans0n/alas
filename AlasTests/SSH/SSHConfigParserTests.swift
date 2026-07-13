@@ -176,6 +176,26 @@ struct SSHConfigParserTests {
         #expect(hosts.first?.hostName == "10.2.2.2")
     }
 
+    @Test func reparsesSharedIncludeUnderDifferentGuards() throws {
+        let home = try makeHome(
+            config: """
+            Host *.corp
+                Include shared
+            Host *.prod
+                Include shared
+            """,
+            extraFiles: [".ssh/shared": """
+            Host app.corp
+                HostName 10.1.1.1
+            Host app.prod
+                HostName 10.2.2.2
+            """]
+        )
+        // The shared file is included under two different guards; the global
+        // visited-file skip must not drop the alias matching the second guard.
+        #expect(Set(SSHConfigParser.parse(home: home).map(\.alias)) == ["app.corp", "app.prod"])
+    }
+
     @Test func followsIncludeUnderWildcardHost() throws {
         let home = try makeHome(
             config: "Host *\n    Include common.conf\n",
