@@ -48,6 +48,7 @@ impl SubscriptionWatcher {
         sender: Sender<ServerMessage>,
     ) -> Result<Self, String> {
         let git_info = resolve_git_info(&root);
+        let paths_to_watch = watch_paths(&root, git_info.as_ref(), &kinds);
         let callback_root = root.clone();
         let callback_git_info = git_info.clone();
         let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
@@ -74,23 +75,10 @@ impl SubscriptionWatcher {
         })
         .map_err(|error| format!("watcher creation failed: {error}"))?;
 
-        watcher
-            .watch(&root, RecursiveMode::Recursive)
-            .map_err(|error| format!("watch root failed: {error}"))?;
-        if let Some(info) = git_info {
-            if !info.common_dir.starts_with(&root) {
-                watcher
-                    .watch(&info.common_dir, RecursiveMode::Recursive)
-                    .map_err(|error| format!("watch git dir failed: {error}"))?;
-            }
-            if info.worktree_dir != info.common_dir
-                && !info.worktree_dir.starts_with(&root)
-                && !info.worktree_dir.starts_with(&info.common_dir)
-            {
-                watcher
-                    .watch(&info.worktree_dir, RecursiveMode::Recursive)
-                    .map_err(|error| format!("watch worktree git dir failed: {error}"))?;
-            }
+        for path in paths_to_watch {
+            watcher
+                .watch(&path, RecursiveMode::Recursive)
+                .map_err(|error| format!("watch path {} failed: {error}", path.display()))?;
         }
         Ok(Self { _watcher: watcher })
     }
@@ -143,6 +131,30 @@ fn normalize_event_path(path: &Path) -> PathBuf {
         path.to_path_buf()
     } else {
         std::env::current_dir().unwrap_or_default().join(path)
+    }
+}
+
+fn watch_paths(
+    root: &Path,
+    git_info: Option<&GitInfo>,
+    kinds: &HashSet<WatchKind>,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if kinds.contains(&WatchKind::Files) {
+        push_unique_path(&mut paths, root);
+    }
+    if kinds.contains(&WatchKind::Git) {
+        if let Some(info) = git_info {
+            push_unique_path(&mut paths, &info.common_dir);
+            push_unique_path(&mut paths, &info.worktree_dir);
+        }
+    }
+    paths
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: &Path) {
+    if !paths.iter().any(|existing| existing == path) {
+        paths.push(path.to_path_buf());
     }
 }
 
@@ -221,6 +233,46 @@ mod tests {
             common_dir: root.join(".git"),
             worktree_dir: root.join(".git"),
         }
+    }
+
+    #[test]
+    fn file_only_watch_registers_root_without_git_dirs() {
+        let root = Path::new("/repo");
+        let info = git_info(root);
+
+        assert_eq!(
+            watch_paths(root, Some(&info), &HashSet::from([WatchKind::Files])),
+            vec![root.to_path_buf()]
+        );
+    }
+
+    #[test]
+    fn git_only_watch_registers_git_dirs_without_root() {
+        let root = Path::new("/repo");
+        let info = GitInfo {
+            common_dir: PathBuf::from("/repos/shared/.git"),
+            worktree_dir: PathBuf::from("/repos/shared/.git/worktrees/feature"),
+        };
+
+        assert_eq!(
+            watch_paths(root, Some(&info), &HashSet::from([WatchKind::Git])),
+            vec![info.common_dir.clone(), info.worktree_dir.clone()]
+        );
+    }
+
+    #[test]
+    fn file_and_git_watch_registers_root_and_git_dirs_once() {
+        let root = Path::new("/repo");
+        let info = git_info(root);
+
+        assert_eq!(
+            watch_paths(
+                root,
+                Some(&info),
+                &HashSet::from([WatchKind::Files, WatchKind::Git])
+            ),
+            vec![root.to_path_buf(), root.join(".git")]
+        );
     }
 
     #[test]
