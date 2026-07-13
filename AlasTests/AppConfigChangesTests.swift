@@ -164,22 +164,34 @@ struct AppConfigChangesTests {
     }
 
     @Test func migratesLegacyTrackUpstreamTrueToBranchUpstream() throws {
-        let changes = try decodeChanges { var c = $0; c.removeValue(forKey: "comparisonMode"); c["trackUpstreamForCommits"] = true; return c }
+        let changes = try decodeChanges { var c = $0
+        c.removeValue(forKey: "comparisonMode")
+        c["trackUpstreamForCommits"] = true
+        return c }
         #expect(changes.comparisonMode == .branchUpstream)
     }
 
     @Test func migratesLegacyTrackUpstreamFalseToAuto() throws {
-        let changes = try decodeChanges { var c = $0; c.removeValue(forKey: "comparisonMode"); c["trackUpstreamForCommits"] = false; return c }
+        let changes = try decodeChanges { var c = $0
+        c.removeValue(forKey: "comparisonMode")
+        c["trackUpstreamForCommits"] = false
+        return c }
         #expect(changes.comparisonMode == .auto)
     }
 
     @Test func defaultsToAutoWhenNeitherKeyPresent() throws {
-        let changes = try decodeChanges { var c = $0; c.removeValue(forKey: "comparisonMode"); c.removeValue(forKey: "trackUpstreamForCommits"); return c }
+        let changes = try decodeChanges { var c = $0
+        c.removeValue(forKey: "comparisonMode")
+        c.removeValue(forKey: "trackUpstreamForCommits")
+        return c }
         #expect(changes.comparisonMode == .auto)
     }
 
     @Test func explicitComparisonModeWinsOverLegacyBool() throws {
-        let changes = try decodeChanges { var c = $0; c["comparisonMode"] = "manual"; c["trackUpstreamForCommits"] = true; return c }
+        let changes = try decodeChanges { var c = $0
+        c["comparisonMode"] = "manual"
+        c["trackUpstreamForCommits"] = true
+        return c }
         #expect(changes.comparisonMode == .manual)
     }
 

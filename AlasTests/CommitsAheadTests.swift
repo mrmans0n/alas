@@ -251,4 +251,28 @@ struct CommitsAheadTests {
         #expect(auto.count == 1)
         #expect(auto[0].subject == "work")
     }
+
+    @Test func baseOriginFirstPrefersOriginForSlashNamedBase() async throws {
+        let (worktree, _) = try await makeRepoWithUpstream()
+        defer { try? FileManager.default.removeItem(at: worktree.deletingLastPathComponent()) }
+        // Create a slash-named base that exists both locally and on origin.
+        _ = try await Process.git(["checkout", "-q", "-b", "release/1.0"], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "chore: release base"], cwd: worktree)
+        _ = try await Process.git(["push", "-q", "-u", "origin", "release/1.0"], cwd: worktree)
+        _ = try await Process.git(["checkout", "-q", "-b", "feature"], cwd: worktree)
+        _ = try await Process.git(["commit", "-q", "--allow-empty", "-m", "feat: feature work"], cwd: worktree)
+
+        let svc = GitService()
+        // Auto must prefer origin/release/1.0 even though the local branch exists,
+        // so a stale local release branch doesn't reintroduce rebase instability.
+        let (_, autoRef) = try await svc.commitsAhead(
+            at: worktree, baseBranch: "release/1.0", resolution: .baseOriginFirst
+        )
+        #expect(autoRef == "origin/release/1.0")
+        // Manual (local-first) still resolves the local slash-named branch.
+        let (_, manualRef) = try await svc.commitsAhead(
+            at: worktree, baseBranch: "release/1.0", resolution: .baseLocalFirst
+        )
+        #expect(manualRef == "release/1.0")
+    }
 }

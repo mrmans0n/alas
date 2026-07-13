@@ -1232,7 +1232,14 @@ extension GitService {
         var baseName: String? = nil
         if upstreamName == nil, let base = baseBranch, !base.isEmpty {
             if base.contains("/") {
-                if try await refExists("refs/heads/\(base)") {
+                // Auto prefers the canonical remote ref even for slash-named
+                // bases (e.g. `release/1.0`), so a stale local branch of the
+                // same name doesn't reintroduce rebase instability. Other
+                // resolutions keep the local-first behavior for ambiguous
+                // slash names.
+                if resolution == .baseOriginFirst, try await refExists("refs/remotes/origin/\(base)") {
+                    baseName = "origin/\(base)"
+                } else if try await refExists("refs/heads/\(base)") {
                     baseName = base
                 } else if try await refExists("refs/remotes/\(base)") {
                     baseName = base
