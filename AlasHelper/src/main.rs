@@ -971,16 +971,23 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
         .as_ref()
         .map(|(offset, _)| *offset)
         .unwrap_or(stderr_offset);
-    if let Some(sender) = state.event_sender.clone() {
-        spawn_proc_stdout_tail(
-            params.proc_id.clone(),
-            dir.clone(),
-            stdout_next_offset,
-            sender.clone(),
-        );
-        spawn_proc_stderr_tail(params.proc_id.clone(), dir.clone(), stderr_next_offset, sender);
-    }
     let status = proc_status_in_dir(&dir);
+    if status.running {
+        if let Some(sender) = state.event_sender.clone() {
+            spawn_proc_stdout_tail(
+                params.proc_id.clone(),
+                dir.clone(),
+                stdout_next_offset,
+                sender.clone(),
+            );
+            spawn_proc_stderr_tail(
+                params.proc_id.clone(),
+                dir.clone(),
+                stderr_next_offset,
+                sender,
+            );
+        }
+    }
     Ok(json!({
         "procId": params.proc_id,
         "running": status.running,
@@ -1066,10 +1073,7 @@ fn proc_status_in_dir(dir: &Path) -> ProcStatus {
     let exit_code = std::fs::read_to_string(dir.join("exit"))
         .ok()
         .and_then(|value| value.trim().parse::<i32>().ok());
-    let running = exit_code.is_none()
-        && read_pid(dir)
-            .map(pid_is_alive)
-            .unwrap_or(false);
+    let running = exit_code.is_none() && read_pid(dir).map(pid_is_alive).unwrap_or(false);
     ProcStatus { running, exit_code }
 }
 
@@ -1078,7 +1082,12 @@ fn read_stdout_frames(path: &Path, offset: u64) -> Result<Vec<ProcReplayFrame>, 
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(jsonrpc_error(-32053, format!("stdout open failed: {error}"))),
+        Err(error) => {
+            return Err(jsonrpc_error(
+                -32053,
+                format!("stdout open failed: {error}"),
+            ));
+        }
     };
     file.seek(io::SeekFrom::Start(offset))
         .map_err(|error| jsonrpc_error(-32053, format!("stdout seek failed: {error}")))?;
@@ -1107,7 +1116,12 @@ fn read_file_tail(path: &Path, offset: u64) -> Result<Option<(u64, Vec<u8>)>, He
     let mut file = match std::fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(jsonrpc_error(-32053, format!("stderr open failed: {error}"))),
+        Err(error) => {
+            return Err(jsonrpc_error(
+                -32053,
+                format!("stderr open failed: {error}"),
+            ));
+        }
     };
     file.seek(io::SeekFrom::Start(offset))
         .map_err(|error| jsonrpc_error(-32053, format!("stderr seek failed: {error}")))?;

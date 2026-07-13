@@ -306,12 +306,17 @@ actor RemoteHelperClient {
                 didExit = true
             }
         }
-        if result.running, !didExit {
+        if didExit {
+            continuation.finish()
+            activeProcAttachments.removeValue(forKey: procId)
+            scheduleIdleShutdownIfPossible()
+        } else if result.running {
             continuation.yield(.available)
-        } else if !didExit {
+        } else {
             continuation.yield(.exited(result.exitCode))
             continuation.finish()
             activeProcAttachments.removeValue(forKey: procId)
+            scheduleIdleShutdownIfPossible()
         }
         return RemoteHelperProcAttachHandle(procId: procId, events: events)
     }
