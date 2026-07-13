@@ -18,6 +18,22 @@ struct RemoteExecTests {
         #expect(invocation.args == expected)
     }
 
+    @Test func inheritedPathInvocationOmitsAugmentedPrelude() {
+        let invocation = RemoteExec.invocation(
+            host: "devbox",
+            cwd: nil,
+            command: "command -v npm",
+            pathPolicy: .inherited
+        )
+        let expected = SSHCommand(host: "devbox", mode: .batch)
+            .argv(remoteScript: SSHCommand.remoteScript(
+                command: "command -v npm",
+                pathPolicy: .inherited
+            ))
+        #expect(invocation.args == expected)
+        #expect(invocation.args.last?.contains(".alas/bin") == false)
+    }
+
     @Test func exit255IsConnectionFailure() {
         #expect(RemoteExec.isConnectionFailure(exitCode: 255))
         #expect(!RemoteExec.isConnectionFailure(exitCode: 0))

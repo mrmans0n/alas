@@ -7,28 +7,43 @@ enum ACPSetupNudgeMode: Equatable {
 
 /// Kept out of the SwiftUI struct so tests can call it without a view hierarchy.
 enum ACPSetupNudgeBannerCopy {
-    static func idleMessage(mode: ACPSetupNudgeMode, agentDisplayName: String) -> String {
+    static func idleMessage(
+        mode: ACPSetupNudgeMode,
+        agentDisplayName: String,
+        targetHost: String? = nil
+    ) -> String {
+        let target = targetHost.map { " on \($0)" } ?? ""
         switch mode {
         case .install:
-            return "\(agentDisplayName) requires the ACP adapter to be installed."
+            return "\(agentDisplayName) requires the ACP adapter to be installed\(target)."
         case .update(let current, let latest):
-            return "\(agentDisplayName) adapter update available (\(current) → \(latest))."
+            return "\(agentDisplayName) adapter update\(target) available (\(current) → \(latest))."
         }
     }
 
-    static func installedMessage(mode: ACPSetupNudgeMode, agentDisplayName: String) -> String {
+    static func installedMessage(
+        mode: ACPSetupNudgeMode,
+        agentDisplayName: String,
+        targetHost: String? = nil
+    ) -> String {
+        let target = targetHost.map { " on \($0)" } ?? ""
         switch mode {
         case .install:
-            return "\(agentDisplayName) adapter installed — connecting…"
+            return "\(agentDisplayName) adapter installed\(target) — connecting…"
         case .update:
-            return "\(agentDisplayName) adapter updated — reconnecting…"
+            return "\(agentDisplayName) adapter updated\(target) — reconnecting…"
         }
     }
 
-    static func installingMessage(mode: ACPSetupNudgeMode, agentDisplayName: String) -> String {
+    static func installingMessage(
+        mode: ACPSetupNudgeMode,
+        agentDisplayName: String,
+        targetHost: String? = nil
+    ) -> String {
+        let target = targetHost.map { " on \($0)" } ?? ""
         switch mode {
-        case .install: return "Installing \(agentDisplayName) adapter…"
-        case .update:  return "Updating \(agentDisplayName) adapter…"
+        case .install: return "Installing \(agentDisplayName) adapter\(target)…"
+        case .update:  return "Updating \(agentDisplayName) adapter\(target)…"
         }
     }
 
@@ -51,7 +66,8 @@ enum ACPSetupNudgeBannerCopy {
 struct ACPSetupNudgeBanner: View {
     let agentID: String
     let agentDisplayName: String
-    let installer: ACPAdapterInstaller
+    let targetHost: String?
+    let install: () async throws -> Void
     let mode: ACPSetupNudgeMode
     let onDismiss: () -> Void
     /// Called after a successful install. Lets the parent re-run setup
@@ -66,16 +82,18 @@ struct ACPSetupNudgeBanner: View {
     init(
         agentID: String,
         agentDisplayName: String,
-        installer: ACPAdapterInstaller,
+        targetHost: String? = nil,
         mode: ACPSetupNudgeMode = .install,
         onDismiss: @escaping () -> Void,
+        install: @escaping () async throws -> Void,
         onInstalled: @escaping () async -> Void
     ) {
         self.agentID = agentID
         self.agentDisplayName = agentDisplayName
-        self.installer = installer
+        self.targetHost = targetHost
         self.mode = mode
         self.onDismiss = onDismiss
+        self.install = install
         self.onInstalled = onInstalled
     }
 
@@ -135,11 +153,14 @@ struct ACPSetupNudgeBanner: View {
     private var message: String {
         switch status {
         case .idle:
-            return ACPSetupNudgeBannerCopy.idleMessage(mode: mode, agentDisplayName: agentDisplayName)
+            return ACPSetupNudgeBannerCopy.idleMessage(
+                mode: mode, agentDisplayName: agentDisplayName, targetHost: targetHost)
         case .installing:
-            return ACPSetupNudgeBannerCopy.installingMessage(mode: mode, agentDisplayName: agentDisplayName)
+            return ACPSetupNudgeBannerCopy.installingMessage(
+                mode: mode, agentDisplayName: agentDisplayName, targetHost: targetHost)
         case .installed:
-            return ACPSetupNudgeBannerCopy.installedMessage(mode: mode, agentDisplayName: agentDisplayName)
+            return ACPSetupNudgeBannerCopy.installedMessage(
+                mode: mode, agentDisplayName: agentDisplayName, targetHost: targetHost)
         case .error(let detail):
             return ACPSetupNudgeBannerCopy.errorMessage(mode: mode, detail: detail)
         }
@@ -163,7 +184,7 @@ struct ACPSetupNudgeBanner: View {
         status = .installing
         Task {
             do {
-                try await installer.install()
+                try await install()
                 await MainActor.run { status = .installed }
                 await onInstalled()
             } catch {

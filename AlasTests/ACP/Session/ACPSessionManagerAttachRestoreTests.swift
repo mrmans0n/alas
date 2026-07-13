@@ -830,6 +830,92 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.contextRestoreWarning == nil)
     }
 
+    @Test("remote managed adapter absence maps to needs setup")
+    func remoteManagedAdapterAbsenceMapsToNeedsSetup() async throws {
+        let root = "/srv/task4-missing-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .missing(reason: "codex-acp is not installed on devbox.")
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(session.setupState == .needsSetup(reason: "codex-acp is not installed on devbox."))
+        #expect(session.agentState == .failed("codex-acp is not installed on devbox."))
+    }
+
+    @Test("remote prerequisite failure maps to setup error")
+    func remotePrerequisiteFailureMapsToSetupError() async throws {
+        let root = "/srv/task4-error-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, _, _ in
+                .error(message: "Node.js and npm are unavailable.")
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+
+        await manager.attach(to: session.id, freshlyCreated: false)
+
+        #expect(session.setupState == .setupError(reason: "Node.js and npm are unavailable."))
+        #expect(session.agentState == .failed("Node.js and npm are unavailable."))
+    }
+
+    @Test("remote setup resolution is reused for absolute launch")
+    func remoteSetupResolutionIsReusedForAbsoluteLaunch() async throws {
+        let root = "/srv/task4-ready-\(UUID().uuidString)"
+        RemoteHostRegistry.shared.register(root: root, host: "devbox")
+        defer { RemoteHostRegistry.shared.unregister(root: root) }
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        scriptInitialize(client)
+        scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
+        final class Capture {
+            var resolverCalls = 0
+            var launchSpec: ACPLaunchSpec?
+        }
+        let capture = Capture()
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: root,
+            store: store,
+            remoteAdapterResolver: { _, descriptor, _ in
+                capture.resolverCalls += 1
+                #expect(descriptor == .codex)
+                return .ready(.init(
+                    adapterPath: "/home/dev/.alas/acp/codex/bin/codex-acp",
+                    nodeBinDirectory: "/home/dev/node/v22/bin"
+                ))
+            },
+            connectionFactory: { spec, host, _ in
+                #expect(host == "devbox")
+                capture.launchSpec = spec
+                return ACPConnection(client: client)
+            }
+        )
+        let session = manager.createSession(agentId: "codex")
+
+        await manager.attach(to: session.id, freshlyCreated: true)
+
+        #expect(capture.resolverCalls == 1)
+        #expect(capture.launchSpec?.command == "/home/dev/.alas/acp/codex/bin/codex-acp")
+        #expect(capture.launchSpec?.remoteNodeBinDirectory == "/home/dev/node/v22/bin")
+        #expect(session.setupState == .ready)
+    }
+
     @Test("load failure followed by new failure leaves stale warning cleared")
     func loadFailureFollowedByNewFailureLeavesStaleWarningCleared() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

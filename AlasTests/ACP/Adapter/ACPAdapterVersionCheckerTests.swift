@@ -4,6 +4,27 @@ import Testing
 
 @Suite("ACPAdapterVersionChecker")
 struct ACPAdapterVersionCheckerTests {
+    private actor RemoteCalls {
+        struct Call: Equatable {
+            let host: String
+            let cwd: String?
+            let command: String
+            let pathPolicy: SSHCommand.PathPolicy
+        }
+
+        private(set) var values: [Call] = []
+
+        func append(_ call: Call) {
+            values.append(call)
+        }
+    }
+
+    private let remoteEnvironment = ACPRemoteNodeEnvironment(
+        npmPath: "/opt/node/bin/npm",
+        nodePath: "/opt/node/bin/node",
+        binDirectory: "/opt/node/bin"
+    )
+
     private func checker(
         status: Int32 = 0,
         stdout: String = "",
@@ -117,8 +138,8 @@ struct ACPAdapterVersionCheckerTests {
         #expect(r == .unknown)
     }
 
-    @Test("runner is invoked with `npm outdated -g <pkg> --json`")
-    func passesNpmArgs() async {
+    @Test("local runner argv remains exactly `npm outdated -g <pkg> --json`")
+    func localArgvIsUnchanged() async {
         var captured: [String] = []
         let c = ACPAdapterVersionChecker(
             timeout: 5,
@@ -128,6 +149,79 @@ struct ACPAdapterVersionCheckerTests {
             })
         _ = await c.check(packageName: "pi-acp")
         #expect(captured == ["npm", "outdated", "-g", "pi-acp", "--json"])
+    }
+
+    @Test("remote managed package uses its private prefix and resolved Node environment")
+    func remoteManagedPrefixCommand() async {
+        let calls = RemoteCalls()
+        let json = #"{"@agentclientprotocol/codex-acp":{"current":"1.0.0","latest":"1.1.0"}}"#
+        let checker = ACPAdapterVersionChecker(
+            remoteRunner: { host, cwd, command, pathPolicy in
+                await calls.append(.init(host: host, cwd: cwd, command: command, pathPolicy: pathPolicy))
+                let count = await calls.values.count
+                return count == 1
+                    ? ProcessResult(exitCode: ACPAdapterVersionChecker.managedSourceExitCode, stdout: "", stderr: "")
+                    : ProcessResult(exitCode: 1, stdout: json, stderr: "")
+            },
+            nodeResolver: { _ in remoteEnvironment }
+        )
+
+        let result = await checker.check(host: "dev@example", descriptor: .codex)
+        let recorded = await calls.values
+
+        #expect(result == .available(current: "1.0.0", latest: "1.1.0"))
+        #expect(recorded.count == 2)
+        #expect(recorded.allSatisfy { $0.host == "dev@example" && $0.cwd == nil && $0.pathPolicy == .inherited })
+        #expect(recorded[0].command.contains("$prefix/lib/node_modules/$package"))
+        #expect(recorded[1].command == """
+        PATH='/opt/node/bin':"$PATH"
+        export PATH
+        prefix=$HOME/.alas/acp/codex
+        '/opt/node/bin/npm' outdated -g '@agentclientprotocol/codex-acp' --json --prefix "$prefix"
+        """)
+    }
+
+    @Test("remote absent managed package falls back to the global command")
+    func remoteGlobalFallbackCommand() async {
+        let calls = RemoteCalls()
+        let checker = ACPAdapterVersionChecker(
+            remoteRunner: { host, cwd, command, pathPolicy in
+                await calls.append(.init(host: host, cwd: cwd, command: command, pathPolicy: pathPolicy))
+                let count = await calls.values.count
+                return count == 1
+                    ? ProcessResult(exitCode: ACPAdapterVersionChecker.globalSourceExitCode, stdout: "", stderr: "")
+                    : ProcessResult(exitCode: 0, stdout: "{}", stderr: "")
+            },
+            nodeResolver: { _ in remoteEnvironment }
+        )
+
+        let result = await checker.check(host: "build-host", descriptor: .pi)
+        let recorded = await calls.values
+
+        #expect(result == .upToDate)
+        #expect(recorded.count == 2)
+        #expect(recorded[1].command == """
+        PATH='/opt/node/bin':"$PATH"
+        export PATH
+        '/opt/node/bin/npm' outdated -g 'pi-acp' --json
+        """)
+    }
+
+    @Test("remote registry failure is unknown")
+    func remoteRegistryFailureIsUnknown() async {
+        let calls = RemoteCalls()
+        let checker = ACPAdapterVersionChecker(
+            remoteRunner: { host, cwd, command, pathPolicy in
+                await calls.append(.init(host: host, cwd: cwd, command: command, pathPolicy: pathPolicy))
+                let count = await calls.values.count
+                return count == 1
+                    ? ProcessResult(exitCode: ACPAdapterVersionChecker.globalSourceExitCode, stdout: "", stderr: "")
+                    : ProcessResult(exitCode: 2, stdout: "", stderr: "registry unavailable")
+            },
+            nodeResolver: { _ in remoteEnvironment }
+        )
+
+        #expect(await checker.check(host: "offline-host", descriptor: .claude) == .unknown)
     }
 }
 

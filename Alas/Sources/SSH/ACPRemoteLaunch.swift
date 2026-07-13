@@ -14,22 +14,34 @@ enum ACPRemoteLaunch {
         "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_SESSION_ID",
     ]
 
-    static func agentCommand(command: String, arguments: [String]) -> String {
+    static func agentCommand(
+        command: String,
+        arguments: [String],
+        nodeBinDirectory: String? = nil
+    ) -> String {
         let scrub = markerScrub.map { "-u \($0)" }.joined(separator: " ")
         let argv = ([command] + arguments).map(SSHCommand.shellQuote).joined(separator: " ")
-        return "env \(scrub) \(argv)"
+        let pathPrefix = nodeBinDirectory.map {
+            "PATH=\(SSHCommand.shellQuote($0)):\"$PATH\" && export PATH && "
+        } ?? ""
+        return "\(pathPrefix)env \(scrub) \(argv)"
     }
 
     static func channelInvocation(
         host: String,
         worktreePath: String,
         command: String,
-        arguments: [String]
+        arguments: [String],
+        nodeBinDirectory: String? = nil
     ) -> RemoteExecInvocation {
         RemoteExec.invocation(
             host: host,
             cwd: worktreePath,
-            command: agentCommand(command: command, arguments: arguments)
+            command: agentCommand(
+                command: command,
+                arguments: arguments,
+                nodeBinDirectory: nodeBinDirectory
+            )
         )
     }
 

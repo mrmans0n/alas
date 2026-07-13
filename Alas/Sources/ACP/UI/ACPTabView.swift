@@ -105,6 +105,22 @@ private struct ACPSessionView: View {
     @State private var suppressRestoredPlanSidebarPlanChange: Bool = false
     @State private var composerFocusRequest: Int = 0
 
+    private var adapterTarget: ACPAdapterTarget {
+        guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+            return .local
+        }
+        return .ssh(host: host)
+    }
+
+    private var adapterUpdateKey: ACPAdapterUpdateKey {
+        ACPAdapterUpdateKey(target: adapterTarget, agentID: session.agentId)
+    }
+
+    private var adapterTargetHost: String? {
+        guard case .ssh(let host) = adapterTarget else { return nil }
+        return host
+    }
+
     /// Re-evaluated on every width / plan change. Pure call into the
     /// hysteresis reducer; the `.spring` wrap lives at the call site.
     ///
@@ -568,7 +584,10 @@ private struct ACPSessionView: View {
                 onReconnect: { Task { await reattachAndRefreshAdapterUpdateState() } }
             )
         } else {
-            let dismissedSetup = state.config.harness.dismissedACPSetupNudges.contains(session.agentId)
+            let dismissedSetup = ACPSetupNudgeDismissal.isDismissed(
+                state.config.harness.dismissedACPSetupNudges,
+                key: adapterUpdateKey
+            )
             let decision = ACPAdapterUpdateBannerDecider.decide(
                 setupState: session.setupState,
                 updateState: updateState,
@@ -576,33 +595,37 @@ private struct ACPSessionView: View {
 
             switch decision {
             case .showInstall where !dismissedSetup:
-                if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
+                if ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil {
                     ACPSetupNudgeBanner(
                         agentID: session.agentId,
                         agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
-                        installer: installer,
+                        targetHost: adapterTargetHost,
                         mode: .install,
                         onDismiss: { dismissNudge() },
-                        onInstalled: { await reattach() }
+                        install: { try await installAdapter() },
+                        onInstalled: { await reattachAfterAdapterChange() }
                     )
                 } else if case .needsSetup(let reason) = session.setupState {
                     setupReasonBanner(reason: reason)
                 }
             case .none:
                 if case .setupError(let reason) = session.setupState {
-                    setupReasonBanner(reason: reason)
+                    setupReasonBanner(reason: reason) {
+                        Task { await reattachAndRefreshAdapterUpdateState() }
+                    }
                 } else {
                     EmptyView()
                 }
             case .showUpdate(let current, let latest):
-                if let installer = ACPInstallerRegistry.installer(for: session.agentId) {
+                if ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil {
                     ACPSetupNudgeBanner(
                         agentID: session.agentId,
                         agentDisplayName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
-                        installer: installer,
+                        targetHost: adapterTargetHost,
                         mode: .update(current: current, latest: latest),
                         onDismiss: { dismissUpdate(latest: latest) },
-                        onInstalled: { await reattachAfterUpdate() }
+                        install: { try await installAdapter() },
+                        onInstalled: { await reattachAfterAdapterChange() }
                     )
                 }
             default:
@@ -714,22 +737,31 @@ private struct ACPSessionView: View {
 
     private func dismissNudge() {
         var dismissed = state.config.harness.dismissedACPSetupNudges
-        if !dismissed.contains(session.agentId) {
-            dismissed.append(session.agentId)
+        let key = adapterUpdateKey
+        if !ACPSetupNudgeDismissal.isDismissed(dismissed, key: key) {
+            dismissed.append(ACPSetupNudgeDismissal.storageKey(for: key))
             state.config.harness.dismissedACPSetupNudges = dismissed
             _ = state.saveConfig()
         }
     }
 
     private func dismissUpdate(latest: String) {
+        let key = adapterUpdateKey
         Task {
-            await state.acpAdapterUpdateStore.dismiss(agentID: session.agentId, latest: latest)
+            await state.acpAdapterUpdateStore.dismiss(key: key, latest: latest)
             await MainActor.run { dismissedLatest = latest }
         }
     }
 
-    private func reattachAfterUpdate() async {
-        await state.acpAdapterUpdateStore.clear(agentID: session.agentId)
+    private func installAdapter() async throws {
+        try await state.acpAdapterInstallCoordinator.install(
+            target: adapterTarget,
+            agentID: session.agentId
+        )
+    }
+
+    private func reattachAfterAdapterChange() async {
+        await state.acpAdapterUpdateStore.clear(key: adapterUpdateKey)
         await MainActor.run {
             updateState = nil
             dismissedLatest = nil
@@ -743,11 +775,19 @@ private struct ACPSessionView: View {
         await refreshAdapterUpdateState()
     }
 
-    private func setupReasonBanner(reason: String) -> some View {
+    private func setupReasonBanner(
+        reason: String,
+        onRetry: (() -> Void)? = nil
+    ) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle").foregroundStyle(theme.color("fg-faint"))
             Text(reason).font(.system(size: 12)).foregroundStyle(theme.color("fg-muted"))
             Spacer()
+            if let onRetry {
+                Button("Retry", action: onRetry)
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(theme.color("bg-1").opacity(0.6))
@@ -783,12 +823,21 @@ private struct ACPSessionView: View {
 
         let store = state.acpAdapterUpdateStore
         let checker = ACPAdapterVersionChecker()
-        let result = await store.checkOrCompute(agentID: session.agentId) {
-            await checker.check(packageName: pkg)
+        let key = adapterUpdateKey
+        let result = await store.checkOrCompute(key: key) {
+            switch key.target {
+            case .local:
+                return await checker.check(packageName: pkg)
+            case .ssh(let host):
+                guard let descriptor = ACPManagedAdapterDescriptor.descriptor(for: key.agentID) else {
+                    return .unknown
+                }
+                return await checker.check(host: host, descriptor: descriptor)
+            }
         }
         var dismissed: String? = nil
         if case .available(_, let latest) = result,
-           await store.isDismissed(agentID: session.agentId, latest: latest) {
+           await store.isDismissed(key: key, latest: latest) {
             dismissed = latest
         }
 
@@ -850,5 +899,18 @@ private struct ACPSessionView: View {
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color("del").opacity(0.3)).frame(height: 0.5)
         }
+    }
+}
+
+enum ACPSetupNudgeDismissal {
+    static func storageKey(for key: ACPAdapterUpdateKey) -> String {
+        key.storageKey
+    }
+
+    static func isDismissed(_ values: [String], key: ACPAdapterUpdateKey) -> Bool {
+        if values.contains(storageKey(for: key)) { return true }
+        // Existing agent-only values predate target identity and therefore
+        // retain their old behavior only for local ACP sessions.
+        return key.target == .local && values.contains(key.agentID)
     }
 }

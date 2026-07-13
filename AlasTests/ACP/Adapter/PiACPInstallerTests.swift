@@ -12,9 +12,6 @@ struct PiACPInstallerTests {
             return (status: 0, stderr: "")
         })
         try? await installer.install()
-        #expect(capturedCommand.contains("npm"))
-        #expect(capturedCommand.contains("install"))
-        #expect(capturedCommand.contains("-g"))
-        #expect(capturedCommand.contains("pi-acp"))
+        #expect(capturedCommand == ["npm", "install", "-g", "pi-acp"])
     }
 }

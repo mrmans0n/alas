@@ -1,7 +1,7 @@
 import Foundation
 
 struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
-    let agentID = "claude"
+    let agentID = ACPManagedAdapterDescriptor.claude.agentID
     let runner: (_ command: String, _ args: [String]) async throws -> (status: Int32, stderr: String)
 
     init(runner: @escaping (String, [String]) async throws -> (status: Int32, stderr: String) = ClaudeCodeACPInstaller.defaultRunner) {
@@ -11,12 +11,13 @@ struct ClaudeCodeACPInstaller: ACPAdapterInstaller {
     func installState() async -> ACPSetupResult {
         await ACPSetupChecker(env: ProcessInfo.processInfo.environment)
             .evaluate(.binaryOnPathOrNpmPackage(
-                binary: "claude-agent-acp",
-                npmPackage: "@agentclientprotocol/claude-agent-acp"))
+                binary: ACPManagedAdapterDescriptor.claude.binaryName,
+                npmPackage: ACPManagedAdapterDescriptor.claude.packageName))
     }
 
     func install() async throws {
-        let (status, stderr) = try await runner("npm", ["install", "-g", "@agentclientprotocol/claude-agent-acp"])
+        let (status, stderr) = try await runner(
+            "npm", ["install", "-g", ACPManagedAdapterDescriptor.claude.packageName])
         if status != 0 { throw ACPInstallError.nonZeroExit(status, stderr: stderr) }
     }
 
