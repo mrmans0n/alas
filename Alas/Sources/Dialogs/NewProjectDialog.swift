@@ -39,6 +39,9 @@ private struct ProjectDialog: View {
     }
     @State private var location: ProjectLocation = .local
     @State private var sshHost: String = ""
+    @State private var showHostPicker = false
+    @State private var sshHosts: [SSHConfigHost] = []
+    @State private var sshHostsLoading = false
     @State private var name: String = ""
     @State private var iconMode: ProjectIcon.Mode = .letter
     @State private var iconColor: String = ProjectIcon.defaultColor
@@ -106,7 +109,30 @@ private struct ProjectDialog: View {
                             }
                         } else {
                             VStack(alignment: .leading, spacing: 6) {
-                                AlasField(text: $sshHost, placeholder: "Host from ~/.ssh/config, e.g. devbox", monospaced: true)
+                                HStack(spacing: 6) {
+                                    AlasField(text: $sshHost, placeholder: "devbox or user@host", monospaced: true)
+                                    Button(action: { showHostPicker.toggle() }) {
+                                        Image(systemName: "list.bullet")
+                                            .font(.system(size: 12, weight: .semibold))
+                                            .foregroundColor(theme.color("fg-dim"))
+                                            .frame(width: 30, height: 28)
+                                            .background(theme.color("bg-2"))
+                                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                                .strokeBorder(theme.color("line"), lineWidth: 0.5))
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Choose a host from ~/.ssh/config")
+                                    .accessibilityLabel("Choose SSH host")
+                                    .popover(isPresented: $showHostPicker, arrowEdge: .bottom) {
+                                        SSHHostPicker(
+                                            host: $sshHost,
+                                            hosts: sshHosts,
+                                            isLoading: sshHostsLoading,
+                                            isPresented: $showHostPicker
+                                        )
+                                    }
+                                }
                                 AlasField(text: $path, placeholder: "/home/me/repo", monospaced: true)
                             }
                         }
@@ -127,7 +153,7 @@ private struct ProjectDialog: View {
                     integrationsSection
                 }
                 if let errorMessage {
-                    Text(errorMessage).font(.system(size: 11)).foregroundColor(.red)
+                    errorField(errorMessage)
                 }
             },
             cancelTitle: "Cancel",
@@ -147,6 +173,11 @@ private struct ProjectDialog: View {
                     await suggestName(for: new)
                     await loadAvatarPresetIfAvailable()
                 }
+            }
+        }
+        .onChange(of: showHostPicker) { _, isOpen in
+            if isOpen && sshHosts.isEmpty && !sshHostsLoading {
+                loadSSHHosts()
             }
         }
         .sheet(isPresented: $mcpManagerPresented) {
@@ -309,6 +340,37 @@ private struct ProjectDialog: View {
             .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
+    // Errors here can carry SSH stderr or a setup command the user needs to
+    // paste into a terminal, so the field is selectable with a Copy button.
+    private func errorField(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundColor(.red)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message, forType: .string)
+            }) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+            }
+            .buttonStyle(.plain)
+            .help("Copy error")
+            .accessibilityLabel("Copy error message")
+        }
+        .padding(8)
+        .background(theme.color("bg-0"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(theme.color("line"), lineWidth: 0.5)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
     private var startupScriptsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Startup scripts")
@@ -430,6 +492,16 @@ private struct ProjectDialog: View {
             if let suggested = try? await svc.suggestProjectName(url), name.isEmpty {
                 name = suggested
             }
+        }
+    }
+
+    private func loadSSHHosts() {
+        sshHostsLoading = true
+        Task {
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            let parsed = await Task.detached { SSHConfigParser.parse(home: home) }.value
+            sshHosts = parsed
+            sshHostsLoading = false
         }
     }
 
