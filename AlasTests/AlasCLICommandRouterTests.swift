@@ -61,6 +61,27 @@ struct AlasCLICommandRouterTests {
         #expect(opened.first?.relativePath == "a.txt")
     }
 
+    @Test func resolvesOriginFromSymlinkedWorktreeRootCwd() async throws {
+        let realRoot = try makeFile("repo/a.txt").deletingLastPathComponent()
+        let logicalRoot = realRoot.deletingLastPathComponent().appendingPathComponent("logical-repo")
+        try FileManager.default.createSymbolicLink(at: logicalRoot, withDestinationURL: realRoot)
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: realRoot, status: .clean, lastActivity: Date()
+        )
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+        // cwd is the symlink pointing at the worktree root (logical $PWD).
+        let owned = await router.handle(.init(version: 1, sessionId: nil, cwd: logicalRoot.path, command: .resolve))
+        #expect(owned == .ok)
+    }
+
     @Test func resolveCommandReturnsOkWhenCwdOwned() async throws {
         let root = try makeFile("repo/a.txt").deletingLastPathComponent()
         let worktree = Worktree(

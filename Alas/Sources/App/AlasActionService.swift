@@ -34,9 +34,14 @@ struct AlasActionService {
         if let match = containingWorktree(for: url) {
             return match.worktree
         }
-        guard let directoryIdentity = fileIdentity(at: url.path) else { return nil }
+        // `cwd` comes from the CLI's logical `$PWD`, which preserves symlinks,
+        // so the directory may itself be a symlink to a worktree root. Resolve
+        // symlinks on both sides before comparing file identities, otherwise a
+        // command run from a symlinked checkout root reports "not inside an
+        // Alas worktree".
+        guard let directoryIdentity = fileIdentity(at: url.resolvingSymlinksInPath().path) else { return nil }
         return visibleWorktrees().first { worktree in
-            fileIdentity(at: worktree.path.standardizedFileURL.path) == directoryIdentity
+            fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
         }
     }
 
