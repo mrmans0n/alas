@@ -190,8 +190,23 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
             keep_branch: args.get("keep_branch").and_then(Value::as_bool).unwrap_or(false),
         }),
-        "review" => Ok(Command::Review { target: optional_string(args, "target") }),
+        "review" => Ok(Command::Review { target: review_target(args)? }),
         other => Err(format!("unknown tool: {other}")),
+    }
+}
+
+/// `review` targets are commonly numeric PR/MR ids, so JSON numbers are
+/// coerced to strings; other non-string shapes are rejected instead of being
+/// silently treated as "review local changes".
+fn review_target(args: &Value) -> Result<Option<String>, String> {
+    match args.get("target") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => {
+            let s = s.trim();
+            Ok(if s.is_empty() { None } else { Some(s.to_string()) })
+        }
+        Some(Value::Number(n)) => Ok(Some(n.to_string())),
+        Some(_) => Err("review 'target' must be a string (PR/MR number or URL)".into()),
     }
 }
 
@@ -457,6 +472,20 @@ mod tests {
             command_for_tool("review", &json!({"target": "123"}), "/wt").unwrap(),
             alas_client::Command::Review { target: Some("123".into()) }
         );
+    }
+
+    #[test]
+    fn review_coerces_numeric_target_and_rejects_other_types() {
+        assert_eq!(
+            command_for_tool("review", &json!({"target": 123}), "/wt").unwrap(),
+            alas_client::Command::Review { target: Some("123".into()) }
+        );
+        assert_eq!(
+            command_for_tool("review", &json!({"target": null}), "/wt").unwrap(),
+            alas_client::Command::Review { target: None }
+        );
+        assert!(command_for_tool("review", &json!({"target": true}), "/wt").is_err());
+        assert!(command_for_tool("review", &json!({"target": ["1"]}), "/wt").is_err());
     }
 
     #[test]

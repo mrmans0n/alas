@@ -2246,9 +2246,12 @@ extension ACPSessionManager {
                 capabilities: initialized.mcpCapabilities
             ))
             // The built-in alas server composes after planning (it is not
-            // user configuration) and before the remote split (so remote
-            // hosts drop it like any other stdio server).
-            let builtInMCP = builtInMCPProvider?(worktreePath)
+            // user configuration). It is local-only by construction — its
+            // command and socket live on this machine — so remote sessions
+            // skip it entirely instead of reporting it unavailable on every
+            // connect.
+            let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
+            let builtInMCP = remoteHost == nil ? builtInMCPProvider?(worktreePath) : nil
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {
@@ -2259,7 +2262,7 @@ extension ACPSessionManager {
                 statuses: plannedStatuses,
                 configurationFingerprint: mcpPlan.configurationFingerprint
             )
-            let mcpSplit = RemoteHostRegistry.shared.host(forPath: worktreePath).map { _ in
+            let mcpSplit = remoteHost.map { _ in
                 ACPRemoteMCPFilter.split(plannedWireServers)
             }
             let wireMCPServers = mcpSplit?.kept ?? plannedWireServers
