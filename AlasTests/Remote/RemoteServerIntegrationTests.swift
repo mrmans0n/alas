@@ -119,6 +119,52 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    // Regression (codex review, PR #775): the fast-lane stop dispatch must
+    // still wait for a preceding drive action (takeOver/sendPrompt) that's
+    // already in flight — otherwise stop can overtake it, find no active
+    // turn to cancel, and the queued action proceeds anyway right after the
+    // user pressed Stop.
+    @Test func stopWaitsForPrecedingTakeOverBeforeRunning() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        provider.sessions[s.id] = s
+        provider.pauseTakeOver = true   // suspends inside the gateway's own await chain
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing, provider: provider)
+
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"test"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        task.resume()
+
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.takeOver(sessionId: s.id))))
+        for _ in 0..<100 where provider.takeOverCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
+
+        // Stop must NOT run while the preceding takeOver is still suspended.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(provider.stopped.isEmpty, "stop must wait for the preceding takeOver to land first")
+
+        provider.resumeTakeOver()
+        for _ in 0..<100 where provider.stopped.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.stopped == [s.id])
+
+        task.cancel(with: .goingAway, reason: nil)
+        server.stop()
+    }
+
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()

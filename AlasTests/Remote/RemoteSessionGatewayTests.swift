@@ -97,9 +97,22 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
+    var pauseTakeOver = false   // suspends INSIDE the gateway's own await, unlike pauseSessionSummaries's detached fetch
+    var takeOverCallCount = 0
+    private var takeOverContinuation: CheckedContinuation<Void, Never>?
     func takeOver(for id: String) async {
+        takeOverCallCount += 1
         tookOver.append(id)
         writers.insert(id)
+        if pauseTakeOver {
+            await withCheckedContinuation { continuation in
+                takeOverContinuation = continuation
+            }
+        }
+    }
+    func resumeTakeOver() {
+        takeOverContinuation?.resume()
+        takeOverContinuation = nil
     }
 
     var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)

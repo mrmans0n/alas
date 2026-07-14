@@ -279,12 +279,19 @@ final class RemoteConnection: @unchecked Sendable {
     private func dispatchMessage(_ payload: Data) {
         guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload),
               let gateway else { return }
-        // Control messages (stop) are idempotent and latency-critical: run
-        // them immediately instead of queueing behind transcript work.
-        // Everything else keeps strict arrival order (takeOver before
-        // sendPrompt, etc.).
+        // Control messages (stop) are idempotent and latency-critical: they
+        // don't extend `processingTail`, so messages arriving AFTER stop are
+        // never blocked behind it. They still await whatever was already
+        // in-flight before them, though — a `sendPrompt`/`takeOver` queued
+        // just before stop must be allowed to land first, or stop could find
+        // no active turn to cancel and the just-submitted prompt would go on
+        // to stream anyway after the user already pressed Stop.
         if msg.isControl {
-            Task { @MainActor in await gateway.handle(msg) }
+            let previous = processingTail
+            Task { @MainActor in
+                await previous?.value
+                await gateway.handle(msg)
+            }
             return
         }
         let previous = processingTail
