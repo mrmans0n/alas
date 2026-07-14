@@ -1854,6 +1854,79 @@ let second = true
         #expect(selectedAnchor == anchor)
     }
 
+    @Test @MainActor func codeTextViewInvokesReviewSelectionForContextRows() throws {
+        let theme = theme()
+        let font = CenterTypography.resolveCodeFont(family: "", size: 13)
+        let text = "let value = 1"
+        let sourceLine = DiffDisplayLine(
+            id: "line-12",
+            anchor: DiffLineAnchor(
+                filePath: "Sources/App.swift",
+                hunkIndex: 0,
+                rowIndex: 0,
+                side: .new,
+                oldLine: nil,
+                newLine: 12
+            ),
+            text: text,
+            lineNumber: 12,
+            kind: .context,
+            inlineSpans: [],
+            noTrailingNewline: false
+        )
+        let document = DiffPaneTextDocumentBuilder.CodeDocument(
+            attributedString: NSAttributedString(
+                string: text,
+                attributes: [.font: font]
+            ),
+            lines: [
+                DiffPaneTextDocumentBuilder.LineMetadata(
+                    kind: .context,
+                    range: NSRange(location: 0, length: (text as NSString).length),
+                    sourceLine: sourceLine
+                ),
+            ]
+        )
+        let scrollView = DiffPaneTextScrollView(frame: NSRect(x: 0, y: 0, width: 220, height: 80))
+        let window = NSWindow(contentRect: scrollView.frame, styleMask: [], backing: .buffered, defer: false)
+        window.contentView?.addSubview(scrollView)
+        var selectedAnchor: DiffReviewLineAnchor?
+        scrollView.onReviewLineSelected = { selectedAnchor = $0 }
+
+        scrollView.update(
+            document: document,
+            lineLabels: ["12"],
+            wraps: false,
+            font: font,
+            theme: theme,
+            lspContext: nil,
+            allowedLSPSide: .new
+        )
+        scrollView.layoutSubtreeIfNeeded()
+
+        let textView = try #require(scrollView.documentView as? DiffPaneCodeTextView)
+        let rowRect = try #require(textView.diffRowRects().first)
+        let windowPoint = textView.convert(NSPoint(x: rowRect.midX, y: rowRect.midY), to: nil)
+        let event = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: windowPoint,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        ))
+
+        textView.mouseDown(with: event)
+
+        #expect(selectedAnchor?.path == "Sources/App.swift")
+        #expect(selectedAnchor?.side == .new)
+        #expect(selectedAnchor?.line == 12)
+        #expect(selectedAnchor?.selectedText == text)
+    }
+
     @Test func splitDocumentBuildsSeparateCodeAndGutterColumns() throws {
         let result = DiffPaneTextDocumentBuilder.buildSplit(
             group: try #require(model().groups.first),
@@ -2089,6 +2162,34 @@ let second = true
         #expect(result.newCode.syntaxSource == "\t/* start\nstill comment */\nlet value = 1")
         #expect(rendered.hasPrefix("→/*·start"))
         #expect(colorComponents(foreground).isClose(to: colorComponents(NSColor(theme.color("fg-faint")))))
+    }
+
+    @Test func splitDocumentKeepsContextAndChangedLinesInColumnSyntaxGroup() throws {
+        let diff = ParsedDiff(hunks: [
+            ParsedDiff.Hunk(
+                header: "@@ -1,1 +1,2 @@",
+                oldStart: 1,
+                newStart: 1,
+                lines: [
+                    .init(kind: .context, text: "/* start", oldNumber: 1, newNumber: 1),
+                    .init(kind: .add, text: "still comment */", oldNumber: nil, newNumber: 2),
+                ]
+            ),
+        ])
+        let model = DiffDisplayModelBuilder.build(diff: diff, filePath: "Sources/App.swift")
+        let result = DiffPaneTextDocumentBuilder.buildSplit(
+            group: try #require(model.groups.first),
+            expandedCollapsedRowIDs: [],
+            fileExtension: "swift",
+            font: CenterTypography.resolveCodeFont(family: "", size: 13),
+            showWhitespace: false,
+            theme: theme()
+        )
+
+        #expect(result.newCode.lines.count == 2)
+        #expect(result.newCode.lines[0].sourceLine?.anchor.side == .new)
+        #expect(result.newCode.lines[1].sourceLine?.anchor.side == .new)
+        #expect(result.newCode.lines[0].syntaxGroup == result.newCode.lines[1].syntaxGroup)
     }
 
     @Test func stackedDocumentDoesNotCarrySyntaxFromDeletedLinesIntoAddedLines() throws {
