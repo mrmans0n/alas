@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -245,11 +246,27 @@ pub enum TransportError {
     Malformed,
 }
 
+/// Bound on how long `send` will wait for a reply. Comfortably covers the
+/// slowest CLI operations (`wt new`, `review`), which the old shell script
+/// bounded the same way, while keeping a wedged app from hanging the shell
+/// forever.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Send one request over `socket` and return the parsed reply. Writes the JSON
-/// bytes (the app parses as soon as the object is complete), then reads to EOF.
+/// bytes (the app parses as soon as the object is complete), then reads to EOF
+/// (bounded by [`READ_TIMEOUT`]).
 pub fn send(socket: &Path, req: &Request) -> Result<Response, TransportError> {
+    send_with_timeout(socket, req, READ_TIMEOUT)
+}
+
+/// `send`, parameterized on the read timeout so tests can exercise the
+/// timeout behavior without waiting on the real [`READ_TIMEOUT`].
+fn send_with_timeout(socket: &Path, req: &Request, read_timeout: Duration) -> Result<Response, TransportError> {
     let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
     let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
+    stream
+        .set_read_timeout(Some(read_timeout))
+        .map_err(|_| TransportError::Io)?;
     stream.write_all(&payload).map_err(|_| TransportError::Io)?;
     stream.flush().map_err(|_| TransportError::Io)?;
     let mut buf = Vec::new();
@@ -498,5 +515,36 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn send_times_out_instead_of_hanging_forever() {
+        // A stub server that accepts the connection but never replies,
+        // modeling a wedged app. `send_with_timeout` must give up instead of
+        // blocking the caller forever.
+        let path = std::env::temp_dir().join(format!(
+            "alas-cli-timeout-{}-{}.sock",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            // Hold the connection open without ever writing a reply.
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        });
+
+        let req = Request::new("resolve");
+        let started = std::time::Instant::now();
+        let result = send_with_timeout(&path, &req, Duration::from_millis(200));
+        assert!(matches!(result, Err(TransportError::Io)));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "send_with_timeout should give up around the configured timeout, not hang"
+        );
+
+        let _ = handle.join();
+        let _ = std::fs::remove_file(&path);
     }
 }

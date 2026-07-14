@@ -1,6 +1,6 @@
 mod parse;
 
-use alas_client::{dispatch, logical_base, resolve_target, DispatchError, Target};
+use alas_client::{dispatch, logical_base, resolve_target, DispatchError, TransportError};
 use parse::{is_ao, parse};
 use std::process::ExitCode;
 
@@ -41,14 +41,14 @@ fn main() -> ExitCode {
             }
         }
         Err(err) => {
-            let (msg, code) = describe(&err, &target);
+            let (msg, code) = describe(&err);
             eprintln!("alas: {msg}");
             ExitCode::from(code)
         }
     }
 }
 
-fn describe(err: &DispatchError, _target: &Target) -> (String, u8) {
+fn describe(err: &DispatchError) -> (String, u8) {
     match err {
         DispatchError::NoAlas => ("no running Alas found".into(), 2),
         DispatchError::NotInWorktree => ("not inside an Alas worktree".into(), 2),
@@ -56,6 +56,58 @@ fn describe(err: &DispatchError, _target: &Target) -> (String, u8) {
             "multiple running Alas instances own this directory".into(),
             1,
         ),
+        // A reply that didn't parse is a distinct failure mode from a socket
+        // we couldn't connect to or write/read at all — surface it
+        // separately so a corrupted/incompatible app reply isn't confused
+        // with "Alas isn't running".
+        DispatchError::Transport(TransportError::Malformed) => {
+            ("malformed response from Alas".into(), 1)
+        }
         DispatchError::Transport(_) => ("could not reach Alas".into(), 1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn describe_maps_not_in_worktree_to_exit_code_2() {
+        let (msg, code) = describe(&DispatchError::NotInWorktree);
+        assert_eq!(msg, "not inside an Alas worktree");
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn describe_maps_no_alas_to_exit_code_2() {
+        let (_, code) = describe(&DispatchError::NoAlas);
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn describe_maps_ambiguous_to_exit_code_1() {
+        let (_, code) = describe(&DispatchError::Ambiguous);
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn describe_gives_malformed_replies_a_distinct_message() {
+        let (msg, code) = describe(&DispatchError::Transport(TransportError::Malformed));
+        assert_eq!(msg, "malformed response from Alas");
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn describe_keeps_generic_message_for_connect_and_io_failures() {
+        let (connect_msg, connect_code) = describe(&DispatchError::Transport(TransportError::Connect));
+        assert_eq!(connect_msg, "could not reach Alas");
+        assert_eq!(connect_code, 1);
+
+        let (io_msg, io_code) = describe(&DispatchError::Transport(TransportError::Io));
+        assert_eq!(io_msg, "could not reach Alas");
+        assert_eq!(io_code, 1);
+
+        // The two must stay distinguishable from the malformed-reply case.
+        assert_ne!(connect_msg, "malformed response from Alas");
     }
 }
