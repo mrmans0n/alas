@@ -1,6 +1,8 @@
 import Foundation
 
 final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransporting {
+    private static let attachAtEndOffset = UInt64.max
+
     private let host: String
     private let procId: String
     private let command: String
@@ -180,8 +182,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             return (0, 0)
         }
         return (
-            stdoutOffset == 0 ? nil : stdoutOffset,
-            stderrOffset == 0 ? nil : stderrOffset
+            stdoutOffset == 0 ? attachAtEndOffset : stdoutOffset,
+            stderrOffset == 0 ? attachAtEndOffset : stderrOffset
         )
     }
 

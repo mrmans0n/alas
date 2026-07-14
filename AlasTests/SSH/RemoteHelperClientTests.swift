@@ -567,13 +567,21 @@ struct RemoteHelperClientTests {
         #expect(freshOffsets.stdout == 0)
         #expect(freshOffsets.stderr == 0)
 
-        let rememberedOffsets = RemoteHelperACPTransport.attachReplayOffsets(
+        let unknownNonFreshOffsets = RemoteHelperACPTransport.attachReplayOffsets(
             stdoutOffset: 0,
             stderrOffset: 0,
             attachFreshSpawnFromStart: false
         )
-        #expect(rememberedOffsets.stdout == nil)
-        #expect(rememberedOffsets.stderr == nil)
+        #expect(unknownNonFreshOffsets.stdout == UInt64.max)
+        #expect(unknownNonFreshOffsets.stderr == UInt64.max)
+
+        let rememberedOffsets = RemoteHelperACPTransport.attachReplayOffsets(
+            stdoutOffset: 14,
+            stderrOffset: 3,
+            attachFreshSpawnFromStart: false
+        )
+        #expect(rememberedOffsets.stdout == 14)
+        #expect(rememberedOffsets.stderr == 3)
     }
 
     @Test func remoteHelperACPTransportSuppressesPreAvailableResponsesUntilProcInputMayHaveBeenWritten() {
