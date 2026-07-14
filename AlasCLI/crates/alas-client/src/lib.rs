@@ -288,8 +288,10 @@ pub fn dispatch_to_sockets(
         return Err(DispatchError::NoAlas);
     }
 
-    // Fast path: a single running app. Send the command directly; a
-    // "not my worktree" reply becomes NotInWorktree.
+    // Fast path: a single running app. Send the command directly and return
+    // its reply verbatim, success or error — there is no single instance to
+    // disambiguate, so no DispatchError::NotInWorktree translation happens
+    // here (that only applies once multiple instances are probed below).
     if sockets.len() == 1 {
         let req = build_request(command, None, Some(cwd.clone()));
         let resp = send(&sockets[0], &req).map_err(DispatchError::Transport)?;
