@@ -14,21 +14,23 @@ import SwiftUI
 /// transcript container (`ACPMessageList`) so every row stays aligned. This
 /// wrapper only reveals the button and positions it into the reserved right
 /// lane via an offset.
-struct ACPMessageGutter<Content: View>: View {
-    enum CopySource {
-        case text(String)
-        case streaming(StreamingText)
+enum ACPMessageCopySource {
+    case text(String)
+    case streaming(StreamingText)
 
-        @MainActor
-        var markdown: String {
-            switch self {
-            case .text(let text):
-                text
-            case .streaming(let text):
-                text.value
-            }
+    @MainActor
+    var markdown: String {
+        switch self {
+        case .text(let text):
+            text
+        case .streaming(let text):
+            text.value
         }
     }
+}
+
+struct ACPMessageGutter<Content: View>: View {
+    typealias CopySource = ACPMessageCopySource
 
     /// Produces the raw Markdown copied by "Copy message". Streaming rows keep
     /// a reference to the live buffer so copy reads the latest text without a
@@ -72,29 +74,102 @@ struct ACPMessageGutter<Content: View>: View {
     }
 
     private var dotsMenu: some View {
-        Menu {
-            Button("Copy message") {
-                let text = copySource.markdown
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(theme.color("fg-muted"))
-                .padding(4)
-                .background(theme.color("bg-3").opacity(0.85))
-                .clipShape(RoundedRectangle(cornerRadius: 5))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5)
-                        .strokeBorder(theme.color("line"), lineWidth: 0.5)
-                )
-                .contentShape(Rectangle())
+        ACPMessageActionsButton(copySource: copySource, tint: theme.color("fg-muted"))
+            .frame(width: 19, height: 19)
+            .background(theme.color("bg-3").opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(theme.color("line"), lineWidth: 0.5)
+            )
+            .contentShape(Rectangle())
+            .help("Message actions")
+    }
+}
+
+private struct ACPMessageActionsButton: NSViewRepresentable {
+    let copySource: ACPMessageCopySource
+    let tint: Color
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(copySource: copySource)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = MessageActionsNSButton()
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.showMenu(_:))
+        button.contentTintColor = NSColor(tint)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.copySource = copySource
+        button.contentTintColor = NSColor(tint)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var copySource: ACPMessageCopySource
+
+        init(copySource: ACPMessageCopySource) {
+            self.copySource = copySource
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("Message actions")
+
+        @objc func showMenu(_ sender: NSButton) {
+            let menu = NSMenu()
+            let copyItem = NSMenuItem(
+                title: "Copy message",
+                action: #selector(copyMessage(_:)),
+                keyEquivalent: ""
+            )
+            copyItem.target = self
+            menu.addItem(copyItem)
+            menu.popUp(
+                positioning: copyItem,
+                at: NSPoint(x: 0, y: sender.bounds.height + 2),
+                in: sender
+            )
+        }
+
+        @objc private func copyMessage(_ sender: NSMenuItem) {
+            let text = copySource.markdown
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+    }
+}
+
+private final class MessageActionsNSButton: NSButton {
+    private static let ellipsisImage = NSImage(
+        systemSymbolName: "ellipsis",
+        accessibilityDescription: "Message actions"
+    )
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configure()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configure()
+    }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 19, height: 19)
+    }
+
+    private func configure() {
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryChange)
+        image = Self.ellipsisImage
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        focusRingType = .none
+        toolTip = "Message actions"
+        setAccessibilityLabel("Message actions")
     }
 }
 
