@@ -126,6 +126,81 @@ jobs:
             .build/ghostty
           key: ${{ steps.ghostty-cache.outputs.cache-primary-key }}
 
+      - name: Compute prebuilt tools cache key inputs
+        # Same pin-file pattern as .ghostty-pin: the fingerprint inputs the
+        # build scripts consult but hashFiles can't reach (submodule HEADs,
+        # the zig binary) get dumped into a small file we can hash.
+        # The zig *binary content* hash (not `zig version`) matters because
+        # build-zmx.sh hashes the binary into its fingerprint — a Homebrew
+        # bottle rebuild with an unchanged version string must still change
+        # the key. Helper's rust toolchain is pinned inside its script, so
+        # the script hash covers it.
+        run: |
+          git -C ThirdParty/zmx rev-parse HEAD > .tools-pin
+          {
+            git -C ThirdParty/fff rev-parse HEAD
+            git rev-parse HEAD:AlasHelper
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh
+            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
+          } >> .tools-pin
+          cat .tools-pin
+
+      - name: Restore prebuilt tools cache
+        # zmx / fff / Alas Helper artifacts combined in one entry — each is
+        # a few MB, and only install outputs + fingerprint markers are
+        # cached (no zig/cargo intermediates). The key is an optimization
+        # hint only: each script re-validates restored artifacts against its
+        # own fingerprint (submodule SHA + dirt + arch + toolchain + script
+        # hash), so a stale restore-keys fallback can never ship a wrong
+        # binary — the changed component rebuilds while the rest fast-path.
+        # zmx's macOS slice fast-paths off the *host* cache
+        # (~/Library/Caches/Alas/zmx), not the worktree output, hence that
+        # path; the Linux slices and fff/helper check worktree markers.
+        id: tools-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/Library/Caches/Alas/zmx
+            .build/zmx/linux-*/install
+            .build/zmx/linux-*/fingerprint
+            .build/fff/*/install
+            .build/fff/*/fingerprint
+            .build/fff/include
+            .build/alas-helper/*/release/alas-helper
+            .build/alas-helper/fingerprint
+          key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
+          restore-keys: |
+            tools-${{ runner.os }}-arm64-
+
+      - name: Prebuild zmx + fff + Alas Helper
+        # These normally run as pre-build script phases *inside* xcodebuild,
+        # where a cold run buries ~11 min of zig/cargo work inside the build
+        # step and a later failure throws it away. Run them as their own
+        # step so the artifacts can be cached the moment they exist; the
+        # in-xcodebuild phases then fast-path in seconds.
+        run: |
+          ./scripts/build-zmx.sh
+          ./scripts/build-fff.sh
+          ./scripts/build-alas-helper.sh
+
+      - name: Save prebuilt tools cache
+        # Save immediately after the prebuild step succeeds, BEFORE
+        # xcodebuild/tests get a chance to fail — same split restore/save
+        # rationale as the Ghostty cache above.
+        if: success() && steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/Library/Caches/Alas/zmx
+            .build/zmx/linux-*/install
+            .build/zmx/linux-*/fingerprint
+            .build/fff/*/install
+            .build/fff/*/fingerprint
+            .build/fff/include
+            .build/alas-helper/*/release/alas-helper
+            .build/alas-helper/fingerprint
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+
       - name: Generate Xcode project
         run: xcodegen
 
