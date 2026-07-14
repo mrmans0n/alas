@@ -71,4 +71,69 @@ struct ACPTranscriptChangeLogTests {
         // A stale consumer from before the release must resync, not read a gap.
         #expect(log.changes(since: consumed) == .resync)
     }
+
+    // MARK: - ACPTranscript hooks
+
+    private func makeTrackedTranscript(messageCount: Int) -> ACPTranscript {
+        let t = ACPTranscript()
+        t.messages = (0..<messageCount).map { i in
+            .user(id: UUID(), messageId: "u\(i)", text: "m\(i)", attachments: [])
+        }
+        t.changeLog.retainTracking()
+        return t
+    }
+
+    @Test func appendIsRecordedAsDirtyIndex() {
+        let t = makeTrackedTranscript(messageCount: 3)
+        let consumed = t.changeLog.latestVersion
+        t.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        #expect(t.changeLog.changes(since: consumed) == .dirty([3]))
+    }
+
+    @Test func inPlaceMutationKeepingIdentityIsRecordedAsDirty() {
+        let t = ACPTranscript()
+        var tc = ACPMessage.ToolCall(toolCallId: "tc1", title: "read", status: "in_progress", content: "", preview: "")
+        t.messages = [.toolCall(tc)]
+        t.changeLog.retainTracking()
+        let consumed = t.changeLog.latestVersion
+        tc.status = "completed"
+        t.messages[0] = .toolCall(tc)
+        #expect(t.changeLog.changes(since: consumed) == .dirty([0]))
+        #expect(t.changeLog.epoch == 0)
+    }
+
+    @Test func removalIsStructural() {
+        let t = makeTrackedTranscript(messageCount: 3)
+        let epochBefore = t.changeLog.epoch
+        t.messages.removeLast()
+        #expect(t.changeLog.epoch == epochBefore + 1)
+    }
+
+    @Test func identityChangeAtExistingIndexIsStructural() {
+        let t = makeTrackedTranscript(messageCount: 3)
+        let epochBefore = t.changeLog.epoch
+        // Prepending shifts every identity; the diff sees index 0's stableId change.
+        t.messages.insert(.systemNotice(id: UUID(), text: "older"), at: 0)
+        #expect(t.changeLog.epoch == epochBefore + 1)
+    }
+
+    @Test func streamingChangeIsRecordedWithoutArrayMutation() {
+        let t = ACPTranscript()
+        let buf = StreamingText("hel")
+        t.messages = [.agent(id: UUID(), messageId: "a1", buf)]
+        t.changeLog.retainTracking()
+        let consumed = t.changeLog.latestVersion
+        let tickBefore = t.streamingTick
+        buf.append("lo")                    // no didSet fires (identity equality)
+        t.noteStreamingChange(at: 0)
+        #expect(t.streamingTick == tickBefore &+ 1)
+        #expect(t.changeLog.changes(since: consumed) == .dirty([0]))
+    }
+
+    @Test func untrackedTranscriptPaysNoDiffAndRecordsNothing() {
+        let t = ACPTranscript()
+        t.messages = [.systemNotice(id: UUID(), text: "x")]
+        t.messages.append(.systemNotice(id: UUID(), text: "y"))
+        #expect(t.changeLog.latestVersion == 0)
+    }
 }

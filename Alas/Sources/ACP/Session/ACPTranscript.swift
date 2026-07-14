@@ -11,8 +11,12 @@ final class ACPTranscript: ObservableObject {
     @Published var messages: [ACPMessage] = [] {
         didSet {
             refreshPlanCaches()
+            recordMessagesDiff(old: oldValue)
         }
     }
+    /// Mutation log consumed by remote-web gateways for incremental deltas.
+    /// Recording is enabled only while at least one gateway is subscribed.
+    let changeLog = ACPTranscriptChangeLog()
     @Published var streamingState: ACPSession.StreamingState = .idle
     @Published var pendingPermission: ACPSession.PendingPermission?
     @Published var pendingQuestion: ACPSession.PendingQuestion?
@@ -127,6 +131,45 @@ final class ACPTranscript: ObservableObject {
         }
         if latestPlan != newLatestPlan {
             latestPlan = newLatestPlan
+        }
+    }
+
+    // MARK: - Remote change tracking
+
+    /// Classify an array mutation for the change log. Index-shifting
+    /// operations (shrink, or an identity change at a surviving index —
+    /// i.e. a prepend, mid-removal, or wholesale replacement) are
+    /// structural; everything else records per-index dirty entries.
+    /// Cost is O(count) enum compares, but unchanged elements share
+    /// storage (COW) and `StreamingText` compares by identity, so the
+    /// scan is cheap — and it only runs while a remote client is
+    /// subscribed.
+    private func recordMessagesDiff(old: [ACPMessage]) {
+        guard changeLog.isTracking else { return }
+        guard messages.count >= old.count else {
+            changeLog.recordStructural()
+            return
+        }
+        for i in old.indices where old[i] != messages[i] {
+            guard old[i].stableIdentityKey == messages[i].stableIdentityKey else {
+                changeLog.recordStructural()
+                return
+            }
+            changeLog.record(index: i)
+        }
+        for i in old.count..<messages.count {
+            changeLog.record(index: i)
+        }
+    }
+
+    /// Streaming chunk appends mutate a `StreamingText` buffer in place —
+    /// the array element compares equal (identity equality), so
+    /// `messages.didSet` cannot see them. Callers pass the mutated index.
+    /// Replaces direct `streamingTick &+= 1` writes.
+    func noteStreamingChange(at index: Int) {
+        streamingTick &+= 1
+        if changeLog.isTracking, messages.indices.contains(index) {
+            changeLog.record(index: index)
         }
     }
 
