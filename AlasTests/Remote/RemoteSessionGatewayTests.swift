@@ -1402,4 +1402,72 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty, "stale delta must be discarded once epoch changed during serialize, got \(sent)")
         #expect(resyncEpoch != 0)   // sanity: the resync did bump the epoch
     }
+
+    // Regression (codex review, PR #775): fetchOlder's page serialization has
+    // the same suspend-then-stamp hazard as sendDelta — a structural resync
+    // landing while a truncated tool call's content is being fetched must not
+    // let the page go out stamped with the post-resync epoch (which the
+    // client would wrongly accept as current instead of dropping).
+    @Test func fetchOlderDropsStalePageWhenEpochChangesDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        // 100 messages total: the tail-window snapshot (last 90) excludes
+        // index 5, so subscribing never fetches/caches its content — the
+        // fetchOlder page below performs the FIRST fetch for it.
+        session.transcript.messages = (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        } + [.toolCall(toolCall)] + (0..<94).map {
+            .user(id: UUID(), messageId: "v\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, _, let firstIndex, _, _, _)? = sent.first else {
+            Issue.record("expected snapshot, got \(sent)")
+            return
+        }
+        #expect(firstIndex == 10)   // sanity: index 5 is outside the tail window
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the page's fetch below
+
+        let fetchTask = Task { @MainActor in
+            await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 90))
+        }
+
+        // Wait for the fetch request to suspend on the paused tool-content call.
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // While the page is suspended, a structural change lands and its own
+        // coalesced delta resyncs via a fresh snapshot.
+        session.transcript.messages.removeLast()
+        for _ in 0..<50 where !(sent.last.map { if case .transcriptSnapshot = $0 { return true }
+        return false } ?? false) {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptSnapshot? = sent.last else {
+            Issue.record("expected a resync snapshot from the structural change, got \(sent)")
+            return
+        }
+
+        sent.removeAll()
+        // Resume the page's suspended fetch. With the fix, it must detect the
+        // epoch moved during its await and discard rather than send a stale
+        // page stamped with the new epoch.
+        provider.resumeFullToolCallContent(fullContent)
+        await fetchTask.value
+        #expect(sent.isEmpty, "stale page must be discarded once epoch changed during serialize, got \(sent)")
+    }
 }

@@ -179,11 +179,18 @@ final class RemoteSessionGateway {
             let count = session.transcript.messages.count
             let hi = min(max(beforeIndex, 0), count)
             let lo = max(0, hi - clamped)
+            // Capture the epoch BEFORE the async serialize below. If a
+            // structural change lands on this same session while a truncated
+            // tool call's full content is being fetched, the concurrent
+            // resync snapshot already advances the client past this page's
+            // (now stale) positions — stamping the page with the epoch read
+            // AFTER the await would make it match the client's post-resync
+            // epoch and be wrongly accepted. Drop it instead.
+            let capturedEpoch = session.transcript.changeLog.epoch
             let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
-            // Stamp with the CURRENT epoch: if it moved past the client's,
-            // the client drops the page and the pending resync wins.
+            guard session.transcript.changeLog.epoch == capturedEpoch else { return }
             send(.transcriptPage(sessionId: id,
-                                 epoch: session.transcript.changeLog.epoch,
+                                 epoch: capturedEpoch,
                                  firstIndex: lo,
                                  messages: wire))
         }
