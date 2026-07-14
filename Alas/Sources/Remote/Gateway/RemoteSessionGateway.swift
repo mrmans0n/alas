@@ -417,15 +417,19 @@ final class RemoteSessionGateway {
                 return
             }
             state.sentVersion = log.latestVersion
-            // Capture the generation BEFORE the async serialize below. A
-            // concurrent sendSnapshot on this same `state` — from a
-            // structural change, a takeOver, or a client resubscribe —
-            // resets revision/sentVersion even when `epoch` itself doesn't
-            // change, so an epoch-only check would miss it. If the
-            // generation moved, this delta's `wire` content is stale
-            // relative to whatever the concurrent snapshot already sent;
-            // sending it would let stale upserts overwrite the newer
-            // content the client just received. Discard instead.
+            // Claim a generation for this send BEFORE the async serialize
+            // below — not just on sendSnapshot. Two overlapping dirty
+            // deltas can race the same way a delta and a snapshot can: a
+            // still-running (cancelled-but-not-stopped) coalesce Task can
+            // suspend on a tool-content fetch while a LATER mutation spawns
+            // its own coalesce Task that completes and sends first. Without
+            // bumping generation here too, the earlier delta would resume,
+            // pass an unchanged-generation check, and send its now-stale
+            // content at a higher revision — rolling the client back after
+            // it already received the newer delta. Bumping on every send
+            // attempt (snapshot OR dirty) makes generation a strict
+            // "did anyone else claim a send after me" ticket.
+            state.generation += 1
             let capturedGeneration = state.generation
             // A dirty tool call's persisted content may have grown past the
             // cached copy — drop it so serialization re-fetches.

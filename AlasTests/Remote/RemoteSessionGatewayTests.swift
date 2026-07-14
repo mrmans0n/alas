@@ -1470,6 +1470,67 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty, "stale delta must be discarded once a same-epoch snapshot landed during serialize, got \(sent)")
     }
 
+    // Regression (codex review, PR #775): two overlapping DIRTY deltas race
+    // the same way a delta and a snapshot do — a still-running (cancelled-
+    // but-not-stopped) coalesce Task can suspend mid-serialize while a later
+    // mutation's own coalesce Task completes and sends first. The earlier
+    // delta must not resume, pass an unchanged-generation check, and roll
+    // the client back with its now-stale content at a higher revision.
+    @Test func deltaDropsStaleUpsertsWhenOverlappingDirtyDeltaLandsDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+
+        // Dirty mutation #1: the tool call — invalidates its cache and
+        // forces a real re-fetch that suspends.
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // Dirty mutation #2: an appended message — a non-truncated-tool-call
+        // dirty index, so its own coalesced delta completes fully (no
+        // suspension) while mutation #1's delta is still stuck above.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, let firstUpserts, _, _)? = sent.last else {
+            Issue.record("expected the overlapping dirty delta to land, got \(sent)")
+            return
+        }
+        #expect(firstUpserts.contains { $0.kind == "systemNotice" })
+
+        sent.removeAll()
+        // Resume mutation #1's suspended fetch. With the fix, it must detect
+        // that mutation #2's delta already claimed a newer generation and
+        // discard instead of rolling the transcript back with stale content.
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "stale overlapping delta must be discarded, got \(sent)")
+    }
+
     // Regression (codex review, PR #775): fetchOlder's page serialization has
     // the same suspend-then-stamp hazard as sendDelta — a structural resync
     // landing while a truncated tool call's content is being fetched must not
