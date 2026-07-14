@@ -6,9 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.7] - 2026-07-14
+
 ### ✨ Features
 
-- Scroll the diff review stream to a comment when its card is clicked in the draft review summary rail, mirroring the file-rail scroll (including cross-file navigation where the comment's file isn't yet realized).
+- Add a standalone `alas` CLI in Rust (#784).
+- Scroll the diff review stream to a comment when its card is clicked in the draft review summary rail, including cross-file navigation (#782).
+
+### 🐛 Fixes
+
+- Gate ACP transcript tail pagination so repeated tail loads do not churn while a page is already loading (#783).
+- Avoid SwiftUI menu churn in ACP message gutters (#785).
 
 ## [0.10.6] - 2026-07-14
 
