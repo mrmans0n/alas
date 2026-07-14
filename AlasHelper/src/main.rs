@@ -1377,7 +1377,7 @@ fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
     validate_proc_id(&params.proc_id)?;
     let dir = proc_dir(&params.proc_id)?;
     if let Some(pid) = verified_proc_pid(&dir) {
-        kill_process_group(pid);
+        terminate_process_group_and_wait(&dir, pid)?;
     }
     remove_proc_directory(&dir)?;
     Ok(json!({ "ok": true }))
@@ -1703,14 +1703,44 @@ fn current_process_group_id(_pid: u32) -> Option<u32> {
 }
 
 #[cfg(unix)]
-fn kill_process_group(pid: u32) {
-    unsafe {
-        let _ = libc_kill(-(pid as i32), 15);
+fn terminate_process_group_and_wait(dir: &Path, pid: u32) -> Result<(), HelperError> {
+    signal_process_group(pid, 15);
+    if wait_for_proc_to_stop(dir, Duration::from_millis(500)) {
+        return Ok(());
     }
+    signal_process_group(pid, 9);
+    if wait_for_proc_to_stop(dir, Duration::from_secs(2)) {
+        return Ok(());
+    }
+    Err(jsonrpc_error(
+        -32050,
+        "process did not exit after kill signal",
+    ))
 }
 
 #[cfg(not(unix))]
-fn kill_process_group(_pid: u32) {}
+fn terminate_process_group_and_wait(_dir: &Path, _pid: u32) -> Result<(), HelperError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: i32) {
+    unsafe {
+        let _ = libc_kill(-(pid as i32), signal);
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_proc_to_stop(dir: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if proc_status_in_dir(dir).exit_code.is_some() || verified_proc_pid(dir).is_none() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    proc_status_in_dir(dir).exit_code.is_some() || verified_proc_pid(dir).is_none()
+}
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -2790,6 +2820,33 @@ mod tests {
 
         remove_proc_directory(&root).expect("cleanup");
 
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_process_group_escalates_before_cleanup() {
+        use std::os::unix::process::CommandExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-kill-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let mut child = Command::new("/bin/sh");
+        child
+            .arg("-c")
+            .arg("trap '' TERM; sleep 30")
+            .process_group(0);
+        let mut child = child.spawn().expect("child");
+        write_proc_pid(&root, child.id()).expect("pid metadata");
+
+        terminate_process_group_and_wait(&root, child.id()).expect("terminated");
+        remove_proc_directory(&root).expect("cleanup");
+
+        let status = child.wait().expect("wait");
+        assert!(!status.success());
         assert!(!root.exists());
     }
 
