@@ -83,14 +83,18 @@ struct AlasCLIRequest: Equatable {
         guard raw.kind == "cli" else { throw AlasCLIRequestError.unsupportedKind }
         guard raw.v == 1 else { throw AlasCLIRequestError.unsupportedVersion }
         let sessionId = raw.session_id?.nilIfBlank
+        // Validate against the raw value and return it unchanged: trimming
+        // would silently resolve a different directory than the one the CLI
+        // sent for a path that legitimately ends in whitespace (the Rust
+        // side already sends absolutized, non-trimmed paths). Whitespace is
+        // checked only to reject an effectively-empty value.
         let cwd = try raw.cwd.map { rawCwd -> String in
-            let trimmed = rawCwd.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty,
-                  trimmed.hasPrefix("/"),
-                  URL(fileURLWithPath: trimmed).path == trimmed else {
+            guard !rawCwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  rawCwd.hasPrefix("/"),
+                  URL(fileURLWithPath: rawCwd).path == rawCwd else {
                 throw AlasCLIRequestError.malformed
             }
-            return trimmed
+            return rawCwd
         }
         guard sessionId != nil || cwd != nil else {
             throw AlasCLIRequestError.missingSession

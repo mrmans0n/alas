@@ -107,6 +107,16 @@ struct AlasCLIRequestTests {
         }
     }
 
+    /// A directory name that legitimately ends in a space must round-trip
+    /// unchanged rather than being silently trimmed to a different path. The
+    /// Rust CLI already sends absolutized, non-trimmed paths, so trimming
+    /// here would resolve the wrong directory without any error.
+    @Test func preservesCwdWithTrailingSpaceRatherThanSilentlyTrimming() throws {
+        let json = #"{"v":1,"kind":"cli","command":"resolve","cwd":"/repo dir "}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.cwd == "/repo dir ")
+    }
+
     @Test func responseEncodesOKAndError() throws {
         let ok = String(data: try AlasCLIResponse.ok.encode(), encoding: .utf8) ?? ""
         let error = String(data: try AlasCLIResponse.error("No file.").encode(), encoding: .utf8) ?? ""
