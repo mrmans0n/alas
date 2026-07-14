@@ -1191,7 +1191,8 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision)? = sent.first else {
-            Issue.record("expected snapshot, got \(sent)"); return
+            Issue.record("expected snapshot, got \(sent)")
+            return
         }
         #expect(total == 200)
         #expect(first == 200 - RemoteTranscriptSync.tailWindow)
@@ -1228,14 +1229,17 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _)? = sent.first else {
-            Issue.record("expected snapshot"); return
+            Issue.record("expected snapshot")
+            return
         }
         sent.removeAll()
         s.transcript.messages.removeLast()               // structural
         try await Task.sleep(nanoseconds: 250_000_000)
-        let resync = sent.last { if case .transcriptSnapshot = $0 { return true }; return false }
+        let resync = sent.last { if case .transcriptSnapshot = $0 { return true }
+        return false }
         guard case .transcriptSnapshot(_, _, _, let msgs, _, let total, let epoch1, _)? = resync else {
-            Issue.record("expected resync snapshot, got \(sent)"); return
+            Issue.record("expected resync snapshot, got \(sent)")
+            return
         }
         #expect(epoch1 == epoch0 + 1)
         #expect(total == 9)
@@ -1252,7 +1256,8 @@ struct RemoteSessionGatewayTests {
         sent.removeAll()
         await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 110, limit: 90))
         guard case .transcriptPage(_, _, let first, let msgs)? = sent.last else {
-            Issue.record("expected page, got \(sent)"); return
+            Issue.record("expected page, got \(sent)")
+            return
         }
         #expect(first == 20)
         #expect(msgs.count == 90)
@@ -1262,7 +1267,8 @@ struct RemoteSessionGatewayTests {
         sent.removeAll()
         await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 500))   // clamp both ends
         guard case .transcriptPage(_, _, let first2, let msgs2)? = sent.last else {
-            Issue.record("expected page, got \(sent)"); return
+            Issue.record("expected page, got \(sent)")
+            return
         }
         #expect(first2 == 0)
         #expect(msgs2.count == 10)
