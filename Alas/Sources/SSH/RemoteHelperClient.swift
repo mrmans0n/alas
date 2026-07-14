@@ -330,17 +330,14 @@ actor RemoteHelperClient {
         )
         for frame in result.stdoutFrames {
             if let data = Data(base64Encoded: frame.dataBase64) {
-                rememberProcOffset(procId: procId, stream: "stdout", offset: frame.offset)
                 continuation.yield(.stdout(data, offset: frame.offset))
             }
         }
         for chunk in result.stderrChunks {
             if let data = Data(base64Encoded: chunk.dataBase64) {
-                rememberProcOffset(procId: procId, stream: "stderr", offset: chunk.offset)
                 continuation.yield(.stderr(data, offset: chunk.offset))
             }
         }
-        rememberProcOffsets(procId: procId, stdout: result.stdoutOffset, stderr: result.stderrOffset)
         var replayedExit = false
         for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
             if Self.procEventIsCoveredByAttachResult(

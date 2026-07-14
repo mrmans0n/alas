@@ -171,6 +171,58 @@ struct RemoteHelperClientTests {
         #expect(await iterator.next() == .stdout(Data(#"{"method":"session/update"}"#.utf8), offset: 52))
     }
 
+    @Test func procAttachDoesNotRememberReplayOffsetsBeforeDrain() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let firstAttach = Task {
+            try await client.attachProc(procId: "acp-session-1", attachmentId: "first")
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":1,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":40,
+          "stdoutOffset":25,
+          "stderrOffset":0,
+          "stdoutFrames":[{"offset":25,"dataBase64":"cmVwbGF5"}],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        _ = try await firstAttach.value
+
+        let secondAttach = Task {
+            try await client.attachProc(procId: "acp-session-1", attachmentId: "second")
+        }
+        try await waitUntil { transport.sentFrames.count == 2 }
+        let secondRequest = try #require(
+            JSONSerialization.jsonObject(with: transport.sentFrames[1]) as? [String: Any]
+        )
+        let params = try #require(secondRequest["params"] as? [String: Any])
+        #expect(params["stdoutOffset"] == nil)
+        #expect(params["stderrOffset"] == nil)
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":2,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":40,
+          "stdoutOffset":25,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        _ = try await secondAttach.value
+    }
+
     @Test func procAttachFinishesAfterReplayingEarlyExit() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
