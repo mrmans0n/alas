@@ -132,7 +132,8 @@ jobs:
           {
             git -C ThirdParty/fff rev-parse HEAD
             git rev-parse HEAD:AlasHelper
-            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh
+            git rev-parse HEAD:AlasCLI
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh
             shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
@@ -161,11 +162,13 @@ jobs:
             .build/fff/include
             .build/alas-helper/*/release/alas-helper
             .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
           key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
           restore-keys: |
             tools-${{ runner.os }}-arm64-
 
-      - name: Prebuild zmx + fff + Alas Helper
+      - name: Prebuild zmx + fff + Alas Helper + Alas CLI
         if: steps.skip-check.outputs.skip != 'true'
         # These normally run as pre-build script phases *inside* xcodebuild,
         # where a cold run buries ~11 min of zig/cargo work inside the build
@@ -176,6 +179,7 @@ jobs:
           ./scripts/build-zmx.sh
           ./scripts/build-fff.sh
           ./scripts/build-alas-helper.sh
+          ./scripts/build-alas-cli.sh
 
       - name: Save prebuilt tools cache (main builds only)
         # Gate on main-built refs like the Ghostty save above — a non-main
@@ -196,6 +200,8 @@ jobs:
             .build/fff/include
             .build/alas-helper/*/release/alas-helper
             .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
 
       - name: Generate project

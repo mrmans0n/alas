@@ -4666,6 +4666,7 @@
 				A6E0A5F2849F1349828C2EEF /* Build GhosttyKit */,
 				2A52B3AA269E67D4B89E4A6B /* Build zmx */,
 				A8FC861C1A7630AE525F4E85 /* Build Alas Helper */,
+				E7133D66219548A98B3DF549 /* Build Alas CLI */,
 				4609384BD7FA0393B4CE182E /* Build fff */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
 				BD47E15DBE895A60942DDB48 /* Resources */,
@@ -4907,6 +4908,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/build-alas-helper.sh\"";
+		};
+		E7133D66219548A98B3DF549 /* Build Alas CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Alas CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/build-alas-cli.sh\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 

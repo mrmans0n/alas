@@ -82,6 +82,9 @@ jobs:
       - name: Test build-alas-helper.sh harness
         run: bash scripts/tests/build-alas-helper/run.sh
 
+      - name: Test build-alas-cli.sh harness
+        run: bash scripts/tests/build-alas-cli/run.sh
+
       - name: Compute Ghostty cache key inputs
         # Submodules track their HEAD via .git/modules/... in the parent repo, so
         # `ThirdParty/ghostty/.git` is a *file* (not a dir) and hashFiles can't
@@ -140,7 +143,8 @@ jobs:
           {
             git -C ThirdParty/fff rev-parse HEAD
             git rev-parse HEAD:AlasHelper
-            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh
+            git rev-parse HEAD:AlasCLI
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh
             shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
@@ -168,11 +172,13 @@ jobs:
             .build/fff/include
             .build/alas-helper/*/release/alas-helper
             .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
           key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
           restore-keys: |
             tools-${{ runner.os }}-arm64-
 
-      - name: Prebuild zmx + fff + Alas Helper
+      - name: Prebuild zmx + fff + Alas Helper + Alas CLI
         # These normally run as pre-build script phases *inside* xcodebuild,
         # where a cold run buries ~11 min of zig/cargo work inside the build
         # step and a later failure throws it away. Run them as their own
@@ -182,6 +188,7 @@ jobs:
           ./scripts/build-zmx.sh
           ./scripts/build-fff.sh
           ./scripts/build-alas-helper.sh
+          ./scripts/build-alas-cli.sh
 
       - name: Save prebuilt tools cache
         # Save immediately after the prebuild step succeeds, BEFORE
@@ -199,6 +206,8 @@ jobs:
             .build/fff/include
             .build/alas-helper/*/release/alas-helper
             .build/alas-helper/fingerprint
+            .build/alas-cli/*/release/alas
+            .build/alas-cli/fingerprint
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
 
       - name: Generate Xcode project
