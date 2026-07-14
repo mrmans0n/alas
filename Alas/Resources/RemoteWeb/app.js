@@ -4,7 +4,11 @@ function listen(id, event, handler) {
   const element = $(id);
   if (element && typeof element.addEventListener === "function") element.addEventListener(event, handler);
 }
-let ws, currentSession = null, messages = new Map();
+let ws, currentSession = null, messages = new Map();   // stableId → wire message
+let messageNodes = new Map();                          // stableId → DOM node
+let transcriptMeta = null;   // {epoch, revision, firstIndex, totalCount} for the open session
+let olderFetchInFlight = false;
+let stopPending = false;
 let sessionTitles = new Map();
 let canDrive = false, canDriveKnown = false;
 let reconnectDelay = 1500;
@@ -164,10 +168,10 @@ function send(obj) { ws && ws.readyState === 1 && ws.send(JSON.stringify(obj)); 
 function handle(msg) {
   switch (msg.type) {
     case "sessionList": renderSessions(msg.sessions); break;
-    case "transcriptSnapshot": messages = new Map(); msg.messages.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; canDriveKnown = true; renderMessages(true); renderDriveBar(msg.streamingState); } break;
-    // The server re-sends the full transcript each time, keyed by stable position
-    // ids, so replace (don't append) to avoid accumulating duplicate copies.
-    case "transcriptDelta": messages = new Map(); msg.upserts.forEach(m => messages.set(m.stableId, m)); if (msg.sessionId === currentSession) { canDrive = msg.canDrive; canDriveKnown = true; renderMessages(false); renderDriveBar(msg.streamingState); } break;
+    case "transcriptSnapshot": applySnapshot(msg); break;
+    case "transcriptDelta": applyDelta(msg); break;
+    case "transcriptPage": applyPage(msg); break;
+    case "stopPending": if (msg.sessionId === currentSession) markStopping(true); break;
     // Scope prompt events to the session currently open — a stale/in-flight
     // event for a session the user already left must not pop or close a sheet.
     case "permissionRequest": handlePromptRequest("permission", msg.sessionId, msg.payload); break;
@@ -287,8 +291,9 @@ function plural(count, singular) {
 
 function openSession(id) {
   clearSessionSheetsForOpen();
-  currentSession = id; messages = new Map(); dismissedQuestion = null; canDrive = false; canDriveKnown = false;
-  sessionConfig = null; clearAttachments();
+  currentSession = id; messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
+  dismissedQuestion = null; canDrive = false; canDriveKnown = false;
+  sessionConfig = null; clearAttachments(); markStopping(false);
   $("back").classList.remove("hidden"); $("nav-title").classList.add("hidden");   // bar shows ‹ Sessions
   $("detail-title").classList.remove("hidden"); $("detail-rename").classList.remove("hidden"); setDetailTitle(id);
   $("sessions").classList.add("hidden"); $("transcript").classList.remove("hidden");
@@ -307,7 +312,8 @@ function clearSessionSheetsForOpen() {
 function showSessions() {
   if (currentSession) send({ type: "unsubscribe", sessionId: currentSession });
   currentSession = null; canDrive = false; canDriveKnown = false;
-  sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances();
+  messages = new Map(); messageNodes = new Map(); transcriptMeta = null; olderFetchInFlight = false;
+  sessionConfig = null; clearAttachments(); hideConfig(); renderConfigAffordances(); markStopping(false);
   hidePermission(); hideQuestion(); hideElicitation(); hideRenameSheet(); hideCreateSheet();   // never leave a sheet over the list
   $("back").classList.add("hidden"); $("nav-title").classList.remove("hidden");   // bar shows app title
   $("detail-title").classList.add("hidden"); $("detail-rename").classList.add("hidden");
@@ -589,16 +595,84 @@ function applyCreatedSession(session) {
   openSession(session.id);
 }
 
-function renderMessages(forceBottom) {
+function applySnapshot(msg) {
+  if (msg.sessionId !== currentSession) return;
+  canDrive = msg.canDrive; canDriveKnown = true;
+  transcriptMeta = { epoch: msg.epoch, revision: msg.revision, firstIndex: msg.firstIndex, totalCount: msg.totalCount };
+  olderFetchInFlight = false;
   const box = $("messages");
-  // #messages is the scroll container (fixed shell), so use its own metrics.
-  const atBottom = forceBottom || (box.scrollTop + box.clientHeight >= box.scrollHeight - 120);
-  // Preserve which tool/thought cards the user expanded across re-renders.
   const open = new Set();
   box.querySelectorAll(".m-collapsible.is-open").forEach(d => { if (d.dataset.sid) open.add(d.dataset.sid); });
   box.innerHTML = "";
-  for (const [sid, m] of messages) box.appendChild(renderMessage(m, sid, open));
+  messages = new Map(); messageNodes = new Map();
+  msg.messages.forEach(m => insertMessage(m, open));
+  requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+  syncStreamingState(msg.streamingState);
+}
+
+function applyDelta(msg) {
+  if (msg.sessionId !== currentSession || !transcriptMeta) return;
+  // Epoch moved or a delta was missed → the server's view diverged; resync.
+  if (msg.epoch !== transcriptMeta.epoch || msg.revision !== transcriptMeta.revision + 1) {
+    resubscribe();
+    return;
+  }
+  transcriptMeta.revision = msg.revision;
+  canDrive = msg.canDrive; canDriveKnown = true;
+  const box = $("messages");
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 120;
+  msg.upserts.forEach(m => upsertMessage(m));
   if (atBottom) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+  syncStreamingState(msg.streamingState);
+}
+
+function applyPage(msg) {
+  olderFetchInFlight = false;
+  removeLoadingRow();
+  if (msg.sessionId !== currentSession || !transcriptMeta) return;
+  if (msg.epoch !== transcriptMeta.epoch) return;   // stale page; a resync snapshot is coming
+  const box = $("messages");
+  const prevHeight = box.scrollHeight;
+  // Pages arrive oldest-first; insert in reverse so each lands at the front.
+  [...msg.messages].reverse().forEach(m => { if (!messages.has(m.stableId)) insertMessage(m, null); });
+  transcriptMeta.firstIndex = Math.min(transcriptMeta.firstIndex, msg.firstIndex);
+  box.scrollTop += box.scrollHeight - prevHeight;   // keep the viewport anchored
+}
+
+function resubscribe() {
+  if (currentSession) send({ type: "subscribe", sessionId: currentSession });
+}
+
+// Insert a message node at its index-ordered DOM position. Nodes carry
+// dataset.index; the common case (append at the tail) is O(1).
+function insertMessage(m, open) {
+  const box = $("messages");
+  const node = renderMessage(m, m.stableId, open);
+  node.dataset.sid = m.stableId;
+  node.dataset.index = m.index;
+  messages.set(m.stableId, m);
+  messageNodes.set(m.stableId, node);
+  let anchor = box.lastElementChild;
+  while (anchor && Number(anchor.dataset.index) > m.index) anchor = anchor.previousElementSibling;
+  if (anchor) anchor.after(node); else box.prepend(node);
+}
+
+function upsertMessage(m) {
+  const existing = messageNodes.get(m.stableId);
+  if (existing) {
+    const wasOpen = existing.classList.contains("is-open") ? new Set([m.stableId]) : null;
+    const node = renderMessage(m, m.stableId, wasOpen);
+    node.dataset.sid = m.stableId;
+    node.dataset.index = m.index;
+    existing.replaceWith(node);
+    messages.set(m.stableId, m);
+    messageNodes.set(m.stableId, node);
+    return;
+  }
+  // A message older than the loaded window (rare late mutation): skip —
+  // it will arrive if the user backfills that far.
+  if (transcriptMeta && m.index < transcriptMeta.firstIndex) return;
+  insertMessage(m, null);
 }
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
@@ -1949,6 +2023,23 @@ function renderDriveBar(streamingState) {
   $("stop").classList.toggle("hidden", !busy);
 }
 
+let stopFallbackTimer = null;
+function markStopping(on) {
+  stopPending = on;
+  const btn = $("stop");
+  btn.disabled = on;
+  btn.classList.toggle("is-stopping", on);
+  if (stopFallbackTimer) { clearTimeout(stopFallbackTimer); stopFallbackTimer = null; }
+  // If the cancel RPC fails and the turn keeps streaming, re-enable Stop so
+  // the user can retry instead of being stranded on a dead button.
+  if (on) stopFallbackTimer = setTimeout(() => markStopping(false), 15000);
+}
+
+function syncStreamingState(streamingState) {
+  if (streamingState === "idle" && stopPending) markStopping(false);
+  renderDriveBar(streamingState);
+}
+
 // takeOver seizes the lease synchronously server-side and messages are ordered,
 // so a follow-up action sent right after lands as the writer.
 function ensureWriter() {
@@ -2101,9 +2192,36 @@ $("file").onchange = async (e) => {
   await onFilesPicked(files);
 };
 
+const LOAD_OLDER_THRESHOLD_PX = 600;
+const OLDER_PAGE_SIZE = 90;
+
+listen("messages", "scroll", () => {
+  if (!currentSession || !transcriptMeta || olderFetchInFlight) return;
+  if (transcriptMeta.firstIndex <= 0) return;
+  if ($("messages").scrollTop > LOAD_OLDER_THRESHOLD_PX) return;
+  olderFetchInFlight = true;
+  showLoadingRow();
+  send({ type: "fetchOlder", sessionId: currentSession, beforeIndex: transcriptMeta.firstIndex, limit: OLDER_PAGE_SIZE });
+});
+
+function showLoadingRow() {
+  if ($("messages").querySelector(".load-older")) return;
+  const row = el("div", "load-older", "Loading earlier messages…");
+  row.dataset.index = "-1";
+  $("messages").prepend(row);
+}
+function removeLoadingRow() {
+  const row = $("messages").querySelector(".load-older");
+  if (row) row.remove();
+}
+
 $("takeover").onclick = () => { if (currentSession) send({ type: "takeOver", sessionId: currentSession }); };
 $("send").onclick = sendPrompt;
-$("stop").onclick = () => { if (!currentSession) return; ensureWriter(); send({ type: "stop", sessionId: currentSession }); };
+$("stop").onclick = () => {
+  if (!currentSession) return;
+  send({ type: "stop", sessionId: currentSession });   // stop is leaseless — no lease takeover first
+  markStopping(true);
+};
 listen("prompt", "input", autoGrowPrompt);
 listen("prompt", "keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
