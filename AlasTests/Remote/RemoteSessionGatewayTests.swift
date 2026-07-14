@@ -1715,10 +1715,13 @@ struct RemoteSessionGatewayTests {
 
     // Regression (codex review, PR #775): fetchOlder's page serialization has
     // the same suspend-then-stamp hazard as sendDelta — a structural resync
-    // landing while a truncated tool call's content is being fetched must not
-    // let the page go out stamped with the post-resync epoch (which the
-    // client would wrongly accept as current instead of dropping).
-    @Test func fetchOlderDropsStalePageWhenEpochChangesDuringSerialize() async throws {
+    // landing while a truncated tool call's content is being fetched must
+    // not let the FIRST attempt's page go out stamped with the post-resync
+    // epoch (which the client would wrongly accept as current). It must
+    // instead retry against the now-current state and deliver a correctly
+    // re-stamped, fresh page — not silently drop the request (see the
+    // dedicated retry test below for why silently dropping is itself a bug).
+    @Test func fetchOlderRetriesAndDeliversFreshPageWhenEpochChangesDuringSerialize() async throws {
         let provider = FakeSessionsProvider()
         let fullContent = String(repeating: "abcdef0123456789", count: 400)
         var toolCall = ACPMessage.ToolCall(
@@ -1773,11 +1776,84 @@ struct RemoteSessionGatewayTests {
         }
 
         sent.removeAll()
-        // Resume the page's suspended fetch. With the fix, it must detect the
-        // epoch moved during its await and discard rather than send a stale
-        // page stamped with the new epoch.
+        // Resume the page's suspended fetch. With the fix, it must detect
+        // the epoch moved during its await, retry against the now-current
+        // state, and still deliver a fresh page rather than leaving the
+        // client's request unanswered.
         provider.resumeFullToolCallContent(fullContent)
         await fetchTask.value
-        #expect(sent.isEmpty, "stale page must be discarded once epoch changed during serialize, got \(sent)")
+        guard case .transcriptPage(_, let pageEpoch, let pageFirst, let pageMessages)? = sent.last else {
+            Issue.record("expected a retried page after the epoch changed during serialize, got \(sent)")
+            return
+        }
+        #expect(pageEpoch != 0)   // reflects the post-resync epoch, not the stale captured one
+        #expect(pageFirst == 0)
+        #expect(pageMessages.contains { $0.stableId == "m5" })
+    }
+
+    // Regression (codex review, PR #775): unlike a dropped delta/snapshot
+    // (which the client naturally recovers from via a later resync
+    // snapshot), a fetchOlder page superseded by an ORDINARY same-epoch
+    // delta has no client-side recovery — only a snapshot clears the
+    // client's "loading earlier messages" state, and a normal delta does
+    // not. Silently dropping the page in that case would leave the client
+    // stuck forever. The gateway must retry and still deliver a page.
+    @Test func fetchOlderRetriesAndDeliversPageInsteadOfLeavingClientStuck() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        // 100 messages: the tail-window snapshot (last 90) excludes index 0,
+        // so subscribing never fetches/caches its content — fetchOlder below
+        // performs the first, pausable fetch.
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the page's first fetch attempt
+
+        let fetchTask = Task { @MainActor in
+            await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 90))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // A normal, same-epoch delta lands first (e.g. streaming continues
+        // while the user is scrolled up) — this must not leave the pending
+        // fetchOlder request unanswered.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta? = sent.last else {
+            Issue.record("expected the concurrent delta to land first, got \(sent)")
+            return
+        }
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        await fetchTask.value
+        guard case .transcriptPage(_, _, let pageFirst, let pageMessages)? = sent.last else {
+            Issue.record("fetchOlder must still deliver a page after being superseded once, got \(sent)")
+            return
+        }
+        #expect(pageFirst == 0)
+        #expect(pageMessages.contains { $0.stableId == "m0" })
+        // The retry reuses the cache the first (superseded) attempt already
+        // populated — no second real fetch needed.
+        #expect(provider.fullToolCallContentCallCount == 1)
     }
 }

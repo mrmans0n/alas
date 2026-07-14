@@ -627,9 +627,13 @@ function applyDelta(msg) {
 }
 
 function applyPage(msg) {
+  // Check the session BEFORE touching shared in-flight state: these globals
+  // track the CURRENT session only, so a stale page for a session the user
+  // already left must not clear (or otherwise affect) whatever the current
+  // session's own in-flight backfill is doing.
+  if (msg.sessionId !== currentSession || !transcriptMeta) return;
   olderFetchInFlight = false;
   removeLoadingRow();
-  if (msg.sessionId !== currentSession || !transcriptMeta) return;
   if (msg.epoch !== transcriptMeta.epoch) return;   // stale page; a resync snapshot is coming
   const box = $("messages");
   const prevHeight = box.scrollHeight;

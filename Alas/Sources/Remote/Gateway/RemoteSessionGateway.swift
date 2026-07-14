@@ -176,26 +176,50 @@ final class RemoteSessionGateway {
             guard let session = provider.session(for: id), let state = syncStates[id] else { return }
             let clamped = min(max(limit, RemoteTranscriptSync.pageLimitRange.lowerBound),
                               RemoteTranscriptSync.pageLimitRange.upperBound)
-            let count = session.transcript.messages.count
-            let hi = min(max(beforeIndex, 0), count)
-            let lo = max(0, hi - clamped)
-            // Capture the generation BEFORE the async serialize below — not
-            // just the epoch, since a same-epoch concurrent snapshot (e.g.
-            // takeOver, or a client resubscribe with no structural change)
-            // also supersedes this page without moving the epoch. If a
-            // snapshot lands on this same session while a truncated tool
-            // call's full content is being fetched, stamping the page with
-            // state read AFTER the await would make it look current and be
-            // wrongly accepted instead of dropped.
-            let capturedGeneration = state.generation
-            let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
-            guard state.generation == capturedGeneration else { return }
-            send(.transcriptPage(sessionId: id,
-                                 epoch: state.epoch,
-                                 firstIndex: lo,
-                                 messages: wire))
+            // A concurrent send (snapshot OR ordinary same-epoch delta) can
+            // supersede this page mid-serialize the same way it supersedes a
+            // dirty delta — see the capturedGeneration comment below. Unlike
+            // a dropped delta/snapshot, though, the client has no fallback
+            // recovery for a silently-dropped page: only a snapshot resets
+            // its "loading earlier messages" state, and an ordinary delta
+            // (the common case here) does not, so simply returning would
+            // leave the client stuck showing a spinner forever. Retry
+            // instead — bounded so pathological continuous churn can't spin
+            // forever either; a truncated tool call's content fetched by an
+            // earlier attempt stays cached, so a retry is cheap.
+            var attempt = 0
+            while true {
+                let count = session.transcript.messages.count
+                let hi = min(max(beforeIndex, 0), count)
+                let lo = max(0, hi - clamped)
+                // Capture the generation BEFORE the async serialize below —
+                // not just the epoch, since a same-epoch concurrent
+                // snapshot (e.g. takeOver, or a client resubscribe with no
+                // structural change) also supersedes this page without
+                // moving the epoch. If a snapshot lands on this same
+                // session while a truncated tool call's full content is
+                // being fetched, stamping the page with state read AFTER
+                // the await would make it look current and be wrongly
+                // accepted instead of dropped.
+                let capturedGeneration = state.generation
+                let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
+                attempt += 1
+                guard state.generation == capturedGeneration || attempt > Self.maxFetchOlderAttempts else {
+                    continue
+                }
+                send(.transcriptPage(sessionId: id,
+                                     epoch: state.epoch,
+                                     firstIndex: lo,
+                                     messages: wire))
+                break
+            }
         }
     }
+
+    /// Bound on retrying a superseded `fetchOlder` page before sending
+    /// whatever was last computed anyway — the client must always get a
+    /// response, never an unbounded wait.
+    private static let maxFetchOlderAttempts = 5
 
     private func beginTracking(id: String, session: ACPSession) {
         guard !trackedSessions.contains(id) else { return }
