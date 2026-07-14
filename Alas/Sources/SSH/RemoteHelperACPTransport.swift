@@ -23,6 +23,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private var stdinOffset: UInt64 = 0
 
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
+    var requestIDPrefix: String? { attachmentId }
 
     init(
         host: String,

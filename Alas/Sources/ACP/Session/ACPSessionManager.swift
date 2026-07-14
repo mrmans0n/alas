@@ -345,6 +345,28 @@ final class ACPSessionManager: ObservableObject {
         return task
     }
 
+    private func enqueuePersistenceResult<Result: Sendable>(
+        _ operation: @escaping @Sendable (ACPSessionPersistence) async throws -> Result
+    ) -> Task<Result?, Never> {
+        let previous = persistenceTail
+        let persistence = persistence
+        persistenceGeneration += 1
+        let resultTask = Task<Result?, Never> { @MainActor [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return nil }
+            do {
+                return try await operation(persistence)
+            } catch {
+                self?.persistenceError = error.localizedDescription
+                return nil
+            }
+        }
+        persistenceTail = Task { @MainActor in
+            _ = await resultTask.value
+        }
+        return resultTask
+    }
+
     func flushPersistence() async {
         while let tail = persistenceTail {
             let generation = persistenceGeneration
@@ -952,16 +974,21 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    private func persistSessionRemoteId(_ s: ACPSession) {
-        guard var row = persistedRows[s.id] else { return }
+    private func persistSessionRemoteId(_ s: ACPSession) async -> Bool {
+        guard var row = persistedRows[s.id] else { return false }
         row.remoteSessionId = s.remoteSessionId
-        persistedRows[s.id] = row
-        replaceRecentRow(row)
         let rowToPersist = row
         let fence = leaseFence(sessionId: s.id)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertSession(rowToPersist, fence: fence)
+        let result = await enqueuePersistenceResult { persistence in
+            try await persistence.upsertSession(rowToPersist, fence: fence)
+        }.value
+        guard result == true else { return false }
+        if var currentRow = persistedRows[s.id] {
+            currentRow.remoteSessionId = s.remoteSessionId
+            persistedRows[s.id] = currentRow
+            replaceRecentRow(currentRow)
         }
+        return true
     }
 
     private func persistContextRecoveryPending(sessionId: ACPSession.ID, pending: Bool) {
@@ -2464,8 +2491,16 @@ extension ACPSessionManager {
             session.promptSuggestions = result.promptSuggestions
             session.availableConfigOptions = result.configOptions
             session.contextRestoreWarning = restoreWarning
-            persistSessionRemoteId(session)
-            await flushPersistence()
+            guard await persistSessionRemoteId(session) else {
+                session.remoteSessionId = persistedRows[sessionId]?.remoteSessionId
+                await connection.shutdown()
+                startedRunner?.stop()
+                await startedRunner?.flushPersistence()
+                session.agentState = .idle
+                if !isDisposed { beginMirroring(sessionId: sessionId) }
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
             connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
             runners[sessionId] = runner

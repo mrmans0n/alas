@@ -7,6 +7,7 @@ import Foundation
 final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable {
     private let cont: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
+    var requestIDPrefix: String?
     private(set) var sentFrames: [Data] = []
     private(set) var terminateCount = 0
     var deferWriteCompletions = false

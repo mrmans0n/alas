@@ -326,6 +326,9 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         stateLock.lock()
         defer { stateLock.unlock() }
         nextId += 1
+        if let prefix = transport.requestIDPrefix {
+            return .string("\(prefix):\(nextId)")
+        }
         return .number(nextId)
     }
 

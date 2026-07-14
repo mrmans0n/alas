@@ -96,6 +96,27 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
+    @Test("transport request ID prefix namespaces outbound requests")
+    func requestIDPrefixNamespacesOutboundRequests() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.requestIDPrefix = "attachment-1"
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let responseTask = Task {
+            try await client.send(ACPRequest(method: "initialize"))
+        }
+        try await Task.sleep(for: .milliseconds(20))
+
+        let frame = try #require(transport.sentFrames.first)
+        let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+        #expect(request["id"] as? String == "attachment-1:1")
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":"attachment-1:1","result":{"ok":true}}"#.utf8))
+
+        let response = try await responseTask.value
+        response.acknowledgeDurableConsumption()
+        await client.shutdown()
+    }
+
     @Test("inbound request defers frame consumption until its response is sent")
     func inboundRequestDefersFrameConsumption() async throws {
         let transport = FakeJSONRPCTransport()
