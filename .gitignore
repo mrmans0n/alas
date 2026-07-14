@@ -9,6 +9,7 @@ xcuserdata/
 .swiftpm/
 .build/
 AlasHelper/target/
+AlasCLI/target/
 
 # macOS
 .DS_Store
