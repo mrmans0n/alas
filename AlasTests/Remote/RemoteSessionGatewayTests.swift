@@ -32,8 +32,12 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var createRequests: [(worktreeId: String, agentId: String)] = []
     var pauseSessionSummaries = false
     var pauseRemoteWorktrees = false
+    /// 1-indexed call number of `fullToolCallContent` to suspend on (nil = never pause).
+    /// Lets a test freeze exactly one in-flight fetch while later calls proceed normally.
+    var pauseFullToolCallContentOnCall: Int?
     private var sessionSummariesContinuation: CheckedContinuation<[RemoteSessionSummary], Never>?
     private var remoteWorktreesContinuation: CheckedContinuation<[RemoteWorktreeOption], Never>?
+    private var fullToolCallContentContinuation: CheckedContinuation<String?, Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
         if pauseSessionSummaries {
@@ -80,7 +84,16 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
 
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String? {
         fullToolCallContentCallCount += 1
+        if pauseFullToolCallContentOnCall == fullToolCallContentCallCount {
+            return await withCheckedContinuation { continuation in
+                fullToolCallContentContinuation = continuation
+            }
+        }
         return fullToolCallContents["\(sessionId)|\(toolCallId)"]
+    }
+    func resumeFullToolCallContent(_ value: String?) {
+        fullToolCallContentContinuation?.resume(returning: value)
+        fullToolCallContentContinuation = nil
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
@@ -1324,5 +1337,69 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.subscribe(sessionId: "s1"))   // client resync
         await gw.handle(.unsubscribe(sessionId: "s1"))
         #expect(!s.transcript.changeLog.isTracking)
+    }
+
+    // Regression (codex review, PR #775): a dirty delta that suspends mid-
+    // serialize (awaiting truncated tool-call content) while a CONCURRENT
+    // structural resync lands on the same session must not resume and send
+    // its now-stale upserts stamped with the resync's new epoch/revision —
+    // the client would wrongly accept them as a legitimate next delta.
+    @Test func deltaDropsStaleUpsertsWhenEpochChangesDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+
+        // Mutate the tool call in place (dirty, not structural) — invalidates
+        // its cache and forces a real re-fetch in the resulting delta.
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+
+        // Wait for the coalesce timer to fire and the delta to suspend on the
+        // paused fetch (call #1).
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // While that delta is suspended, a structural change lands on the
+        // SAME session and its own coalesced delta resyncs via a fresh
+        // snapshot (its tool-content fetch is call #2, not paused).
+        session.transcript.messages.removeLast()
+        for _ in 0..<50 where !(sent.last.map { if case .transcriptSnapshot = $0 { return true }
+        return false } ?? false) {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let resyncEpoch, _)? = sent.last else {
+            Issue.record("expected a resync snapshot from the structural change, got \(sent)")
+            return
+        }
+
+        sent.removeAll()
+        // Resume the original delta's suspended fetch. With the fix, it must
+        // detect the epoch moved during its await and discard rather than
+        // send a stale delta stamped with the new epoch.
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "stale delta must be discarded once epoch changed during serialize, got \(sent)")
+        #expect(resyncEpoch != 0)   // sanity: the resync did bump the epoch
     }
 }
