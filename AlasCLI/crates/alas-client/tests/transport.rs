@@ -187,6 +187,52 @@ fn dispatch_directory_multi_socket_zero_owners_is_not_in_worktree() {
 }
 
 #[test]
+fn dispatch_directory_slow_non_owner_does_not_stall_dispatch() {
+    // Owner: replies promptly to both the probe and the real command.
+    let (owner_path, owner_handle) = stub_multi_server(vec![r#"{"ok":true}"#, r#"{"ok":true}"#]);
+
+    // Non-owner: accepts the connection but never replies, modeling a wedged
+    // unrelated Alas instance. Probing must not wait anywhere near the normal
+    // 30s read timeout for this socket.
+    let unique = STUB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let wedged_path = std::env::temp_dir().join(format!(
+        "alas-cli-stub-wedged-{}-{}.sock",
+        std::process::id(),
+        unique
+    ));
+    let _ = std::fs::remove_file(&wedged_path);
+    let listener = UnixListener::bind(&wedged_path).unwrap();
+    let wedged_handle = thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        // Hold the connection open without ever writing a reply.
+        thread::sleep(std::time::Duration::from_secs(5));
+    });
+
+    let target = Target::Directory { cwd: "/repo".into() };
+    let started = std::time::Instant::now();
+    let resp = alas_client::dispatch_to_sockets(
+        &Command::WtList,
+        &target,
+        &[owner_path.clone(), wedged_path.clone()],
+    );
+    let elapsed = started.elapsed();
+    assert!(matches!(resp, Ok(r) if r.ok));
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "dispatch took {:?}; a wedged non-owner must not stall it past the probe timeout",
+        elapsed
+    );
+
+    let owner_received = owner_handle.join().unwrap();
+    assert_eq!(owner_received.len(), 2, "owner should see probe + real command");
+
+    let _ = std::fs::remove_file(&owner_path);
+    let _ = std::fs::remove_file(&wedged_path);
+    // Detach; the wedged listener thread will exit once its sleep elapses.
+    drop(wedged_handle);
+}
+
+#[test]
 fn dispatch_directory_multi_socket_multiple_owners_is_ambiguous() {
     let (path_a, handle_a) = stub_multi_server(vec![r#"{"ok":true}"#]);
     let (path_b, handle_b) = stub_multi_server(vec![r#"{"ok":true}"#]);

@@ -252,6 +252,12 @@ pub enum TransportError {
 /// forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Bound on how long a single non-mutating `resolve` probe (used to find the
+/// owning instance among several live sockets) may take. Kept short and
+/// applied in parallel across sockets so a wedged, unrelated Alas instance
+/// cannot stall directory dispatch by anywhere near [`READ_TIMEOUT`].
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Send one request over `socket` and return the parsed reply. Writes the JSON
 /// bytes (the app parses as soon as the object is complete), then reads to EOF
 /// (bounded by [`READ_TIMEOUT`]).
@@ -337,15 +343,33 @@ pub fn dispatch_to_sockets(
     // regardless of socket count (even a single running app is probed) so
     // "not inside an Alas worktree" maps to the same DispatchError, and thus
     // the same exit code, whether one or many instances are running.
+    //
+    // Probes run in parallel with a short [`PROBE_TIMEOUT`] rather than
+    // sequentially with the normal (30s) timeout, so a single wedged,
+    // unrelated Alas instance cannot stall dispatch for everyone else.
     let probe = build_request(&Command::Resolve, None, Some(cwd.clone()));
     let mut owners = Vec::new();
-    for socket in sockets {
-        if let Ok(resp) = send(socket, &probe)
-            && resp.ok
-        {
-            owners.push(socket.clone());
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = sockets
+            .iter()
+            .map(|socket| {
+                let probe = &probe;
+                scope.spawn(move || {
+                    let ok = matches!(
+                        send_with_timeout(socket, probe, PROBE_TIMEOUT),
+                        Ok(resp) if resp.ok
+                    );
+                    (socket, ok)
+                })
+            })
+            .collect();
+        for handle in handles {
+            let (socket, ok) = handle.join().expect("probe thread should not panic");
+            if ok {
+                owners.push(socket.clone());
+            }
         }
-    }
+    });
     match owners.len() {
         0 => Err(DispatchError::NotInWorktree),
         1 => {
