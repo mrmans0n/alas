@@ -1,5 +1,7 @@
 import Foundation
 
+// Compilation-caching probe (CI round 2): verifies a single-file change only recompiles dependents.
+
 /// Snapshot of a destructive discard request awaiting user confirmation.
 /// `paths` is computed at request time so the alert reflects what the user
 /// saw, even if the worktree watcher refreshes `changes` mid-prompt.
