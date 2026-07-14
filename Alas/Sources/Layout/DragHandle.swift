@@ -109,8 +109,4 @@ struct DragHandle: View {
         NSCursor.pop()
         cursorPushed = false
     }
-
-    nonisolated static func clamp(value: Double, min minVal: Double, max maxVal: Double) -> Double {
-        max(minVal, min(maxVal, value))
-    }
 }

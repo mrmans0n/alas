@@ -780,7 +780,6 @@
 		A050BAECF89694B0D613C5D2 /* EditorBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64E96E26D5F53F217BFD1F49 /* EditorBuffer.swift */; };
 		A05391FF4907AB0870A79C02 /* ReviewEvidenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B05E0E44B026AE7E8EA3101 /* ReviewEvidenceTests.swift */; };
 		A06C59805BCD9D3200896932 /* StagedDiffLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B2FEDAAF927CDC9E4D19551 /* StagedDiffLoader.swift */; };
-		A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */; };
 		A0CAF1DC84D4D990617B96F7 /* ProjectIconImageStaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B874BF8AEC4B60FC536E04 /* ProjectIconImageStaging.swift */; };
 		A0D904EB04508A3DB97E9ECA /* ProjectMCPServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDDDF6CCDD6CE4A78AEF8F2 /* ProjectMCPServerManager.swift */; };
 		A0F1E46BC1A9E2CC21805EE7 /* FilesTabFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1977C85C3DFD1F232A2755AD /* FilesTabFilterTests.swift */; };
@@ -1361,7 +1360,6 @@
 		12F5FD1C6AEC80509D52C724 /* FontFamilyPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FontFamilyPicker.swift; sourceTree = "<group>"; };
 		134EE8D2BC31085A504D27D8 /* InstallNudgeResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeResolverTests.swift; sourceTree = "<group>"; };
 		136BDA12046FB352E183D6A4 /* AgentHookEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookEvent.swift; sourceTree = "<group>"; };
-		1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragHandleTests.swift; sourceTree = "<group>"; };
 		137E9C84D7F32E747F0AF4C0 /* GatekeeperAssessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatekeeperAssessorTests.swift; sourceTree = "<group>"; };
 		137F79BD0DEB96B6F756ABD4 /* JSONHookSettingsFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONHookSettingsFile.swift; sourceTree = "<group>"; };
 		13B7B0E241FE2BEAE4623BA1 /* ParkChangesSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParkChangesSheet.swift; sourceTree = "<group>"; };
@@ -2761,7 +2759,6 @@
 				FB02326DBD7A82431A33C50F /* DraftAmendPrefillTests.swift */,
 				4FB0C89AA6E07A2402934FD2 /* DraftCommitTabsManagerTests.swift */,
 				EB44F87B415733A4B2F2A990 /* DraftCommitTabStateTests.swift */,
-				1379AD82025AFEABD37EFC42 /* DragHandleTests.swift */,
 				35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */,
 				C6E896FEA37B4691BD16E2DD /* EditorBufferTests.swift */,
 				6033DBD8BF13A76978A653A3 /* EditorFindControllerTests.swift */,
@@ -5818,7 +5815,6 @@
 				5936DF2636F0B74BEAB33A57 /* DraftAmendPrefillTests.swift in Sources */,
 				804D11E10C7478C00C0F5C40 /* DraftCommitTabStateTests.swift in Sources */,
 				881AE2B2D456B36573346AD6 /* DraftCommitTabsManagerTests.swift in Sources */,
-				A0B5074B10E732616C917D10 /* DragHandleTests.swift in Sources */,
 				3B7D77B9E71C66ACB1E007D7 /* EditorBufferStoreTests.swift in Sources */,
 				C91AE8901B9D4B16A1EE67FB /* EditorBufferTests.swift in Sources */,
 				B9BEA46E818C321122713F41 /* EditorFindControllerTests.swift in Sources */,
