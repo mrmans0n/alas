@@ -28,7 +28,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let stateLock = NSLock()
     private var nextId: Int = 0
     private var _yieldedUpdateCount = 0
-    private var pending: [JSONRPCID: CheckedContinuation<Data, Error>] = [:]
+    private var pending: [JSONRPCID: CheckedContinuation<ACPResponse, Error>] = [:]
+    private var pendingInboundConsumptions: [JSONRPCID: ACPDurableConsumptionAcknowledgement] = [:]
     private var didDrainPending = false
     private var dispatchTask: Task<Void, Never>?
 
@@ -174,7 +175,11 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 return
             }
             if let raw = Self.extractResultBytes(from: data) {
-                cont.resume(returning: raw)
+                acknowledgeAfterDispatch = false
+                cont.resume(returning: ACPResponse(
+                    body: raw,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
             } else {
                 cont.resume(throwing: ACPClientError.decoding("no result/error in response"))
             }
@@ -197,15 +202,25 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             }
         case "session/request_permission":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data),
-               let id = env.id, let p = env.params { permsCont.yield((id, p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                permsCont.yield((id, p))
+            }
         case "cursor/ask_question":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPQuestionRequestParams>.self, from: data),
-               let id = env.id, let p = env.params { questionsCont.yield(.init(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                questionsCont.yield(.init(id: id, params: p))
+            }
         case "elicitation/create":
             if let env = try? JSONDecoder().decode(
                 JSONRPCEnvelope<ACPElicitationRequestParams>.self,
                 from: data
             ), let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
                 elicitationsCont.yield(.init(id: id, params: p))
             }
         case "elicitation/complete":
@@ -217,25 +232,53 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             }
         case "fs/read_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsReadParams>.self, from: data),
-               let id = env.id, let p = env.params { filesCont.yield(.read(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                filesCont.yield(.read(id: id, params: p))
+            }
         case "fs/write_text_file":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPFsWriteParams>.self, from: data),
-               let id = env.id, let p = env.params { filesCont.yield(.write(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                filesCont.yield(.write(id: id, params: p))
+            }
         case "terminal/create":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalCreateParams>.self, from: data),
-               let id = env.id, let p = env.params { terminalsCont.yield(.create(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.create(id: id, params: p))
+            }
         case "terminal/output":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalOutputParams>.self, from: data),
-               let id = env.id, let p = env.params { terminalsCont.yield(.output(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.output(id: id, params: p))
+            }
         case "terminal/wait_for_exit":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
-               let id = env.id, let p = env.params { terminalsCont.yield(.waitForExit(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.waitForExit(id: id, params: p))
+            }
         case "terminal/kill":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
-               let id = env.id, let p = env.params { terminalsCont.yield(.kill(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.kill(id: id, params: p))
+            }
         case "terminal/release":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPTerminalIdParams>.self, from: data),
-               let id = env.id, let p = env.params { terminalsCont.yield(.release(id: id, params: p)) }
+               let id = env.id, let p = env.params {
+                acknowledgeAfterDispatch = false
+                deferInboundConsumption(id: id, acknowledgement: onConsumed)
+                terminalsCont.yield(.release(id: id, params: p))
+            }
         default:
             break
         }
@@ -252,13 +295,10 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
     // MARK: - Outbound
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
-        stateLock.lock()
-        nextId += 1
-        let id = JSONRPCID.number(nextId)
-        stateLock.unlock()
+        let id = nextRequestID()
 
         let body = try Self.encode(envelopeFor: request, id: id)
-        let data: Data = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+        return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ACPResponse, Error>) in
             stateLock.lock()
             if didDrainPending {
                 stateLock.unlock()
@@ -280,7 +320,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 if stillPending { cont.resume(throwing: error) }
             }
         }
-        return ACPResponse(body: data)
+    }
+
+    private func nextRequestID() -> JSONRPCID {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        nextId += 1
+        return .number(nextId)
     }
 
     private static func encode(envelopeFor request: ACPRequest, id: JSONRPCID) throws -> Data {
@@ -369,7 +415,9 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON]
         dict["result"] = try JSONSerialization.jsonObject(with: body)
         let payload = try JSONSerialization.data(withJSONObject: dict)
-        try transport.send(payload)
+        try transport.send(payload, onWritten: { [weak self] in
+            self?.acknowledgeInboundConsumption(id: id)
+        })
     }
 
     private func respondFile(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
@@ -389,8 +437,30 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
             case .failure(let err):
                 dict["error"] = ["code": err.code, "message": err.message]
             }
-            try transport.send(try JSONSerialization.data(withJSONObject: dict))
+            let payload = try JSONSerialization.data(withJSONObject: dict)
+            try transport.send(payload, onWritten: { [weak self] in
+                self?.acknowledgeInboundConsumption(id: id)
+            })
         } catch {}
+    }
+
+    private func deferInboundConsumption(
+        id: JSONRPCID,
+        acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) {
+        guard let acknowledgement else { return }
+        stateLock.lock()
+        if pendingInboundConsumptions[id] == nil {
+            pendingInboundConsumptions[id] = acknowledgement
+        }
+        stateLock.unlock()
+    }
+
+    private func acknowledgeInboundConsumption(id: JSONRPCID) {
+        stateLock.lock()
+        let acknowledgement = pendingInboundConsumptions.removeValue(forKey: id)
+        stateLock.unlock()
+        acknowledgement?()
     }
 
     /// Resumes and clears every pending outbound continuation exactly once.
@@ -417,6 +487,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         drainPending(with: ACPClientError.notRunning)
         transport.terminate()
         dispatchTask?.cancel()
+        discardPendingInboundConsumptions()
+    }
+
+    private func discardPendingInboundConsumptions() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        pendingInboundConsumptions.removeAll()
     }
 }
 

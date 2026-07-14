@@ -2466,6 +2466,7 @@ extension ACPSessionManager {
             session.contextRestoreWarning = restoreWarning
             persistSessionRemoteId(session)
             await flushPersistence()
+            connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
             runners[sessionId] = runner
             keepElicitationCoordinator = true

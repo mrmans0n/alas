@@ -9,6 +9,8 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
     private(set) var sentFrames: [Data] = []
     private(set) var terminateCount = 0
+    var deferWriteCompletions = false
+    private var pendingWriteCompletions: [@Sendable () -> Void] = []
 
     init() {
         var c: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
@@ -22,6 +24,23 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
 
     func send(_ data: Data) throws {
         sentFrames.append(data)
+    }
+
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
+        try send(data)
+        if deferWriteCompletions {
+            pendingWriteCompletions.append(onWritten)
+        } else {
+            onWritten()
+        }
+    }
+
+    func completePendingWrites() {
+        let completions = pendingWriteCompletions
+        pendingWriteCompletions.removeAll()
+        for completion in completions {
+            completion()
+        }
     }
 
     /// When false, `terminate()` does not synthesise an `.exited` event —

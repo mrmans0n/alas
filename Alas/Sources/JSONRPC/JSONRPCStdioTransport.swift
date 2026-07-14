@@ -10,7 +10,15 @@ protocol JSONRPCStdioTransporting: AnyObject, Sendable {
     var incoming: AsyncStream<JSONRPCStdioTransport.Incoming> { get }
     func start() throws
     func send(_ data: Data) throws
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws
     func terminate()
+}
+
+extension JSONRPCStdioTransporting {
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
+        try send(data)
+        onWritten()
+    }
 }
 
 final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting {

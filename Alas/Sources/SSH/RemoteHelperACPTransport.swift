@@ -62,7 +62,15 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     }
 
     func send(_ data: Data) throws {
-        guard state.enqueue(data) else { throw ACPClientError.notRunning }
+        try enqueue(data, onWritten: nil)
+    }
+
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
+        try enqueue(data, onWritten: onWritten)
+    }
+
+    private func enqueue(_ data: Data, onWritten: (@Sendable () -> Void)?) throws {
+        guard state.enqueue(data, onWritten: onWritten) else { throw ACPClientError.notRunning }
         Task { [weak self] in
             await self?.flushPendingWrites()
         }
@@ -257,6 +265,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         data: Self.frameForProcWrite(next.data),
                         expectedStdinOffset: expectedStdinOffset
                     )
+                    next.onWritten?()
                     state.markMayHaveDurableProcInput()
                 } catch RemoteHelperClientError.jsonrpc(let error) {
                     _ = state.markTerminated()
@@ -434,11 +443,15 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             mayHaveDurableInput = true
         }
 
-        func enqueue(_ data: Data) -> Bool {
+        func enqueue(_ data: Data, onWritten: (@Sendable () -> Void)?) -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard !terminated else { return false }
-            pendingWrites.append(PendingProcWrite(data: data, expectedStdinOffset: nil))
+            pendingWrites.append(PendingProcWrite(
+                data: data,
+                expectedStdinOffset: nil,
+                onWritten: onWritten
+            ))
             return true
         }
 
@@ -481,9 +494,10 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private struct PendingProcWrite {
         let data: Data
         let expectedStdinOffset: UInt64?
+        let onWritten: (@Sendable () -> Void)?
 
         func withExpectedStdinOffset(_ offset: UInt64) -> PendingProcWrite {
-            PendingProcWrite(data: data, expectedStdinOffset: offset)
+            PendingProcWrite(data: data, expectedStdinOffset: offset, onWritten: onWritten)
         }
     }
 }

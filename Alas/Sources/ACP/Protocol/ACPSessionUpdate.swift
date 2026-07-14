@@ -1,7 +1,5 @@
 import Foundation
 
-typealias ACPDurableConsumptionAcknowledgement = @Sendable () -> Void
-
 struct ACPSessionUpdateParams: Codable, Equatable {
     let sessionId: String
     let update: ACPSessionUpdate

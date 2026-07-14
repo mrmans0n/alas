@@ -1,5 +1,7 @@
 import Foundation
 
+typealias ACPDurableConsumptionAcknowledgement = @Sendable () -> Void
+
 struct ACPRequest {
     let method: String
     let params: Encodable?
@@ -9,6 +11,19 @@ struct ACPRequest {
 
 struct ACPResponse {
     let body: Data
+    let durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
+
+    init(
+        body: Data,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        self.body = body
+        self.durableConsumptionAcknowledgement = durableConsumptionAcknowledgement
+    }
+
+    func acknowledgeDurableConsumption() {
+        durableConsumptionAcknowledgement?()
+    }
 }
 
 enum ACPClientError: LocalizedError {
