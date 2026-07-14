@@ -135,6 +135,17 @@ actor ACPSessionPersistence {
     }
 
     @discardableResult
+    func resetHelperProcOffsets(
+        sessionId: String,
+        fence: ACPSessionLeaseFence?
+    ) throws -> Bool {
+        let store = try openedStore()
+        let operation = { try store.resetHelperProcOffsets(sessionId: sessionId) }
+        if let fence { return try store.withLeaseFence(fence, operation) ?? false }
+        return try operation()
+    }
+
+    @discardableResult
     func setContextRecoveryPending(
         sessionId: String,
         pending: Bool,

@@ -382,6 +382,15 @@ extension ACPSessionStore {
         ]) > 0
     }
 
+    func resetHelperProcOffsets(sessionId: String) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET helper_proc_stdout_offset = 0,
+            helper_proc_stderr_offset = 0
+        WHERE id = ?
+        """, bindings: [sessionId]) > 0
+    }
+
     func recentSessions(limit: Int = 50) throws -> [ACPSessionRow] {
         let rows = try db.query("""
         SELECT * FROM sessions WHERE archived = 0 ORDER BY last_opened_at DESC LIMIT ?

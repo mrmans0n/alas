@@ -13,6 +13,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private let cwd: String
     private let environment: [String: String]
     private let pathPrefixDirectories: [String]
+    private let onFreshProcSpawn: @MainActor @Sendable () async -> Void
     private let onOutputOffsetsChanged: @MainActor @Sendable (OutputOffsets) -> Void
     private let attachmentId = UUID().uuidString
     private let state = State()
@@ -33,6 +34,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         environment: [String: String],
         pathPrefixDirectories: [String] = [],
         initialOutputOffsets: OutputOffsets? = nil,
+        onFreshProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
         onOutputOffsetsChanged: @escaping @MainActor @Sendable (OutputOffsets) -> Void = { _ in }
     ) {
         self.host = host
@@ -42,6 +44,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         self.cwd = cwd
         self.environment = environment
         self.pathPrefixDirectories = pathPrefixDirectories
+        self.onFreshProcSpawn = onFreshProcSpawn
         self.onOutputOffsetsChanged = onOutputOffsetsChanged
         stdoutOffset = initialOutputOffsets?.stdout
         stderrOffset = initialOutputOffsets?.stderr
@@ -105,6 +108,9 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                             pathPrefixDirectories: pathPrefixDirectories
                         )
                         attachFreshSpawnFromStart = status.spawned == true
+                        if attachFreshSpawnFromStart {
+                            await onFreshProcSpawn()
+                        }
                     } catch {
                         guard Self.shouldRetrySpawnFailure(error) else {
                             state.setWritesEnabled(false)

@@ -89,8 +89,8 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.currentModel == "opus")
     }
 
-    @Test("helper proc offsets persist monotonically")
-    func helperProcOffsetsPersistMonotonically() throws {
+    @Test("helper proc offsets persist monotonically within each proc generation")
+    func helperProcOffsetsPersistMonotonicallyWithinGeneration() throws {
         let store = try tmp()
         try store.upsertSession(.init(
             id: "local-1",
@@ -120,6 +120,17 @@ struct ACPSessionStoreCRUDTests {
         let row = try #require(try store.loadSession(id: "local-1"))
         #expect(row.helperProcStdoutOffset == 20)
         #expect(row.helperProcStderrOffset == 4)
+
+        #expect(try store.resetHelperProcOffsets(sessionId: "local-1"))
+        #expect(try store.updateHelperProcOffsets(
+            sessionId: "local-1",
+            stdoutOffset: 3,
+            stderrOffset: 1
+        ))
+
+        let respawnedRow = try #require(try store.loadSession(id: "local-1"))
+        #expect(respawnedRow.helperProcStdoutOffset == 3)
+        #expect(respawnedRow.helperProcStderrOffset == 1)
     }
 
     @Test("metadata-only upsert can preserve stored title")

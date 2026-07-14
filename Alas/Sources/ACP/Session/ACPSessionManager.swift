@@ -1009,6 +1009,23 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private func resetHelperProcOffsets(sessionId: ACPSession.ID) async {
+        guard !isMirror(sessionId: sessionId) else { return }
+        if var row = persistedRows[sessionId] {
+            row.helperProcStdoutOffset = 0
+            row.helperProcStderrOffset = 0
+            persistedRows[sessionId] = row
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        let task = enqueuePersistence { persistence in
+            _ = try await persistence.resetHelperProcOffsets(
+                sessionId: sessionId,
+                fence: fence
+            )
+        }
+        await task.value
+    }
+
     /// Rename a session with the given title and source. Updates both
     /// the in-memory session and SQLite in one call. No-ops only when
     /// another live instance owns the writer lease (this pane is a mirror).
@@ -1387,6 +1404,7 @@ final class ACPSessionManager: ObservableObject {
         sessionId: ACPSession.ID?,
         useHelperProc: Bool,
         initialHelperProcOffsets: RemoteHelperACPTransport.OutputOffsets? = nil,
+        onFreshHelperProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
         onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in }
     ) throws -> ACPConnection {
         let client: ACPStdioClient
@@ -1400,6 +1418,7 @@ final class ACPSessionManager: ObservableObject {
                 environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv),
                 pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? [],
                 initialOutputOffsets: initialHelperProcOffsets,
+                onFreshProcSpawn: onFreshHelperProcSpawn,
                 onOutputOffsetsChanged: onHelperProcOffsetsChanged
             )
             client = ACPStdioClient.makeForTesting(transport: transport)
@@ -2120,6 +2139,9 @@ extension ACPSessionManager {
                     sessionId: sessionId,
                     useHelperProc: useHelperProc,
                     initialHelperProcOffsets: Self.helperProcOffsets(from: persistedRows[sessionId]),
+                    onFreshHelperProcSpawn: { [weak self] in
+                        await self?.resetHelperProcOffsets(sessionId: sessionId)
+                    },
                     onHelperProcOffsetsChanged: { [weak self] offsets in
                         self?.persistHelperProcOffsets(sessionId: sessionId, offsets: offsets)
                     }
