@@ -608,10 +608,15 @@ final class DiffPaneTextScrollView: NSScrollView {
     }
     var allowsReviewLineSelection: Bool = true {
         didSet {
+            textView.allowsReviewLineSelection = allowsReviewLineSelection
             (verticalRulerView as? DiffPaneLineNumberRulerView)?.allowsReviewLineSelection = allowsReviewLineSelection
         }
     }
-    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in } {
+        didSet {
+            textView.onReviewLineSelected = onReviewLineSelected
+        }
+    }
     var onContextExpansion: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in } {
         didSet {
             textView.contextExpansionHandler = onContextExpansion
@@ -657,6 +662,8 @@ final class DiffPaneTextScrollView: NSScrollView {
             self?.onReviewLineSelected(anchor)
         }
         verticalRulerView = ruler
+        textView.allowsReviewLineSelection = allowsReviewLineSelection
+        textView.onReviewLineSelected = onReviewLineSelected
 
         textView.isEditable = false
         textView.isSelectable = true
@@ -1047,6 +1054,8 @@ final class DiffPaneCodeTextView: NSTextView {
     var flagsChangedHandler: ((NSEvent) -> Void)?
     var mouseExitedHandler: (() -> Void)?
     var contextExpansionHandler: (DiffContextExpansionKey, DiffContextExpansionMode) -> Void = { _, _ in }
+    var allowsReviewLineSelection = true
+    var onReviewLineSelected: (DiffReviewLineAnchor) -> Void = { _ in }
     var lspContext: DiffPaneLSPContext?
     var allowedLSPSide: DiffLineSide = .new
     var hasLSPContextForTesting: Bool { lspContext != nil }
@@ -1156,6 +1165,13 @@ final class DiffPaneCodeTextView: NSTextView {
         }
         if event.modifierFlags.contains(.command), let commandClickHandler {
             commandClickHandler(point)
+            return
+        }
+        if allowsReviewLineSelection,
+           event.clickCount == 1,
+           let anchor = reviewLineAnchor(at: point)
+        {
+            onReviewLineSelected(anchor)
             return
         }
         super.mouseDown(with: event)
