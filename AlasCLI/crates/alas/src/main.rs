@@ -88,7 +88,10 @@ fn run_mcp() -> ExitCode {
     };
     match mcp::serve(&env) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(_) => ExitCode::FAILURE,
+        Err(err) => {
+            eprintln!("alas: mcp io error: {err}");
+            ExitCode::FAILURE
+        }
     }
 }
 

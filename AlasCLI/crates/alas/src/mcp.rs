@@ -44,6 +44,9 @@ pub fn handle_line(
         Ok(v) => v,
         Err(_) => return Some(error_reply(Value::Null, -32700, "parse error")),
     };
+    if !msg.is_object() {
+        return Some(error_reply(Value::Null, -32600, "invalid request"));
+    }
     // Messages without an id are notifications (e.g. notifications/initialized).
     let id = msg.get("id").cloned()?;
     let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
@@ -363,6 +366,15 @@ mod tests {
     }
 
     #[test]
+    fn non_object_json_line_is_invalid_request() {
+        for line in [r#""hello""#, "42", "[1,2]", "true", "null"] {
+            let reply = handle_line(line, "/wt", ok_dispatch).unwrap();
+            assert_eq!(reply["error"]["code"], json!(-32600), "line: {line}");
+            assert_eq!(reply["id"], Value::Null);
+        }
+    }
+
+    #[test]
     fn tools_list_returns_the_six_tools() {
         let line = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#;
         let reply = handle_line(line, "/wt", ok_dispatch).unwrap();
@@ -511,6 +523,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(reply["result"]["content"][0]["text"], json!("malformed response from Alas"));
+        assert_eq!(reply["result"]["isError"], json!(true));
+    }
+
+    #[test]
+    fn empty_lines_vec_falls_back_to_confirmation_text() {
+        let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
+            Ok(Response { ok: true, lines: Some(vec![]), error: None })
+        })
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], json!(false));
+        assert_eq!(reply["result"]["content"][0]["text"], json!("OK"));
     }
 
     #[test]
