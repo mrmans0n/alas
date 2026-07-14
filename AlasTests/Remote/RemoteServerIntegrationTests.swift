@@ -71,7 +71,7 @@ struct RemoteServerIntegrationTests {
         @unknown default: payload = nil
         }
         guard let data = payload,
-              case .transcriptSnapshot(_, _, _, let msgs)? = try? JSONDecoder().decode(RemoteServerMessage.self, from: data) else {
+              case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _)? = try? JSONDecoder().decode(RemoteServerMessage.self, from: data) else {
             Issue.record("expected snapshot frame, got \(received)")
             task.cancel(with: .goingAway, reason: nil)
             server.stop()

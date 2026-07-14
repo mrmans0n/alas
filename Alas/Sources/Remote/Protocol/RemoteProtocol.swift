@@ -44,10 +44,11 @@ enum RemoteClientMessage: Equatable, Sendable {
     case setMode(sessionId: String, modeId: String)
     case setAutoRun(sessionId: String, enabled: Bool)
     case renameSession(sessionId: String, title: String)
+    case fetchOlder(sessionId: String, beforeIndex: Int, limit: Int)
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, content, text, attachments, modelId, modeId, enabled, title, worktreeId, agentId, beforeIndex, limit }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -101,6 +102,11 @@ extension RemoteClientMessage: Codable {
             self = .renameSession(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 title: try c.decode(String.self, forKey: .title))
+        case "fetchOlder":
+            self = .fetchOlder(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                beforeIndex: try c.decode(Int.self, forKey: .beforeIndex),
+                limit: try c.decode(Int.self, forKey: .limit))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -166,7 +172,23 @@ extension RemoteClientMessage: Codable {
             try c.encode("renameSession", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(title, forKey: .title)
+        case .fetchOlder(let id, let beforeIndex, let limit):
+            try c.encode("fetchOlder", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(beforeIndex, forKey: .beforeIndex)
+            try c.encode(limit, forKey: .limit)
         }
+    }
+}
+
+extension RemoteClientMessage {
+    /// Control messages bypass the per-connection serial processing chain
+    /// (RemoteConnection.dispatchMessage): they are idempotent and must not
+    /// queue behind transcript work. Everything else stays strictly ordered
+    /// (e.g. takeOver-before-sendPrompt).
+    var isControl: Bool {
+        if case .stop = self { return true }
+        return false
     }
 }
 
@@ -177,8 +199,14 @@ enum RemoteServerMessage: Equatable, Sendable {
     case agentList(agents: [RemoteAgentOption])
     case sessionCreated(session: RemoteSessionSummary)
     case createSessionFailed(message: String)
-    case transcriptSnapshot(sessionId: String, streamingState: String, canDrive: Bool, messages: [RemoteWireMessage])
-    case transcriptDelta(sessionId: String, streamingState: String, canDrive: Bool, upserts: [RemoteWireMessage])
+    case transcriptSnapshot(
+        sessionId: String, streamingState: String, canDrive: Bool, messages: [RemoteWireMessage],
+        firstIndex: Int, totalCount: Int, epoch: Int, revision: Int)
+    case transcriptDelta(
+        sessionId: String, streamingState: String, canDrive: Bool, upserts: [RemoteWireMessage],
+        epoch: Int, revision: Int)
+    case transcriptPage(sessionId: String, epoch: Int, firstIndex: Int, messages: [RemoteWireMessage])
+    case stopPending(sessionId: String)
     case permissionRequest(sessionId: String, payload: RemotePermissionPayload)
     case permissionResolved(sessionId: String, requestId: Int)
     case questionRequest(sessionId: String, payload: RemoteQuestionPayload)
@@ -200,6 +228,7 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case worktrees, agents, session
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
+        case firstIndex, totalCount, epoch, revision
     }
 
     init(from decoder: Decoder) throws {
@@ -219,13 +248,27 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 streamingState: try c.decode(String.self, forKey: .streamingState),
                 canDrive: try c.decode(Bool.self, forKey: .canDrive),
-                messages: try c.decode([RemoteWireMessage].self, forKey: .messages))
+                messages: try c.decode([RemoteWireMessage].self, forKey: .messages),
+                firstIndex: try c.decode(Int.self, forKey: .firstIndex),
+                totalCount: try c.decode(Int.self, forKey: .totalCount),
+                epoch: try c.decode(Int.self, forKey: .epoch),
+                revision: try c.decode(Int.self, forKey: .revision))
         case "transcriptDelta":
             self = .transcriptDelta(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 streamingState: try c.decode(String.self, forKey: .streamingState),
                 canDrive: try c.decode(Bool.self, forKey: .canDrive),
-                upserts: try c.decode([RemoteWireMessage].self, forKey: .upserts))
+                upserts: try c.decode([RemoteWireMessage].self, forKey: .upserts),
+                epoch: try c.decode(Int.self, forKey: .epoch),
+                revision: try c.decode(Int.self, forKey: .revision))
+        case "transcriptPage":
+            self = .transcriptPage(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                epoch: try c.decode(Int.self, forKey: .epoch),
+                firstIndex: try c.decode(Int.self, forKey: .firstIndex),
+                messages: try c.decode([RemoteWireMessage].self, forKey: .messages))
+        case "stopPending":
+            self = .stopPending(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "permissionRequest":
             self = .permissionRequest(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -290,18 +333,33 @@ extension RemoteServerMessage: Codable {
         case .createSessionFailed(let message):
             try c.encode("createSessionFailed", forKey: .type)
             try c.encode(message, forKey: .message)
-        case .transcriptSnapshot(let id, let st, let cd, let m):
+        case .transcriptSnapshot(let id, let st, let cd, let m, let firstIndex, let totalCount, let epoch, let revision):
             try c.encode("transcriptSnapshot", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(st, forKey: .streamingState)
             try c.encode(cd, forKey: .canDrive)
             try c.encode(m, forKey: .messages)
-        case .transcriptDelta(let id, let st, let cd, let u):
+            try c.encode(firstIndex, forKey: .firstIndex)
+            try c.encode(totalCount, forKey: .totalCount)
+            try c.encode(epoch, forKey: .epoch)
+            try c.encode(revision, forKey: .revision)
+        case .transcriptDelta(let id, let st, let cd, let u, let epoch, let revision):
             try c.encode("transcriptDelta", forKey: .type)
             try c.encode(id, forKey: .sessionId)
             try c.encode(st, forKey: .streamingState)
             try c.encode(cd, forKey: .canDrive)
             try c.encode(u, forKey: .upserts)
+            try c.encode(epoch, forKey: .epoch)
+            try c.encode(revision, forKey: .revision)
+        case .transcriptPage(let id, let epoch, let firstIndex, let m):
+            try c.encode("transcriptPage", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
+            try c.encode(epoch, forKey: .epoch)
+            try c.encode(firstIndex, forKey: .firstIndex)
+            try c.encode(m, forKey: .messages)
+        case .stopPending(let id):
+            try c.encode("stopPending", forKey: .type)
+            try c.encode(id, forKey: .sessionId)
         case .permissionRequest(let id, let p):
             try c.encode("permissionRequest", forKey: .type)
             try c.encode(id, forKey: .sessionId)

@@ -160,6 +160,10 @@ final class RemoteSessionGateway {
             }
             send(.sessionRenamed(sessionId: id, title: trimmed))
             refreshSessionList()
+        case .fetchOlder:
+            // Wire protocol only for now; serving historical pages from the
+            // transcript change log is a follow-up (windowing/diffing work).
+            break
         }
     }
 
@@ -261,10 +265,16 @@ final class RemoteSessionGateway {
 
     private func sendSnapshot(id: String, session: ACPSession) async {
         let wire = await wireMessages(id: id, session: session)
+        // v1: full-replay snapshot with placeholder windowing/versioning fields
+        // (real tail-window + epoch/revision tracking lands in a follow-up).
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
                                  canDrive: provider.isWriter(for: id),
-                                 messages: wire))
+                                 messages: wire,
+                                 firstIndex: 0,
+                                 totalCount: wire.count,
+                                 epoch: 0,
+                                 revision: 0))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
@@ -319,10 +329,14 @@ final class RemoteSessionGateway {
         // v1: send a full re-snapshot as the "delta" (simple + always correct).
         // A true per-message diff optimization is intentionally deferred (YAGNI).
         let wire = await wireMessages(id: id, session: session)
+        // v1: full-replay delta with placeholder epoch/revision (real per-message
+        // diffing lands in a follow-up).
         send(.transcriptDelta(sessionId: id,
                               streamingState: Self.stateString(session.transcript.streamingState),
                               canDrive: provider.isWriter(for: id),
-                              upserts: wire))
+                              upserts: wire,
+                              epoch: 0,
+                              revision: 0))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
@@ -701,24 +715,25 @@ final class RemoteSessionGateway {
             var parts: [String] = []
             if !text.isEmpty { parts.append(text) }
             parts.append(contentsOf: attachments.map { "🖼 \($0.name ?? "Image")" })
-            return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil)
+            return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil, index: index)
         case .agent(_, _, let streaming):
-            return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil)
+            return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):
-            return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil)
+            return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil, index: index)
         case .systemNotice(_, let text):
-            return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
+            return .init(stableId: sid, kind: "systemNotice", text: text, json: nil, index: index)
         case .toolCall(let call):
             return .init(
                 stableId: sid,
                 kind: "toolCall",
                 text: nil,
-                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent))
+                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent)),
+                index: index
             )
         case .fileEdit(_, let edit):
-            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
+            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit), index: index)
         case .plan(_, let items):
-            return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items))
+            return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
         }
     }
 

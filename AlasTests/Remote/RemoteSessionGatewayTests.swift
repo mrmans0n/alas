@@ -320,7 +320,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.subscribe(sessionId: "s1"))
         #expect(sent.contains { message in
-            if case .transcriptSnapshot(let id, _, _, _) = message {
+            if case .transcriptSnapshot(let id, _, _, _, _, _, _, _) = message {
                 return id == "s1"
             }
             return false
@@ -391,7 +391,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(let id, _, _, let msgs)? = sent.first else {
+        guard case .transcriptSnapshot(let id, _, _, let msgs, _, _, _, _)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
         }
@@ -419,7 +419,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.subscribe(sessionId: "s1"))
 
-        guard case .transcriptSnapshot(_, _, _, let msgs)? = sent.first,
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _)? = sent.first,
               let json = msgs.first(where: { $0.kind == "toolCall" })?.json,
               let data = json.data(using: .utf8)
         else {
@@ -452,7 +452,7 @@ struct RemoteSessionGatewayTests {
             if case .transcriptSnapshot = msg { return true }
             return false
         }
-        guard case .transcriptSnapshot(let id, _, let canDrive, _)? = snap else {
+        guard case .transcriptSnapshot(let id, _, let canDrive, _, _, _, _, _)? = snap else {
             Issue.record("expected a snapshot after takeOver, got \(sent)")
             return
         }
@@ -779,7 +779,7 @@ struct RemoteSessionGatewayTests {
         s.transcript.messages.append(.agent(id: UUID(), StreamingText("more")))  // fires objectWillChange
         try await Task.sleep(nanoseconds: 250_000_000)  // > coalesce window
         let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
-            if case .transcriptDelta(_, _, _, let upserts) = msg { return upserts }
+            if case .transcriptDelta(_, _, _, let upserts, _, _) = msg { return upserts }
             return nil
         }.last
         let delta2 = try #require(delta, "expected a transcriptDelta after mutation")
@@ -893,7 +893,7 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         let drive = sent.compactMap { msg -> Bool? in
-            if case .transcriptSnapshot(_, _, let canDrive, _) = msg { return canDrive }
+            if case .transcriptSnapshot(_, _, let canDrive, _, _, _, _, _) = msg { return canDrive }
             return nil
         }.first
         #expect(drive == true)
