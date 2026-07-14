@@ -325,16 +325,26 @@ final class RemoteConnection: @unchecked Sendable {
                     // instead: whichever finishes first resumes it, and the
                     // loser keeps running independently in the background,
                     // its own eventual resume attempt becoming a no-op.
-                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                    let timedOut = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
                         let resume = SingleResume(continuation)
                         Task { @MainActor in
                             await previous.value
-                            resume.fire()
+                            resume.fire(false)
                         }
                         Task { @MainActor in
                             try? await Task.sleep(nanoseconds: Self.stopDriveActionWaitNanos)
-                            resume.fire()
+                            resume.fire(true)
                         }
+                    }
+                    if timedOut {
+                        // The drive action never finished in time. It's still
+                        // queued and WILL eventually run once its own
+                        // predecessor clears — cancel it so the dispatch
+                        // below (which checks isCancelled before calling
+                        // gateway.handle) skips it instead of submitting a
+                        // prompt/takeover after the user already pressed
+                        // Stop, silently defeating the emergency brake.
+                        previous.cancel()
                     }
                 }
                 await gateway.handle(msg)
@@ -344,6 +354,12 @@ final class RemoteConnection: @unchecked Sendable {
         let previous = processingTail
         let task = Task { @MainActor in
             await previous?.value
+            // Only drive-ordering tasks are ever explicitly cancelled (by a
+            // timed-out stop, above) — this check is a no-op for every other
+            // message type, which nothing cancels.
+            if msg.isDriveOrdering {
+                guard !Task.isCancelled else { return }
+            }
             await gateway.handle(msg)
         }
         processingTail = task
@@ -398,22 +414,23 @@ final class RemoteConnection: @unchecked Sendable {
     }
 }
 
-/// Resumes a `CheckedContinuation<Void, Never>` at most once. Used to race
-/// two independent tasks (e.g. "did the prior work finish" vs. "did the
-/// timeout elapse") where whichever finishes first should win and the other
+/// Resumes a `CheckedContinuation<T, Never>` at most once with the given
+/// value. Used to race two independent tasks (e.g. "did the prior work
+/// finish" vs. "did the timeout elapse") where whichever finishes first
+/// wins — its value is what the continuation resumes with — and the other
 /// is simply abandoned rather than cancelled.
 @MainActor
-private final class SingleResume {
+private final class SingleResume<T> {
     private var fired = false
-    private let continuation: CheckedContinuation<Void, Never>
+    private let continuation: CheckedContinuation<T, Never>
 
-    init(_ continuation: CheckedContinuation<Void, Never>) {
+    init(_ continuation: CheckedContinuation<T, Never>) {
         self.continuation = continuation
     }
 
-    func fire() {
+    func fire(_ value: T) {
         guard !fired else { return }
         fired = true
-        continuation.resume()
+        continuation.resume(returning: value)
     }
 }

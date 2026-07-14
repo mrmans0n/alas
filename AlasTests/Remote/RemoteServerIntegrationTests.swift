@@ -283,6 +283,70 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    // Regression (codex review, PR #775): the bounded stop wait let stop
+    // proceed after a timeout, but the queued drive action itself was never
+    // cancelled — it was still sitting in processingTail and would run once
+    // its own predecessor eventually cleared, submitting the prompt/takeover
+    // AFTER the user already pressed Stop and silently defeating the
+    // emergency brake. A timed-out stop must cancel the queued drive action
+    // so it never actually executes once unblocked.
+    @Test func stopTimeoutCancelsQueuedDriveActionSoItNeverRuns() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: String(repeating: "abcdef0123456789", count: 400), preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        s.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions[s.id] = s
+        provider.fullToolCallContents["\(s.id)|old"] = "full content"
+        provider.pauseFullToolCallContentOnCall = 1
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing, provider: provider)
+
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"test"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        task.resume()
+
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        try await task.send(.data(JSONEncoder().encode(
+            RemoteClientMessage.fetchOlder(sessionId: s.id, beforeIndex: 10, limit: 90))))
+        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.takeOver(sessionId: s.id))))
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
+
+        // Wait past stop's bounded wait so it takes the timeout path.
+        for _ in 0..<150 where provider.stopped.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.stopped == [s.id])
+        #expect(provider.takeOverCallCount == 0)
+
+        // Now unblock the stuck predecessor — the queued takeOver's own
+        // `await previous?.value` can finally resolve. With the fix it must
+        // still never call gateway.handle (it was cancelled), so
+        // takeOverCallCount stays 0 even after everything settles.
+        provider.resumeFullToolCallContent("full content")
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(provider.takeOverCallCount == 0, "a timed-out stop must cancel the queued drive action, not just outrace it")
+
+        task.cancel(with: .goingAway, reason: nil)
+        server.stop()
+    }
+
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()
