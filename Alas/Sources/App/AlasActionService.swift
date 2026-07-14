@@ -26,23 +26,28 @@ struct AlasActionService {
     }
     var activateApp: () -> Void
 
-    /// Worktree owning `directory`: either the worktree the directory sits
-    /// inside of (most-specific match wins), or the worktree rooted exactly
-    /// at `directory` itself.
+    /// Worktree owning `directory`: the worktree rooted exactly at
+    /// `directory` itself, or else the worktree the directory sits inside of
+    /// (most-specific match wins).
+    ///
+    /// The exact-root check runs first: a directory that is itself the root
+    /// of a nested worktree (a worktree whose root lives inside a parent
+    /// worktree's tree) must resolve to that nested worktree, not to the
+    /// parent it happens to be a strictly-deeper descendant of.
     func resolveWorktree(forDirectory directory: String) -> Worktree? {
         let url = URL(fileURLWithPath: directory).standardizedFileURL
-        if let match = containingWorktree(for: url) {
-            return match.worktree
-        }
         // `cwd` comes from the CLI's logical `$PWD`, which preserves symlinks,
         // so the directory may itself be a symlink to a worktree root. Resolve
         // symlinks on both sides before comparing file identities, otherwise a
         // command run from a symlinked checkout root reports "not inside an
         // Alas worktree".
-        guard let directoryIdentity = fileIdentity(at: url.resolvingSymlinksInPath().path) else { return nil }
-        return visibleWorktrees().first { worktree in
-            fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
+        if let directoryIdentity = fileIdentity(at: url.resolvingSymlinksInPath().path),
+           let exactMatch = visibleWorktrees().first(where: { worktree in
+               fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
+           }) {
+            return exactMatch
         }
+        return containingWorktree(for: url)?.worktree
     }
 
     func open(paths: [String], fallbackWorktreeId: String) -> AlasCLIResponse {

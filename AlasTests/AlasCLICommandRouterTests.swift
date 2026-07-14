@@ -102,6 +102,45 @@ struct AlasCLICommandRouterTests {
         if case .error = notOwned {} else { Issue.record("expected error for unowned cwd") }
     }
 
+    @Test func resolvesExactNestedWorktreeRootOverParentContainingMatch() async throws {
+        let root = try makeFile("repo/pkg/tool/file.txt")
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let nestedRoot = root.appendingPathComponent("pkg/tool")
+        let parent = Worktree(
+            id: "parent", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let nested = Worktree(
+            id: "nested", projectId: "p1", name: "tool", branch: "tool",
+            path: nestedRoot, status: .clean, lastActivity: Date()
+        )
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [parent, nested] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+
+        // cwd is exactly the nested worktree's root, which is also strictly
+        // inside the parent's tree. The nested worktree, not the parent, must
+        // be treated as the origin.
+        let response = await router.handle(.init(
+            version: 1, sessionId: nil, cwd: nestedRoot.path, command: .worktree(.list)
+        ))
+
+        guard case .text(let rows) = response else {
+            Issue.record("expected text response, got \(response)")
+            return
+        }
+        let currentRows = rows.filter { $0.hasPrefix("*") }
+        #expect(currentRows.count == 1)
+        #expect(currentRows.first?.contains(nestedRoot.path) == true)
+    }
+
     @Test func opensNestedWorktreeFileInMostSpecificVisibleWorktree() async throws {
         let root = try makeFile("repo/packages/tool/file.txt")
             .deletingLastPathComponent()
