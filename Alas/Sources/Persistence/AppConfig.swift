@@ -233,11 +233,15 @@ struct AppConfig: Codable, Equatable {
         /// (the agent runs tools without asking). Seeds the per-session value
         /// only; the composer bolt still wins afterward. Default: false.
         var acpAutoRunByDefault: Bool
+        /// When true (default), every local ACP session gets the built-in
+        /// "alas" MCP server exposing CLI actions (open, worktrees, review).
+        var exposeAlasMCP: Bool
 
         enum CodingKeys: String, CodingKey {
             case notifyOnFinish, notifyOnAwaiting,
                  dismissedHookInstallNudges, dismissedACPSetupNudges,
-                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault
+                 confirmCloseChatTabs, acpSendOnEnter, acpAutoRunByDefault,
+                 exposeAlasMCP
         }
 
         init(notifyOnFinish: Bool = true, notifyOnAwaiting: Bool = true,
@@ -245,7 +249,8 @@ struct AppConfig: Codable, Equatable {
              dismissedACPSetupNudges: [String] = [],
              confirmCloseChatTabs: Bool = false,
              acpSendOnEnter: Bool = true,
-             acpAutoRunByDefault: Bool = false)
+             acpAutoRunByDefault: Bool = false,
+             exposeAlasMCP: Bool = true)
         {
             self.notifyOnFinish = notifyOnFinish
             self.notifyOnAwaiting = notifyOnAwaiting
@@ -254,6 +259,7 @@ struct AppConfig: Codable, Equatable {
             self.confirmCloseChatTabs = confirmCloseChatTabs
             self.acpSendOnEnter = acpSendOnEnter
             self.acpAutoRunByDefault = acpAutoRunByDefault
+            self.exposeAlasMCP = exposeAlasMCP
         }
 
         init(from decoder: Decoder) throws {
@@ -265,6 +271,7 @@ struct AppConfig: Codable, Equatable {
             confirmCloseChatTabs = (try? c.decode(Bool.self, forKey: .confirmCloseChatTabs)) ?? false
             acpSendOnEnter = (try? c.decode(Bool.self, forKey: .acpSendOnEnter)) ?? true
             acpAutoRunByDefault = (try? c.decode(Bool.self, forKey: .acpAutoRunByDefault)) ?? false
+            exposeAlasMCP = (try? c.decode(Bool.self, forKey: .exposeAlasMCP)) ?? true
         }
     }
 

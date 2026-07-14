@@ -148,6 +148,7 @@
 		1EBF9B83C26B9518AF70D2F3 /* EditorTabStateMarkdownCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98FAFF3AE36A17EE6AD029C /* EditorTabStateMarkdownCodableTests.swift */; };
 		1ECA2C8485DB484C5C687F3D /* OpenCodeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 292B5DA9EC17ED07588C48FD /* OpenCodeInstallerTests.swift */; };
 		1ED78A36E993D85D0DD1E3CC /* ACPSessionUsageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF05DF16587C5A48A9E04B2A /* ACPSessionUsageTests.swift */; };
+		1F3AA3B31A896A0608970906 /* AppConfigHarnessMCPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */; };
 		1F5AA7624BE0459338EE0EEC /* DragHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D398D06BDFFA5EDC24D3E6A /* DragHandle.swift */; };
 		1F84796DE0ABC832C0303B27 /* ACPSessionStoreDedupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FADFC82400385AD76A200A2B /* ACPSessionStoreDedupTests.swift */; };
 		1F860C66D658B0DA5A0599F6 /* RemoteZmxInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B4239E76E57C63CD983437F /* RemoteZmxInstaller.swift */; };
@@ -1728,6 +1729,7 @@
 		5B4239E76E57C63CD983437F /* RemoteZmxInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteZmxInstaller.swift; sourceTree = "<group>"; };
 		5B72D621D704CB5B2CCA82C6 /* RemoteAppStateAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteAppStateAccessTests.swift; sourceTree = "<group>"; };
 		5B7B8B82A8D4F5B1F1DF1731 /* DiffReviewRenderContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRenderContext.swift; sourceTree = "<group>"; };
+		5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfigHarnessMCPTests.swift; sourceTree = "<group>"; };
 		5B9583B34B9AAD4454C558E5 /* GitService+Pull.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GitService+Pull.swift"; sourceTree = "<group>"; };
 		5BAC89A6B9D5DC926AC18E13 /* MergeConflictTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeConflictTabView.swift; sourceTree = "<group>"; };
 		5BB6172AE118D2F9A40FD534 /* AgentsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentsPane.swift; sourceTree = "<group>"; };
@@ -4395,6 +4397,7 @@
 		D7416CBAB1B316023E546714 /* Persistence */ = {
 			isa = PBXGroup;
 			children = (
+				5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */,
 				4D4F87B7B6F4A6E6ED882F1F /* HarnessConfigAutoRunTests.swift */,
 				792BD8DAE4AAED201252C9E2 /* ProjectMCPServerTests.swift */,
 			);
@@ -5760,6 +5763,7 @@
 				1DF096E0925EFA91B9033642 /* AppConfigChangesTests.swift in Sources */,
 				D1FF11465D1309A56FCFFAF0 /* AppConfigCodeInstallTests.swift in Sources */,
 				CCB0C90ABC15D987D0EEB230 /* AppConfigFilesTests.swift in Sources */,
+				1F3AA3B31A896A0608970906 /* AppConfigHarnessMCPTests.swift in Sources */,
 				8D86580619CA83FE832ACB25 /* AppConfigHarnessTests.swift in Sources */,
 				ECF9400D49926064C4AE4F29 /* AppConfigMarkdownTests.swift in Sources */,
 				1BC03FAEA1E89F3A74A98DE4 /* AppConfigShortcutsCodingTests.swift in Sources */,
