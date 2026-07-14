@@ -150,7 +150,7 @@ jobs:
           cat .tools-pin
 
       - name: Restore prebuilt tools cache
-        # zmx / fff / Alas Helper artifacts combined in one entry — each is
+        # zmx / fff / Alas Helper / Alas CLI artifacts combined in one entry — each is
         # a few MB, and only install outputs + fingerprint markers are
         # cached (no zig/cargo intermediates). The key is an optimization
         # hint only: each script re-validates restored artifacts against its
