@@ -172,7 +172,9 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         state.setWritesEnabled(false)
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
-                        let consumptionToken = outputConsumption.registerStdout(offset: offset)
+                        guard let consumptionToken = outputConsumption.registerStdout(offset: offset) else {
+                            continue
+                        }
                         if !didBecomeAvailable,
                            Self.shouldSuppressPreAvailableReplayFrame(
                                data,
@@ -213,8 +215,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         return (stdoutOffset, stderrOffset)
     }
 
-    private func acknowledgeStdout(_ token: OutputConsumptionTracker.StdoutToken?) {
-        guard let token, let offsets = outputConsumption.consumeStdout(token: token) else { return }
+    private func acknowledgeStdout(_ token: OutputConsumptionTracker.StdoutToken) {
+        guard let offsets = outputConsumption.consumeStdout(token: token) else { return }
         publishOutputOffsets(offsets)
     }
 
@@ -351,9 +353,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             lock.lock()
             defer { lock.unlock() }
             if let stdoutOffset, stdoutOffset >= offset { return nil }
-            if let pending = pendingStdout.first(where: { $0.token.offset == offset }) {
-                return pending.token
-            }
+            if pendingStdout.contains(where: { $0.token.offset == offset }) { return nil }
             let token = StdoutToken(generation: generation, offset: offset)
             pendingStdout.append(.init(token: token, consumed: false))
             return token

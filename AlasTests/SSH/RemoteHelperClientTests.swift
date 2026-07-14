@@ -584,12 +584,13 @@ struct RemoteHelperClientTests {
         #expect(rememberedOffsets.stderr == 3)
     }
 
-    @Test func helperOutputConsumptionAdvancesOnlyThroughContiguousFrames() throws {
+    @Test func helperOutputConsumptionRejectsPendingDuplicatesAndAdvancesContiguousFrames() throws {
         let tracker = RemoteHelperACPTransport.OutputConsumptionTracker(
             stdoutOffset: 10,
             stderrOffset: 2
         )
         let first = try #require(tracker.registerStdout(offset: 20))
+        #expect(tracker.registerStdout(offset: 20) == nil)
         let second = try #require(tracker.registerStdout(offset: 30))
 
         #expect(tracker.consumeStdout(token: second) == nil)
