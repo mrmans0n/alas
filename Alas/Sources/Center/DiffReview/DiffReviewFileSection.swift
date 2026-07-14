@@ -1127,10 +1127,13 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.string = text
         textView.onKeyboardAction = context.coordinator.perform
+        textView.onWindowChanged = { [weak coordinator = context.coordinator] in
+            coordinator?.requestFocusIfNeeded()
+        }
         scrollView.documentView = textView
         context.coordinator.textView = textView
         applyTheme(to: scrollView, textView: textView)
-        requestFocusIfNeeded(textView)
+        context.coordinator.requestFocusIfNeeded()
         return scrollView
     }
 
@@ -1141,8 +1144,11 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
             textView.string = text
         }
         textView.onKeyboardAction = context.coordinator.perform
+        textView.onWindowChanged = { [weak coordinator = context.coordinator] in
+            coordinator?.requestFocusIfNeeded()
+        }
         applyTheme(to: scrollView, textView: textView)
-        requestFocusIfNeeded(textView)
+        context.coordinator.requestFocusIfNeeded()
     }
 
     private func applyTheme(to scrollView: NSScrollView, textView: NSTextView) {
@@ -1151,16 +1157,6 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         textView.font = .systemFont(ofSize: 12)
         textView.textColor = NSColor(theme.color("fg"))
         textView.insertionPointColor = NSColor(theme.color("accent"))
-    }
-
-    private func requestFocusIfNeeded(_ textView: NSTextView) {
-        guard isFocused.wrappedValue else { return }
-        DispatchQueue.main.async {
-            guard let window = textView.window,
-                  window.firstResponder !== textView
-            else { return }
-            window.makeFirstResponder(textView)
-        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -1185,6 +1181,16 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
         }
 
         @MainActor
+        func requestFocusIfNeeded() {
+            guard parent.isFocused.wrappedValue,
+                  let textView,
+                  let window = textView.window,
+                  window.firstResponder !== textView
+            else { return }
+            window.makeFirstResponder(textView)
+        }
+
+        @MainActor
         func perform(_ action: ReviewDraftComposerKeyboardAction) {
             switch action {
             case .save:
@@ -1198,6 +1204,12 @@ struct ReviewDraftComposerTextEditor: NSViewRepresentable {
 
 private final class ReviewDraftComposerNSTextView: NSTextView {
     var onKeyboardAction: (@MainActor (ReviewDraftComposerKeyboardAction) -> Void)?
+    var onWindowChanged: (@MainActor () -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        onWindowChanged?()
+    }
 
     override func keyDown(with event: NSEvent) {
         let key = event.charactersIgnoringModifiers ?? event.characters ?? ""
