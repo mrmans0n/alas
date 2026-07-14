@@ -168,6 +168,47 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
     req
 }
 
+/// The per-user socket directory Alas binds its `pid-<pid>` sockets under.
+pub fn socket_dir() -> PathBuf {
+    let uid = unsafe { libc::getuid() };
+    PathBuf::from(format!("/tmp/alas-{}", uid))
+}
+
+/// True if a process with `pid` exists and we may signal it. Same-uid callers
+/// get `0` for a live process; a missing process yields `ESRCH`.
+fn process_alive(pid: i32) -> bool {
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// Live `pid-<pid>` sockets in `dir`, filtering out entries whose process has
+/// exited. Non-`pid-` entries (e.g. per-leaf `sock-` symlinks) are ignored.
+pub fn discover_live_sockets_in(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(pid_str) = name.strip_prefix("pid-") else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<i32>() else {
+            continue;
+        };
+        if process_alive(pid) {
+            result.push(entry.path());
+        }
+    }
+    result.sort();
+    result
+}
+
+/// Live Alas sockets under the standard per-user directory.
+pub fn discover_live_sockets() -> Vec<PathBuf> {
+    discover_live_sockets_in(&socket_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +293,23 @@ mod tests {
         assert_eq!(req.command, "resolve");
         assert_eq!(req.cwd.as_deref(), Some("/repo"));
         assert!(req.session_id.is_none());
+    }
+
+    #[test]
+    fn discovers_only_live_pid_sockets() {
+        let root = std::env::temp_dir().join(format!("alas-cli-disc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        // Live: our own pid. Dead: pid 999999999 (out of range, guaranteed absent).
+        let live = root.join(format!("pid-{}", std::process::id()));
+        let dead = root.join("pid-999999999");
+        let junk = root.join("sock-abc"); // symlink-style entry, ignored by prefix
+        std::fs::write(&live, b"").unwrap();
+        std::fs::write(&dead, b"").unwrap();
+        std::fs::write(&junk, b"").unwrap();
+
+        let found = discover_live_sockets_in(&root);
+        assert_eq!(found, vec![live]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
