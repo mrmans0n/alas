@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/alas-client", "crates/alas"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+publish = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = "symbols"

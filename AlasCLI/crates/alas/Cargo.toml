@@ -1,0 +1,12 @@
+[package]
+name = "alas"
+edition.workspace = true
+version.workspace = true
+publish = false
+
+[[bin]]
+name = "alas"
+path = "src/main.rs"
+
+[dependencies]
+alas-client = { path = "../alas-client" }
