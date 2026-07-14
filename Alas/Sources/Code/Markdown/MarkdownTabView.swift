@@ -140,8 +140,8 @@ struct MarkdownTabView: View {
                             transientEditorWidth = CGFloat(PaneDragMath.resolvedWidth(
                                 startWidth: Double(start),
                                 translation: Double(translation),
-                                min: 120,
-                                max: Double(total - 120)
+                                min: max(120, Double(total) * 0.1),
+                                max: min(Double(total) - 120, Double(total) * 0.9)
                             ))
                         },
                         onDragEnded: {

@@ -82,10 +82,10 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                         onDragEnded: {
                             if let width = transientSidebarWidth {
                                 sidebarWidth = width
+                                onWidthsChanged()
                             }
                             transientSidebarWidth = nil
                             sidebarDragStartWidth = nil
-                            onWidthsChanged()
                         }
                     )
                 }
@@ -110,10 +110,10 @@ struct ThreePaneLayout<Sidebar: View, Center: View, Right: View>: View {
                         onDragEnded: {
                             if let width = transientRightWidth {
                                 rightWidth = width
+                                onWidthsChanged()
                             }
                             transientRightWidth = nil
                             rightDragStartWidth = nil
-                            onWidthsChanged()
                         }
                     )
                     right()

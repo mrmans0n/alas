@@ -143,8 +143,8 @@ struct CommitEditorTabView: View {
                         transientFilesWidth = CGFloat(PaneDragMath.resolvedWidth(
                             startWidth: Double(start),
                             translation: Double(translation),
-                            min: Double(Self.minPaneWidth),
-                            max: Double(total - Self.minPaneWidth)
+                            min: max(Double(Self.minPaneWidth), Double(total) * 0.15),
+                            max: min(Double(total) - Double(Self.minPaneWidth), Double(total) * 0.7)
                         ))
                     },
                     onDragEnded: {
