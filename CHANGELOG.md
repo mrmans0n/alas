@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Scroll the diff review stream to a comment when its card is clicked in the draft review summary rail, mirroring the file-rail scroll (including cross-file navigation where the comment's file isn't yet realized).
+
 ## [0.10.6] - 2026-07-14
 
 ### ✨ Features
