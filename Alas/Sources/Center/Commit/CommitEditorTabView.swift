@@ -125,7 +125,7 @@ struct CommitEditorTabView: View {
         GeometryReader { proxy in
             let total = proxy.size.width
             let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
-            let leftWidth = transientFilesWidth ?? max(Self.minPaneWidth, total * ratio)
+            let leftWidth: CGFloat = transientFilesWidth ?? max(Self.minPaneWidth, total * ratio)
             HStack(spacing: 0) {
                 CommitFilesListView(
                     files: details.files,
@@ -138,7 +138,7 @@ struct CommitEditorTabView: View {
                     axis: .horizontal,
                     onDragChanged: { translation in
                         guard total > Self.minPaneWidth * 2 else { return }
-                        let start = filesDragStartWidth ?? leftWidth
+                        let start: CGFloat = filesDragStartWidth ?? leftWidth
                         filesDragStartWidth = start
                         transientFilesWidth = CGFloat(PaneDragMath.resolvedWidth(
                             startWidth: Double(start),

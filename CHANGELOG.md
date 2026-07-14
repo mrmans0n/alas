@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-07-14
+
+### 🐛 Fixes
+
+- Prevent launch crashes when fingerprinting deleted or inaccessible worktrees (#779).
+- Stabilize pane-resize dragging to avoid jittery width updates (#777).
+
+### 🏗️ Internal
+
+- Cache zmx, fff, and helper prebuild artifacts in release-related workflows (#776).
+- Enable Xcode compilation caching for PR builds (#778).
+
 ## [0.10.4] - 2026-07-14
 
 ### ✨ Features

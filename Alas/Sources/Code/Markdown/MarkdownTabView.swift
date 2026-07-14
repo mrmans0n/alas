@@ -127,7 +127,7 @@ struct MarkdownTabView: View {
             preview
         case .split:
             GeometryReader { proxy in
-                let leftWidth = transientEditorWidth ?? max(120, proxy.size.width * splitFraction)
+                let leftWidth: CGFloat = transientEditorWidth ?? max(120, proxy.size.width * splitFraction)
                 HStack(spacing: 0) {
                     codeEditor.frame(width: leftWidth)
                     DragHandle(
@@ -135,7 +135,7 @@ struct MarkdownTabView: View {
                         onDragChanged: { translation in
                             let total = proxy.size.width
                             guard total > 240 else { return }
-                            let start = editorDragStartWidth ?? leftWidth
+                            let start: CGFloat = editorDragStartWidth ?? leftWidth
                             editorDragStartWidth = start
                             transientEditorWidth = CGFloat(PaneDragMath.resolvedWidth(
                                 startWidth: Double(start),
