@@ -82,6 +82,29 @@ for mapping in "${helper_targets[@]}"; do
 done
 rsync -a "${SRCROOT}/AlasHelper/manifest.json" "${helper_destination_root}/manifest.json"
 
+# Alas CLI. macOS-only; the running Mac's slice is selected by
+# TerminalCLIInjection at install time.
+cli_destination_root="${destination_root}/alas-cli"
+rm -rf "${cli_destination_root}"
+mkdir -p "${cli_destination_root}"
+cli_targets=(
+    "macos-x86_64:x86_64-apple-darwin"
+    "macos-aarch64:aarch64-apple-darwin"
+)
+for mapping in "${cli_targets[@]}"; do
+    resource_dir="${mapping%%:*}"
+    rust_target="${mapping#*:}"
+    cli_source="${SRCROOT}/.build/alas-cli/${rust_target}/release/alas"
+    if [ ! -x "${cli_source}" ]; then
+        echo "embed-ghostty-resources.sh: error: Alas CLI binary not found at ${cli_source}" >&2
+        exit 1
+    fi
+    mkdir -p "${cli_destination_root}/${resource_dir}"
+    rsync -a "${cli_source}" "${cli_destination_root}/${resource_dir}/alas"
+    chmod +x "${cli_destination_root}/${resource_dir}/alas"
+done
+rsync -a "${SRCROOT}/AlasCLI/manifest.json" "${cli_destination_root}/manifest.json"
+
 # fff search backend dylib. Selection mirrors build-fff.sh.
 if [ -n "${ALAS_FFF_TARGET_ARCH:-}" ]; then
     fff_arch="${ALAS_FFF_TARGET_ARCH}"

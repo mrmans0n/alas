@@ -1143,6 +1143,7 @@
 		E541E14A713FB78AF4595FEB /* ReviewRequestContextBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 039C5E652B7A9457EB13BD70 /* ReviewRequestContextBuilder.swift */; };
 		E551A81EBC839478D6999A97 /* ACPComposerDraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = A47981117B0CDB5F71DECD64 /* ACPComposerDraft.swift */; };
 		E5D32C15B08F30DF3B46CA74 /* DiffReviewScrollSpy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73C433B373577FD515FECD3 /* DiffReviewScrollSpy.swift */; };
+		E6426E94A57602E76D401D21 /* AlasActionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 005F92E45C7D391D8BD5A3FD /* AlasActionService.swift */; };
 		E681EB5B83BAC199B1ED5E24 /* WorktreeWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AD81E0DFE33CE4DACF0ADF /* WorktreeWatcher.swift */; };
 		E6A429E3423A9A40A9B36C97 /* RepoSelectorEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C7F4710313BA1671A3AED0 /* RepoSelectorEnvironment.swift */; };
 		E6B5EDEA2C41C783ECA67FD9 /* ReviewSessionLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADC27B340A795F13EA4E0765 /* ReviewSessionLoaderTests.swift */; };
@@ -1271,6 +1272,7 @@
 		001E204C8DBD41063D806ECA /* HTTPRequestParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HTTPRequestParserTests.swift; sourceTree = "<group>"; };
 		002C8D5C52466955E0A90606 /* BaseBranchSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseBranchSelector.swift; sourceTree = "<group>"; };
 		0046CA3B9FF996E55A85D853 /* RemoteFileAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFileAccess.swift; sourceTree = "<group>"; };
+		005F92E45C7D391D8BD5A3FD /* AlasActionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasActionService.swift; sourceTree = "<group>"; };
 		00809DCA566AAAADD7448659 /* ProjectPickerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPickerTests.swift; sourceTree = "<group>"; };
 		008E982C8526670670425AB8 /* EmptyTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyTabView.swift; sourceTree = "<group>"; };
 		00B894D92F014C2ADB3CCC9B /* TreeSitterPython */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TreeSitterPython; path = ThirdParty/TreeSitterPython; sourceTree = SOURCE_ROOT; };
@@ -4598,6 +4600,7 @@
 		FAE46B7EB9FF647CE1B2E166 /* App */ = {
 			isa = PBXGroup;
 			children = (
+				005F92E45C7D391D8BD5A3FD /* AlasActionService.swift */,
 				7E39F15B0B7395FB81D2C9D0 /* AlasApp.swift */,
 				0452819DD42784CF60D466A4 /* AlasApplicationDelegate.swift */,
 				1271747193D1594AEA596278 /* AlasCLICommandRouter.swift */,
@@ -4666,6 +4669,7 @@
 				A6E0A5F2849F1349828C2EEF /* Build GhosttyKit */,
 				2A52B3AA269E67D4B89E4A6B /* Build zmx */,
 				A8FC861C1A7630AE525F4E85 /* Build Alas Helper */,
+				E7133D66219548A98B3DF549 /* Build Alas CLI */,
 				4609384BD7FA0393B4CE182E /* Build fff */,
 				16AE5D200CA779AE0410E1B1 /* Sources */,
 				BD47E15DBE895A60942DDB48 /* Resources */,
@@ -4908,6 +4912,25 @@
 			shellPath = /bin/sh;
 			shellScript = "\"${SRCROOT}/scripts/build-alas-helper.sh\"";
 		};
+		E7133D66219548A98B3DF549 /* Build Alas CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Alas CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/build-alas-cli.sh\"";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -5068,6 +5091,7 @@
 				0BA997A903C1DC2A41D64E22 /* AgentRunner.swift in Sources */,
 				55C7881F382ACCEBCDB7D157 /* AgentsPane.swift in Sources */,
 				59EFDD354514B21BBA4206AD /* AiSplitButton.swift in Sources */,
+				E6426E94A57602E76D401D21 /* AlasActionService.swift in Sources */,
 				A240E6FE68F27C04D32A270A /* AlasApp.swift in Sources */,
 				8CAD455D39C888978F7E66EF /* AlasApplicationDelegate.swift in Sources */,
 				5D3E7C2D040B58D0C9D1C0E8 /* AlasButton.swift in Sources */,

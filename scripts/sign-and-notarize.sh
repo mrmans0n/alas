@@ -129,6 +129,11 @@ for helper_arch in macos-x86_64 macos-aarch64; do
     "$app_path/Contents/Resources/alas-helper/$helper_arch/alas-helper" \
     "Alas helper ($helper_arch)"
 done
+for cli_arch in macos-x86_64 macos-aarch64; do
+  sign_embedded_executable \
+    "$app_path/Contents/Resources/alas-cli/$cli_arch/alas" \
+    "Alas CLI ($cli_arch)"
+done
 
 echo "==> Signing $app_path"
 codesign \

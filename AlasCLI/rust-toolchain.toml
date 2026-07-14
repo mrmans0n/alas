@@ -1,0 +1,7 @@
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+targets = [
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
