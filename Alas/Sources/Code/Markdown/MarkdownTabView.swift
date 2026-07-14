@@ -125,7 +125,7 @@ struct MarkdownTabView: View {
                 let leftWidth = max(120, proxy.size.width * splitFraction)
                 HStack(spacing: 0) {
                     codeEditor.frame(width: leftWidth)
-                    DragHandle(axis: .horizontal) { delta in
+                    DragHandle(axis: .horizontal, onDrag: { delta in
                         let total = proxy.size.width
                         guard total > 0 else { return }
                         let newWidth = max(120, min(total - 120, leftWidth + delta))
@@ -133,7 +133,7 @@ struct MarkdownTabView: View {
                             worktreeId: worktreeId, tabId: tabId,
                             fraction: newWidth / total
                         )
-                    }
+                    })
                     preview
                 }
             }
