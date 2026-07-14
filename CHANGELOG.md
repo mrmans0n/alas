@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-07-14
+
+### ✨ Features
+
+- Keep remote ACP agents alive in the helper so headless sessions can survive UI disconnects (#774).
+
 ## [0.10.3] - 2026-07-14
 
 ### ✨ Features
