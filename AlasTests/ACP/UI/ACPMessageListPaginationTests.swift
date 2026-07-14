@@ -278,30 +278,38 @@ struct ACPMessageListPaginationTests {
         ))
     }
 
-    @Test("bottom sentinel pages newer rows only during user scroll")
-    func bottomSentinelPagesNewerRowsOnlyDuringUserScroll() {
-        #expect(!ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
-            isSentinelVisible: true,
-            isUserDriven: false,
+    @Test("bottom geometry pages newer rows only for fresh downward user scrolls")
+    func bottomGeometryPagesNewerRowsOnlyForFreshDownwardUserScrolls() {
+        #expect(ACPMessageList.shouldStepTailForwardFromBottomGeometry(
+            isUserDriven: true,
+            isRestoring: false,
+            previousMinY: 1_000,
+            newMinY: 1_080,
             visibleTail: 90,
             messageCount: 100
         ))
-        #expect(ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
-            isSentinelVisible: true,
+        #expect(!ACPMessageList.shouldStepTailForwardFromBottomGeometry(
             isUserDriven: true,
+            isRestoring: true,
+            previousMinY: 1_000,
+            newMinY: 1_080,
             visibleTail: 90,
             messageCount: 100
         ))
-        #expect(!ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
-            isSentinelVisible: true,
+        #expect(!ACPMessageList.shouldStepTailForwardFromBottomGeometry(
             isUserDriven: true,
+            isRestoring: false,
+            previousMinY: 1_080,
+            newMinY: 1_000,
+            visibleTail: 90,
+            messageCount: 100
+        ))
+        #expect(!ACPMessageList.shouldStepTailForwardFromBottomGeometry(
+            isUserDriven: true,
+            isRestoring: false,
+            previousMinY: 1_000,
+            newMinY: 1_080,
             visibleTail: 100,
-            messageCount: 100
-        ))
-        #expect(!ACPMessageList.shouldPageNewerRowsFromBottomSentinel(
-            isSentinelVisible: false,
-            isUserDriven: true,
-            visibleTail: 90,
             messageCount: 100
         ))
     }

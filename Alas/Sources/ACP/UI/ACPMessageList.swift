@@ -219,7 +219,9 @@ struct ACPMessageList: View {
                     onResolveScrollView: { scrollViewRef.scrollView = $0 },
                     onHeadFrame: { handleHeadFramePreference($0, proxy: proxy) },
                     onPaused: { setFollowsTranscriptTail(false) },
-                    onAtBottom: { handleAtBottom(proxy: proxy) },
+                    onAtBottom: { shouldPageHiddenTail in
+                        handleAtBottom(proxy: proxy, shouldPageHiddenTail: shouldPageHiddenTail)
+                    },
                     onGeometry: { old, new in
                         handleScrollGeometry(
                             previousMinY: old.minY,
@@ -468,14 +470,6 @@ struct ACPMessageList: View {
 
     private func handleVisibleTargetIDs(_ ids: [String], proxy: ScrollViewProxy) {
         let lookup = visibleMessageLookup
-        if Self.shouldPageNewerRowsFromBottomSentinel(
-            isSentinelVisible: ids.contains(Self.bottomPaginationSentinelID),
-            isUserDriven: ACPUserScrollEvent.isUserDriven(NSApp.currentEvent?.type),
-            visibleTail: transcript.visibleTailBound,
-            messageCount: transcript.messages.count
-        ) {
-            stepTailForwardPreservingScroll(proxy: proxy, lookup: lookup)
-        }
         guard let anchor = Self.topVisibleScrollTargetID(
             in: ids,
             visibleMessageIds: lookup.ids
@@ -528,13 +522,13 @@ struct ACPMessageList: View {
         }
     }
 
-    private func handleAtBottom(proxy: ScrollViewProxy) {
+    private func handleAtBottom(proxy: ScrollViewProxy, shouldPageHiddenTail: Bool) {
         if Self.shouldResumeTailFollowAtBottom(
             visibleTail: transcript.visibleTailBound,
             messageCount: transcript.messages.count
         ) {
             setFollowsTranscriptTail(true)
-        } else {
+        } else if shouldPageHiddenTail {
             stepTailForwardPreservingScroll(proxy: proxy, lookup: visibleMessageLookup)
         }
     }
@@ -619,13 +613,18 @@ struct ACPMessageList: View {
         visibleTail >= messageCount
     }
 
-    nonisolated static func shouldPageNewerRowsFromBottomSentinel(
-        isSentinelVisible: Bool,
+    nonisolated static func shouldStepTailForwardFromBottomGeometry(
         isUserDriven: Bool,
+        isRestoring: Bool,
+        previousMinY: CGFloat,
+        newMinY: CGFloat,
         visibleTail: Int,
         messageCount: Int
     ) -> Bool {
-        isSentinelVisible && isUserDriven && visibleTail < messageCount
+        guard visibleTail < messageCount else { return false }
+        guard isUserDriven else { return false }
+        guard !isRestoring else { return false }
+        return newMinY > previousMinY + ACPScrollDirectionClassifier.upwardEpsilon
     }
 
     nonisolated static func queueHeaderCount(statuses: [QueuedPrompt.Status]) -> Int {
@@ -845,7 +844,18 @@ struct ACPMessageList: View {
         )
         switch decision {
         case .userScrolledUp: setFollowsTranscriptTail(false)
-        case .userAtBottom: handleAtBottom(proxy: proxy)
+        case .userAtBottom:
+            handleAtBottom(
+                proxy: proxy,
+                shouldPageHiddenTail: Self.shouldStepTailForwardFromBottomGeometry(
+                    isUserDriven: isUserDriven,
+                    isRestoring: isRestoringTail,
+                    previousMinY: previousMinY,
+                    newMinY: newMinY,
+                    visibleTail: transcript.visibleTailBound,
+                    messageCount: transcript.messages.count
+                )
+            )
         case .noChange: break
         }
         if Self.shouldRestoreTailAfterContentGrowth(
@@ -1048,7 +1058,7 @@ private struct ACPTranscriptScrollTracking: ViewModifier {
     let onResolveScrollView: (NSScrollView) -> Void
     let onHeadFrame: (CGRect) -> Void
     let onPaused: () -> Void
-    let onAtBottom: () -> Void
+    let onAtBottom: (Bool) -> Void
     let onGeometry: (ACPScrollProbe, ACPScrollProbe) -> Void
 
     @ViewBuilder
@@ -1089,7 +1099,7 @@ private struct ACPScrollProbe: Equatable {
 
 private struct ACPScrollEventObserver: NSViewRepresentable {
     let onPaused: () -> Void
-    let onAtBottom: () -> Void
+    let onAtBottom: (Bool) -> Void
     let isRestoring: () -> Bool
     var onScrollViewResolved: ((NSScrollView) -> Void)?
 
@@ -1116,7 +1126,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         var onPaused: () -> Void
-        var onAtBottom: () -> Void
+        var onAtBottom: (Bool) -> Void
         var isRestoring: () -> Bool
         var onScrollViewResolved: ((NSScrollView) -> Void)?
         private weak var observedScrollView: NSScrollView?
@@ -1124,7 +1134,7 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
         private var lastOffsetY: CGFloat?
 
         init(onPaused: @escaping () -> Void,
-             onAtBottom: @escaping () -> Void,
+             onAtBottom: @escaping (Bool) -> Void,
              isRestoring: @escaping () -> Bool) {
             self.onPaused = onPaused
             self.onAtBottom = onAtBottom
@@ -1169,18 +1179,20 @@ private struct ACPScrollEventObserver: NSViewRepresentable {
             let newY = cv.bounds.origin.y
             let viewportH = cv.bounds.height
             let contentH = scrollView.documentView?.bounds.height ?? 0
+            let restoring = isRestoring()
+            let isUserDriven = Self.isUserDrivenScrollEvent
             let decision = ACPScrollDirectionClassifier.decide(
                 previousOffsetY: lastOffsetY,
                 newOffsetY: newY,
                 viewportHeight: viewportH,
                 contentHeight: contentH,
-                isRestoring: isRestoring(),
-                isUserDriven: Self.isUserDrivenScrollEvent
+                isRestoring: restoring,
+                isUserDriven: isUserDriven
             )
             lastOffsetY = newY
             switch decision {
             case .userScrolledUp: onPaused()
-            case .userAtBottom: onAtBottom()
+            case .userAtBottom: onAtBottom(isUserDriven && !restoring)
             case .noChange: break
             }
         }
