@@ -973,6 +973,22 @@ fn register_proc_cwd(state: &mut HelperState, proc_id: &str, cwd: PathBuf) {
     state.subscriptions.insert(format!("proc:{proc_id}"), cwd);
 }
 
+fn register_persisted_proc_cwd(state: &mut HelperState, proc_id: &str, dir: &Path) {
+    let Ok(bytes) = std::fs::read(dir.join("meta.json")) else {
+        return;
+    };
+    let Ok(metadata) = serde_json::from_slice::<ProcMetadata>(&bytes) else {
+        return;
+    };
+    if metadata.proc_id != proc_id {
+        return;
+    }
+    let Ok(cwd) = validated_proc_cwd(&metadata.cwd) else {
+        return;
+    };
+    register_proc_cwd(state, proc_id, cwd);
+}
+
 fn spawn_proc_supervisor(dir: &Path) -> Result<(), HelperError> {
     let exe = std::env::current_exe()
         .map_err(|error| jsonrpc_error(-32050, format!("helper path failed: {error}")))?;
@@ -1164,6 +1180,7 @@ fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, 
     if !dir.is_dir() {
         return Err(jsonrpc_error(-32051, "process not found"));
     }
+    register_persisted_proc_cwd(state, &params.proc_id, &dir);
     let stdout_offset = requested_log_offset(&dir.join("stdout.log"), params.stdout_offset);
     let stderr_offset = requested_log_offset(&dir.join("stderr.log"), params.stderr_offset);
     let mut stdout_frames = Vec::new();
@@ -2130,6 +2147,36 @@ mod tests {
         register_proc_cwd(&mut state, "session-1", cwd.clone());
 
         assert_eq!(state.subscriptions.get("proc:session-1"), Some(&cwd));
+    }
+
+    #[test]
+    fn proc_attach_restores_cwd_registration_from_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-attach-cwd-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        let cwd = root.join("repo");
+        let proc_dir = root.join("proc");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&proc_dir).expect("proc dir");
+        let metadata = ProcMetadata {
+            proc_id: "session-1".to_string(),
+            command: "codex-acp".to_string(),
+            args: Vec::new(),
+            cwd: cwd.display().to_string(),
+        };
+        std::fs::write(
+            proc_dir.join("meta.json"),
+            serde_json::to_vec(&metadata).expect("metadata"),
+        )
+        .expect("metadata file");
+        let mut state = HelperState::default();
+
+        register_persisted_proc_cwd(&mut state, "session-1", &proc_dir);
+
+        assert_eq!(state.subscriptions.get("proc:session-1"), Some(&cwd));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
