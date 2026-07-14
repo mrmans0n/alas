@@ -38,9 +38,8 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
 pub fn handle_line(
     line: &str,
     worktree_dir: &str,
-    dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
+    mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
 ) -> Option<Value> {
-    let _ = (worktree_dir, &dispatch); // used from Task 3 on
     let msg: Value = match serde_json::from_str(line) {
         Ok(v) => v,
         Err(_) => return Some(error_reply(Value::Null, -32700, "parse error")),
@@ -52,6 +51,10 @@ pub fn handle_line(
         "initialize" => Ok(initialize_result()),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
+        "tools/call" => {
+            let params = msg.get("params").cloned().unwrap_or(Value::Null);
+            call_tool(&params, worktree_dir, &mut dispatch)
+        }
         other => Err((-32601, format!("method not found: {other}"))),
     };
     Some(match reply {
@@ -201,9 +204,73 @@ fn optional_string(args: &Value, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// Send one command to the owning app instance, addressed by worktree
+/// directory (never session id — the MCP server has no terminal session).
+pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportError> {
+    let req = alas_client::build_request(command, None, Some(env.worktree_dir.clone()));
+    alas_client::send(&env.socket, &req)
+}
+
+/// Unknown tools and invalid arguments are JSON-RPC protocol errors
+/// (-32602); failures while executing a valid call are tool results with
+/// isError:true, per the MCP spec's split between the two.
+fn call_tool(
+    params: &Value,
+    worktree_dir: &str,
+    mut dispatch: impl FnMut(&Command) -> Result<Response, TransportError>,
+) -> Result<Value, (i64, String)> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or((-32602, "tools/call requires a tool name".to_string()))?;
+    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
+    Ok(match dispatch(&command) {
+        Ok(resp) => tool_result(&command, resp),
+        Err(err) => transport_error_result(&err),
+    })
+}
+
+fn tool_result(command: &Command, resp: Response) -> Value {
+    if !resp.ok {
+        return text_result(resp.error.unwrap_or_else(|| "request failed".into()), true);
+    }
+    match resp.lines.filter(|lines| !lines.is_empty()) {
+        Some(lines) => text_result(lines.join("\n"), false),
+        None => text_result(success_message(command), false),
+    }
+}
+
+/// The app replies to UI-action commands with a bare ok; agents read better
+/// with an explicit confirmation than with empty content.
+fn success_message(command: &Command) -> String {
+    match command {
+        Command::Open { paths } => format!("Opened {} file(s) in Alas.", paths.len()),
+        Command::WtSwitch { target } => format!("Switched Alas to worktree '{target}'."),
+        Command::WtNew { branch, .. } => format!("Created worktree for branch '{branch}' in Alas."),
+        Command::WtDelete { target, .. } => format!("Deleted worktree '{target}'."),
+        Command::Review { target: Some(target) } => format!("Opened review for '{target}' in Alas."),
+        Command::Review { target: None } => "Opened review of local changes in Alas.".into(),
+        Command::WtList | Command::Resolve => "OK".into(),
+    }
+}
+
+fn transport_error_result(err: &TransportError) -> Value {
+    // Mirrors describe() in main.rs so agents and humans read the same words.
+    let message = match err {
+        TransportError::Malformed => "malformed response from Alas",
+        TransportError::Connect | TransportError::Io => "could not reach Alas",
+    };
+    text_result(message.into(), true)
+}
+
+fn text_result(text: String, is_error: bool) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{command_for_tool, env_from, handle_line, tool_definitions, PROTOCOL_VERSION};
+    use super::{command_for_tool, dispatch, env_from, handle_line, McpEnv, PROTOCOL_VERSION};
     use alas_client::Response;
     use serde_json::{json, Value};
 
@@ -362,5 +429,111 @@ mod tests {
     fn unknown_tool_is_an_error() {
         assert!(command_for_tool("resolve", &json!({}), "/wt").is_err());
         assert!(command_for_tool("nope", &json!({}), "/wt").is_err());
+    }
+
+    fn call(name: &str, arguments: Value) -> String {
+        json!({
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn tools_call_returns_joined_lines_on_success() {
+        let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
+            Ok(Response { ok: true, lines: Some(vec!["main *".into(), "feat".into()]), error: None })
+        })
+        .unwrap();
+        let result = &reply["result"];
+        assert_eq!(result["isError"], json!(false));
+        assert_eq!(result["content"][0]["type"], json!("text"));
+        assert_eq!(result["content"][0]["text"], json!("main *\nfeat"));
+    }
+
+    #[test]
+    fn tools_call_synthesizes_confirmation_when_no_lines() {
+        let reply = handle_line(&call("open", json!({"paths": ["a.txt", "b.txt"]})), "/wt", |cmd| {
+            assert_eq!(
+                cmd,
+                &alas_client::Command::Open { paths: vec!["/wt/a.txt".into(), "/wt/b.txt".into()] }
+            );
+            Ok(Response { ok: true, lines: None, error: None })
+        })
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], json!(false));
+        assert_eq!(reply["result"]["content"][0]["text"], json!("Opened 2 file(s) in Alas."));
+    }
+
+    #[test]
+    fn tools_call_maps_app_failure_to_error_result() {
+        let reply = handle_line(&call("review", json!({})), "/wt", |_| {
+            Ok(Response { ok: false, lines: None, error: Some("no changes to review".into()) })
+        })
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], json!(true));
+        assert_eq!(reply["result"]["content"][0]["text"], json!("no changes to review"));
+    }
+
+    #[test]
+    fn tools_call_maps_transport_failure_to_error_result() {
+        let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
+            Err(alas_client::TransportError::Connect)
+        })
+        .unwrap();
+        assert_eq!(reply["result"]["isError"], json!(true));
+        assert_eq!(reply["result"]["content"][0]["text"], json!("could not reach Alas"));
+
+        let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
+            Err(alas_client::TransportError::Malformed)
+        })
+        .unwrap();
+        assert_eq!(reply["result"]["content"][0]["text"], json!("malformed response from Alas"));
+    }
+
+    #[test]
+    fn tools_call_with_unknown_tool_or_bad_args_is_invalid_params() {
+        let reply = handle_line(&call("nope", json!({})), "/wt", ok_dispatch).unwrap();
+        assert_eq!(reply["error"]["code"], json!(-32602));
+
+        let reply = handle_line(&call("open", json!({})), "/wt", ok_dispatch).unwrap();
+        assert_eq!(reply["error"]["code"], json!(-32602));
+    }
+
+    #[test]
+    fn dispatch_sends_cwd_addressed_request_over_the_socket() {
+        use std::io::{Read, Write};
+
+        let dir = std::env::temp_dir().join(format!("alas-mcp-it-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stub.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let n = stream.read(&mut buf).unwrap();
+            tx.send(String::from_utf8_lossy(&buf[..n]).into_owned()).unwrap();
+            stream
+                .write_all(br#"{"ok":true,"lines":["main *"]}"#)
+                .unwrap();
+        });
+
+        let env = McpEnv { socket: path.clone(), worktree_dir: "/wt".into() };
+        let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.lines, Some(vec!["main *".into()]));
+
+        let seen: Value = serde_json::from_str(&rx.recv().unwrap()).unwrap();
+        assert_eq!(seen["kind"], json!("cli"));
+        assert_eq!(seen["v"], json!(1));
+        assert_eq!(seen["command"], json!("wt"));
+        assert_eq!(seen["subcommand"], json!("list"));
+        assert_eq!(seen["cwd"], json!("/wt"));
+        assert!(seen.get("session_id").is_none());
+
+        let _ = handle.join();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
