@@ -1,6 +1,11 @@
 import SwiftUI
 
 struct DiffInlineCommentCard: View {
+    private enum FocusedEditor: Hashable {
+        case reply
+        case edit(String)
+    }
+
     let thread: DiffInlineCommentThread
     var onReply: (String) -> Void = { _ in }
     var onResolve: () -> Void = {}
@@ -20,6 +25,7 @@ struct DiffInlineCommentCard: View {
     @State private var editDraft = ""
     @State private var isHovered = false
     @FocusState private var isCardFocused: Bool
+    @FocusState private var focusedEditor: FocusedEditor?
 
     init(
         thread: DiffInlineCommentThread,
@@ -160,16 +166,21 @@ struct DiffInlineCommentCard: View {
                     }
                     TextEditor(text: $replyDraft)
                         .font(.system(size: 11))
+                        .focused($focusedEditor, equals: .reply)
                         .frame(minHeight: 60)
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
                                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                         )
+                        .onAppear {
+                            focusedEditor = .reply
+                        }
                     HStack(spacing: 8) {
                         Button("Comment") {
                             onReply(replyDraft)
                             replyDraft = ""
                             isComposerOpen = false
+                            focusedEditor = nil
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .semibold))
@@ -180,6 +191,7 @@ struct DiffInlineCommentCard: View {
                                 onStageReply(replyDraft)
                                 replyDraft = ""
                                 isComposerOpen = false
+                                focusedEditor = nil
                             }
                             .buttonStyle(.plain)
                             .font(.system(size: 11, weight: .semibold))
@@ -189,6 +201,7 @@ struct DiffInlineCommentCard: View {
                         Button("Cancel") {
                             replyDraft = ""
                             isComposerOpen = false
+                            focusedEditor = nil
                         }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
@@ -204,7 +217,10 @@ struct DiffInlineCommentCard: View {
             // Action buttons
             HStack(spacing: 8) {
                 if canReply {
-                    Button("Reply") { isComposerOpen.toggle() }
+                    Button("Reply") {
+                        isComposerOpen.toggle()
+                        focusedEditor = isComposerOpen ? .reply : nil
+                    }
                         .buttonStyle(.plain)
                         .font(.system(size: 11))
                         .foregroundColor(.accentColor)
@@ -249,16 +265,21 @@ struct DiffInlineCommentCard: View {
                     .foregroundColor(.primary)
                 TextEditor(text: $editDraft)
                     .font(.system(size: 11))
+                    .focused($focusedEditor, equals: .edit(comment.id))
                     .frame(minHeight: 60)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
                             .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                     )
+                    .onAppear {
+                        focusedEditor = .edit(comment.id)
+                    }
                 HStack(spacing: 8) {
                     Button("Save") {
                         onEdit(comment, editDraft)
                         editingCommentID = nil
                         editDraft = ""
+                        focusedEditor = nil
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11, weight: .semibold))
@@ -267,6 +288,7 @@ struct DiffInlineCommentCard: View {
                     Button("Cancel") {
                         editingCommentID = nil
                         editDraft = ""
+                        focusedEditor = nil
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11))
@@ -286,6 +308,7 @@ struct DiffInlineCommentCard: View {
                         Button {
                             editingCommentID = comment.id
                             editDraft = comment.body
+                            focusedEditor = .edit(comment.id)
                         } label: {
                             Image(systemName: "pencil")
                                 .font(.system(size: 10))
