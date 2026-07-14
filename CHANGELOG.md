@@ -6,6 +6,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-07-14
+
+### ✨ Features
+
+- Add incremental ACP transcript delivery and faster stop handling for remote web sessions (#775).
+
+### 🐛 Fixes
+
+- Focus review comment composers reliably when adding diff comments (#780).
+- Allow comments on unchanged diff lines during review (#781).
+
 ## [0.10.5] - 2026-07-14
 
 ### 🐛 Fixes
