@@ -15,7 +15,7 @@ protocol JSONRPCStdioTransporting: AnyObject, Sendable {
 
 final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting {
     enum Incoming: Sendable {
-        case frame(Data)
+        case frame(Data, onConsumed: (@Sendable () -> Void)? = nil)
         case stderr(Data)
         case exited(Int32)
     }

@@ -42,6 +42,10 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
         cont.yield(.frame(frame))
     }
 
+    func send(frame: Data, onConsumed: @escaping @Sendable () -> Void) {
+        cont.yield(.frame(frame, onConsumed: onConsumed))
+    }
+
     func send(exitStatus: Int32) {
         cont.yield(.exited(exitStatus))
         cont.finish()

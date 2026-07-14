@@ -15,12 +15,11 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private let pathPrefixDirectories: [String]
     private let onFreshProcSpawn: @MainActor @Sendable () async -> Void
     private let onOutputOffsetsChanged: @MainActor @Sendable (OutputOffsets) -> Void
+    private let outputConsumption: OutputConsumptionTracker
     private let attachmentId = UUID().uuidString
     private let state = State()
     private var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation?
     private var attachTask: Task<Void, Never>?
-    private var stdoutOffset: UInt64?
-    private var stderrOffset: UInt64?
     private var stdinOffset: UInt64 = 0
 
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
@@ -46,8 +45,10 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         self.pathPrefixDirectories = pathPrefixDirectories
         self.onFreshProcSpawn = onFreshProcSpawn
         self.onOutputOffsetsChanged = onOutputOffsetsChanged
-        stdoutOffset = initialOutputOffsets?.stdout
-        stderrOffset = initialOutputOffsets?.stderr
+        self.outputConsumption = OutputConsumptionTracker(
+            stdoutOffset: initialOutputOffsets?.stdout,
+            stderrOffset: initialOutputOffsets?.stderr
+        )
         var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
         self.incoming = AsyncStream { continuation = $0 }
         self.continuation = continuation
@@ -70,13 +71,14 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     func terminate() {
         guard state.markTerminated() else { return }
         attachTask?.cancel()
-        Task { [host, procId, attachmentId, stdoutOffset, stderrOffset] in
+        let offsets = outputConsumption.snapshot()
+        Task { [host, procId, attachmentId, offsets] in
             let client = await RemoteHelperClientPool.shared.client(for: host)
             await client.detachProc(
                 procId: procId,
                 attachmentId: attachmentId,
-                stdoutOffset: stdoutOffset ?? 0,
-                stderrOffset: stderrOffset ?? 0
+                stdoutOffset: offsets.stdout ?? 0,
+                stderrOffset: offsets.stderr ?? 0
             )
         }
         continuation?.yield(.exited(0))
@@ -110,6 +112,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         attachFreshSpawnFromStart = status.spawned == true
                         if attachFreshSpawnFromStart {
                             await onFreshProcSpawn()
+                            outputConsumption.reset(stdoutOffset: 0, stderrOffset: 0)
                         }
                     } catch {
                         guard Self.shouldRetrySpawnFailure(error) else {
@@ -124,9 +127,10 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     }
                     didSpawn = true
                 }
+                let consumedOffsets = outputConsumption.snapshot()
                 let requestedOffsets = Self.attachReplayOffsets(
-                    stdoutOffset: stdoutOffset,
-                    stderrOffset: stderrOffset,
+                    stdoutOffset: consumedOffsets.stdout,
+                    stderrOffset: consumedOffsets.stderr,
                     attachFreshSpawnFromStart: attachFreshSpawnFromStart
                 )
                 let handle = try await client.attachProc(
@@ -137,11 +141,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 )
                 stdinOffset = handle.stdinOffset
                 guard !Task.isCancelled, !state.isTerminated else {
+                    let offsets = outputConsumption.snapshot()
                     await client.detachProc(
                         procId: procId,
                         attachmentId: attachmentId,
-                        stdoutOffset: stdoutOffset ?? 0,
-                        stderrOffset: stderrOffset ?? 0
+                        stdoutOffset: offsets.stdout ?? 0,
+                        stderrOffset: offsets.stderr ?? 0
                     )
                     return
                 }
@@ -159,19 +164,20 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         state.setWritesEnabled(false)
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
-                        stdoutOffset = offset
-                        publishOutputOffsets()
+                        let consumptionToken = outputConsumption.registerStdout(offset: offset)
                         if !didBecomeAvailable,
                            Self.shouldSuppressPreAvailableReplayFrame(
                                data,
                                mayHaveDurableProcInput: state.mayHaveDurableProcInput
                            ) {
+                            acknowledgeStdout(consumptionToken)
                             continue
                         }
-                        continuation?.yield(.frame(data))
+                        continuation?.yield(.frame(data, onConsumed: { [weak self] in
+                            self?.acknowledgeStdout(consumptionToken)
+                        }))
                     case .stderr(let data, let offset):
-                        stderrOffset = offset
-                        publishOutputOffsets()
+                        publishOutputOffsets(outputConsumption.consumeStderr(offset: offset))
                         continuation?.yield(.stderr(data))
                     case .exited(let code):
                         state.setWritesEnabled(false)
@@ -199,8 +205,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         return (stdoutOffset, stderrOffset)
     }
 
-    private func publishOutputOffsets() {
-        let offsets = OutputOffsets(stdout: stdoutOffset, stderr: stderrOffset)
+    private func acknowledgeStdout(_ token: OutputConsumptionTracker.StdoutToken?) {
+        guard let token, let offsets = outputConsumption.consumeStdout(token: token) else { return }
+        publishOutputOffsets(offsets)
+    }
+
+    private func publishOutputOffsets(_ offsets: OutputOffsets) {
         Task { @MainActor [onOutputOffsetsChanged] in
             onOutputOffsetsChanged(offsets)
         }
@@ -289,6 +299,83 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         let delay = ACPReconnectPolicy.delay(forAttempt: attempt) ?? 5
         attempt += 1
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+    }
+
+    final class OutputConsumptionTracker: @unchecked Sendable {
+        struct StdoutToken: Equatable, Sendable {
+            let generation: UInt64
+            let offset: UInt64
+        }
+
+        private struct PendingStdout {
+            let token: StdoutToken
+            var consumed: Bool
+        }
+
+        private let lock = NSLock()
+        private var stdoutOffset: UInt64?
+        private var stderrOffset: UInt64?
+        private var pendingStdout: [PendingStdout] = []
+        private var generation: UInt64 = 0
+
+        init(stdoutOffset: UInt64?, stderrOffset: UInt64?) {
+            self.stdoutOffset = stdoutOffset
+            self.stderrOffset = stderrOffset
+        }
+
+        func reset(stdoutOffset: UInt64?, stderrOffset: UInt64?) {
+            lock.lock()
+            defer { lock.unlock() }
+            self.stdoutOffset = stdoutOffset
+            self.stderrOffset = stderrOffset
+            pendingStdout.removeAll(keepingCapacity: true)
+            generation &+= 1
+        }
+
+        func snapshot() -> OutputOffsets {
+            lock.lock()
+            defer { lock.unlock() }
+            return OutputOffsets(stdout: stdoutOffset, stderr: stderrOffset)
+        }
+
+        func registerStdout(offset: UInt64) -> StdoutToken? {
+            lock.lock()
+            defer { lock.unlock() }
+            if let stdoutOffset, stdoutOffset >= offset { return nil }
+            if let pending = pendingStdout.first(where: { $0.token.offset == offset }) {
+                return pending.token
+            }
+            let token = StdoutToken(generation: generation, offset: offset)
+            pendingStdout.append(.init(token: token, consumed: false))
+            return token
+        }
+
+        func consumeStdout(token: StdoutToken) -> OutputOffsets? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard token.generation == generation,
+                  let index = pendingStdout.firstIndex(where: { $0.token == token && !$0.consumed })
+            else {
+                return nil
+            }
+            pendingStdout[index].consumed = true
+            var advanced = false
+            while pendingStdout.first?.consumed == true {
+                stdoutOffset = pendingStdout.removeFirst().token.offset
+                advanced = true
+            }
+            guard advanced else { return nil }
+            return OutputOffsets(stdout: stdoutOffset, stderr: stderrOffset)
+        }
+
+        func consumeStderr(offset: UInt64) -> OutputOffsets {
+            lock.lock()
+            defer { lock.unlock() }
+            if stderrOffset == nil || stderrOffset! < offset {
+                stderrOffset = offset
+            }
+            return OutputOffsets(stdout: stdoutOffset, stderr: stderrOffset)
+        }
     }
 
     private final class State: @unchecked Sendable {

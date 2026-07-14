@@ -133,8 +133,8 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
 
     private func handle(_ event: JSONRPCStdioTransport.Incoming) {
         switch event {
-        case .frame(let data):
-            handleFrame(data)
+        case .frame(let data, let onConsumed):
+            handleFrame(data, onConsumed: onConsumed)
         case .stderr(let data):
             stderrCont.yield(data)
         case .exited:
@@ -155,7 +155,13 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
         let method: String?
     }
 
-    private func handleFrame(_ data: Data) {
+    private func handleFrame(_ data: Data, onConsumed: (@Sendable () -> Void)?) {
+        var acknowledgeAfterDispatch = true
+        defer {
+            if acknowledgeAfterDispatch {
+                onConsumed?()
+            }
+        }
         guard let head = try? JSONDecoder().decode(AnyEnvelopeHead.self, from: data) else { return }
         if let id = head.id, head.method == nil {
             stateLock.lock()
@@ -182,7 +188,12 @@ final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 stateLock.lock()
                 _yieldedUpdateCount += 1
                 stateLock.unlock()
-                updatesCont.yield(p)
+                acknowledgeAfterDispatch = false
+                updatesCont.yield(.init(
+                    sessionId: p.sessionId,
+                    update: p.update,
+                    durableConsumptionAcknowledgement: onConsumed
+                ))
             }
         case "session/request_permission":
             if let env = try? JSONDecoder().decode(JSONRPCEnvelope<ACPPermissionRequestParams>.self, from: data),

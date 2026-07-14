@@ -637,7 +637,7 @@ actor RemoteHelperClient {
     private func handle(_ event: JSONRPCStdioTransport.Incoming, generation eventGeneration: Int) {
         guard eventGeneration == generation else { return }
         switch event {
-        case .frame(let data):
+        case .frame(let data, _):
             handleFrame(data)
         case .stderr:
             break

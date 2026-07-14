@@ -584,6 +584,24 @@ struct RemoteHelperClientTests {
         #expect(rememberedOffsets.stderr == 3)
     }
 
+    @Test func helperOutputConsumptionAdvancesOnlyThroughContiguousFrames() throws {
+        let tracker = RemoteHelperACPTransport.OutputConsumptionTracker(
+            stdoutOffset: 10,
+            stderrOffset: 2
+        )
+        let first = try #require(tracker.registerStdout(offset: 20))
+        let second = try #require(tracker.registerStdout(offset: 30))
+
+        #expect(tracker.consumeStdout(token: second) == nil)
+        #expect(tracker.snapshot() == .init(stdout: 10, stderr: 2))
+        #expect(tracker.consumeStdout(token: first) == .init(stdout: 30, stderr: 2))
+
+        tracker.reset(stdoutOffset: 0, stderrOffset: 0)
+        let respawned = try #require(tracker.registerStdout(offset: 20))
+        #expect(tracker.consumeStdout(token: first) == nil)
+        #expect(tracker.consumeStdout(token: respawned) == .init(stdout: 20, stderr: 0))
+    }
+
     @Test func remoteHelperACPTransportSuppressesPreAvailableResponsesUntilProcInputMayHaveBeenWritten() {
         #expect(RemoteHelperACPTransport.shouldSuppressPreAvailableReplayFrame(
             Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8),

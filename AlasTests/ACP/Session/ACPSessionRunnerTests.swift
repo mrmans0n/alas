@@ -1102,7 +1102,8 @@ struct ACPSessionRunnerTests {
             currentModel: nil, currentMode: nil, autoRun: false,
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
-        let mock = StreamingBatchACPClient()
+        let acknowledgement = DurableAcknowledgementRecorder()
+        let mock = StreamingBatchACPClient(chunkAcknowledgementRecorder: acknowledgement)
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.agentState = .ready
         let runner = ACPSessionRunner(
@@ -1134,12 +1135,14 @@ struct ACPSessionRunnerTests {
         #expect(inMemoryAgentMessages.count == 1)
         let rowsBeforeCompletion = try store.loadMessages(sessionId: "s")
         #expect(!rowsBeforeCompletion.contains { $0.kind == "agent" })
+        #expect(acknowledgement.recordedCount == 0)
 
         await mock.finishPrompt()
         #expect(await completed.value)
         await runner.flushPersistence()
 
         let rows = try store.loadMessages(sessionId: "s")
+        #expect(acknowledgement.recordedCount == 2)
         let agentRow = try #require(rows.first(where: { $0.kind == "agent" }))
         let decoded = try ACPMessageCodec.decode(kind: agentRow.kind, payload: agentRow.payload)
         guard case .agent(_, _, let text) = decoded else {
@@ -1147,6 +1150,35 @@ struct ACPSessionRunnerTests {
             return
         }
         #expect(text.value == "hello world")
+    }
+
+    @Test("incoming update is acknowledged only after message persistence")
+    func incomingUpdateAcknowledgesAfterPersistence() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        let acknowledgement = DurableAcknowledgementRecorder()
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "s",
+            update: .agentMessageChunk(.text("durable")),
+            durableConsumptionAcknowledgement: { acknowledgement.record() }
+        ))
+
+        #expect(!acknowledgement.wasRecorded)
+        await runner.flushPersistence()
+        #expect(acknowledgement.wasRecorded)
+        #expect(try store.loadMessages(sessionId: "s").contains { $0.kind == "agent" })
     }
 
     @Test("incoming streaming chunks are coalesced before applying")
@@ -3149,6 +3181,7 @@ private final class StreamingBatchACPClient: ACPClient {
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let chunksEmitted = AsyncGate()
     private let promptCanFinish = AsyncGate()
+    private let chunkAcknowledgementRecorder: DurableAcknowledgementRecorder?
 
     let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     let permissionRequests = AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)> { $0.finish() }
@@ -3157,18 +3190,32 @@ private final class StreamingBatchACPClient: ACPClient {
     let questionRequests = AsyncStream<ACPQuestionRequest> { $0.finish() }
     var yieldedUpdateCount: Int { 2 }
 
-    init() {
+    init(chunkAcknowledgementRecorder: DurableAcknowledgementRecorder? = nil) {
+        self.chunkAcknowledgementRecorder = chunkAcknowledgementRecorder
         var updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation!
         incomingUpdates = AsyncStream { updatesCont = $0 }
         self.updatesCont = updatesCont
+    }
+
+    private func chunkAcknowledgement() -> ACPDurableConsumptionAcknowledgement? {
+        guard let chunkAcknowledgementRecorder else { return nil }
+        return { chunkAcknowledgementRecorder.record() }
     }
 
     func send(_ request: ACPRequest) async throws -> ACPResponse {
         guard request.method == "session/prompt" else {
             throw ACPClientError.noScript(method: request.method)
         }
-        updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("hello "))))
-        updatesCont.yield(.init(sessionId: "s", update: .agentMessageChunk(.text("world"))))
+        updatesCont.yield(.init(
+            sessionId: "s",
+            update: .agentMessageChunk(.text("hello ")),
+            durableConsumptionAcknowledgement: chunkAcknowledgement()
+        ))
+        updatesCont.yield(.init(
+            sessionId: "s",
+            update: .agentMessageChunk(.text("world")),
+            durableConsumptionAcknowledgement: chunkAcknowledgement()
+        ))
         await chunksEmitted.open()
         await promptCanFinish.wait()
         return ACPResponse(body: Data("{}".utf8))
@@ -3235,5 +3282,26 @@ private actor AsyncCounter {
     func next() -> Int {
         value += 1
         return value
+    }
+}
+
+private final class DurableAcknowledgementRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var wasRecorded: Bool {
+        recordedCount > 0
+    }
+
+    var recordedCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func record() {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }

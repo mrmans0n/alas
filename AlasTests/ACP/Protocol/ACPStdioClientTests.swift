@@ -54,6 +54,26 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
+    @Test("session update defers frame consumption until durable acknowledgement")
+    func sessionUpdateDefersFrameConsumption() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        var iterator = client.incomingUpdates.makeAsyncIterator()
+        let update = try #require(await iterator.next())
+        #expect(consumed.get() == nil)
+
+        update.durableConsumptionAcknowledgement?()
+        #expect(consumed.get() == true)
+        await client.shutdown()
+    }
+
     private final class ResultBox<T>: @unchecked Sendable {
         private let lock = NSLock()
         private var value: T?
