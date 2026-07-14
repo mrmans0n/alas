@@ -343,6 +343,13 @@ actor RemoteHelperClient {
         rememberProcOffsets(procId: procId, stdout: result.stdoutOffset, stderr: result.stderrOffset)
         var replayedExit = false
         for event in earlyProcEvents.removeValue(forKey: procId) ?? [] {
+            if Self.procEventIsCoveredByAttachResult(
+                event,
+                stdoutOffset: result.stdoutOffset,
+                stderrOffset: result.stderrOffset
+            ) {
+                continue
+            }
             rememberProcOffsetIfNeeded(event, procId: procId)
             continuation.yield(event)
             if case .exited = event {
@@ -369,6 +376,21 @@ actor RemoteHelperClient {
             stderrOffset: result.stderrOffset,
             events: events
         )
+    }
+
+    private static func procEventIsCoveredByAttachResult(
+        _ event: RemoteHelperProcEvent,
+        stdoutOffset: UInt64,
+        stderrOffset: UInt64
+    ) -> Bool {
+        switch event {
+        case .stdout(_, let offset):
+            return offset <= stdoutOffset
+        case .stderr(_, let offset):
+            return offset <= stderrOffset
+        case .available, .unavailable, .exited:
+            return false
+        }
     }
 
     func detachProc(

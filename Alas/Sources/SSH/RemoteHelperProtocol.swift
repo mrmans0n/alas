@@ -216,6 +216,7 @@ struct RemoteHelperProcStatus: Codable, Equatable, Sendable {
     let procId: String
     let running: Bool
     let exitCode: Int32?
+    let spawned: Bool?
 }
 
 struct RemoteHelperProcAttachParams: Codable, Equatable, Sendable {

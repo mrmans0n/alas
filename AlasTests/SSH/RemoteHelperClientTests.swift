@@ -120,11 +120,12 @@ struct RemoteHelperClientTests {
         #expect(params["cwd"] as? String == "/srv/repo")
         #expect(params["pathPrefixDirectories"] as? [String] == ["/managed/node/bin"])
 
-        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"procId":"acp-session-1","running":true,"exitCode":null}}"#.utf8))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"procId":"acp-session-1","running":true,"exitCode":null,"spawned":true}}"#.utf8))
         #expect(try await spawn.value == RemoteHelperProcStatus(
             procId: "acp-session-1",
             running: true,
-            exitCode: nil
+            exitCode: nil,
+            spawned: true
         ))
     }
 
@@ -503,6 +504,24 @@ struct RemoteHelperClientTests {
     @Test func remoteHelperACPTransportFramesWritesAsNewlineDelimitedACP() {
         let framed = RemoteHelperACPTransport.frameForProcWrite(Data(#"{"id":1}"#.utf8))
         #expect(framed == Data("{\"id\":1}\n".utf8))
+    }
+
+    @Test func remoteHelperACPTransportAttachesFreshSpawnFromStart() {
+        let freshOffsets = RemoteHelperACPTransport.attachReplayOffsets(
+            stdoutOffset: 0,
+            stderrOffset: 0,
+            attachFreshSpawnFromStart: true
+        )
+        #expect(freshOffsets.stdout == 0)
+        #expect(freshOffsets.stderr == 0)
+
+        let rememberedOffsets = RemoteHelperACPTransport.attachReplayOffsets(
+            stdoutOffset: 0,
+            stderrOffset: 0,
+            attachFreshSpawnFromStart: false
+        )
+        #expect(rememberedOffsets.stdout == nil)
+        #expect(rememberedOffsets.stderr == nil)
     }
 
     @Test func procWriteUsesExpectedOffsetAndReturnsAcknowledgedOffset() async throws {

@@ -898,7 +898,8 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         return Ok(json!({
             "procId": params.proc_id,
             "running": true,
-            "exitCode": null
+            "exitCode": null,
+            "spawned": false
         }));
     }
     state
@@ -958,7 +959,8 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
     Ok(json!({
         "procId": params.proc_id,
         "running": status.running,
-        "exitCode": status.exit_code
+        "exitCode": status.exit_code,
+        "spawned": true
     }))
 }
 
@@ -1377,7 +1379,19 @@ fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
     if let Some(pid) = verified_proc_pid(&dir) {
         kill_process_group(pid);
     }
+    remove_proc_directory(&dir)?;
     Ok(json!({ "ok": true }))
+}
+
+fn remove_proc_directory(dir: &Path) -> Result<(), HelperError> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(jsonrpc_error(
+            -32050,
+            format!("proc cleanup failed: {error}"),
+        )),
+    }
 }
 
 fn proc_list() -> Result<Value, HelperError> {
@@ -2759,6 +2773,24 @@ mod tests {
         assert_eq!(stdout_frames[1].data, b"final");
         assert_eq!(stderr_chunk, Some((19, b"early err final err".to_vec())));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remove_proc_directory_deletes_logs_and_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-cleanup-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("stdin.log"), b"request").expect("stdin");
+        std::fs::write(root.join("stdout.log"), b"response").expect("stdout");
+        std::fs::write(root.join("stderr.log"), b"error").expect("stderr");
+        std::fs::write(root.join("meta.json"), b"{}").expect("metadata");
+
+        remove_proc_directory(&root).expect("cleanup");
+
+        assert!(!root.exists());
     }
 
     #[test]

@@ -71,6 +71,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
 
     private func runAttachLoop() async {
         var didSpawn = false
+        var attachFreshSpawnFromStart = false
         var attempt = 0
         while !Task.isCancelled && !state.isTerminated {
             do {
@@ -84,7 +85,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         return
                     }
                     do {
-                        _ = try await client.spawnProc(
+                        let status = try await client.spawnProc(
                             procId: procId,
                             command: command,
                             args: arguments,
@@ -92,6 +93,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                             env: environment,
                             pathPrefixDirectories: pathPrefixDirectories
                         )
+                        attachFreshSpawnFromStart = status.spawned == true
                     } catch {
                         guard Self.shouldRetrySpawnFailure(error) else {
                             state.setWritesEnabled(false)
@@ -105,13 +107,16 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     }
                     didSpawn = true
                 }
-                let requestedStdoutOffset = stdoutOffset == 0 ? nil : stdoutOffset
-                let requestedStderrOffset = stderrOffset == 0 ? nil : stderrOffset
+                let requestedOffsets = Self.attachReplayOffsets(
+                    stdoutOffset: stdoutOffset,
+                    stderrOffset: stderrOffset,
+                    attachFreshSpawnFromStart: attachFreshSpawnFromStart
+                )
                 let handle = try await client.attachProc(
                     procId: procId,
                     attachmentId: attachmentId,
-                    stdoutOffset: requestedStdoutOffset,
-                    stderrOffset: requestedStderrOffset
+                    stdoutOffset: requestedOffsets.stdout,
+                    stderrOffset: requestedOffsets.stderr
                 )
                 stdinOffset = handle.stdinOffset
                 stdoutOffset = handle.stdoutOffset
@@ -126,6 +131,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     return
                 }
                 attempt = 0
+                attachFreshSpawnFromStart = false
                 for await event in handle.events {
                     guard !Task.isCancelled, !state.isTerminated else { return }
                     switch event {
@@ -154,6 +160,20 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 await Self.sleepBeforeRetry(attempt: &attempt)
             }
         }
+    }
+
+    static func attachReplayOffsets(
+        stdoutOffset: UInt64,
+        stderrOffset: UInt64,
+        attachFreshSpawnFromStart: Bool
+    ) -> (stdout: UInt64?, stderr: UInt64?) {
+        if attachFreshSpawnFromStart {
+            return (0, 0)
+        }
+        return (
+            stdoutOffset == 0 ? nil : stdoutOffset,
+            stderrOffset == 0 ? nil : stderrOffset
+        )
     }
 
     private func flushPendingWrites() async {
