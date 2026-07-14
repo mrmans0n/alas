@@ -30,7 +30,7 @@ extension Process {
         stdin: String? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResult {
-        try validateLaunchConfiguration(executable: executable, cwd: cwd)
+        try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -253,7 +253,7 @@ extension Process {
         env: [String: String]? = nil,
         timeout: TimeInterval = Process.defaultTimeout
     ) async throws -> ProcessResultData {
-        try validateLaunchConfiguration(executable: executable, cwd: cwd)
+        try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -338,9 +338,16 @@ extension Process {
     }
 }
 
-private func validateLaunchConfiguration(executable: String, cwd: URL?) throws {
+private let maximumFoundationProcessArgumentCount = 4096
+
+private func validateLaunchConfiguration(executable: String, args: [String], cwd: URL?) throws {
     guard FileManager.default.isExecutableFile(atPath: executable) else {
         throw ProcessError.launchFailed("Executable is not runnable: \(executable)")
+    }
+    guard args.count <= maximumFoundationProcessArgumentCount else {
+        throw ProcessError.launchFailed(
+            "Too many arguments: \(args.count) (maximum \(maximumFoundationProcessArgumentCount))"
+        )
     }
 
     try validateWorkingDirectory(cwd)

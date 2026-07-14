@@ -13,6 +13,7 @@
 		01568CB821D2E938C51BBCAB /* ACPHarnessBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A5A3E6B2F9AC2CBB1CDA78E /* ACPHarnessBridgeTests.swift */; };
 		018F0BE1174B9020C52007BE /* ACPRemoteFileServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2BDAB5BEDF7FE5EBFBFE9A2 /* ACPRemoteFileServerTests.swift */; };
 		019D3627B3CEB44C34CC34F9 /* RemoteHelperProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0B0D8590E0335CD31B758E0 /* RemoteHelperProtocol.swift */; };
+		019EE52A9C64CF5D15AD9AF2 /* RightPaneStateContentFingerprintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8233D58F8A76CFFA25EE8D22 /* RightPaneStateContentFingerprintTests.swift */; };
 		01C919A6F3868980D51539DD /* ACPInitializeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DF8B5E766D2B3649D2555ED /* ACPInitializeTests.swift */; };
 		01CBEF6793755D3D9B000BC1 /* CodeLanguageDetailViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91A6AFCC9B3AEFB43D8946F /* CodeLanguageDetailViewTests.swift */; };
 		01D2A32A3366C5CF6A225004 /* GhosttyConfigBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BE23A4881B60D7F16A4ACA5 /* GhosttyConfigBuilderTests.swift */; };
@@ -1898,6 +1899,7 @@
 		818B29F6B58D4FFC80603AAD /* ACPAdapterTarget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAdapterTarget.swift; sourceTree = "<group>"; };
 		81E981C10B13C43CE65DA74D /* ProjectMCPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMCPServer.swift; sourceTree = "<group>"; };
 		822D37F962CC1C97981533A3 /* RepoSelectorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorModel.swift; sourceTree = "<group>"; };
+		8233D58F8A76CFFA25EE8D22 /* RightPaneStateContentFingerprintTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneStateContentFingerprintTests.swift; sourceTree = "<group>"; };
 		82387CFDFFBF52E639095C65 /* GitServiceBehindStatusTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceBehindStatusTests.swift; sourceTree = "<group>"; };
 		82E98F9835497D830C12AA8F /* CodeHostRemoteDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeHostRemoteDetector.swift; sourceTree = "<group>"; };
 		82F696636690652C48CE87D9 /* AlasGhostty.Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlasGhostty.Config.swift; sourceTree = "<group>"; };
@@ -2889,6 +2891,7 @@
 				B87101C6F8F27B57AEDC187D /* ReviewThreadWriteTests.swift */,
 				54635D583B6B308B75ABCE63 /* RightPaneSelectionStateResolverTests.swift */,
 				6713F5A8712C0962BED1EFEA /* RightPaneStateBaseBranchTests.swift */,
+				8233D58F8A76CFFA25EE8D22 /* RightPaneStateContentFingerprintTests.swift */,
 				4973BDD06953B7A1EB9A7A66 /* RightPaneStateDiscardPathsTests.swift */,
 				3D10596B1B9B854DB81DAF6A /* RightPaneStateDiscardTests.swift */,
 				5A85E1D1600F487D359F363F /* RightPaneStateFileTreeTests.swift */,
@@ -6018,6 +6021,7 @@
 				1ACB56B9AA0EC3C1C2AF5E18 /* ReviewThreadWriteTests.swift in Sources */,
 				C35CB6B466364169DF2616C3 /* RightPaneSelectionStateResolverTests.swift in Sources */,
 				38EB2BAA50A7B7B37DDE2A4C /* RightPaneStateBaseBranchTests.swift in Sources */,
+				019EE52A9C64CF5D15AD9AF2 /* RightPaneStateContentFingerprintTests.swift in Sources */,
 				21332BF444F30835C0C70AD6 /* RightPaneStateDiscardPathsTests.swift in Sources */,
 				8104F4F1DFD11BC5758545E9 /* RightPaneStateDiscardTests.swift in Sources */,
 				35A0942B075D267EBB9A4484 /* RightPaneStateFileTreeTests.swift in Sources */,
