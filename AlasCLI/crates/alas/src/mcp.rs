@@ -268,6 +268,28 @@ fn text_result(text: String, is_error: bool) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
+/// Blocking stdio server loop: one JSON-RPC message per line in, one per
+/// line out. EOF on stdin means the agent hung up — exit cleanly.
+pub fn serve(env: &McpEnv) -> std::io::Result<()> {
+    use std::io::{BufRead, Write};
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(reply) = handle_line(&line, &env.worktree_dir, |cmd| dispatch(env, cmd)) {
+            let mut out = stdout.lock();
+            out.write_all(reply.to_string().as_bytes())?;
+            out.write_all(b"\n")?;
+            out.flush()?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{command_for_tool, dispatch, env_from, handle_line, McpEnv, PROTOCOL_VERSION};
