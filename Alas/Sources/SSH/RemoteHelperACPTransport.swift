@@ -145,7 +145,11 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
                         stdoutOffset = offset
-                        if !didBecomeAvailable, Self.shouldSuppressPreAvailableReplayFrame(data) {
+                        if !didBecomeAvailable,
+                           Self.shouldSuppressPreAvailableReplayFrame(
+                               data,
+                               mayHaveDurableProcInput: state.mayHaveDurableProcInput
+                           ) {
                             continue
                         }
                         continuation?.yield(.frame(data))
@@ -181,7 +185,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         )
     }
 
-    static func shouldSuppressPreAvailableReplayFrame(_ data: Data) -> Bool {
+    static func shouldSuppressPreAvailableReplayFrame(_ data: Data, mayHaveDurableProcInput: Bool) -> Bool {
+        guard !mayHaveDurableProcInput else { return false }
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return false
         }
@@ -221,6 +226,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         data: Self.frameForProcWrite(next.data),
                         expectedStdinOffset: expectedStdinOffset
                     )
+                    state.markMayHaveDurableProcInput()
                 } catch RemoteHelperClientError.jsonrpc(let error) {
                     _ = state.markTerminated()
                     let message = "Remote helper failed to write ACP input: \(error.message)\n"
@@ -231,6 +237,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     ownsFlush = false
                     return
                 } catch {
+                    state.markMayHaveDurableProcInput()
                     state.requeueForOffsetGuardedRetry(next.withExpectedStdinOffset(expectedStdinOffset))
                     state.endFlushingWrites()
                     ownsFlush = false
@@ -269,6 +276,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         private var terminated = false
         private var canWrite = false
         private var isFlushingWrites = false
+        private var mayHaveDurableInput = false
         private var pendingWrites: [PendingProcWrite] = []
 
         var isTerminated: Bool {
@@ -281,6 +289,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             lock.lock()
             defer { lock.unlock() }
             return canWrite && !terminated
+        }
+
+        var mayHaveDurableProcInput: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return mayHaveDurableInput
         }
 
         func markStarted() -> Bool {
@@ -304,6 +318,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             lock.lock()
             defer { lock.unlock() }
             canWrite = enabled && !terminated
+        }
+
+        func markMayHaveDurableProcInput() {
+            lock.lock()
+            defer { lock.unlock() }
+            mayHaveDurableInput = true
         }
 
         func enqueue(_ data: Data) -> Bool {

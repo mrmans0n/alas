@@ -524,18 +524,26 @@ struct RemoteHelperClientTests {
         #expect(rememberedOffsets.stderr == nil)
     }
 
-    @Test func remoteHelperACPTransportSuppressesPreAvailableResponsesOnly() {
+    @Test func remoteHelperACPTransportSuppressesPreAvailableResponsesUntilProcInputMayHaveBeenWritten() {
         #expect(RemoteHelperACPTransport.shouldSuppressPreAvailableReplayFrame(
-            Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8)
+            Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8),
+            mayHaveDurableProcInput: false
         ))
         #expect(RemoteHelperACPTransport.shouldSuppressPreAvailableReplayFrame(
-            Data(#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"old"}}"#.utf8)
+            Data(#"{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"old"}}"#.utf8),
+            mayHaveDurableProcInput: false
         ))
         #expect(!RemoteHelperACPTransport.shouldSuppressPreAvailableReplayFrame(
-            Data(#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#.utf8)
+            Data(#"{"jsonrpc":"2.0","method":"session/update","params":{}}"#.utf8),
+            mayHaveDurableProcInput: false
         ))
         #expect(!RemoteHelperACPTransport.shouldSuppressPreAvailableReplayFrame(
-            Data("not json".utf8)
+            Data("not json".utf8),
+            mayHaveDurableProcInput: false
+        ))
+        #expect(!RemoteHelperACPTransport.shouldSuppressPreAvailableReplayFrame(
+            Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8),
+            mayHaveDurableProcInput: true
         ))
     }
 
