@@ -27,6 +27,11 @@ struct CommitEditorTabView: View {
     @State private var pendingDropHunk: PendingCommitHunkDrop?
     @State private var showWhitespace = false
 
+    // Files/diff divider drag: transient during the drag, committed to
+    // config (and disk) once on drag end.
+    @State private var transientFilesWidth: CGFloat?
+    @State private var filesDragStartWidth: CGFloat?
+
     @Environment(\.theme) private var theme
     private let git = GitService()
 
@@ -120,7 +125,7 @@ struct CommitEditorTabView: View {
         GeometryReader { proxy in
             let total = proxy.size.width
             let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
-            let leftWidth = max(Self.minPaneWidth, total * ratio)
+            let leftWidth = transientFilesWidth ?? max(Self.minPaneWidth, total * ratio)
             HStack(spacing: 0) {
                 CommitFilesListView(
                     files: details.files,
@@ -129,12 +134,28 @@ struct CommitEditorTabView: View {
                     dropFileEnabled: canDropFile
                 )
                     .frame(width: leftWidth)
-                DragHandle(axis: .horizontal, onDrag: { delta in
-                    guard total > 0 else { return }
-                    let newWidth = max(Self.minPaneWidth, min(total - Self.minPaneWidth, leftWidth + delta))
-                    appState.config.commitDetailSplitRatio = newWidth / total
-                    appState.saveConfig()
-                })
+                DragHandle(
+                    axis: .horizontal,
+                    onDragChanged: { translation in
+                        guard total > Self.minPaneWidth * 2 else { return }
+                        let start = filesDragStartWidth ?? leftWidth
+                        filesDragStartWidth = start
+                        transientFilesWidth = CGFloat(PaneDragMath.resolvedWidth(
+                            startWidth: Double(start),
+                            translation: Double(translation),
+                            min: Double(Self.minPaneWidth),
+                            max: Double(total - Self.minPaneWidth)
+                        ))
+                    },
+                    onDragEnded: {
+                        if let width = transientFilesWidth, total > 0 {
+                            appState.config.commitDetailSplitRatio = Double(width / total)
+                            appState.saveConfig()
+                        }
+                        transientFilesWidth = nil
+                        filesDragStartWidth = nil
+                    }
+                )
                 Group {
                     if let path = selectedPath,
                        let file = details.files.first(where: { $0.path == path }) {

@@ -18,6 +18,11 @@ struct MarkdownTabView: View {
     @State private var renderCache = MarkdownPreviewCache<MarkdownRenderResult>()
     @State private var debounceTask: Task<Void, Never>?
 
+    // Editor/preview divider drag: transient during the drag, committed to
+    // the tab store (and disk) once on drag end.
+    @State private var transientEditorWidth: CGFloat?
+    @State private var editorDragStartWidth: CGFloat?
+
     private var renderIdentity: MarkdownRenderIdentity {
         MarkdownRenderIdentity(
             worktreePath: worktreePath.standardizedFileURL.path,
@@ -122,18 +127,35 @@ struct MarkdownTabView: View {
             preview
         case .split:
             GeometryReader { proxy in
-                let leftWidth = max(120, proxy.size.width * splitFraction)
+                let leftWidth = transientEditorWidth ?? max(120, proxy.size.width * splitFraction)
                 HStack(spacing: 0) {
                     codeEditor.frame(width: leftWidth)
-                    DragHandle(axis: .horizontal, onDrag: { delta in
-                        let total = proxy.size.width
-                        guard total > 0 else { return }
-                        let newWidth = max(120, min(total - 120, leftWidth + delta))
-                        appState.tabs.setMarkdownSplitFraction(
-                            worktreeId: worktreeId, tabId: tabId,
-                            fraction: newWidth / total
-                        )
-                    })
+                    DragHandle(
+                        axis: .horizontal,
+                        onDragChanged: { translation in
+                            let total = proxy.size.width
+                            guard total > 240 else { return }
+                            let start = editorDragStartWidth ?? leftWidth
+                            editorDragStartWidth = start
+                            transientEditorWidth = CGFloat(PaneDragMath.resolvedWidth(
+                                startWidth: Double(start),
+                                translation: Double(translation),
+                                min: 120,
+                                max: Double(total - 120)
+                            ))
+                        },
+                        onDragEnded: {
+                            let total = proxy.size.width
+                            if let width = transientEditorWidth, total > 0 {
+                                appState.tabs.setMarkdownSplitFraction(
+                                    worktreeId: worktreeId, tabId: tabId,
+                                    fraction: Double(width / total)
+                                )
+                            }
+                            transientEditorWidth = nil
+                            editorDragStartWidth = nil
+                        }
+                    )
                     preview
                 }
             }
