@@ -979,6 +979,36 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private func persistHelperProcOffsets(
+        sessionId: ACPSession.ID,
+        offsets: RemoteHelperACPTransport.OutputOffsets
+    ) {
+        guard !isMirror(sessionId: sessionId) else { return }
+        let stdoutOffset = offsets.stdout.flatMap(Self.sqliteOffset)
+        let stderrOffset = offsets.stderr.flatMap(Self.sqliteOffset)
+        guard stdoutOffset != nil || stderrOffset != nil else { return }
+        if var row = persistedRows[sessionId] {
+            if let stdoutOffset,
+               row.helperProcStdoutOffset == nil || row.helperProcStdoutOffset! < stdoutOffset {
+                row.helperProcStdoutOffset = stdoutOffset
+            }
+            if let stderrOffset,
+               row.helperProcStderrOffset == nil || row.helperProcStderrOffset! < stderrOffset {
+                row.helperProcStderrOffset = stderrOffset
+            }
+            persistedRows[sessionId] = row
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.updateHelperProcOffsets(
+                sessionId: sessionId,
+                stdoutOffset: stdoutOffset,
+                stderrOffset: stderrOffset,
+                fence: fence
+            )
+        }
+    }
+
     /// Rename a session with the given title and source. Updates both
     /// the in-memory session and SQLite in one call. No-ops only when
     /// another live instance owns the writer lease (this pane is a mirror).
@@ -1355,7 +1385,9 @@ final class ACPSessionManager: ObservableObject {
         host: String?,
         worktreePath: String,
         sessionId: ACPSession.ID?,
-        useHelperProc: Bool
+        useHelperProc: Bool,
+        initialHelperProcOffsets: RemoteHelperACPTransport.OutputOffsets? = nil,
+        onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in }
     ) throws -> ACPConnection {
         let client: ACPStdioClient
         if let host, useHelperProc, let sessionId {
@@ -1366,7 +1398,9 @@ final class ACPSessionManager: ObservableObject {
                 arguments: spec.arguments,
                 cwd: worktreePath,
                 environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv),
-                pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? []
+                pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? [],
+                initialOutputOffsets: initialHelperProcOffsets,
+                onOutputOffsetsChanged: onHelperProcOffsetsChanged
             )
             client = ACPStdioClient.makeForTesting(transport: transport)
         } else if let host {
@@ -1407,6 +1441,19 @@ final class ACPSessionManager: ObservableObject {
             return "-"
         }
         return "acp-" + String(allowed)
+    }
+
+    private static func helperProcOffsets(from row: ACPSessionRow?) -> RemoteHelperACPTransport.OutputOffsets? {
+        guard let row else { return nil }
+        let stdout = row.helperProcStdoutOffset.flatMap { $0 >= 0 ? UInt64($0) : nil }
+        let stderr = row.helperProcStderrOffset.flatMap { $0 >= 0 ? UInt64($0) : nil }
+        guard stdout != nil || stderr != nil else { return nil }
+        return RemoteHelperACPTransport.OutputOffsets(stdout: stdout, stderr: stderr)
+    }
+
+    private static func sqliteOffset(_ offset: UInt64) -> Int64? {
+        guard offset <= UInt64(Int64.max) else { return nil }
+        return Int64(offset)
     }
 
     private func remoteHelperSupportsProc(host: String) async -> Bool {
@@ -2071,7 +2118,11 @@ extension ACPSessionManager {
                     host: host,
                     worktreePath: worktreePath,
                     sessionId: sessionId,
-                    useHelperProc: useHelperProc
+                    useHelperProc: useHelperProc,
+                    initialHelperProcOffsets: Self.helperProcOffsets(from: persistedRows[sessionId]),
+                    onHelperProcOffsetsChanged: { [weak self] offsets in
+                        self?.persistHelperProcOffsets(sessionId: sessionId, offsets: offsets)
+                    }
                 )
             }
         } catch {

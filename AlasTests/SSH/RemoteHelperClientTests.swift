@@ -568,12 +568,12 @@ struct RemoteHelperClientTests {
         #expect(freshOffsets.stderr == 0)
 
         let unknownNonFreshOffsets = RemoteHelperACPTransport.attachReplayOffsets(
-            stdoutOffset: 0,
-            stderrOffset: 0,
+            stdoutOffset: nil,
+            stderrOffset: nil,
             attachFreshSpawnFromStart: false
         )
-        #expect(unknownNonFreshOffsets.stdout == UInt64.max)
-        #expect(unknownNonFreshOffsets.stderr == UInt64.max)
+        #expect(unknownNonFreshOffsets.stdout == nil)
+        #expect(unknownNonFreshOffsets.stderr == nil)
 
         let rememberedOffsets = RemoteHelperACPTransport.attachReplayOffsets(
             stdoutOffset: 14,

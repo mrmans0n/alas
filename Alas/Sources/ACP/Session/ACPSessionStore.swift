@@ -1,7 +1,7 @@
 import Foundation
 
 final class ACPSessionStore {
-    static let targetSchemaVersion = 11
+    static let targetSchemaVersion = 12
     let path: String
     let db: SQLiteDatabase
 
@@ -38,6 +38,7 @@ final class ACPSessionStore {
         if current < 9 { try migrate_to_v9() }
         if current < 10 { try migrate_to_v10() }
         if current < 11 { try migrate_to_v11() }
+        if current < 12 { try migrate_to_v12() }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -192,6 +193,17 @@ final class ACPSessionStore {
         guard !columns.contains(where: { ($0["name"] as? String) == "lease_token" }) else { return }
         try db.exec("ALTER TABLE session_leases ADD COLUMN lease_token TEXT NOT NULL DEFAULT ''")
     }
+
+    private func migrate_to_v12() throws {
+        let columns = try db.query("PRAGMA table_info(sessions)")
+        let names = Set(columns.compactMap { $0["name"] as? String })
+        if !names.contains("helper_proc_stdout_offset") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN helper_proc_stdout_offset INTEGER")
+        }
+        if !names.contains("helper_proc_stderr_offset") {
+            try db.exec("ALTER TABLE sessions ADD COLUMN helper_proc_stderr_offset INTEGER")
+        }
+    }
 }
 
 struct ACPSessionLease: Equatable, Sendable {
@@ -226,6 +238,8 @@ struct ACPSessionRow: Equatable, Sendable {
     var currentModel: String?
     var currentMode: String?
     var autoRun: Bool
+    var helperProcStdoutOffset: Int64? = nil
+    var helperProcStderrOffset: Int64? = nil
     let createdAt: Int64
     var updatedAt: Int64
     var lastOpenedAt: Int64
@@ -286,8 +300,9 @@ extension ACPSessionStore {
     func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending,
-                              current_model, current_mode, auto_run, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                              current_model, current_mode, auto_run, helper_proc_stdout_offset,
+                              helper_proc_stderr_offset, created_at, updated_at, last_opened_at, archived)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -297,6 +312,8 @@ extension ACPSessionStore {
             current_model = excluded.current_model,
             current_mode = excluded.current_mode,
             auto_run = excluded.auto_run,
+            helper_proc_stdout_offset = COALESCE(excluded.helper_proc_stdout_offset, sessions.helper_proc_stdout_offset),
+            helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
             archived = excluded.archived
@@ -304,6 +321,7 @@ extension ACPSessionStore {
             s.id, s.agentId, s.title, s.titleSource.rawValue, s.remoteSessionId, s.origin.rawValue,
             s.contextRecoveryPending ? 1 : 0,
             s.currentModel, s.currentMode, s.autoRun ? 1 : 0,
+            s.helperProcStdoutOffset, s.helperProcStderrOffset,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
             preserveTitle ? 1 : 0,
             preserveTitle ? 1 : 0
@@ -341,6 +359,27 @@ extension ACPSessionStore {
             "UPDATE sessions SET context_recovery_pending = ? WHERE id = ?",
             bindings: [pending ? 1 : 0, sessionId]
         )
+    }
+
+    func updateHelperProcOffsets(sessionId: String, stdoutOffset: Int64?, stderrOffset: Int64?) throws -> Bool {
+        try db.execChanges("""
+        UPDATE sessions
+        SET helper_proc_stdout_offset = CASE
+                WHEN ? IS NULL THEN helper_proc_stdout_offset
+                WHEN helper_proc_stdout_offset IS NULL OR helper_proc_stdout_offset < ? THEN ?
+                ELSE helper_proc_stdout_offset
+            END,
+            helper_proc_stderr_offset = CASE
+                WHEN ? IS NULL THEN helper_proc_stderr_offset
+                WHEN helper_proc_stderr_offset IS NULL OR helper_proc_stderr_offset < ? THEN ?
+                ELSE helper_proc_stderr_offset
+            END
+        WHERE id = ?
+        """, bindings: [
+            stdoutOffset, stdoutOffset, stdoutOffset,
+            stderrOffset, stderrOffset, stderrOffset,
+            sessionId
+        ]) > 0
     }
 
     func recentSessions(limit: Int = 50) throws -> [ACPSessionRow] {
@@ -617,6 +656,8 @@ extension ACPSessionStore {
             currentModel: r["current_model"] as? String,
             currentMode: r["current_mode"] as? String,
             autoRun: ((r["auto_run"] as? Int64) ?? 0) != 0,
+            helperProcStdoutOffset: r["helper_proc_stdout_offset"] as? Int64,
+            helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,
             createdAt: (r["created_at"] as? Int64) ?? 0,
             updatedAt: (r["updated_at"] as? Int64) ?? 0,
             lastOpenedAt: (r["last_opened_at"] as? Int64) ?? 0,

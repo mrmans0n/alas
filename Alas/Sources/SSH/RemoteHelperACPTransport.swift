@@ -1,7 +1,10 @@
 import Foundation
 
 final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransporting {
-    private static let attachAtEndOffset = UInt64.max
+    struct OutputOffsets: Equatable, Sendable {
+        let stdout: UInt64?
+        let stderr: UInt64?
+    }
 
     private let host: String
     private let procId: String
@@ -10,12 +13,13 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private let cwd: String
     private let environment: [String: String]
     private let pathPrefixDirectories: [String]
+    private let onOutputOffsetsChanged: @MainActor @Sendable (OutputOffsets) -> Void
     private let attachmentId = UUID().uuidString
     private let state = State()
     private var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation?
     private var attachTask: Task<Void, Never>?
-    private var stdoutOffset: UInt64 = 0
-    private var stderrOffset: UInt64 = 0
+    private var stdoutOffset: UInt64?
+    private var stderrOffset: UInt64?
     private var stdinOffset: UInt64 = 0
 
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
@@ -27,7 +31,9 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         arguments: [String],
         cwd: String,
         environment: [String: String],
-        pathPrefixDirectories: [String] = []
+        pathPrefixDirectories: [String] = [],
+        initialOutputOffsets: OutputOffsets? = nil,
+        onOutputOffsetsChanged: @escaping @MainActor @Sendable (OutputOffsets) -> Void = { _ in }
     ) {
         self.host = host
         self.procId = procId
@@ -36,6 +42,9 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         self.cwd = cwd
         self.environment = environment
         self.pathPrefixDirectories = pathPrefixDirectories
+        self.onOutputOffsetsChanged = onOutputOffsetsChanged
+        stdoutOffset = initialOutputOffsets?.stdout
+        stderrOffset = initialOutputOffsets?.stderr
         var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
         self.incoming = AsyncStream { continuation = $0 }
         self.continuation = continuation
@@ -63,8 +72,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
             await client.detachProc(
                 procId: procId,
                 attachmentId: attachmentId,
-                stdoutOffset: stdoutOffset,
-                stderrOffset: stderrOffset
+                stdoutOffset: stdoutOffset ?? 0,
+                stderrOffset: stderrOffset ?? 0
             )
         }
         continuation?.yield(.exited(0))
@@ -121,14 +130,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     stderrOffset: requestedOffsets.stderr
                 )
                 stdinOffset = handle.stdinOffset
-                stdoutOffset = handle.stdoutOffset
-                stderrOffset = handle.stderrOffset
                 guard !Task.isCancelled, !state.isTerminated else {
                     await client.detachProc(
                         procId: procId,
                         attachmentId: attachmentId,
-                        stdoutOffset: stdoutOffset,
-                        stderrOffset: stderrOffset
+                        stdoutOffset: stdoutOffset ?? 0,
+                        stderrOffset: stderrOffset ?? 0
                     )
                     return
                 }
@@ -147,6 +154,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
                         stdoutOffset = offset
+                        publishOutputOffsets()
                         if !didBecomeAvailable,
                            Self.shouldSuppressPreAvailableReplayFrame(
                                data,
@@ -157,6 +165,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         continuation?.yield(.frame(data))
                     case .stderr(let data, let offset):
                         stderrOffset = offset
+                        publishOutputOffsets()
                         continuation?.yield(.stderr(data))
                     case .exited(let code):
                         state.setWritesEnabled(false)
@@ -174,17 +183,21 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     }
 
     static func attachReplayOffsets(
-        stdoutOffset: UInt64,
-        stderrOffset: UInt64,
+        stdoutOffset: UInt64?,
+        stderrOffset: UInt64?,
         attachFreshSpawnFromStart: Bool
     ) -> (stdout: UInt64?, stderr: UInt64?) {
         if attachFreshSpawnFromStart {
             return (0, 0)
         }
-        return (
-            stdoutOffset == 0 ? attachAtEndOffset : stdoutOffset,
-            stderrOffset == 0 ? attachAtEndOffset : stderrOffset
-        )
+        return (stdoutOffset, stderrOffset)
+    }
+
+    private func publishOutputOffsets() {
+        let offsets = OutputOffsets(stdout: stdoutOffset, stderr: stderrOffset)
+        Task { @MainActor [onOutputOffsetsChanged] in
+            onOutputOffsetsChanged(offsets)
+        }
     }
 
     static func shouldSuppressPreAvailableReplayFrame(_ data: Data, mayHaveDurableProcInput: Bool) -> Bool {
