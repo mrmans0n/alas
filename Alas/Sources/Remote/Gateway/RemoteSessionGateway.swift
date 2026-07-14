@@ -353,7 +353,19 @@ final class RemoteSessionGateway {
         // sentVersion already covers them. Only commit once we know this
         // snapshot is actually going out.
         let newSentVersion = log.latestVersion
-        state.revision = 0
+        // Also defer resetting revision — the same hazard as sentVersion,
+        // but on the send side instead of the change-log side. A `.none`
+        // content-free delta doesn't participate in the generation ticket
+        // (it has no reason to — no message content raced it), so it can
+        // still complete and send WHILE this snapshot is suspended, bumping
+        // `state.revision` past 0. If we'd already reset it to 0 here, and
+        // this snapshot then wins (generation unaffected by a `.none`
+        // send), its wire payload hardcodes `revision: 0` while
+        // `state.revision` is left at whatever the intervening delta bumped
+        // it to — the server's internal counter desyncs from what it
+        // actually told the client, and every subsequent delta fails the
+        // client's `revision === transcriptMeta.revision + 1` check until
+        // another full resync happens. Reset it atomically with the send.
         state.generation += 1
         let capturedGeneration = state.generation
         let wire = await wireMessages(id: id, session: session, indices: Array(first..<count))
@@ -367,6 +379,7 @@ final class RemoteSessionGateway {
         // generation read fresher state and is authoritative.
         if state.generation == capturedGeneration {
             state.sentVersion = newSentVersion
+            state.revision = 0
             send(.transcriptSnapshot(sessionId: id,
                                      streamingState: Self.stateString(session.transcript.streamingState),
                                      canDrive: provider.isWriter(for: id),

@@ -1713,6 +1713,89 @@ struct RemoteSessionGatewayTests {
         #expect(snapshotCount == 0, "the superseded re-subscribe snapshot must be discarded, got \(sent)")
     }
 
+    // Regression (codex review, PR #775): a same-epoch snapshot reset
+    // `state.revision = 0` synchronously up front, the same premature-commit
+    // hazard as sentVersion but on the send side. If the snapshot is then
+    // DISCARDED (superseded by a dirty delta claiming a later generation),
+    // that already-happened reset still corrupts the winning delta's own
+    // numbering: it computes `state.revision += 1` off the snapshot's
+    // premature reset (0) instead of the client's actual last-known
+    // revision, producing revision:1 when the client expects N+1 — the
+    // client rejects it and resubscribes, defeating incremental delivery
+    // right when it matters (an active resync race).
+    @Test func sendSnapshotDefersRevisionResetSoSupersedingDeltaStaysInSync() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // establishes observe(); revision committed at 0
+
+        // Three uncontested dirty deltas first, to establish a non-zero
+        // baseline revision — the bug is invisible when the baseline is
+        // already 0, since a premature reset and a legitimate prior value
+        // of 0 look identical.
+        for i in 0..<3 {
+            sent.removeAll()
+            session.transcript.messages.append(.systemNotice(id: UUID(), text: "warmup \(i)"))
+            for _ in 0..<50 where sent.isEmpty {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            guard case .transcriptDelta? = sent.last else {
+                Issue.record("expected warmup delta \(i) to land, got \(sent)")
+                return
+            }
+        }
+        // state.revision is now legitimately 3.
+
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the re-subscribe snapshot's fetch below
+
+        session.transcript.messages.append(.toolCall(toolCall))
+        let resubscribeTask = Task { @MainActor in
+            await gw.handle(.subscribe(sessionId: "s1"))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // The still-active observer reacts to the append with its own
+        // coalesced dirty delta, which supersedes (via generation) the
+        // suspended re-subscribe snapshot.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, _, _, let winningRevision)? = sent.last else {
+            Issue.record("expected the superseding delta to land, got \(sent)")
+            return
+        }
+        #expect(
+            winningRevision == 4,
+            "the superseding delta must continue from the real prior revision (3), not the discarded snapshot's premature reset, got \(winningRevision)"
+        )
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        await resubscribeTask.value
+        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotCount == 0, "the superseded re-subscribe snapshot must still be discarded, got \(sent)")
+    }
+
     // Regression (codex review, PR #775): fetchOlder's page serialization has
     // the same suspend-then-stamp hazard as sendDelta — a structural resync
     // landing while a truncated tool call's content is being fetched must
