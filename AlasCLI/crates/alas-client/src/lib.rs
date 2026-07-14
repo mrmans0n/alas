@@ -108,6 +108,66 @@ pub struct Response {
     pub error: Option<String>,
 }
 
+/// The parsed CLI intent, independent of transport. `Open` paths are already
+/// absolutized by the caller.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    Open { paths: Vec<String> },
+    WtList,
+    WtSwitch { target: String },
+    WtNew { branch: String, base: Option<String> },
+    WtDelete { target: String, force: bool, keep_branch: bool },
+    Review { target: Option<String> },
+    Resolve,
+}
+
+/// Build the wire request for a command, attaching whichever addressing the
+/// caller resolved (`session_id` inside Alas, else `cwd`).
+pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<String>) -> Request {
+    let mut req = match command {
+        Command::Open { paths } => {
+            let mut r = Request::new("open");
+            r.paths = Some(paths.clone());
+            r
+        }
+        Command::WtList => {
+            let mut r = Request::new("wt");
+            r.subcommand = Some("list".into());
+            r
+        }
+        Command::WtSwitch { target } => {
+            let mut r = Request::new("wt");
+            r.subcommand = Some("switch".into());
+            r.target = Some(target.clone());
+            r
+        }
+        Command::WtNew { branch, base } => {
+            let mut r = Request::new("wt");
+            r.subcommand = Some("new".into());
+            r.branch = Some(branch.clone());
+            r.base = base.clone();
+            r
+        }
+        Command::WtDelete { target, force, keep_branch } => {
+            let mut r = Request::new("wt");
+            r.subcommand = Some("delete".into());
+            r.target = Some(target.clone());
+            r.force = Some(*force);
+            r.keep_branch = Some(*keep_branch);
+            r
+        }
+        Command::Review { target } => {
+            let mut r = Request::new("review");
+            r.target = target.clone();
+            r
+        }
+        Command::Resolve => Request::new("resolve"),
+    };
+    req.session_id = session_id;
+    req.cwd = cwd;
+    req
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +213,44 @@ mod tests {
         assert!(ok.ok && ok.lines.is_none() && ok.error.is_none());
         let err: Response = serde_json::from_str(r#"{"ok":false,"error":"nope"}"#).unwrap();
         assert_eq!(err.error.as_deref(), Some("nope"));
+    }
+
+    #[test]
+    fn builds_wt_new_with_base() {
+        let cmd = Command::WtNew { branch: "feature".into(), base: Some("main".into()) };
+        let req = build_request(&cmd, Some("s1".into()), None);
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":1,"kind":"cli","command":"wt","session_id":"s1","subcommand":"new","branch":"feature","base":"main"}"#
+        );
+    }
+
+    #[test]
+    fn builds_wt_delete_flags_and_cwd() {
+        let cmd = Command::WtDelete { target: "feature".into(), force: true, keep_branch: false };
+        let req = build_request(&cmd, None, Some("/repo".into()));
+        assert_eq!(req.command, "wt");
+        assert_eq!(req.subcommand.as_deref(), Some("delete"));
+        assert_eq!(req.cwd.as_deref(), Some("/repo"));
+        assert_eq!(req.force, Some(true));
+        assert_eq!(req.keep_branch, Some(false));
+    }
+
+    #[test]
+    fn builds_review_local_and_provider() {
+        let local = build_request(&Command::Review { target: None }, Some("s1".into()), None);
+        assert_eq!(local.command, "review");
+        assert!(local.target.is_none());
+        let provider = build_request(&Command::Review { target: Some("123".into()) }, Some("s1".into()), None);
+        assert_eq!(provider.target.as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn builds_resolve_with_cwd_only() {
+        let req = build_request(&Command::Resolve, None, Some("/repo".into()));
+        assert_eq!(req.command, "resolve");
+        assert_eq!(req.cwd.as_deref(), Some("/repo"));
+        assert!(req.session_id.is_none());
     }
 }
