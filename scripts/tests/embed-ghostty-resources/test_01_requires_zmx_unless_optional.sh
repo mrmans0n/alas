@@ -26,6 +26,17 @@ for target in \
     chmod +x "${helper}"
 done
 cp "${repo_root}/AlasHelper/manifest.json" "${srcroot}/AlasHelper/manifest.json"
+
+mkdir -p "${srcroot}/AlasCLI"
+for target in \
+    x86_64-apple-darwin \
+    aarch64-apple-darwin; do
+    cli="${srcroot}/.build/alas-cli/${target}/release/alas"
+    mkdir -p "$(dirname "${cli}")"
+    printf '#!/bin/sh\n' > "${cli}"
+    chmod +x "${cli}"
+done
+cp "${repo_root}/AlasCLI/manifest.json" "${srcroot}/AlasCLI/manifest.json"
 touch "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
 for tool in install_name_tool codesign; do
     printf '#!/bin/sh\nexit 0\n' > "${tmp}/bin/${tool}"
@@ -65,6 +76,10 @@ test -x "${resources}/alas-helper/linux-aarch64/alas-helper"
 test -x "${resources}/alas-helper/macos-x86_64/alas-helper"
 test -x "${resources}/alas-helper/macos-aarch64/alas-helper"
 cmp "${srcroot}/AlasHelper/manifest.json" "${resources}/alas-helper/manifest.json"
+
+test -x "${resources}/alas-cli/macos-x86_64/alas"
+test -x "${resources}/alas-cli/macos-aarch64/alas"
+cmp "${srcroot}/AlasCLI/manifest.json" "${resources}/alas-cli/manifest.json"
 
 # Stale-bundle cleanup: a previously bundled zmx in TARGET_BUILD_DIR must be
 # removed on an optional skip so the app does not silently ship a stale
