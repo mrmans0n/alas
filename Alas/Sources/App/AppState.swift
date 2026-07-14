@@ -4092,6 +4092,21 @@ final class AppState {
                     projectDirectory: project.path,
                     configuredServers: project.mcpServers
                 )
+            },
+            builtInMCPProvider: { [weak self] worktreePath in
+                guard let self else { return nil }
+                // installExecutables is idempotent (byte-compares before
+                // writing); a nil binaryPath (no bundle, e.g. tests) means
+                // no injection rather than a dead command for the agent.
+                let binaryPath = (try? TerminalCLIInjection.installExecutables())?
+                    .appendingPathComponent(TerminalCLIInjection.executableName).path
+                return BuiltInAlasMCP.injection(
+                    enabled: self.config.harness.exposeAlasMCP,
+                    configuredServers: self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
+                    binaryPath: binaryPath,
+                    socketPath: self.harness.socketServer.socketPath,
+                    worktreePath: worktreePath
+                )
             }
         )
         acpManagers[worktree.id] = mgr
