@@ -295,9 +295,12 @@ final class RemoteConnection: @unchecked Sendable {
     }
 
     private func sendServerMessage(_ msg: RemoteServerMessage) {
-        guard let data = try? JSONEncoder().encode(msg) else { return }
+        // Encode on the connection's serial queue, not the caller's
+        // MainActor context — outbound serialization must never compete
+        // with ACP state mutation for main-thread time.
         onQueue { [weak self] in
-            self?.send(WebSocketFrame.encode(opcode: .text, payload: data)) {}
+            guard let self, let data = try? JSONEncoder().encode(msg) else { return }
+            self.send(WebSocketFrame.encode(opcode: .text, payload: data)) {}
         }
     }
 
