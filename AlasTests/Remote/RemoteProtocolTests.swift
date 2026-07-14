@@ -45,7 +45,11 @@ struct RemoteProtocolTests {
             sessionId: "s1",
             streamingState: "streaming",
             canDrive: false,
-            messages: [RemoteWireMessage(stableId: "m0", kind: "agent", text: "hi", json: nil)]
+            messages: [RemoteWireMessage(stableId: "m0", kind: "agent", text: "hi", json: nil, index: 0)],
+            firstIndex: 0,
+            totalCount: 1,
+            epoch: 0,
+            revision: 0
         )
         #expect(try roundTrip(snap) == snap)
     }
@@ -193,7 +197,9 @@ struct RemoteProtocolTests {
             sessionId: "s1",
             streamingState: "idle",
             canDrive: false,
-            upserts: [RemoteWireMessage(stableId: "m1", kind: "toolCall", text: nil, json: #"{"name":"bash"}"#)]
+            upserts: [RemoteWireMessage(stableId: "m1", kind: "toolCall", text: nil, json: #"{"name":"bash"}"#, index: 1)],
+            epoch: 0,
+            revision: 0
         )
         #expect(try roundTrip(delta) == delta)
     }
@@ -328,7 +334,9 @@ struct RemoteProtocolTests {
     }
 
     @Test func snapshotCarriesCanDrive() throws {
-        let snap = RemoteServerMessage.transcriptSnapshot(sessionId: "s1", streamingState: "idle", canDrive: true, messages: [])
+        let snap = RemoteServerMessage.transcriptSnapshot(
+            sessionId: "s1", streamingState: "idle", canDrive: true, messages: [],
+            firstIndex: 0, totalCount: 0, epoch: 0, revision: 0)
         let data = try JSONEncoder().encode(snap)
         #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == snap)
     }
@@ -399,5 +407,61 @@ struct RemoteProtocolTests {
             text: "look",
             attachments: [RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: "AAAA")])
         #expect(try roundTrip(msg) == msg)
+    }
+
+    @Test func fetchOlderRoundTrips() throws {
+        let msg = RemoteClientMessage.fetchOlder(sessionId: "s1", beforeIndex: 120, limit: 90)
+        let data = try JSONEncoder().encode(msg)
+        let decoded = try JSONDecoder().decode(RemoteClientMessage.self, from: data)
+        #expect(decoded == msg)
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains(#""type":"fetchOlder""#))
+    }
+
+    @Test func windowedSnapshotRoundTrips() throws {
+        let wire = [RemoteWireMessage(stableId: "m110", kind: "agent", text: "hi", json: nil, index: 110)]
+        let msg = RemoteServerMessage.transcriptSnapshot(
+            sessionId: "s1", streamingState: "idle", canDrive: true,
+            messages: wire, firstIndex: 110, totalCount: 200, epoch: 3, revision: 0)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: JSONEncoder().encode(msg))
+        #expect(decoded == msg)
+    }
+
+    @Test func deltaCarriesEpochAndRevision() throws {
+        let msg = RemoteServerMessage.transcriptDelta(
+            sessionId: "s1", streamingState: "streaming", canDrive: false,
+            upserts: [], epoch: 3, revision: 7)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: JSONEncoder().encode(msg))
+        #expect(decoded == msg)
+    }
+
+    @Test func transcriptPageRoundTrips() throws {
+        let wire = [RemoteWireMessage(stableId: "m20", kind: "user", text: "old", json: nil, index: 20)]
+        let msg = RemoteServerMessage.transcriptPage(sessionId: "s1", epoch: 3, firstIndex: 20, messages: wire)
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: JSONEncoder().encode(msg))
+        #expect(decoded == msg)
+    }
+
+    @Test func stopPendingRoundTrips() throws {
+        let msg = RemoteServerMessage.stopPending(sessionId: "s1")
+        let decoded = try JSONDecoder().decode(RemoteServerMessage.self, from: JSONEncoder().encode(msg))
+        #expect(decoded == msg)
+    }
+
+    @Test func onlyStopIsControl() {
+        #expect(RemoteClientMessage.stop(sessionId: "s").isControl)
+        #expect(!RemoteClientMessage.subscribe(sessionId: "s").isControl)
+        #expect(!RemoteClientMessage.takeOver(sessionId: "s").isControl)
+        #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isControl)
+    }
+
+    @Test func onlySendPromptAndTakeOverAreDriveOrdering() {
+        #expect(RemoteClientMessage.sendPrompt(sessionId: "s", text: "hi", attachments: []).isDriveOrdering)
+        #expect(RemoteClientMessage.takeOver(sessionId: "s").isDriveOrdering)
+        #expect(!RemoteClientMessage.subscribe(sessionId: "s").isDriveOrdering)
+        #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isDriveOrdering)
+        #expect(!RemoteClientMessage.stop(sessionId: "s").isDriveOrdering)
+        #expect(!RemoteClientMessage.setModel(sessionId: "s", modelId: "m").isDriveOrdering)
+        #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
     }
 }

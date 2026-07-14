@@ -1555,7 +1555,7 @@ final class ACPSession: ObservableObject, Identifiable {
             if let existingMessageId {
                 liveUserChunkMessageIds.insert(existingMessageId)
             }
-            transcript.streamingTick &+= 1
+            transcript.noteStreamingChange(at: i)
             return i
         }
 
@@ -1569,7 +1569,7 @@ final class ACPSession: ObservableObject, Identifiable {
                         text: text,
                         attachments: Self.mergingAttachments(attachments, newAttachments))
                     reconciledLocalUserPromptMessageIds.insert(messageId)
-                    transcript.streamingTick &+= 1
+                    transcript.noteStreamingChange(at: i)
                 } else {
                     reconciledLegacyLocalUserPromptIds.insert(id)
                 }
@@ -1590,7 +1590,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 messageId: existingMessageId,
                 text: mergedText,
                 attachments: mergedAttachments)
-            transcript.streamingTick &+= 1
+            transcript.noteStreamingChange(at: i)
             return i
         }
 
@@ -1747,7 +1747,7 @@ final class ACPSession: ObservableObject, Identifiable {
         default:
             return nil
         }
-        transcript.streamingTick &+= 1
+        transcript.noteStreamingChange(at: i)
         return i
     }
 
@@ -1800,7 +1800,7 @@ final class ACPSession: ObservableObject, Identifiable {
                 switch transcript.messages[i] {
                 case .agent(_, _, let buf), .thought(_, _, let buf):
                     buf.append(Self.streamingSeparator(between: buf.value, and: addition) + addition)
-                    transcript.streamingTick &+= 1
+                    transcript.noteStreamingChange(at: i)
                     return i
                 default:
                     break

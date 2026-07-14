@@ -38,6 +38,12 @@ final class RemoteConnection: @unchecked Sendable {
     /// arrival order — clients rely on this (e.g. a `takeOver` must land before
     /// the `sendPrompt` that follows it). Mutated only on `queue`.
     private var processingTail: Task<Void, Never>?
+    /// Task of the most recently dispatched `isDriveOrdering` message
+    /// (sendPrompt/takeOver). A following `stop` awaits exactly this —
+    /// narrower than the full `processingTail` — so it lands after a turn
+    /// the user just started without being blocked by unrelated queued read
+    /// work (subscribe/fetchOlder/list*/etc). Mutated only on `queue`.
+    private var lastDriveActionTail: Task<Void, Never>?
     /// Reassembles fragmented WebSocket messages before they're decoded.
     private var reassembler = WebSocketReassembler()
     /// The device this connection authenticated as, set on `queue` once the WS
@@ -66,6 +72,14 @@ final class RemoteConnection: @unchecked Sendable {
     // Bounds on the unauthenticated HTTP path (auth happens at WS upgrade).
     private static let maxHeaderBytes = 64 * 1024
     private static let maxBodyBytes = 1 << 20   // 1 MB
+
+    /// Cap on how long a control message (stop) waits for a preceding drive
+    /// action's own task — which itself waits on whatever ordered read work
+    /// preceded IT — before running anyway regardless of whether that chain
+    /// finished. Generous for normal-speed reads/lease-confirms; short
+    /// enough that stop remains a reliable emergency brake if something
+    /// ahead of it is genuinely stuck.
+    private static let stopDriveActionWaitNanos: UInt64 = 1_000_000_000
 
     func start() {
         conn.start(queue: queue)
@@ -279,17 +293,88 @@ final class RemoteConnection: @unchecked Sendable {
     private func dispatchMessage(_ payload: Data) {
         guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload),
               let gateway else { return }
+        // Control messages (stop) are idempotent and latency-critical: they
+        // don't extend `processingTail`, so messages arriving AFTER stop are
+        // never blocked behind it. They still await the most recent DRIVE
+        // action (sendPrompt/takeOver) specifically — not the whole ordered
+        // queue — so a still-in-flight prompt/takeover is allowed to land
+        // first (or stop could find no active turn to cancel and the
+        // just-submitted prompt would stream anyway right after the user
+        // pressed Stop).
+        //
+        // That drive action's own task still chains behind whatever ordered
+        // read work (subscribe/fetchOlder/list*/etc.) preceded IT, though —
+        // `await previous?.value` inside its body is unavoidable, since the
+        // drive action genuinely cannot run before its predecessor. If that
+        // predecessor is stuck (not just normally slow), waiting on it here
+        // would block stop indefinitely too, defeating its purpose as an
+        // always-available emergency brake. Bound the wait: ordered read
+        // work is fast under normal conditions (Task 4/6 fixed the
+        // MainActor-saturating case), so this window is generous for the
+        // common case but still guarantees stop is never stuck for good.
+        if msg.isControl {
+            let previous = lastDriveActionTail
+            Task { @MainActor in
+                if let previous {
+                    // `Task<Void, Never>.value` cannot be interrupted by
+                    // cancellation (it has no error channel to abort
+                    // through), so a `withTaskGroup` race here would still
+                    // block at the group's implicit exit-reap until
+                    // `previous` itself finishes — defeating the bound
+                    // entirely. Race via a manually-resumed continuation
+                    // instead: whichever finishes first resumes it, and the
+                    // loser keeps running independently in the background,
+                    // its own eventual resume attempt becoming a no-op.
+                    let timedOut = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                        let resume = SingleResume(continuation)
+                        Task { @MainActor in
+                            await previous.value
+                            resume.fire(false)
+                        }
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: Self.stopDriveActionWaitNanos)
+                            resume.fire(true)
+                        }
+                    }
+                    if timedOut {
+                        // The drive action never finished in time. It's still
+                        // queued and WILL eventually run once its own
+                        // predecessor clears — cancel it so the dispatch
+                        // below (which checks isCancelled before calling
+                        // gateway.handle) skips it instead of submitting a
+                        // prompt/takeover after the user already pressed
+                        // Stop, silently defeating the emergency brake.
+                        previous.cancel()
+                    }
+                }
+                await gateway.handle(msg)
+            }
+            return
+        }
         let previous = processingTail
-        processingTail = Task { @MainActor in
+        let task = Task { @MainActor in
             await previous?.value
+            // Only drive-ordering tasks are ever explicitly cancelled (by a
+            // timed-out stop, above) — this check is a no-op for every other
+            // message type, which nothing cancels.
+            if msg.isDriveOrdering {
+                guard !Task.isCancelled else { return }
+            }
             await gateway.handle(msg)
+        }
+        processingTail = task
+        if msg.isDriveOrdering {
+            lastDriveActionTail = task
         }
     }
 
     private func sendServerMessage(_ msg: RemoteServerMessage) {
-        guard let data = try? JSONEncoder().encode(msg) else { return }
+        // Encode on the connection's serial queue, not the caller's
+        // MainActor context — outbound serialization must never compete
+        // with ACP state mutation for main-thread time.
         onQueue { [weak self] in
-            self?.send(WebSocketFrame.encode(opcode: .text, payload: data)) {}
+            guard let self, let data = try? JSONEncoder().encode(msg) else { return }
+            self.send(WebSocketFrame.encode(opcode: .text, payload: data)) {}
         }
     }
 
@@ -326,5 +411,26 @@ final class RemoteConnection: @unchecked Sendable {
         let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         let digest = Insecure.SHA1.hash(data: Data((key + magic).utf8))
         return Data(digest).base64EncodedString()
+    }
+}
+
+/// Resumes a `CheckedContinuation<T, Never>` at most once with the given
+/// value. Used to race two independent tasks (e.g. "did the prior work
+/// finish" vs. "did the timeout elapse") where whichever finishes first
+/// wins — its value is what the continuation resumes with — and the other
+/// is simply abandoned rather than cancelled.
+@MainActor
+private final class SingleResume<T> {
+    private var fired = false
+    private let continuation: CheckedContinuation<T, Never>
+
+    init(_ continuation: CheckedContinuation<T, Never>) {
+        self.continuation = continuation
+    }
+
+    func fire(_ value: T) {
+        guard !fired else { return }
+        fired = true
+        continuation.resume(returning: value)
     }
 }

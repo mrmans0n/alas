@@ -4765,7 +4765,7 @@ extension AppState: RemoteSessionsProvider {
 
     func stop(for id: String) async {
         for mgr in acpManagers.values where mgr.liveSession(for: id) != nil {
-            await mgr.interrupt(for: id)
+            await mgr.interruptBypassingLease(for: id)
             return
         }
     }

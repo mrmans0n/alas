@@ -8,6 +8,7 @@ struct RemoteWireMessage: Codable, Equatable, Sendable {
     let kind: String          // "user" | "agent" | "thought" | "toolCall" | "fileEdit" | "plan" | "systemNotice"
     let text: String?
     let json: String?         // JSON string for structured kinds; nil otherwise
+    let index: Int            // transcript position; the client orders and windows by this
 }
 
 struct RemoteWorktreeSummary: Codable, Equatable, Sendable {

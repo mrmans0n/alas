@@ -25,14 +25,19 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
     var fullToolCallContents: [String: String] = [:]
+    var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
     var remoteWorktreesCallCount = 0
     var remoteAgentsCallCount = 0
     var createRequests: [(worktreeId: String, agentId: String)] = []
     var pauseSessionSummaries = false
     var pauseRemoteWorktrees = false
+    /// 1-indexed call number of `fullToolCallContent` to suspend on (nil = never pause).
+    /// Lets a test freeze exactly one in-flight fetch while later calls proceed normally.
+    var pauseFullToolCallContentOnCall: Int?
     private var sessionSummariesContinuation: CheckedContinuation<[RemoteSessionSummary], Never>?
     private var remoteWorktreesContinuation: CheckedContinuation<[RemoteWorktreeOption], Never>?
+    private var fullToolCallContentContinuation: CheckedContinuation<String?, Never>?
     func sessionSummaries() async -> [RemoteSessionSummary] {
         sessionSummariesCallCount += 1
         if pauseSessionSummaries {
@@ -78,13 +83,36 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
 
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String? {
-        fullToolCallContents["\(sessionId)|\(toolCallId)"]
+        fullToolCallContentCallCount += 1
+        if pauseFullToolCallContentOnCall == fullToolCallContentCallCount {
+            return await withCheckedContinuation { continuation in
+                fullToolCallContentContinuation = continuation
+            }
+        }
+        return fullToolCallContents["\(sessionId)|\(toolCallId)"]
+    }
+    func resumeFullToolCallContent(_ value: String?) {
+        fullToolCallContentContinuation?.resume(returning: value)
+        fullToolCallContentContinuation = nil
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
+    var pauseTakeOver = false   // suspends INSIDE the gateway's own await, unlike pauseSessionSummaries's detached fetch
+    var takeOverCallCount = 0
+    private var takeOverContinuation: CheckedContinuation<Void, Never>?
     func takeOver(for id: String) async {
+        takeOverCallCount += 1
         tookOver.append(id)
         writers.insert(id)
+        if pauseTakeOver {
+            await withCheckedContinuation { continuation in
+                takeOverContinuation = continuation
+            }
+        }
+    }
+    func resumeTakeOver() {
+        takeOverContinuation?.resume()
+        takeOverContinuation = nil
     }
 
     var sendPromptResultIsAsync = false   // deliver onResult on a later tick (models a late delivery failure)
@@ -320,7 +348,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.subscribe(sessionId: "s1"))
         #expect(sent.contains { message in
-            if case .transcriptSnapshot(let id, _, _, _) = message {
+            if case .transcriptSnapshot(let id, _, _, _, _, _, _, _) = message {
                 return id == "s1"
             }
             return false
@@ -391,7 +419,7 @@ struct RemoteSessionGatewayTests {
         var sent: [RemoteServerMessage] = []
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
-        guard case .transcriptSnapshot(let id, _, _, let msgs)? = sent.first else {
+        guard case .transcriptSnapshot(let id, _, _, let msgs, _, _, _, _)? = sent.first else {
             Issue.record("expected snapshot, got \(sent)")
             return
         }
@@ -419,7 +447,7 @@ struct RemoteSessionGatewayTests {
 
         await gw.handle(.subscribe(sessionId: "s1"))
 
-        guard case .transcriptSnapshot(_, _, _, let msgs)? = sent.first,
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, _, _, _)? = sent.first,
               let json = msgs.first(where: { $0.kind == "toolCall" })?.json,
               let data = json.data(using: .utf8)
         else {
@@ -452,7 +480,7 @@ struct RemoteSessionGatewayTests {
             if case .transcriptSnapshot = msg { return true }
             return false
         }
-        guard case .transcriptSnapshot(let id, _, let canDrive, _)? = snap else {
+        guard case .transcriptSnapshot(let id, _, let canDrive, _, _, _, _, _)? = snap else {
             Issue.record("expected a snapshot after takeOver, got \(sent)")
             return
         }
@@ -779,7 +807,7 @@ struct RemoteSessionGatewayTests {
         s.transcript.messages.append(.agent(id: UUID(), StreamingText("more")))  // fires objectWillChange
         try await Task.sleep(nanoseconds: 250_000_000)  // > coalesce window
         let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
-            if case .transcriptDelta(_, _, _, let upserts) = msg { return upserts }
+            if case .transcriptDelta(_, _, _, let upserts, _, _) = msg { return upserts }
             return nil
         }.last
         let delta2 = try #require(delta, "expected a transcriptDelta after mutation")
@@ -874,14 +902,28 @@ struct RemoteSessionGatewayTests {
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
-    @Test func stopRoutesOnlyWhenWriter() async {
+    @Test func stopWorksRegardlessOfWriterStatus() async {
+        // Stop is a fast-lane emergency brake: it no longer requires the
+        // writer lease, so it must succeed whether or not the caller is
+        // the current writer.
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
         await gw.handle(.stop(sessionId: "s1"))
-        #expect(provider.stopped.isEmpty)
+        #expect(provider.stopped == ["s1"])
         provider.writers.insert("s1")
         await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped == ["s1", "s1"])
+    }
+
+    @Test func stopWorksWithoutWriterLeaseAndAcksImmediately() async throws {
+        let provider = FakeSessionsProvider()
+        provider.sessions["s1"] = try makeSessionWithAgentText("hi")
+        // NOTE: provider.writers is intentionally empty — not the writer.
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.stop(sessionId: "s1"))
         #expect(provider.stopped == ["s1"])
+        #expect(sent.first == .stopPending(sessionId: "s1"))
     }
 
     @Test func snapshotCarriesCanDrive() async throws {
@@ -893,7 +935,7 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
         await gw.handle(.subscribe(sessionId: "s1"))
         let drive = sent.compactMap { msg -> Bool? in
-            if case .transcriptSnapshot(_, _, let canDrive, _) = msg { return canDrive }
+            if case .transcriptSnapshot(_, _, let canDrive, _, _, _, _, _) = msg { return canDrive }
             return nil
         }.first
         #expect(drive == true)
@@ -1156,5 +1198,745 @@ struct RemoteSessionGatewayTests {
         }
         // cleanup
         for url in provider.writtenAttachmentURLs { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func makeSessionWithUserMessages(_ count: Int) throws -> ACPSession {
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        s.transcript.messages = (0..<count).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        return s
+    }
+
+    @Test func snapshotOfLongTranscriptIsTailWindowed() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(200)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision)? = sent.first else {
+            Issue.record("expected snapshot, got \(sent)")
+            return
+        }
+        #expect(total == 200)
+        #expect(first == 200 - RemoteTranscriptSync.tailWindow)
+        #expect(msgs.count == RemoteTranscriptSync.tailWindow)
+        #expect(msgs.first?.stableId == "m\(first)")
+        #expect(msgs.first?.index == first)
+        #expect(revision == 0)
+    }
+
+    @Test func deltaCarriesOnlyDirtyMessages() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(50)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        s.transcript.messages.append(.systemNotice(id: UUID(), text: "done"))
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
+            if case .transcriptDelta(_, _, _, let u, _, _) = msg { return u }
+            return nil
+        }.last
+        #expect(delta?.count == 1)
+        #expect(delta?.first?.index == 50)
+        #expect(delta?.first?.kind == "systemNotice")
+    }
+
+    @Test func structuralChangeTriggersResyncSnapshotWithBumpedEpoch() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(10)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _)? = sent.first else {
+            Issue.record("expected snapshot")
+            return
+        }
+        sent.removeAll()
+        s.transcript.messages.removeLast()               // structural
+        try await Task.sleep(nanoseconds: 250_000_000)
+        let resync = sent.last { if case .transcriptSnapshot = $0 { return true }
+        return false }
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, let total, let epoch1, _)? = resync else {
+            Issue.record("expected resync snapshot, got \(sent)")
+            return
+        }
+        #expect(epoch1 == epoch0 + 1)
+        #expect(total == 9)
+        #expect(msgs.count == 9)
+    }
+
+    @Test func fetchOlderReturnsClampedPage() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(200)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 110, limit: 90))
+        guard case .transcriptPage(_, _, let first, let msgs)? = sent.last else {
+            Issue.record("expected page, got \(sent)")
+            return
+        }
+        #expect(first == 20)
+        #expect(msgs.count == 90)
+        #expect(msgs.first?.index == 20)
+        #expect(msgs.last?.index == 109)
+
+        sent.removeAll()
+        await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 500))   // clamp both ends
+        guard case .transcriptPage(_, _, let first2, let msgs2)? = sent.last else {
+            Issue.record("expected page, got \(sent)")
+            return
+        }
+        #expect(first2 == 0)
+        #expect(msgs2.count == 10)
+    }
+
+    @Test func fetchOlderBeforeSubscribeIsIgnored() async throws {
+        let provider = FakeSessionsProvider()
+        provider.sessions["s1"] = try makeSessionWithUserMessages(5)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 5, limit: 5))
+        #expect(sent.isEmpty)
+    }
+
+    @Test func truncatedToolContentIsFetchedOnceAcrossSnapshotAndDeltas() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let session = try makeSessionWithAgentText("tail")
+        session.transcript.messages = [.toolCall(toolCall), .agent(id: UUID(), StreamingText("tail"))]
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(provider.fullToolCallContentCallCount == 1)
+        // A dirty tick on the OTHER message must not re-fetch tool content.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "x"))
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(provider.fullToolCallContentCallCount == 1)
+    }
+
+    @Test func unsubscribeReleasesChangeTracking() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(3)
+        provider.sessions["s1"] = s
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(s.transcript.changeLog.isTracking)
+        await gw.handle(.unsubscribe(sessionId: "s1"))
+        #expect(!s.transcript.changeLog.isTracking)
+    }
+
+    @Test func resubscribeDoesNotLeakTrackingRetains() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(3)
+        provider.sessions["s1"] = s
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        await gw.handle(.subscribe(sessionId: "s1"))   // client resync
+        await gw.handle(.unsubscribe(sessionId: "s1"))
+        #expect(!s.transcript.changeLog.isTracking)
+    }
+
+    // Regression (codex review, PR #775): a dirty delta that suspends mid-
+    // serialize (awaiting truncated tool-call content) while a CONCURRENT
+    // structural resync lands on the same session must not resume and send
+    // its now-stale upserts stamped with the resync's new epoch/revision —
+    // the client would wrongly accept them as a legitimate next delta.
+    @Test func deltaDropsStaleUpsertsWhenEpochChangesDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+
+        // Mutate the tool call in place (dirty, not structural) — invalidates
+        // its cache and forces a real re-fetch in the resulting delta.
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+
+        // Wait for the coalesce timer to fire and the delta to suspend on the
+        // paused fetch (call #1).
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // While that delta is suspended, a structural change lands on the
+        // SAME session and its own coalesced delta resyncs via a fresh
+        // snapshot (its tool-content fetch is call #2, not paused).
+        session.transcript.messages.removeLast()
+        for _ in 0..<50 where !(sent.last.map { if case .transcriptSnapshot = $0 { return true }
+        return false } ?? false) {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let resyncEpoch, _)? = sent.last else {
+            Issue.record("expected a resync snapshot from the structural change, got \(sent)")
+            return
+        }
+
+        sent.removeAll()
+        // Resume the original delta's suspended fetch. With the fix, it must
+        // detect the epoch moved during its await and discard rather than
+        // send a stale delta stamped with the new epoch.
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "stale delta must be discarded once epoch changed during serialize, got \(sent)")
+        #expect(resyncEpoch != 0)   // sanity: the resync did bump the epoch
+    }
+
+    // Regression (codex review, PR #775): an epoch-only guard misses a
+    // SAME-epoch snapshot (e.g. a takeOver, or a client resubscribe with no
+    // intervening structural change) landing while a dirty delta is
+    // suspended mid-serialize — the snapshot still resets revision/
+    // sentVersion, so the resumed delta's stale content would be accepted
+    // as the next legitimate delta after it. The generation counter (bumped
+    // on every snapshot regardless of epoch) must catch this too.
+    @Test func deltaDropsStaleUpsertsWhenSameEpochSnapshotLandsDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // A SAME-epoch snapshot lands via takeOver — no structural change,
+        // so the transcript's epoch never moves.
+        await gw.handle(.takeOver(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let snapshotEpoch, _)? = sent.last else {
+            Issue.record("expected a snapshot from takeOver, got \(sent)")
+            return
+        }
+        #expect(snapshotEpoch == 0)   // sanity: confirms this is the same-epoch case
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "stale delta must be discarded once a same-epoch snapshot landed during serialize, got \(sent)")
+    }
+
+    // Regression (codex review, PR #775): two overlapping DIRTY deltas race
+    // the same way a delta and a snapshot do — a still-running (cancelled-
+    // but-not-stopped) coalesce Task can suspend mid-serialize while a later
+    // mutation's own coalesce Task completes and sends first. The earlier
+    // delta must not resume, pass an unchanged-generation check, and roll
+    // the client back with its now-stale content at a higher revision.
+    @Test func deltaDropsStaleUpsertsWhenOverlappingDirtyDeltaLandsDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+
+        // Dirty mutation #1: the tool call — invalidates its cache and
+        // forces a real re-fetch that suspends.
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // Dirty mutation #2: an appended message — a non-truncated-tool-call
+        // dirty index, so its own coalesced delta completes fully (no
+        // suspension) while mutation #1's delta is still stuck above.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, let firstUpserts, _, _)? = sent.last else {
+            Issue.record("expected the overlapping dirty delta to land, got \(sent)")
+            return
+        }
+        #expect(firstUpserts.contains { $0.kind == "systemNotice" })
+
+        sent.removeAll()
+        // Resume mutation #1's suspended fetch. With the fix, it must detect
+        // that mutation #2's delta already claimed a newer generation and
+        // discard instead of rolling the transcript back with stale content.
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "stale overlapping delta must be discarded, got \(sent)")
+    }
+
+    // Regression (codex review, PR #775): discarding a superseded dirty
+    // delta must not silently lose the mutation it would have carried.
+    // sentVersion used to advance BEFORE the await, so a delta that got
+    // discarded still "consumed" its indices from the change log's
+    // perspective — the next delta would never re-offer them, losing the
+    // mutation until a full resync. sentVersion must only commit once the
+    // delta is actually accepted, so a superseding delta naturally re-picks
+    // up whatever the discarded one would have sent.
+    @Test func overlappingDirtyDeltaStillDeliversDiscardedMutation() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend mutation #1's re-fetch
+
+        // Mutation #1: the tool call — invalidates its cache and suspends
+        // its own delta while re-fetching.
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // Mutation #2: an appended message. Its own coalesced delta must
+        // include BOTH this new index AND mutation #1's index, because
+        // sentVersion was NOT prematurely advanced by the still-suspended
+        // (and about-to-be-discarded) delta from mutation #1.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, let upserts, _, _)? = sent.last else {
+            Issue.record("expected the overlapping dirty delta to land, got \(sent)")
+            return
+        }
+        #expect(upserts.contains { $0.kind == "systemNotice" })
+        #expect(
+            upserts.contains { $0.stableId == "m0" && ($0.json?.contains(#""status":"completed""#) ?? false) },
+            "mutation #1's tool-call status change must not be lost, got \(upserts)"
+        )
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "the superseded delta must still discard, got \(sent)")
+    }
+
+    // Regression (codex review, PR #775): sendSnapshot bumps `generation`
+    // but, unlike the delta/page paths, never re-checked it after its own
+    // await — so a snapshot superseded by a concurrent send (another
+    // snapshot, or a dirty delta) still went out unconditionally. Because
+    // the web client applies snapshots without any epoch/revision ordering
+    // check (unlike deltas), this could roll the client back to stale
+    // content until a later resync happened to correct it.
+    @Test func sendSnapshotDropsStaleSendWhenSupersededDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        // Small transcript: the tool call is inside the tail window, so
+        // both subscribe's and takeOver's snapshots must serialize it.
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        provider.pauseFullToolCallContentOnCall = 1   // only subscribe's first fetch pauses
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        let subscribeTask = Task { @MainActor in
+            await gw.handle(.subscribe(sessionId: "s1"))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // A concurrent takeOver's own snapshot completes and sends first
+        // (its own fetch is call #2, not paused).
+        await gw.handle(.takeOver(sessionId: "s1"))
+        let snapshotsAfterTakeOver = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotsAfterTakeOver == 1)
+
+        // Resume subscribe's suspended fetch. With the fix, it must detect
+        // it was superseded and NOT send a second, stale snapshot.
+        provider.resumeFullToolCallContent(fullContent)
+        await subscribeTask.value
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotCount == 1, "the superseded subscribe snapshot must be discarded, got \(sent)")
+    }
+
+    // Regression (codex review, PR #775): sendSnapshot advanced sentVersion
+    // BEFORE its own await, the same premature-commit hazard as the dirty
+    // delta fix above. If the snapshot is later discarded because a
+    // concurrent dirty delta sent first, that delta computes its upserts
+    // against the ALREADY-advanced sentVersion and never re-offers the
+    // pre-snapshot dirty content — losing it entirely (neither send ever
+    // delivers it) until a later full resync.
+    @Test func sendSnapshotDefersSentVersionSoSupersedingDeltaStillDeliversIt() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // establishes observe(); nothing to cache yet
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the re-subscribe snapshot's fetch below
+
+        // Append the truncated tool call directly (uncached anywhere) and
+        // immediately re-subscribe — its snapshot must fetch the tool call
+        // for the first time and suspends.
+        session.transcript.messages.append(.toolCall(toolCall))
+        let resubscribeTask = Task { @MainActor in
+            await gw.handle(.subscribe(sessionId: "s1"))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // The first subscribe's still-active observer reacts to the append
+        // with its own coalesced delta, which also needs the (still
+        // uncached) tool call — its fetch is call #2, not paused.
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, let upserts, _, _)? = sent.last else {
+            Issue.record("expected the concurrent delta to land, got \(sent)")
+            return
+        }
+        #expect(
+            upserts.contains { $0.kind == "toolCall" },
+            "the appended tool call must not be lost, got \(upserts)"
+        )
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        await resubscribeTask.value
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotCount == 0, "the superseded re-subscribe snapshot must be discarded, got \(sent)")
+    }
+
+    // Regression (codex review, PR #775): a same-epoch snapshot reset
+    // `state.revision = 0` synchronously up front, the same premature-commit
+    // hazard as sentVersion but on the send side. If the snapshot is then
+    // DISCARDED (superseded by a dirty delta claiming a later generation),
+    // that already-happened reset still corrupts the winning delta's own
+    // numbering: it computes `state.revision += 1` off the snapshot's
+    // premature reset (0) instead of the client's actual last-known
+    // revision, producing revision:1 when the client expects N+1 — the
+    // client rejects it and resubscribes, defeating incremental delivery
+    // right when it matters (an active resync race).
+    @Test func sendSnapshotDefersRevisionResetSoSupersedingDeltaStaysInSync() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // establishes observe(); revision committed at 0
+
+        // Three uncontested dirty deltas first, to establish a non-zero
+        // baseline revision — the bug is invisible when the baseline is
+        // already 0, since a premature reset and a legitimate prior value
+        // of 0 look identical.
+        for i in 0..<3 {
+            sent.removeAll()
+            session.transcript.messages.append(.systemNotice(id: UUID(), text: "warmup \(i)"))
+            for _ in 0..<50 where sent.isEmpty {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            guard case .transcriptDelta? = sent.last else {
+                Issue.record("expected warmup delta \(i) to land, got \(sent)")
+                return
+            }
+        }
+        // state.revision is now legitimately 3.
+
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the re-subscribe snapshot's fetch below
+
+        session.transcript.messages.append(.toolCall(toolCall))
+        let resubscribeTask = Task { @MainActor in
+            await gw.handle(.subscribe(sessionId: "s1"))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // The still-active observer reacts to the append with its own
+        // coalesced dirty delta, which supersedes (via generation) the
+        // suspended re-subscribe snapshot.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, _, _, let winningRevision)? = sent.last else {
+            Issue.record("expected the superseding delta to land, got \(sent)")
+            return
+        }
+        #expect(
+            winningRevision == 4,
+            "the superseding delta must continue from the real prior revision (3), not the discarded snapshot's premature reset, got \(winningRevision)"
+        )
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        await resubscribeTask.value
+        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotCount == 0, "the superseded re-subscribe snapshot must still be discarded, got \(sent)")
+    }
+
+    // Regression (codex review, PR #775): fetchOlder's page serialization has
+    // the same suspend-then-stamp hazard as sendDelta — a structural resync
+    // landing while a truncated tool call's content is being fetched must
+    // not let the FIRST attempt's page go out stamped with the post-resync
+    // epoch (which the client would wrongly accept as current). It must
+    // instead retry against the now-current state and deliver a correctly
+    // re-stamped, fresh page — not silently drop the request (see the
+    // dedicated retry test below for why silently dropping is itself a bug).
+    @Test func fetchOlderRetriesAndDeliversFreshPageWhenEpochChangesDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        // 100 messages total: the tail-window snapshot (last 90) excludes
+        // index 5, so subscribing never fetches/caches its content — the
+        // fetchOlder page below performs the FIRST fetch for it.
+        session.transcript.messages = (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        } + [.toolCall(toolCall)] + (0..<94).map {
+            .user(id: UUID(), messageId: "v\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, _, let firstIndex, _, _, _)? = sent.first else {
+            Issue.record("expected snapshot, got \(sent)")
+            return
+        }
+        #expect(firstIndex == 10)   // sanity: index 5 is outside the tail window
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the page's fetch below
+
+        let fetchTask = Task { @MainActor in
+            await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 90))
+        }
+
+        // Wait for the fetch request to suspend on the paused tool-content call.
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // While the page is suspended, a structural change lands and its own
+        // coalesced delta resyncs via a fresh snapshot.
+        session.transcript.messages.removeLast()
+        for _ in 0..<50 where !(sent.last.map { if case .transcriptSnapshot = $0 { return true }
+        return false } ?? false) {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptSnapshot? = sent.last else {
+            Issue.record("expected a resync snapshot from the structural change, got \(sent)")
+            return
+        }
+
+        sent.removeAll()
+        // Resume the page's suspended fetch. With the fix, it must detect
+        // the epoch moved during its await, retry against the now-current
+        // state, and still deliver a fresh page rather than leaving the
+        // client's request unanswered.
+        provider.resumeFullToolCallContent(fullContent)
+        await fetchTask.value
+        guard case .transcriptPage(_, let pageEpoch, let pageFirst, let pageMessages)? = sent.last else {
+            Issue.record("expected a retried page after the epoch changed during serialize, got \(sent)")
+            return
+        }
+        #expect(pageEpoch != 0)   // reflects the post-resync epoch, not the stale captured one
+        #expect(pageFirst == 0)
+        #expect(pageMessages.contains { $0.stableId == "m5" })
+    }
+
+    // Regression (codex review, PR #775): unlike a dropped delta/snapshot
+    // (which the client naturally recovers from via a later resync
+    // snapshot), a fetchOlder page superseded by an ORDINARY same-epoch
+    // delta has no client-side recovery — only a snapshot clears the
+    // client's "loading earlier messages" state, and a normal delta does
+    // not. Silently dropping the page in that case would leave the client
+    // stuck forever. The gateway must retry and still deliver a page.
+    @Test func fetchOlderRetriesAndDeliversPageInsteadOfLeavingClientStuck() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        // 100 messages: the tail-window snapshot (last 90) excludes index 0,
+        // so subscribing never fetches/caches its content — fetchOlder below
+        // performs the first, pausable fetch.
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the page's first fetch attempt
+
+        let fetchTask = Task { @MainActor in
+            await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 90))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // A normal, same-epoch delta lands first (e.g. streaming continues
+        // while the user is scrolled up) — this must not leave the pending
+        // fetchOlder request unanswered.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta? = sent.last else {
+            Issue.record("expected the concurrent delta to land first, got \(sent)")
+            return
+        }
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        await fetchTask.value
+        guard case .transcriptPage(_, _, let pageFirst, let pageMessages)? = sent.last else {
+            Issue.record("fetchOlder must still deliver a page after being superseded once, got \(sent)")
+            return
+        }
+        #expect(pageFirst == 0)
+        #expect(pageMessages.contains { $0.stableId == "m0" })
+        // The retry reuses the cache the first (superseded) attempt already
+        // populated — no second real fetch needed.
+        #expect(provider.fullToolCallContentCallCount == 1)
     }
 }

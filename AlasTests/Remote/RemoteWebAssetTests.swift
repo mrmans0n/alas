@@ -48,11 +48,11 @@ struct RemoteWebAssetTests {
         let html = try asset("index.html")
         let sw = try asset("sw.js")
 
-        #expect(html.contains(#"/app.js?v=57"#))
-        #expect(html.contains(#"/style.css?v=36"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v35";"#))
-        #expect(sw.contains(#""/app.js?v=57""#))
-        #expect(sw.contains(#""/style.css?v=36""#))
+        #expect(html.contains(#"/app.js?v=59"#))
+        #expect(html.contains(#"/style.css?v=37"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v37";"#))
+        #expect(sw.contains(#""/app.js?v=59""#))
+        #expect(sw.contains(#""/style.css?v=37""#))
     }
 
     @Test func remoteWebToolRowsAvoidNativeButtonRenderingOnMobileSafari() throws {
@@ -65,11 +65,11 @@ struct RemoteWebAssetTests {
         #expect(app.contains("toggle.tabIndex = 0"))
         #expect(app.contains("function handleCardToggleKeydown"))
         #expect(!app.contains(#"const button = el("button", "tool-toggle")"#))
-        #expect(html.contains(#"/app.js?v=57"#))
-        #expect(html.contains(#"/style.css?v=36"#))
-        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v35";"#))
-        #expect(sw.contains(#""/app.js?v=57""#))
-        #expect(sw.contains(#""/style.css?v=36""#))
+        #expect(html.contains(#"/app.js?v=59"#))
+        #expect(html.contains(#"/style.css?v=37"#))
+        #expect(sw.contains(#"const CACHE_NAME = "alas-remote-shell-v37";"#))
+        #expect(sw.contains(#""/app.js?v=59""#))
+        #expect(sw.contains(#""/style.css?v=37""#))
     }
 
     @Test func remoteBareURLLinkifierPreservesIndentedCodeBlocks() throws {
@@ -110,8 +110,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-state-active"))
         #expect(css.contains(".session-state-inactive"))
         #expect(css.contains(".session-meta"))
-        #expect(html.contains("/app.js?v=57"))
-        #expect(html.contains("/style.css?v=36"))
+        #expect(html.contains("/app.js?v=59"))
+        #expect(html.contains("/style.css?v=37"))
     }
 
     @Test func remoteWebExposesSessionRenameControls() throws {
@@ -136,8 +136,8 @@ struct RemoteWebAssetTests {
         #expect(css.contains(".session-open"))
         #expect(css.contains("#detail-title"))
         #expect(css.contains(".sheet-input"))
-        #expect(sw.contains(#""/app.js?v=57""#))
-        #expect(sw.contains(#""/style.css?v=36""#))
+        #expect(sw.contains(#""/app.js?v=59""#))
+        #expect(sw.contains(#""/style.css?v=37""#))
     }
 
     @Test func configSheetScrollsWhenModelListOverflows() throws {
@@ -267,6 +267,44 @@ struct RemoteWebAssetTests {
         #expect(css.contains(#"#new-session::before { content: "+";"#))
         #expect(css.contains("#status.chip { font-size: 0;"))
         #expect(css.contains("#status.chip::before"))
+    }
+
+    @Test func remoteWebSpeaksIncrementalTranscriptProtocol() throws {
+        let js = try asset("app.js")
+        #expect(js.contains(#"case "transcriptPage""#))
+        #expect(js.contains(#"case "stopPending""#))
+        #expect(js.contains(#"type: "fetchOlder""#))
+    }
+
+    @Test func remoteWebStopDoesNotTakeOverFirst() throws {
+        let js = try asset("app.js")
+        let stopHandler = try #require(js.range(of: #"$("stop").onclick"#).map { js[$0.lowerBound...].prefix(220) })
+        #expect(!stopHandler.contains("ensureWriter"))
+    }
+
+    @Test func incrementalTranscriptBustsServiceWorkerAssetCache() throws {
+        let sw = try asset("sw.js")
+        let html = try asset("index.html")
+        #expect(sw.contains("alas-remote-shell-v37"))
+        #expect(sw.contains("/app.js?v=59"))
+        #expect(html.contains("app.js?v=59"))
+    }
+
+    // Regression (codex review, PR #775): applyPage used to clear the
+    // shared (single-session) olderFetchInFlight/loading-row state BEFORE
+    // checking whether the page belonged to the currently open session —
+    // so a stale page for a session the user already left could clear the
+    // CURRENT session's own in-flight backfill indicator and allow a
+    // duplicate fetch while the real request was still pending.
+    @Test func applyPageChecksSessionBeforeClearingSharedInFlightState() throws {
+        let js = try asset("app.js")
+        let body = try #require(js.range(of: "function applyPage(msg) {").map { js[$0.lowerBound...].prefix(400) })
+        let sessionCheckIndex = try #require(body.range(of: "msg.sessionId !== currentSession")?.lowerBound)
+        let clearInFlightIndex = try #require(body.range(of: "olderFetchInFlight = false")?.lowerBound)
+        #expect(
+            sessionCheckIndex < clearInFlightIndex,
+            "the sessionId check must run before clearing shared in-flight state"
+        )
     }
 
     @Test func serviceWorkerKeepsControlAndDiagnosticRoutesNetworkOnly() throws {

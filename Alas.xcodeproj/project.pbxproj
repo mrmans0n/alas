@@ -739,6 +739,7 @@
 		99613CF61A0F19105D8E7A71 /* EmojiPickerButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BEC4E033DB3BA44C825D453 /* EmojiPickerButton.swift */; };
 		996B67B45E7247CDED5F98EF /* AppStateRemoteWorktreePathTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED0AAD3FE0E143D409A3E8B /* AppStateRemoteWorktreePathTests.swift */; };
 		99711AA1B0FB450D32770415 /* ZmxSunPathBudget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A40BDC5115B641AB26220D9 /* ZmxSunPathBudget.swift */; };
+		9983414D08DCAB87919FB804 /* ACPTranscriptChangeLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38643438B0DF2F60F9B3B5AC /* ACPTranscriptChangeLog.swift */; };
 		999C8421F3610FF682CE9D0E /* ReviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 500B60003934104E2CA5A895 /* ReviewTabView.swift */; };
 		99CD435501BBBAAD8C4214D8 /* ProjectMCPServerEditorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 178EAF6036A9BEAEA2C55082 /* ProjectMCPServerEditorPolicyTests.swift */; };
 		99FA2F1F9D41CA81E59B20E5 /* ACPRemoteLaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5DC5AC55D5FF5BF7FECAD2F /* ACPRemoteLaunch.swift */; };
@@ -918,6 +919,7 @@
 		BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		BAE6B1D93387807ADD7ED0CC /* ACPImageThumbnail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E1462C85D0E49127BCED81 /* ACPImageThumbnail.swift */; };
 		BB565B8EE9BA20EE961B32FB /* ThemeSidebarContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70ED4990428C46B69784970 /* ThemeSidebarContrastTests.swift */; };
+		BB7A00188B3BD4C729E0D8E6 /* RemoteTranscriptSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */; };
 		BB924C35D21B87B46A47C5FA /* ACPAdapterTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818B29F6B58D4FFC80603AAD /* ACPAdapterTarget.swift */; };
 		BBACA7DCC1EFA6D55AEB38CE /* ACPMCPStatusControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1936C815E64C7DB204340469 /* ACPMCPStatusControl.swift */; };
 		BC0EC69E1BC62514BBE129E7 /* OpenSessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEFCC9CAC7B3254708748815 /* OpenSessionsTests.swift */; };
@@ -1194,6 +1196,7 @@
 		F269D59E1E21AD57EF3EE909 /* ACPQueueHeader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10602801D3FA990E60CB072D /* ACPQueueHeader.swift */; };
 		F2983AF4C5674B906BEF2E88 /* RemoteWorktreePoll.swift in Sources */ = {isa = PBXBuildFile; fileRef = D837246E56472EBA3993F515 /* RemoteWorktreePoll.swift */; };
 		F2F75C44CD5042F209299FB9 /* InstallSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E7E61C3BD4AD4AE3828A6F0 /* InstallSource.swift */; };
+		F3249EE6574B3C7FC9FED0B1 /* ACPTranscriptChangeLogTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5027B783605BE1C0189308CC /* ACPTranscriptChangeLogTests.swift */; };
 		F35B489DCC169F2B77DB6F3F /* ACPRemoteLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA0EE530F852A921942B04C /* ACPRemoteLaunchTests.swift */; };
 		F3C9321ABD5230C4FA4F7D4E /* GatekeeperRemediatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9FE7571B9A83F6BFFA6BFC6 /* GatekeeperRemediatorTests.swift */; };
 		F3E7DF34D9DDA268E40575AE /* CommitInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9427B922BAFA43AF6EB21080 /* CommitInfoTests.swift */; };
@@ -1548,6 +1551,7 @@
 		380D04E9EB0D0ED0C24702DA /* ACPAuthFailureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPAuthFailureTests.swift; sourceTree = "<group>"; };
 		38499AFE31188908546EE222 /* LSPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LSPTransport.swift; sourceTree = "<group>"; };
 		3855FBA3E4444960418639E9 /* FileIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileIndexTests.swift; sourceTree = "<group>"; };
+		38643438B0DF2F60F9B3B5AC /* ACPTranscriptChangeLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptChangeLog.swift; sourceTree = "<group>"; };
 		389D0EB957CCC8447DB9C4FE /* DiffReviewRenderEligibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewRenderEligibility.swift; sourceTree = "<group>"; };
 		38C56D3A6AE256FCBDAE2FBD /* ReviewScopePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewScopePicker.swift; sourceTree = "<group>"; };
 		38EAFDB135BDCF0DFF0121B1 /* ImageDiffPairKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageDiffPairKind.swift; sourceTree = "<group>"; };
@@ -1665,6 +1669,7 @@
 		4FB0C89AA6E07A2402934FD2 /* DraftCommitTabsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftCommitTabsManagerTests.swift; sourceTree = "<group>"; };
 		4FE58EF9CF8EC461667D9430 /* AppConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConfig.swift; sourceTree = "<group>"; };
 		500B60003934104E2CA5A895 /* ReviewTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewTabView.swift; sourceTree = "<group>"; };
+		5027B783605BE1C0189308CC /* ACPTranscriptChangeLogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptChangeLogTests.swift; sourceTree = "<group>"; };
 		50737099AA490FAC6BD9F612 /* TextEditCoordinatesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextEditCoordinatesTests.swift; sourceTree = "<group>"; };
 		50B0831638833C386E5CC9E8 /* CompletionEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionEngine.swift; sourceTree = "<group>"; };
 		50F0FBAC37A6C6A46C8D426E /* ACPMarkdownInlineRendererTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMarkdownInlineRendererTests.swift; sourceTree = "<group>"; };
@@ -1926,6 +1931,7 @@
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
 		883981BBADF9816718091CE1 /* MergeScrollCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeScrollCoordinatorTests.swift; sourceTree = "<group>"; };
 		88C6356C759B509DD81EDEBB /* ACPConfigOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConfigOption.swift; sourceTree = "<group>"; };
+		88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTranscriptSync.swift; sourceTree = "<group>"; };
 		8942D0F47DBCFFB3549EE775 /* ShortcutReservations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutReservations.swift; sourceTree = "<group>"; };
 		89B23F35BE6FD53B74DD84ED /* ZmxSessionName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxSessionName.swift; sourceTree = "<group>"; };
 		89C4AE9D01CA02A9689AAE8B /* CompletionWindowControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionWindowControllerTests.swift; sourceTree = "<group>"; };
@@ -2646,6 +2652,7 @@
 			children = (
 				CDE49D2437D7E6AC9D67F136 /* RemoteSessionGateway.swift */,
 				33EBE6A3E0CA30D8910E68F8 /* RemoteSessionsProvider.swift */,
+				88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */,
 				9DD81682586D187AB70D1CDB /* RemoteWorktreeSummaryBuilder.swift */,
 			);
 			path = Gateway;
@@ -3465,6 +3472,7 @@
 				033CEEE92FCAFF8A177428E4 /* ACPStreamingText.swift */,
 				A655F5AA40CA10A7685794F7 /* ACPSubmitIntent.swift */,
 				0B0317FF3C6E6D3F149FB4F5 /* ACPTranscript.swift */,
+				38643438B0DF2F60F9B3B5AC /* ACPTranscriptChangeLog.swift */,
 				04B44F1DD775D2543439D508 /* ACPTranscriptMarkdown.swift */,
 				955B9084309744F3B9A44CBC /* ACPUserInput.swift */,
 				87F9063CCA0DA839EB342993 /* CursorModelVariants.swift */,
@@ -3652,6 +3660,7 @@
 				F31E42DEC85081FEA8CA1BC3 /* ACPSessionLeaseTests.swift */,
 				96C13707B79B7A4F4BB2608E /* ACPSessionManagerLeaseTests.swift */,
 				FADFC82400385AD76A200A2B /* ACPSessionStoreDedupTests.swift */,
+				5027B783605BE1C0189308CC /* ACPTranscriptChangeLogTests.swift */,
 				C1CE17139DAF0E60FE9D92C2 /* Adapter */,
 				E6055B84E3F6E5717B873689 /* E2E */,
 				075A0E441C47ACE7EEA52334 /* FileWriter */,
@@ -5030,6 +5039,7 @@
 				312DB6016C040DE52CD365E8 /* ACPToolbar.swift in Sources */,
 				303E16565ECF8BDDC7A28AF1 /* ACPTopPaginationIndicator.swift in Sources */,
 				8927B4E929B4180F5B8984F1 /* ACPTranscript.swift in Sources */,
+				9983414D08DCAB87919FB804 /* ACPTranscriptChangeLog.swift in Sources */,
 				C12FCCB35EBD486D20EC65D2 /* ACPTranscriptMarkdown.swift in Sources */,
 				05AD50E71FED22187F67D33F /* ACPUserInput.swift in Sources */,
 				64DD701281B8BF9468C50C58 /* ACPUserInputFormState.swift in Sources */,
@@ -5417,6 +5427,7 @@
 				A770A357750B4713AF21C0E0 /* RemoteSessionsProvider.swift in Sources */,
 				31CB9FBE16CECDE2C6D94EC6 /* RemoteStatusFingerprint.swift in Sources */,
 				FD4196C9F558CE954D94E060 /* RemoteTerminalScript.swift in Sources */,
+				BB7A00188B3BD4C729E0D8E6 /* RemoteTranscriptSync.swift in Sources */,
 				F2983AF4C5674B906BEF2E88 /* RemoteWorktreePoll.swift in Sources */,
 				8C492CBACC6D6DACE56DADA9 /* RemoteWorktreeSummaryBuilder.swift in Sources */,
 				1F860C66D658B0DA5A0599F6 /* RemoteZmxInstaller.swift in Sources */,
@@ -5688,6 +5699,7 @@
 				28710B18EF9FAE100B99E0A7 /* ACPThumbnailImageCacheTests.swift in Sources */,
 				E1E4C11CC5BFF761DF397507 /* ACPToolCallContentTests.swift in Sources */,
 				1C2C949642E10060172AB1BA /* ACPToolCallPresentationTests.swift in Sources */,
+				F3249EE6574B3C7FC9FED0B1 /* ACPTranscriptChangeLogTests.swift in Sources */,
 				4B8BD1280C2DFF3CE1FD3C4B /* ACPTranscriptCurrentPlanTests.swift in Sources */,
 				A8EE9207A828D4D1BAF1C1C1 /* ACPTranscriptLatestPlanTests.swift in Sources */,
 				F1C4DD0D3A95ED5301EE2AC9 /* ACPTranscriptMarkdownCacheEvictionTests.swift in Sources */,

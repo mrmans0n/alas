@@ -5,8 +5,11 @@ import Combine
 ///
 /// Transport-agnostic: it consumes decoded `RemoteClientMessage`s and emits
 /// `RemoteServerMessage`s via the `send` closure, so it is fully testable
-/// without sockets. Observes the live `ACPTranscript` (Combine) and
-/// re-snapshots on change (coalesced) as a "delta". Inbound permission
+/// without sockets. Observes the live `ACPTranscript` (Combine) and, on
+/// change (coalesced), consumes `ACPTranscriptChangeLog` to emit either an
+/// incremental delta (only the messages the log marked dirty) or, when the
+/// log reports a structural change or the connection has fallen behind, a
+/// fresh tail-window snapshot under a bumped epoch. Inbound permission
 /// decisions route to the existing `ACPPermissionPolicy.userDecided(...)`
 /// after a first-wins staleness guard.
 @MainActor
@@ -22,6 +25,8 @@ final class RemoteSessionGateway {
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
     private var worktreeListGeneration = 0
+    private var syncStates: [String: RemoteTranscriptSync] = [:]
+    private var trackedSessions: Set<String> = []
     // Per-session request id of the permission/question prompt we last surfaced,
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
@@ -57,6 +62,7 @@ final class RemoteSessionGateway {
                 send(.sessionClosed(sessionId: id))
                 return
             }
+            beginTracking(id: id, session: session)
             await sendSnapshot(id: id, session: session)
             if let cfg = provider.sessionConfig(for: id) {
                 send(.sessionConfig(cfg))
@@ -73,6 +79,8 @@ final class RemoteSessionGateway {
             lastPermissionReq[id] = nil
             lastQuestionReq[id] = nil
             lastElicitationReq[id] = nil
+            endTracking(id: id)
+            syncStates[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
@@ -140,7 +148,10 @@ final class RemoteSessionGateway {
             }
             refusalIsSynchronous = false
         case .stop(let id):
-            guard provider.isWriter(for: id) else { return }
+            // Emergency brake: any authenticated subscriber may cancel the
+            // running turn; no writer lease required. Ack immediately so the
+            // client flips to "stopping" before the ACP round-trip completes.
+            send(.stopPending(sessionId: id))
             await provider.stop(for: id)
         case .setModel(let id, let modelId):
             guard provider.isWriter(for: id) else { return }
@@ -160,7 +171,65 @@ final class RemoteSessionGateway {
             }
             send(.sessionRenamed(sessionId: id, title: trimmed))
             refreshSessionList()
+        case .fetchOlder(let id, let beforeIndex, let limit):
+            // Ignore pages requested before a snapshot established sync state.
+            guard let session = provider.session(for: id), let state = syncStates[id] else { return }
+            let clamped = min(max(limit, RemoteTranscriptSync.pageLimitRange.lowerBound),
+                              RemoteTranscriptSync.pageLimitRange.upperBound)
+            // A concurrent send (snapshot OR ordinary same-epoch delta) can
+            // supersede this page mid-serialize the same way it supersedes a
+            // dirty delta — see the capturedGeneration comment below. Unlike
+            // a dropped delta/snapshot, though, the client has no fallback
+            // recovery for a silently-dropped page: only a snapshot resets
+            // its "loading earlier messages" state, and an ordinary delta
+            // (the common case here) does not, so simply returning would
+            // leave the client stuck showing a spinner forever. Retry
+            // instead — bounded so pathological continuous churn can't spin
+            // forever either; a truncated tool call's content fetched by an
+            // earlier attempt stays cached, so a retry is cheap.
+            var attempt = 0
+            while true {
+                let count = session.transcript.messages.count
+                let hi = min(max(beforeIndex, 0), count)
+                let lo = max(0, hi - clamped)
+                // Capture the generation BEFORE the async serialize below —
+                // not just the epoch, since a same-epoch concurrent
+                // snapshot (e.g. takeOver, or a client resubscribe with no
+                // structural change) also supersedes this page without
+                // moving the epoch. If a snapshot lands on this same
+                // session while a truncated tool call's full content is
+                // being fetched, stamping the page with state read AFTER
+                // the await would make it look current and be wrongly
+                // accepted instead of dropped.
+                let capturedGeneration = state.generation
+                let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
+                attempt += 1
+                guard state.generation == capturedGeneration || attempt > Self.maxFetchOlderAttempts else {
+                    continue
+                }
+                send(.transcriptPage(sessionId: id,
+                                     epoch: state.epoch,
+                                     firstIndex: lo,
+                                     messages: wire))
+                break
+            }
         }
+    }
+
+    /// Bound on retrying a superseded `fetchOlder` page before sending
+    /// whatever was last computed anyway — the client must always get a
+    /// response, never an unbounded wait.
+    private static let maxFetchOlderAttempts = 5
+
+    private func beginTracking(id: String, session: ACPSession) {
+        guard !trackedSessions.contains(id) else { return }
+        trackedSessions.insert(id)
+        session.transcript.changeLog.retainTracking()
+    }
+
+    private func endTracking(id: String) {
+        guard trackedSessions.remove(id) != nil else { return }
+        provider.session(for: id)?.transcript.changeLog.releaseTracking()
     }
 
     private func refreshSessionList() {
@@ -255,19 +324,81 @@ final class RemoteSessionGateway {
         lastPermissionReq.removeAll()
         lastQuestionReq.removeAll()
         lastElicitationReq.removeAll()
+        for id in trackedSessions {
+            provider.session(for: id)?.transcript.changeLog.releaseTracking()
+        }
+        trackedSessions.removeAll()
+        syncStates.removeAll()
     }
 
     // MARK: snapshot / delta
 
     private func sendSnapshot(id: String, session: ACPSession) async {
-        let wire = await wireMessages(id: id, session: session)
-        send(.transcriptSnapshot(sessionId: id,
-                                 streamingState: Self.stateString(session.transcript.streamingState),
-                                 canDrive: provider.isWriter(for: id),
-                                 messages: wire))
+        let state = syncState(for: id)
+        let log = session.transcript.changeLog
+        let count = session.transcript.messages.count
+        let first = max(0, count - RemoteTranscriptSync.tailWindow)
+        // Capture epoch/version BEFORE the async serialize, but do NOT yet
+        // commit sentVersion to `state` — see below. Bumping `generation`
+        // here — even when `epoch` itself is unchanged (e.g. a same-epoch
+        // takeOver or client resubscribe) — lets a concurrently-suspended
+        // delta/page detect that THIS snapshot already superseded it.
+        state.epoch = log.epoch
+        // Defer committing sentVersion, matching the dirty-delta fix above:
+        // writing it now would make the change log treat everything dirty
+        // up to this point as "already sent" even if this snapshot ends up
+        // discarded below (superseded by a same-epoch dirty delta that
+        // raced in during the await) — the pre-snapshot dirty indices would
+        // then be silently absent from both sends, never re-offered, since
+        // sentVersion already covers them. Only commit once we know this
+        // snapshot is actually going out.
+        let newSentVersion = log.latestVersion
+        // Also defer resetting revision — the same hazard as sentVersion,
+        // but on the send side instead of the change-log side. A `.none`
+        // content-free delta doesn't participate in the generation ticket
+        // (it has no reason to — no message content raced it), so it can
+        // still complete and send WHILE this snapshot is suspended, bumping
+        // `state.revision` past 0. If we'd already reset it to 0 here, and
+        // this snapshot then wins (generation unaffected by a `.none`
+        // send), its wire payload hardcodes `revision: 0` while
+        // `state.revision` is left at whatever the intervening delta bumped
+        // it to — the server's internal counter desyncs from what it
+        // actually told the client, and every subsequent delta fails the
+        // client's `revision === transcriptMeta.revision + 1` check until
+        // another full resync happens. Reset it atomically with the send.
+        state.generation += 1
+        let capturedGeneration = state.generation
+        let wire = await wireMessages(id: id, session: session, indices: Array(first..<count))
+        // If another send (a concurrent snapshot or dirty delta) claimed a
+        // later generation while this one was suspended fetching truncated
+        // tool-call content, THIS snapshot's payload is now stale relative
+        // to what the client already has or is about to receive. Sending it
+        // anyway would roll the client back — snapshots are applied
+        // unconditionally client-side (no epoch/revision ordering check),
+        // unlike deltas/pages. Discard; whatever claimed the later
+        // generation read fresher state and is authoritative.
+        if state.generation == capturedGeneration {
+            state.sentVersion = newSentVersion
+            state.revision = 0
+            send(.transcriptSnapshot(sessionId: id,
+                                     streamingState: Self.stateString(session.transcript.streamingState),
+                                     canDrive: provider.isWriter(for: id),
+                                     messages: wire,
+                                     firstIndex: first,
+                                     totalCount: count,
+                                     epoch: state.epoch,
+                                     revision: 0))
+        }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
+    }
+
+    private func syncState(for id: String) -> RemoteTranscriptSync {
+        if let s = syncStates[id] { return s }
+        let s = RemoteTranscriptSync()
+        syncStates[id] = s
+        return s
     }
 
     private func observe(id: String, session: ACPSession) {
@@ -315,40 +446,102 @@ final class RemoteSessionGateway {
         }
     }
 
+    /// Emits an incremental delta: only messages the change log marked
+    /// dirty since the last send. Structural transcript changes (prepend,
+    /// removal, wholesale replacement) resync via a fresh tail snapshot.
     private func sendDelta(id: String, session: ACPSession) async {
-        // v1: send a full re-snapshot as the "delta" (simple + always correct).
-        // A true per-message diff optimization is intentionally deferred (YAGNI).
-        let wire = await wireMessages(id: id, session: session)
-        send(.transcriptDelta(sessionId: id,
-                              streamingState: Self.stateString(session.transcript.streamingState),
-                              canDrive: provider.isWriter(for: id),
-                              upserts: wire))
+        guard let state = syncStates[id] else { return }
+        let log = session.transcript.changeLog
+        switch log.changes(since: state.sentVersion) {
+        case .resync:
+            await sendSnapshot(id: id, session: session)
+            return
+        case .none:
+            // No transcript content changed — this tick was a state flip
+            // (streamingState / pending prompt). Send a content-free delta
+            // so the client still tracks state.
+            state.revision += 1
+            send(.transcriptDelta(sessionId: id,
+                                  streamingState: Self.stateString(session.transcript.streamingState),
+                                  canDrive: provider.isWriter(for: id),
+                                  upserts: [],
+                                  epoch: state.epoch,
+                                  revision: state.revision))
+        case .dirty(let indices):
+            guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
+                await sendSnapshot(id: id, session: session)
+                return
+            }
+            // Capture — but do NOT yet commit — the version this delta will
+            // cover. Committing it now (before the await) would make the
+            // change log treat `indices` as "already sent" even if this
+            // delta ends up discarded below: a later dirty mutation would
+            // then compute `changes(since:)` against an already-advanced
+            // sentVersion and never re-offer these indices, silently losing
+            // them until a full resync. Only write it once we know we're
+            // actually sending (see the guard below).
+            let newSentVersion = log.latestVersion
+            // Claim a generation for this send BEFORE the async serialize
+            // below — not just on sendSnapshot. Two overlapping dirty
+            // deltas can race the same way a delta and a snapshot can: a
+            // still-running (cancelled-but-not-stopped) coalesce Task can
+            // suspend on a tool-content fetch while a LATER mutation spawns
+            // its own coalesce Task that completes and sends first. Without
+            // bumping generation here too, the earlier delta would resume,
+            // pass an unchanged-generation check, and send its now-stale
+            // content at a higher revision — rolling the client back after
+            // it already received the newer delta. Bumping on every send
+            // attempt (snapshot OR dirty) makes generation a strict
+            // "did anyone else claim a send after me" ticket.
+            state.generation += 1
+            let capturedGeneration = state.generation
+            // A dirty tool call's persisted content may have grown past the
+            // cached copy — drop it so serialization re-fetches.
+            for index in indices where session.transcript.messages.indices.contains(index) {
+                if case .toolCall(let tc) = session.transcript.messages[index] {
+                    state.invalidateToolContent(tc.toolCallId)
+                }
+            }
+            let wire = await wireMessages(id: id, session: session, indices: indices)
+            guard state.generation == capturedGeneration else { return }
+            state.sentVersion = newSentVersion
+            state.revision += 1
+            send(.transcriptDelta(sessionId: id,
+                                  streamingState: Self.stateString(session.transcript.streamingState),
+                                  canDrive: provider.isWriter(for: id),
+                                  upserts: wire,
+                                  epoch: state.epoch,
+                                  revision: state.revision))
+        }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
     }
 
-    private func wireMessages(id: String, session: ACPSession) async -> [RemoteWireMessage] {
+    private func wireMessages(id: String, session: ACPSession, indices: [Int]) async -> [RemoteWireMessage] {
         var wire: [RemoteWireMessage] = []
-        wire.reserveCapacity(session.transcript.messages.count)
-        for (index, message) in session.transcript.messages.enumerated() {
+        wire.reserveCapacity(indices.count)
+        for index in indices {
+            // Re-check across awaits: a structural mutation mid-serialize can
+            // shrink the array; the epoch bump will resync the client.
+            guard session.transcript.messages.indices.contains(index) else { continue }
+            let message = session.transcript.messages[index]
             wire.append(Self.toWire(
                 message,
                 index: index,
-                fullToolCallContent: await fullToolCallContentIfNeeded(
-                    sessionId: id,
-                    message: message
-                )
-            ))
+                fullToolCallContent: await cachedFullToolCallContent(sessionId: id, message: message)))
         }
         return wire
     }
 
-    private func fullToolCallContentIfNeeded(sessionId: String, message: ACPMessage) async -> String? {
-        guard case .toolCall(let toolCall) = message,
-              toolCall.isContentTruncated
+    private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
+        guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated else { return nil }
+        let state = syncState(for: sessionId)
+        if let cached = state.cachedToolContent(toolCall.toolCallId) { return cached }
+        guard let full = await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
         else { return nil }
-        return await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
+        state.storeToolContent(toolCall.toolCallId, full)
+        return full
     }
 
     private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
@@ -685,8 +878,13 @@ final class RemoteSessionGateway {
     /// mirror re-decodes the transcript on every refresh, minting fresh UUIDs
     /// each time (`ACPMessageWire.toMessage`), so the per-message id is not
     /// stable across our full re-snapshots. Position is — the Nth message stays
-    /// the Nth — so the client can upsert idempotently instead of accumulating
-    /// duplicate copies of the whole transcript on each refresh.
+    /// the Nth — so the client can upsert idempotently by `index` instead of
+    /// accumulating duplicate copies. Positional ids stay valid across
+    /// incremental deltas too: every index-shifting mutation (prepend,
+    /// removal, wholesale replacement) is recorded as *structural* by
+    /// `ACPTranscriptChangeLog`, which forces a fresh tail snapshot under a
+    /// bumped epoch rather than a delta that could otherwise upsert a stale
+    /// index against shifted content.
     static func toWire(
         _ message: ACPMessage,
         index: Int,
@@ -701,24 +899,25 @@ final class RemoteSessionGateway {
             var parts: [String] = []
             if !text.isEmpty { parts.append(text) }
             parts.append(contentsOf: attachments.map { "🖼 \($0.name ?? "Image")" })
-            return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil)
+            return .init(stableId: sid, kind: "user", text: parts.joined(separator: "\n\n"), json: nil, index: index)
         case .agent(_, _, let streaming):
-            return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil)
+            return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):
-            return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil)
+            return .init(stableId: sid, kind: "thought", text: streaming.value, json: nil, index: index)
         case .systemNotice(_, let text):
-            return .init(stableId: sid, kind: "systemNotice", text: text, json: nil)
+            return .init(stableId: sid, kind: "systemNotice", text: text, json: nil, index: index)
         case .toolCall(let call):
             return .init(
                 stableId: sid,
                 kind: "toolCall",
                 text: nil,
-                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent))
+                json: Self.encodeJSON(remoteToolCall(call, fullContent: fullToolCallContent)),
+                index: index
             )
         case .fileEdit(_, let edit):
-            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit))
+            return .init(stableId: sid, kind: "fileEdit", text: nil, json: Self.encodeJSON(edit), index: index)
         case .plan(_, let items):
-            return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items))
+            return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
         }
     }
 
