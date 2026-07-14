@@ -891,6 +891,7 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         .map_err(|error| jsonrpc_error(-32050, format!("proc dir failed: {error}")))?;
     let status = proc_status_in_dir(&dir);
     if status.running {
+        register_proc_cwd(state, &params.proc_id, cwd);
         return Ok(json!({
             "procId": params.proc_id,
             "running": true,
@@ -948,9 +949,7 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         "launch",
     )?;
     spawn_proc_supervisor(&dir)?;
-    state
-        .subscriptions
-        .insert(format!("proc:{}", params.proc_id), cwd);
+    register_proc_cwd(state, &params.proc_id, cwd);
     let status = proc_status_in_dir(&dir);
     Ok(json!({
         "procId": params.proc_id,
@@ -968,6 +967,10 @@ fn validated_proc_cwd(requested_cwd: &str) -> Result<PathBuf, HelperError> {
         return Err(jsonrpc_error(-32050, "cwd is not a directory"));
     }
     Ok(cwd)
+}
+
+fn register_proc_cwd(state: &mut HelperState, proc_id: &str, cwd: PathBuf) {
+    state.subscriptions.insert(format!("proc:{proc_id}"), cwd);
 }
 
 fn spawn_proc_supervisor(dir: &Path) -> Result<(), HelperError> {
@@ -1270,6 +1273,13 @@ fn proc_write(params: Option<Value>) -> Result<Value, HelperError> {
     let dir = proc_dir(&params.proc_id)?;
     if !dir.is_dir() {
         return Err(jsonrpc_error(-32051, "process not found"));
+    }
+    proc_write_in_dir(&dir, &params)
+}
+
+fn proc_write_in_dir(dir: &Path, params: &ProcWriteParams) -> Result<Value, HelperError> {
+    if !proc_status_in_dir(dir).running {
+        return Err(jsonrpc_error(-32051, "process not running"));
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(params.data_base64.as_bytes())
@@ -2109,6 +2119,45 @@ mod tests {
             .expect("symlink cwd should be valid");
 
         assert_eq!(validated, link);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_cwd_registration_uses_proc_subscription_key() {
+        let mut state = HelperState::default();
+        let cwd = PathBuf::from("/repo/link");
+
+        register_proc_cwd(&mut state, "session-1", cwd.clone());
+
+        assert_eq!(state.subscriptions.get("proc:session-1"), Some(&cwd));
+    }
+
+    #[test]
+    fn proc_write_rejects_exited_process_without_appending() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-write-exited-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("proc dir");
+        std::fs::write(root.join("stdin.log"), b"existing\n").expect("stdin log");
+        std::fs::write(root.join("exit"), b"0\n").expect("exit status");
+        let params = ProcWriteParams {
+            proc_id: "session-1".to_string(),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(b"prompt\n"),
+            expected_stdin_offset: Some(9),
+        };
+
+        let error = proc_write_in_dir(&root, &params).expect_err("exited proc must reject writes");
+
+        assert_eq!(error.code, -32051);
+        assert_eq!(
+            std::fs::read(root.join("stdin.log")).expect("stdin contents"),
+            b"existing\n"
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
