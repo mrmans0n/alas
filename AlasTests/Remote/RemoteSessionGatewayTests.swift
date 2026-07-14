@@ -1531,6 +1531,71 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty, "stale overlapping delta must be discarded, got \(sent)")
     }
 
+    // Regression (codex review, PR #775): discarding a superseded dirty
+    // delta must not silently lose the mutation it would have carried.
+    // sentVersion used to advance BEFORE the await, so a delta that got
+    // discarded still "consumed" its indices from the change log's
+    // perspective — the next delta would never re-offer them, losing the
+    // mutation until a full resync. sentVersion must only commit once the
+    // delta is actually accepted, so a superseding delta naturally re-picks
+    // up whatever the discarded one would have sent.
+    @Test func overlappingDirtyDeltaStillDeliversDiscardedMutation() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend mutation #1's re-fetch
+
+        // Mutation #1: the tool call — invalidates its cache and suspends
+        // its own delta while re-fetching.
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // Mutation #2: an appended message. Its own coalesced delta must
+        // include BOTH this new index AND mutation #1's index, because
+        // sentVersion was NOT prematurely advanced by the still-suspended
+        // (and about-to-be-discarded) delta from mutation #1.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "notice"))
+        for _ in 0..<50 where sent.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard case .transcriptDelta(_, _, _, let upserts, _, _)? = sent.last else {
+            Issue.record("expected the overlapping dirty delta to land, got \(sent)")
+            return
+        }
+        #expect(upserts.contains { $0.kind == "systemNotice" })
+        #expect(
+            upserts.contains { $0.stableId == "m0" && ($0.json?.contains(#""status":"completed""#) ?? false) },
+            "mutation #1's tool-call status change must not be lost, got \(upserts)"
+        )
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "the superseded delta must still discard, got \(sent)")
+    }
+
     // Regression (codex review, PR #775): sendSnapshot bumps `generation`
     // but, unlike the delta/page paths, never re-checked it after its own
     // await — so a snapshot superseded by a concurrent send (another

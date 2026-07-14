@@ -427,7 +427,15 @@ final class RemoteSessionGateway {
                 await sendSnapshot(id: id, session: session)
                 return
             }
-            state.sentVersion = log.latestVersion
+            // Capture — but do NOT yet commit — the version this delta will
+            // cover. Committing it now (before the await) would make the
+            // change log treat `indices` as "already sent" even if this
+            // delta ends up discarded below: a later dirty mutation would
+            // then compute `changes(since:)` against an already-advanced
+            // sentVersion and never re-offer these indices, silently losing
+            // them until a full resync. Only write it once we know we're
+            // actually sending (see the guard below).
+            let newSentVersion = log.latestVersion
             // Claim a generation for this send BEFORE the async serialize
             // below — not just on sendSnapshot. Two overlapping dirty
             // deltas can race the same way a delta and a snapshot can: a
@@ -451,6 +459,7 @@ final class RemoteSessionGateway {
             }
             let wire = await wireMessages(id: id, session: session, indices: indices)
             guard state.generation == capturedGeneration else { return }
+            state.sentVersion = newSentVersion
             state.revision += 1
             send(.transcriptDelta(sessionId: id,
                                   streamingState: Self.stateString(session.transcript.streamingState),
