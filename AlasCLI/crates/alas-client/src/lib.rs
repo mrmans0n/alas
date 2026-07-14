@@ -288,18 +288,11 @@ pub fn dispatch_to_sockets(
         return Err(DispatchError::NoAlas);
     }
 
-    // Fast path: a single running app. Send the command directly and return
-    // its reply verbatim, success or error — there is no single instance to
-    // disambiguate, so no DispatchError::NotInWorktree translation happens
-    // here (that only applies once multiple instances are probed below).
-    if sockets.len() == 1 {
-        let req = build_request(command, None, Some(cwd.clone()));
-        let resp = send(&sockets[0], &req).map_err(DispatchError::Transport)?;
-        return Ok(resp);
-    }
-
-    // Multiple apps: probe each with a non-mutating resolve, then send the real
-    // command only to the unique owner.
+    // Probe every live socket with a non-mutating resolve first, then send
+    // the real command only to the unique owner. This applies uniformly
+    // regardless of socket count (even a single running app is probed) so
+    // "not inside an Alas worktree" maps to the same DispatchError, and thus
+    // the same exit code, whether one or many instances are running.
     let probe = build_request(&Command::Resolve, None, Some(cwd.clone()));
     let mut owners = Vec::new();
     for socket in sockets {

@@ -62,7 +62,10 @@ use alas_client::{Command, DispatchError, Target};
 
 #[test]
 fn dispatch_directory_single_owner_sends_command() {
-    let (path, handle) = stub_server(r#"{"ok":true}"#);
+    // Even with a single live socket, directory dispatch probes first (a
+    // `resolve`) before sending the real command, so the single-instance and
+    // multi-instance paths agree on exit codes for "not in a worktree".
+    let (path, handle) = stub_multi_server(vec![r#"{"ok":true}"#, r#"{"ok":true}"#]);
     let target = Target::Directory { cwd: "/repo".into() };
     // One explicit socket via the test-only entry point.
     let resp = alas_client::dispatch_to_sockets(
@@ -71,7 +74,13 @@ fn dispatch_directory_single_owner_sends_command() {
         std::slice::from_ref(&path),
     );
     assert!(matches!(resp, Ok(r) if r.ok));
-    let _ = handle.join();
+
+    let received = handle.join().unwrap();
+    assert_eq!(received.len(), 2, "owner should see probe + real command");
+    assert_eq!(parsed(&received[0])["command"], "resolve");
+    assert_eq!(parsed(&received[1])["command"], "wt");
+    assert_eq!(parsed(&received[1])["subcommand"], "list");
+
     let _ = std::fs::remove_file(&path);
 }
 
