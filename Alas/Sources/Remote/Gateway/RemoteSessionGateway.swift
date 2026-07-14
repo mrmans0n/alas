@@ -5,8 +5,11 @@ import Combine
 ///
 /// Transport-agnostic: it consumes decoded `RemoteClientMessage`s and emits
 /// `RemoteServerMessage`s via the `send` closure, so it is fully testable
-/// without sockets. Observes the live `ACPTranscript` (Combine) and
-/// re-snapshots on change (coalesced) as a "delta". Inbound permission
+/// without sockets. Observes the live `ACPTranscript` (Combine) and, on
+/// change (coalesced), consumes `ACPTranscriptChangeLog` to emit either an
+/// incremental delta (only the messages the log marked dirty) or, when the
+/// log reports a structural change or the connection has fallen behind, a
+/// fresh tail-window snapshot under a bumped epoch. Inbound permission
 /// decisions route to the existing `ACPPermissionPolicy.userDecided(...)`
 /// after a first-wins staleness guard.
 @MainActor
@@ -22,6 +25,8 @@ final class RemoteSessionGateway {
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
     private var worktreeListGeneration = 0
+    private var syncStates: [String: RemoteTranscriptSync] = [:]
+    private var trackedSessions: Set<String> = []
     // Per-session request id of the permission/question prompt we last surfaced,
     // so we can tell the client to dismiss it if it gets resolved elsewhere.
     private var lastPermissionReq: [String: Int] = [:]
@@ -57,6 +62,7 @@ final class RemoteSessionGateway {
                 send(.sessionClosed(sessionId: id))
                 return
             }
+            beginTracking(id: id, session: session)
             await sendSnapshot(id: id, session: session)
             if let cfg = provider.sessionConfig(for: id) {
                 send(.sessionConfig(cfg))
@@ -73,6 +79,8 @@ final class RemoteSessionGateway {
             lastPermissionReq[id] = nil
             lastQuestionReq[id] = nil
             lastElicitationReq[id] = nil
+            endTracking(id: id)
+            syncStates[id] = nil
         case .permissionDecision(let id, let requestId, let optionId, let persistScope):
             await applyDecision(sessionId: id, requestId: requestId, optionId: optionId, persistScope: persistScope)
         case .questionAnswer(let id, let requestId, let answers):
@@ -160,11 +168,33 @@ final class RemoteSessionGateway {
             }
             send(.sessionRenamed(sessionId: id, title: trimmed))
             refreshSessionList()
-        case .fetchOlder:
-            // Wire protocol only for now; serving historical pages from the
-            // transcript change log is a follow-up (windowing/diffing work).
-            break
+        case .fetchOlder(let id, let beforeIndex, let limit):
+            // Ignore pages requested before a snapshot established sync state.
+            guard let session = provider.session(for: id), syncStates[id] != nil else { return }
+            let clamped = min(max(limit, RemoteTranscriptSync.pageLimitRange.lowerBound),
+                              RemoteTranscriptSync.pageLimitRange.upperBound)
+            let count = session.transcript.messages.count
+            let hi = min(max(beforeIndex, 0), count)
+            let lo = max(0, hi - clamped)
+            let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
+            // Stamp with the CURRENT epoch: if it moved past the client's,
+            // the client drops the page and the pending resync wins.
+            send(.transcriptPage(sessionId: id,
+                                 epoch: session.transcript.changeLog.epoch,
+                                 firstIndex: lo,
+                                 messages: wire))
         }
+    }
+
+    private func beginTracking(id: String, session: ACPSession) {
+        guard !trackedSessions.contains(id) else { return }
+        trackedSessions.insert(id)
+        session.transcript.changeLog.retainTracking()
+    }
+
+    private func endTracking(id: String) {
+        guard trackedSessions.remove(id) != nil else { return }
+        provider.session(for: id)?.transcript.changeLog.releaseTracking()
     }
 
     private func refreshSessionList() {
@@ -259,25 +289,45 @@ final class RemoteSessionGateway {
         lastPermissionReq.removeAll()
         lastQuestionReq.removeAll()
         lastElicitationReq.removeAll()
+        for id in trackedSessions {
+            provider.session(for: id)?.transcript.changeLog.releaseTracking()
+        }
+        trackedSessions.removeAll()
+        syncStates.removeAll()
     }
 
     // MARK: snapshot / delta
 
     private func sendSnapshot(id: String, session: ACPSession) async {
-        let wire = await wireMessages(id: id, session: session)
-        // v1: full-replay snapshot with placeholder windowing/versioning fields
-        // (real tail-window + epoch/revision tracking lands in a follow-up).
+        let state = syncState(for: id)
+        let log = session.transcript.changeLog
+        let count = session.transcript.messages.count
+        let first = max(0, count - RemoteTranscriptSync.tailWindow)
+        // Capture version/epoch BEFORE the async serialize: anything that
+        // mutates during the awaits lands at a higher version and is
+        // picked up by the next delta.
+        state.epoch = log.epoch
+        state.sentVersion = log.latestVersion
+        state.revision = 0
+        let wire = await wireMessages(id: id, session: session, indices: Array(first..<count))
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
                                  canDrive: provider.isWriter(for: id),
                                  messages: wire,
-                                 firstIndex: 0,
-                                 totalCount: wire.count,
-                                 epoch: 0,
+                                 firstIndex: first,
+                                 totalCount: count,
+                                 epoch: state.epoch,
                                  revision: 0))
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
+    }
+
+    private func syncState(for id: String) -> RemoteTranscriptSync {
+        if let s = syncStates[id] { return s }
+        let s = RemoteTranscriptSync()
+        syncStates[id] = s
+        return s
     }
 
     private func observe(id: String, session: ACPSession) {
@@ -325,44 +375,78 @@ final class RemoteSessionGateway {
         }
     }
 
+    /// Emits an incremental delta: only messages the change log marked
+    /// dirty since the last send. Structural transcript changes (prepend,
+    /// removal, wholesale replacement) resync via a fresh tail snapshot.
     private func sendDelta(id: String, session: ACPSession) async {
-        // v1: send a full re-snapshot as the "delta" (simple + always correct).
-        // A true per-message diff optimization is intentionally deferred (YAGNI).
-        let wire = await wireMessages(id: id, session: session)
-        // v1: full-replay delta with placeholder epoch/revision (real per-message
-        // diffing lands in a follow-up).
-        send(.transcriptDelta(sessionId: id,
-                              streamingState: Self.stateString(session.transcript.streamingState),
-                              canDrive: provider.isWriter(for: id),
-                              upserts: wire,
-                              epoch: 0,
-                              revision: 0))
+        guard let state = syncStates[id] else { return }
+        let log = session.transcript.changeLog
+        switch log.changes(since: state.sentVersion) {
+        case .resync:
+            await sendSnapshot(id: id, session: session)
+            return
+        case .none:
+            // No transcript content changed — this tick was a state flip
+            // (streamingState / pending prompt). Send a content-free delta
+            // so the client still tracks state.
+            state.revision += 1
+            send(.transcriptDelta(sessionId: id,
+                                  streamingState: Self.stateString(session.transcript.streamingState),
+                                  canDrive: provider.isWriter(for: id),
+                                  upserts: [],
+                                  epoch: state.epoch,
+                                  revision: state.revision))
+        case .dirty(let indices):
+            guard indices.count <= RemoteTranscriptSync.dirtyResnapshotThreshold else {
+                await sendSnapshot(id: id, session: session)
+                return
+            }
+            state.sentVersion = log.latestVersion
+            // A dirty tool call's persisted content may have grown past the
+            // cached copy — drop it so serialization re-fetches.
+            for index in indices where session.transcript.messages.indices.contains(index) {
+                if case .toolCall(let tc) = session.transcript.messages[index] {
+                    state.invalidateToolContent(tc.toolCallId)
+                }
+            }
+            let wire = await wireMessages(id: id, session: session, indices: indices)
+            state.revision += 1
+            send(.transcriptDelta(sessionId: id,
+                                  streamingState: Self.stateString(session.transcript.streamingState),
+                                  canDrive: provider.isWriter(for: id),
+                                  upserts: wire,
+                                  epoch: state.epoch,
+                                  revision: state.revision))
+        }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)
     }
 
-    private func wireMessages(id: String, session: ACPSession) async -> [RemoteWireMessage] {
+    private func wireMessages(id: String, session: ACPSession, indices: [Int]) async -> [RemoteWireMessage] {
         var wire: [RemoteWireMessage] = []
-        wire.reserveCapacity(session.transcript.messages.count)
-        for (index, message) in session.transcript.messages.enumerated() {
+        wire.reserveCapacity(indices.count)
+        for index in indices {
+            // Re-check across awaits: a structural mutation mid-serialize can
+            // shrink the array; the epoch bump will resync the client.
+            guard session.transcript.messages.indices.contains(index) else { continue }
+            let message = session.transcript.messages[index]
             wire.append(Self.toWire(
                 message,
                 index: index,
-                fullToolCallContent: await fullToolCallContentIfNeeded(
-                    sessionId: id,
-                    message: message
-                )
-            ))
+                fullToolCallContent: await cachedFullToolCallContent(sessionId: id, message: message)))
         }
         return wire
     }
 
-    private func fullToolCallContentIfNeeded(sessionId: String, message: ACPMessage) async -> String? {
-        guard case .toolCall(let toolCall) = message,
-              toolCall.isContentTruncated
+    private func cachedFullToolCallContent(sessionId: String, message: ACPMessage) async -> String? {
+        guard case .toolCall(let toolCall) = message, toolCall.isContentTruncated else { return nil }
+        let state = syncState(for: sessionId)
+        if let cached = state.cachedToolContent(toolCall.toolCallId) { return cached }
+        guard let full = await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
         else { return nil }
-        return await provider.fullToolCallContent(sessionId: sessionId, toolCallId: toolCall.toolCallId)
+        state.storeToolContent(toolCall.toolCallId, full)
+        return full
     }
 
     private func emitPendingPermissionIfAny(id: String, session: ACPSession) {
@@ -699,8 +783,13 @@ final class RemoteSessionGateway {
     /// mirror re-decodes the transcript on every refresh, minting fresh UUIDs
     /// each time (`ACPMessageWire.toMessage`), so the per-message id is not
     /// stable across our full re-snapshots. Position is — the Nth message stays
-    /// the Nth — so the client can upsert idempotently instead of accumulating
-    /// duplicate copies of the whole transcript on each refresh.
+    /// the Nth — so the client can upsert idempotently by `index` instead of
+    /// accumulating duplicate copies. Positional ids stay valid across
+    /// incremental deltas too: every index-shifting mutation (prepend,
+    /// removal, wholesale replacement) is recorded as *structural* by
+    /// `ACPTranscriptChangeLog`, which forces a fresh tail snapshot under a
+    /// bumped epoch rather than a delta that could otherwise upsert a stale
+    /// index against shifted content.
     static func toWire(
         _ message: ACPMessage,
         index: Int,

@@ -25,6 +25,7 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     var renameSucceeds = true
     var configs: [String: RemoteSessionConfig] = [:]
     var fullToolCallContents: [String: String] = [:]
+    var fullToolCallContentCallCount = 0
     var sessionSummariesCallCount = 0
     var remoteWorktreesCallCount = 0
     var remoteAgentsCallCount = 0
@@ -78,7 +79,8 @@ final class FakeSessionsProvider: RemoteSessionsProvider {
     }
 
     func fullToolCallContent(sessionId: String, toolCallId: String) async -> String? {
-        fullToolCallContents["\(sessionId)|\(toolCallId)"]
+        fullToolCallContentCallCount += 1
+        return fullToolCallContents["\(sessionId)|\(toolCallId)"]
     }
 
     func isWriter(for id: String) -> Bool { writers.contains(id) }
@@ -1156,5 +1158,151 @@ struct RemoteSessionGatewayTests {
         }
         // cleanup
         for url in provider.writtenAttachmentURLs { try? FileManager.default.removeItem(at: url) }
+    }
+
+    private func makeSessionWithUserMessages(_ count: Int) throws -> ACPSession {
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        s.transcript.messages = (0..<count).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        return s
+    }
+
+    @Test func snapshotOfLongTranscriptIsTailWindowed() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(200)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, let msgs, let first, let total, _, let revision)? = sent.first else {
+            Issue.record("expected snapshot, got \(sent)"); return
+        }
+        #expect(total == 200)
+        #expect(first == 200 - RemoteTranscriptSync.tailWindow)
+        #expect(msgs.count == RemoteTranscriptSync.tailWindow)
+        #expect(msgs.first?.stableId == "m\(first)")
+        #expect(msgs.first?.index == first)
+        #expect(revision == 0)
+    }
+
+    @Test func deltaCarriesOnlyDirtyMessages() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(50)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        s.transcript.messages.append(.systemNotice(id: UUID(), text: "done"))
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        let delta = sent.compactMap { msg -> [RemoteWireMessage]? in
+            if case .transcriptDelta(_, _, _, let u, _, _) = msg { return u }
+            return nil
+        }.last
+        #expect(delta?.count == 1)
+        #expect(delta?.first?.index == 50)
+        #expect(delta?.first?.kind == "systemNotice")
+    }
+
+    @Test func structuralChangeTriggersResyncSnapshotWithBumpedEpoch() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(10)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let epoch0, _)? = sent.first else {
+            Issue.record("expected snapshot"); return
+        }
+        sent.removeAll()
+        s.transcript.messages.removeLast()               // structural
+        try await Task.sleep(nanoseconds: 250_000_000)
+        let resync = sent.last { if case .transcriptSnapshot = $0 { return true }; return false }
+        guard case .transcriptSnapshot(_, _, _, let msgs, _, let total, let epoch1, _)? = resync else {
+            Issue.record("expected resync snapshot, got \(sent)"); return
+        }
+        #expect(epoch1 == epoch0 + 1)
+        #expect(total == 9)
+        #expect(msgs.count == 9)
+    }
+
+    @Test func fetchOlderReturnsClampedPage() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(200)
+        provider.sessions["s1"] = s
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        sent.removeAll()
+        await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 110, limit: 90))
+        guard case .transcriptPage(_, _, let first, let msgs)? = sent.last else {
+            Issue.record("expected page, got \(sent)"); return
+        }
+        #expect(first == 20)
+        #expect(msgs.count == 90)
+        #expect(msgs.first?.index == 20)
+        #expect(msgs.last?.index == 109)
+
+        sent.removeAll()
+        await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 10, limit: 500))   // clamp both ends
+        guard case .transcriptPage(_, _, let first2, let msgs2)? = sent.last else {
+            Issue.record("expected page, got \(sent)"); return
+        }
+        #expect(first2 == 0)
+        #expect(msgs2.count == 10)
+    }
+
+    @Test func fetchOlderBeforeSubscribeIsIgnored() async throws {
+        let provider = FakeSessionsProvider()
+        provider.sessions["s1"] = try makeSessionWithUserMessages(5)
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.fetchOlder(sessionId: "s1", beforeIndex: 5, limit: 5))
+        #expect(sent.isEmpty)
+    }
+
+    @Test func truncatedToolContentIsFetchedOnceAcrossSnapshotAndDeltas() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let session = try makeSessionWithAgentText("tail")
+        session.transcript.messages = [.toolCall(toolCall), .agent(id: UUID(), StreamingText("tail"))]
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(provider.fullToolCallContentCallCount == 1)
+        // A dirty tick on the OTHER message must not re-fetch tool content.
+        session.transcript.messages.append(.systemNotice(id: UUID(), text: "x"))
+        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(provider.fullToolCallContentCallCount == 1)
+    }
+
+    @Test func unsubscribeReleasesChangeTracking() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(3)
+        provider.sessions["s1"] = s
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        #expect(s.transcript.changeLog.isTracking)
+        await gw.handle(.unsubscribe(sessionId: "s1"))
+        #expect(!s.transcript.changeLog.isTracking)
+    }
+
+    @Test func resubscribeDoesNotLeakTrackingRetains() async throws {
+        let provider = FakeSessionsProvider()
+        let s = try makeSessionWithUserMessages(3)
+        provider.sessions["s1"] = s
+        let gw = RemoteSessionGateway(provider: provider) { _ in }
+        await gw.handle(.subscribe(sessionId: "s1"))
+        await gw.handle(.subscribe(sessionId: "s1"))   // client resync
+        await gw.handle(.unsubscribe(sessionId: "s1"))
+        #expect(!s.transcript.changeLog.isTracking)
     }
 }

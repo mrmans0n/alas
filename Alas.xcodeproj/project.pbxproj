@@ -917,6 +917,7 @@
 		BAE4D422FC3950E61FEE1D15 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA43AA9C8462D579E733B46C /* AppIntents.framework */; };
 		BAE6B1D93387807ADD7ED0CC /* ACPImageThumbnail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5E1462C85D0E49127BCED81 /* ACPImageThumbnail.swift */; };
 		BB565B8EE9BA20EE961B32FB /* ThemeSidebarContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70ED4990428C46B69784970 /* ThemeSidebarContrastTests.swift */; };
+		BB7A00188B3BD4C729E0D8E6 /* RemoteTranscriptSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */; };
 		BB924C35D21B87B46A47C5FA /* ACPAdapterTarget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 818B29F6B58D4FFC80603AAD /* ACPAdapterTarget.swift */; };
 		BBACA7DCC1EFA6D55AEB38CE /* ACPMCPStatusControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1936C815E64C7DB204340469 /* ACPMCPStatusControl.swift */; };
 		BC0EC69E1BC62514BBE129E7 /* OpenSessionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEFCC9CAC7B3254708748815 /* OpenSessionsTests.swift */; };
@@ -1926,6 +1927,7 @@
 		88379ACE40F42BE4A3257659 /* ThemeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeTests.swift; sourceTree = "<group>"; };
 		883981BBADF9816718091CE1 /* MergeScrollCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeScrollCoordinatorTests.swift; sourceTree = "<group>"; };
 		88C6356C759B509DD81EDEBB /* ACPConfigOption.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPConfigOption.swift; sourceTree = "<group>"; };
+		88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTranscriptSync.swift; sourceTree = "<group>"; };
 		8942D0F47DBCFFB3549EE775 /* ShortcutReservations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutReservations.swift; sourceTree = "<group>"; };
 		89B23F35BE6FD53B74DD84ED /* ZmxSessionName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZmxSessionName.swift; sourceTree = "<group>"; };
 		89C4AE9D01CA02A9689AAE8B /* CompletionWindowControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionWindowControllerTests.swift; sourceTree = "<group>"; };
@@ -2646,6 +2648,7 @@
 			children = (
 				CDE49D2437D7E6AC9D67F136 /* RemoteSessionGateway.swift */,
 				33EBE6A3E0CA30D8910E68F8 /* RemoteSessionsProvider.swift */,
+				88DCE75EFAA8F6E576343CE5 /* RemoteTranscriptSync.swift */,
 				9DD81682586D187AB70D1CDB /* RemoteWorktreeSummaryBuilder.swift */,
 			);
 			path = Gateway;
@@ -5417,6 +5420,7 @@
 				A770A357750B4713AF21C0E0 /* RemoteSessionsProvider.swift in Sources */,
 				31CB9FBE16CECDE2C6D94EC6 /* RemoteStatusFingerprint.swift in Sources */,
 				FD4196C9F558CE954D94E060 /* RemoteTerminalScript.swift in Sources */,
+				BB7A00188B3BD4C729E0D8E6 /* RemoteTranscriptSync.swift in Sources */,
 				F2983AF4C5674B906BEF2E88 /* RemoteWorktreePoll.swift in Sources */,
 				8C492CBACC6D6DACE56DADA9 /* RemoteWorktreeSummaryBuilder.swift in Sources */,
 				1F860C66D658B0DA5A0599F6 /* RemoteZmxInstaller.swift in Sources */,
