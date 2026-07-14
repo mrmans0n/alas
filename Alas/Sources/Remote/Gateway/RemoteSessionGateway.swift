@@ -314,14 +314,21 @@ final class RemoteSessionGateway {
         let log = session.transcript.changeLog
         let count = session.transcript.messages.count
         let first = max(0, count - RemoteTranscriptSync.tailWindow)
-        // Capture version/epoch BEFORE the async serialize: anything that
-        // mutates during the awaits lands at a higher version and is
-        // picked up by the next delta. Bumping `generation` here — even
-        // when `epoch` itself is unchanged (e.g. a same-epoch takeOver or
-        // client resubscribe) — lets a concurrently-suspended delta/page
-        // detect that THIS snapshot already superseded it.
+        // Capture epoch/version BEFORE the async serialize, but do NOT yet
+        // commit sentVersion to `state` — see below. Bumping `generation`
+        // here — even when `epoch` itself is unchanged (e.g. a same-epoch
+        // takeOver or client resubscribe) — lets a concurrently-suspended
+        // delta/page detect that THIS snapshot already superseded it.
         state.epoch = log.epoch
-        state.sentVersion = log.latestVersion
+        // Defer committing sentVersion, matching the dirty-delta fix above:
+        // writing it now would make the change log treat everything dirty
+        // up to this point as "already sent" even if this snapshot ends up
+        // discarded below (superseded by a same-epoch dirty delta that
+        // raced in during the await) — the pre-snapshot dirty indices would
+        // then be silently absent from both sends, never re-offered, since
+        // sentVersion already covers them. Only commit once we know this
+        // snapshot is actually going out.
+        let newSentVersion = log.latestVersion
         state.revision = 0
         state.generation += 1
         let capturedGeneration = state.generation
@@ -335,6 +342,7 @@ final class RemoteSessionGateway {
         // unlike deltas/pages. Discard; whatever claimed the later
         // generation read fresher state and is authoritative.
         if state.generation == capturedGeneration {
+            state.sentVersion = newSentVersion
             send(.transcriptSnapshot(sessionId: id,
                                      streamingState: Self.stateString(session.transcript.streamingState),
                                      canDrive: provider.isWriter(for: id),

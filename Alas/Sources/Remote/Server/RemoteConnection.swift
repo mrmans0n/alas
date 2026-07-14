@@ -73,6 +73,14 @@ final class RemoteConnection: @unchecked Sendable {
     private static let maxHeaderBytes = 64 * 1024
     private static let maxBodyBytes = 1 << 20   // 1 MB
 
+    /// Cap on how long a control message (stop) waits for a preceding drive
+    /// action's own task — which itself waits on whatever ordered read work
+    /// preceded IT — before running anyway regardless of whether that chain
+    /// finished. Generous for normal-speed reads/lease-confirms; short
+    /// enough that stop remains a reliable emergency brake if something
+    /// ahead of it is genuinely stuck.
+    private static let stopDriveActionWaitNanos: UInt64 = 1_000_000_000
+
     func start() {
         conn.start(queue: queue)
         receive()
@@ -292,12 +300,43 @@ final class RemoteConnection: @unchecked Sendable {
         // queue — so a still-in-flight prompt/takeover is allowed to land
         // first (or stop could find no active turn to cancel and the
         // just-submitted prompt would stream anyway right after the user
-        // pressed Stop), while unrelated queued read work (subscribe,
-        // fetchOlder, list*, etc.) never blocks stop.
+        // pressed Stop).
+        //
+        // That drive action's own task still chains behind whatever ordered
+        // read work (subscribe/fetchOlder/list*/etc.) preceded IT, though —
+        // `await previous?.value` inside its body is unavoidable, since the
+        // drive action genuinely cannot run before its predecessor. If that
+        // predecessor is stuck (not just normally slow), waiting on it here
+        // would block stop indefinitely too, defeating its purpose as an
+        // always-available emergency brake. Bound the wait: ordered read
+        // work is fast under normal conditions (Task 4/6 fixed the
+        // MainActor-saturating case), so this window is generous for the
+        // common case but still guarantees stop is never stuck for good.
         if msg.isControl {
             let previous = lastDriveActionTail
             Task { @MainActor in
-                await previous?.value
+                if let previous {
+                    // `Task<Void, Never>.value` cannot be interrupted by
+                    // cancellation (it has no error channel to abort
+                    // through), so a `withTaskGroup` race here would still
+                    // block at the group's implicit exit-reap until
+                    // `previous` itself finishes — defeating the bound
+                    // entirely. Race via a manually-resumed continuation
+                    // instead: whichever finishes first resumes it, and the
+                    // loser keeps running independently in the background,
+                    // its own eventual resume attempt becoming a no-op.
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        let resume = SingleResume(continuation)
+                        Task { @MainActor in
+                            await previous.value
+                            resume.fire()
+                        }
+                        Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: Self.stopDriveActionWaitNanos)
+                            resume.fire()
+                        }
+                    }
+                }
                 await gateway.handle(msg)
             }
             return
@@ -356,5 +395,25 @@ final class RemoteConnection: @unchecked Sendable {
         let magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         let digest = Insecure.SHA1.hash(data: Data((key + magic).utf8))
         return Data(digest).base64EncodedString()
+    }
+}
+
+/// Resumes a `CheckedContinuation<Void, Never>` at most once. Used to race
+/// two independent tasks (e.g. "did the prior work finish" vs. "did the
+/// timeout elapse") where whichever finishes first should win and the other
+/// is simply abandoned rather than cancelled.
+@MainActor
+private final class SingleResume {
+    private var fired = false
+    private let continuation: CheckedContinuation<Void, Never>
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = continuation
+    }
+
+    func fire() {
+        guard !fired else { return }
+        fired = true
+        continuation.resume()
     }
 }
