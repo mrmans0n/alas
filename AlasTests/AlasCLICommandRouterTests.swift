@@ -38,6 +38,49 @@ struct AlasCLICommandRouterTests {
         #expect(opened[0].relativePath == "a.txt")
     }
 
+    @Test func resolvesOriginFromCwdWhenNoSession() async throws {
+        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var opened: [(worktreeId: String, relativePath: String)] = []
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { relativePath, worktreeId in opened.append((worktreeId, relativePath)) },
+            openExternalFile: { _, _ in Issue.record("expected relative open") },
+            activateApp: {}
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: nil, cwd: root.path,
+            command: .open(paths: [root.appendingPathComponent("a.txt").path])
+        ))
+        #expect(response == .ok)
+        #expect(opened.first?.relativePath == "a.txt")
+    }
+
+    @Test func resolveCommandReturnsOkWhenCwdOwned() async throws {
+        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { _ in nil },
+            originatingWorktree: { _ in nil },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            activateApp: {}
+        )
+        let owned = await router.handle(.init(version: 1, sessionId: nil, cwd: root.path, command: .resolve))
+        #expect(owned == .ok)
+        let notOwned = await router.handle(.init(version: 1, sessionId: nil, cwd: "/nope", command: .resolve))
+        if case .error = notOwned {} else { Issue.record("expected error for unowned cwd") }
+    }
+
     @Test func opensNestedWorktreeFileInMostSpecificVisibleWorktree() async throws {
         let root = try makeFile("repo/packages/tool/file.txt")
             .deletingLastPathComponent()
