@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Component, Path, PathBuf};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -208,6 +210,113 @@ pub fn discover_live_sockets_in(dir: &Path) -> Vec<PathBuf> {
 pub fn discover_live_sockets() -> Vec<PathBuf> {
     discover_live_sockets_in(&socket_dir())
 }
+
+#[derive(Debug)]
+pub enum TransportError {
+    Connect,
+    Io,
+    Malformed,
+}
+
+/// Send one request over `socket` and return the parsed reply. Writes the JSON
+/// bytes (the app parses as soon as the object is complete), then reads to EOF.
+pub fn send(socket: &Path, req: &Request) -> Result<Response, TransportError> {
+    let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
+    let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
+    stream.write_all(&payload).map_err(|_| TransportError::Io)?;
+    stream.flush().map_err(|_| TransportError::Io)?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).map_err(|_| TransportError::Io)?;
+    serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed)
+}
+
+/// How the CLI addresses the app: an exact pane (inside Alas) or a directory
+/// (anywhere else).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    Session { socket: String, session_id: String },
+    Directory { cwd: String },
+}
+
+/// Resolve the target from the environment. Inside Alas both vars are set and
+/// we address the exact session; otherwise we address the logical directory.
+pub fn resolve_target() -> Target {
+    let socket = std::env::var("ALAS_SOCKET_PATH").ok().filter(|s| !s.is_empty());
+    let session = std::env::var("ALAS_SESSION_ID").ok().filter(|s| !s.is_empty());
+    if let (Some(socket), Some(session_id)) = (socket, session) {
+        return Target::Session { socket, session_id };
+    }
+    let cwd = absolutize(&logical_base(), ".");
+    Target::Directory { cwd }
+}
+
+#[derive(Debug)]
+pub enum DispatchError {
+    NoAlas,
+    NotInWorktree,
+    Ambiguous,
+    Transport(TransportError),
+}
+
+/// Send `command` to the right app. Session targets go straight to their
+/// socket. Directory targets discover live sockets and pick the unique owner
+/// (via a non-mutating `resolve` probe) before sending the real command.
+pub fn dispatch(command: &Command, target: &Target) -> Result<Response, DispatchError> {
+    match target {
+        Target::Session { socket, session_id } => {
+            let req = build_request(command, Some(session_id.clone()), None);
+            send(Path::new(socket), &req).map_err(DispatchError::Transport)
+        }
+        Target::Directory { .. } => {
+            let sockets = discover_live_sockets();
+            dispatch_to_sockets(command, target, &sockets)
+        }
+    }
+}
+
+/// Directory-mode dispatch against an explicit socket list (separated out so it
+/// is testable without touching `/tmp`).
+pub fn dispatch_to_sockets(
+    command: &Command,
+    target: &Target,
+    sockets: &[PathBuf],
+) -> Result<Response, DispatchError> {
+    let Target::Directory { cwd } = target else {
+        unreachable!("dispatch_to_sockets is directory-only");
+    };
+    if sockets.is_empty() {
+        return Err(DispatchError::NoAlas);
+    }
+
+    // Fast path: a single running app. Send the command directly; a
+    // "not my worktree" reply becomes NotInWorktree.
+    if sockets.len() == 1 {
+        let req = build_request(command, None, Some(cwd.clone()));
+        let resp = send(&sockets[0], &req).map_err(DispatchError::Transport)?;
+        return Ok(resp);
+    }
+
+    // Multiple apps: probe each with a non-mutating resolve, then send the real
+    // command only to the unique owner.
+    let probe = build_request(&Command::Resolve, None, Some(cwd.clone()));
+    let mut owners = Vec::new();
+    for socket in sockets {
+        if let Ok(resp) = send(socket, &probe)
+            && resp.ok
+        {
+            owners.push(socket.clone());
+        }
+    }
+    match owners.len() {
+        0 => Err(DispatchError::NotInWorktree),
+        1 => {
+            let req = build_request(command, None, Some(cwd.clone()));
+            send(&owners[0], &req).map_err(DispatchError::Transport)
+        }
+        _ => Err(DispatchError::Ambiguous),
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
