@@ -29,6 +29,17 @@ struct ProcessGitTests {
         }
     }
 
+    @Test func tooManyArgumentsThrowsLaunchFailedBeforeFoundationAbort() async throws {
+        do {
+            _ = try await Process.run("/usr/bin/true", args: Array(repeating: "x", count: 4097))
+            Issue.record("expected launch failure")
+        } catch ProcessError.launchFailed(let message) {
+            #expect(message.contains("Too many arguments"))
+        } catch {
+            Issue.record("wrong error: \(error)")
+        }
+    }
+
     @Test func gitVersionRuns() async throws {
         let result = try await Process.run("/usr/bin/env", args: ["git", "--version"])
         #expect(result.exitCode == 0)

@@ -254,6 +254,7 @@ final class RightPaneState {
     @ObservationIgnored private var remoteHelperSession: RemoteHelperWatchSession?
     @ObservationIgnored private let remoteEventDebouncer = DebounceTimer(interval: 0.5, maxWait: 2.0)
     @ObservationIgnored private var remoteFingerprint: String?
+    nonisolated private static let hashObjectBatchSize = 256
     private static let remotePollIntervalNanos: UInt64 = 7 * 1_000_000_000
     private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
 
@@ -986,21 +987,29 @@ final class RightPaneState {
 
     nonisolated private static func hashObjects(paths: [String], worktreePath: URL) async -> [String: String] {
         guard !paths.isEmpty else { return [:] }
-        if let result = try? await Process.git(["hash-object", "--"] + paths, cwd: worktreePath),
-           result.exitCode == 0 {
-            let hashes = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
-            if hashes.count == paths.count {
-                return Dictionary(uniqueKeysWithValues: zip(paths, hashes))
-            }
-        }
 
         var hashes: [String: String] = [:]
-        for path in paths {
-            guard let result = try? await Process.git(["hash-object", "--", path], cwd: worktreePath),
-                  result.exitCode == 0 else {
-                continue
+        for startIndex in stride(from: 0, to: paths.count, by: hashObjectBatchSize) {
+            let endIndex = min(startIndex + hashObjectBatchSize, paths.count)
+            let batch = Array(paths[startIndex..<endIndex])
+            if let result = try? await Process.git(["hash-object", "--"] + batch, cwd: worktreePath),
+               result.exitCode == 0 {
+                let batchHashes = result.stdout.split(whereSeparator: \.isNewline).map(String.init)
+                if batchHashes.count == batch.count {
+                    for (path, hash) in zip(batch, batchHashes) {
+                        hashes[path] = hash
+                    }
+                    continue
+                }
             }
-            hashes[path] = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            for path in batch {
+                guard let result = try? await Process.git(["hash-object", "--", path], cwd: worktreePath),
+                      result.exitCode == 0 else {
+                    continue
+                }
+                hashes[path] = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
         }
         return hashes
     }
