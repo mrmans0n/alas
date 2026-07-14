@@ -885,11 +885,7 @@ fn spawn_search(
 fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
     let params: ProcSpawnParams = decode_params(params)?;
     validate_proc_id(&params.proc_id)?;
-    let cwd = std::fs::canonicalize(&params.cwd)
-        .map_err(|error| jsonrpc_error(-32050, format!("invalid cwd: {error}")))?;
-    if !cwd.is_dir() {
-        return Err(jsonrpc_error(-32050, "cwd is not a directory"));
-    }
+    let cwd = validated_proc_cwd(&params.cwd)?;
     let dir = proc_dir(&params.proc_id)?;
     std::fs::create_dir_all(&dir)
         .map_err(|error| jsonrpc_error(-32050, format!("proc dir failed: {error}")))?;
@@ -962,6 +958,16 @@ fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, H
         "exitCode": status.exit_code,
         "spawned": true
     }))
+}
+
+fn validated_proc_cwd(requested_cwd: &str) -> Result<PathBuf, HelperError> {
+    let cwd = PathBuf::from(requested_cwd);
+    let metadata = std::fs::metadata(&cwd)
+        .map_err(|error| jsonrpc_error(-32050, format!("invalid cwd: {error}")))?;
+    if !metadata.is_dir() {
+        return Err(jsonrpc_error(-32050, "cwd is not a directory"));
+    }
+    Ok(cwd)
 }
 
 fn spawn_proc_supervisor(dir: &Path) -> Result<(), HelperError> {
@@ -2078,6 +2084,31 @@ mod tests {
             !input_log_already_contains(&mut file, 20, b"later\n").expect("contains beyond eof")
         );
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_cwd_validation_preserves_symlink_path() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-cwd-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time after epoch")
+                .as_nanos()
+        ));
+        let target = root.join("target");
+        let link = root.join("link");
+        std::fs::create_dir_all(&target).expect("target cwd");
+        symlink(&target, &link).expect("cwd symlink");
+
+        let validated = validated_proc_cwd(link.to_str().expect("utf8 path"))
+            .expect("symlink cwd should be valid");
+
+        assert_eq!(validated, link);
         let _ = std::fs::remove_dir_all(root);
     }
 
