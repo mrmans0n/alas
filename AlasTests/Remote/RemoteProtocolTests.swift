@@ -454,4 +454,14 @@ struct RemoteProtocolTests {
         #expect(!RemoteClientMessage.takeOver(sessionId: "s").isControl)
         #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isControl)
     }
+
+    @Test func onlySendPromptAndTakeOverAreDriveOrdering() {
+        #expect(RemoteClientMessage.sendPrompt(sessionId: "s", text: "hi", attachments: []).isDriveOrdering)
+        #expect(RemoteClientMessage.takeOver(sessionId: "s").isDriveOrdering)
+        #expect(!RemoteClientMessage.subscribe(sessionId: "s").isDriveOrdering)
+        #expect(!RemoteClientMessage.fetchOlder(sessionId: "s", beforeIndex: 0, limit: 1).isDriveOrdering)
+        #expect(!RemoteClientMessage.stop(sessionId: "s").isDriveOrdering)
+        #expect(!RemoteClientMessage.setModel(sessionId: "s", modelId: "m").isDriveOrdering)
+        #expect(!RemoteClientMessage.listSessions.isDriveOrdering)
+    }
 }

@@ -38,6 +38,12 @@ final class RemoteConnection: @unchecked Sendable {
     /// arrival order — clients rely on this (e.g. a `takeOver` must land before
     /// the `sendPrompt` that follows it). Mutated only on `queue`.
     private var processingTail: Task<Void, Never>?
+    /// Task of the most recently dispatched `isDriveOrdering` message
+    /// (sendPrompt/takeOver). A following `stop` awaits exactly this —
+    /// narrower than the full `processingTail` — so it lands after a turn
+    /// the user just started without being blocked by unrelated queued read
+    /// work (subscribe/fetchOlder/list*/etc). Mutated only on `queue`.
+    private var lastDriveActionTail: Task<Void, Never>?
     /// Reassembles fragmented WebSocket messages before they're decoded.
     private var reassembler = WebSocketReassembler()
     /// The device this connection authenticated as, set on `queue` once the WS
@@ -281,13 +287,15 @@ final class RemoteConnection: @unchecked Sendable {
               let gateway else { return }
         // Control messages (stop) are idempotent and latency-critical: they
         // don't extend `processingTail`, so messages arriving AFTER stop are
-        // never blocked behind it. They still await whatever was already
-        // in-flight before them, though — a `sendPrompt`/`takeOver` queued
-        // just before stop must be allowed to land first, or stop could find
-        // no active turn to cancel and the just-submitted prompt would go on
-        // to stream anyway after the user already pressed Stop.
+        // never blocked behind it. They still await the most recent DRIVE
+        // action (sendPrompt/takeOver) specifically — not the whole ordered
+        // queue — so a still-in-flight prompt/takeover is allowed to land
+        // first (or stop could find no active turn to cancel and the
+        // just-submitted prompt would stream anyway right after the user
+        // pressed Stop), while unrelated queued read work (subscribe,
+        // fetchOlder, list*, etc.) never blocks stop.
         if msg.isControl {
-            let previous = processingTail
+            let previous = lastDriveActionTail
             Task { @MainActor in
                 await previous?.value
                 await gateway.handle(msg)
@@ -295,9 +303,13 @@ final class RemoteConnection: @unchecked Sendable {
             return
         }
         let previous = processingTail
-        processingTail = Task { @MainActor in
+        let task = Task { @MainActor in
             await previous?.value
             await gateway.handle(msg)
+        }
+        processingTail = task
+        if msg.isDriveOrdering {
+            lastDriveActionTail = task
         }
     }
 

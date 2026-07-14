@@ -1416,6 +1416,60 @@ struct RemoteSessionGatewayTests {
         #expect(resyncEpoch != 0)   // sanity: the resync did bump the epoch
     }
 
+    // Regression (codex review, PR #775): an epoch-only guard misses a
+    // SAME-epoch snapshot (e.g. a takeOver, or a client resubscribe with no
+    // intervening structural change) landing while a dirty delta is
+    // suspended mid-serialize — the snapshot still resets revision/
+    // sentVersion, so the resumed delta's stale content would be accepted
+    // as the next legitimate delta after it. The generation counter (bumped
+    // on every snapshot regardless of epoch) must catch this too.
+    @Test func deltaDropsStaleUpsertsWhenSameEpochSnapshotLandsDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "in_progress",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        await gw.handle(.subscribe(sessionId: "s1"))   // caches "old"'s content
+        sent.removeAll()
+        provider.fullToolCallContentCallCount = 0
+        provider.pauseFullToolCallContentOnCall = 1   // suspend the delta's re-fetch below
+
+        if case .toolCall(var tc) = session.transcript.messages[0] {
+            tc.status = "completed"
+            session.transcript.messages[0] = .toolCall(tc)
+        }
+
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // A SAME-epoch snapshot lands via takeOver — no structural change,
+        // so the transcript's epoch never moves.
+        await gw.handle(.takeOver(sessionId: "s1"))
+        guard case .transcriptSnapshot(_, _, _, _, _, _, let snapshotEpoch, _)? = sent.last else {
+            Issue.record("expected a snapshot from takeOver, got \(sent)")
+            return
+        }
+        #expect(snapshotEpoch == 0)   // sanity: confirms this is the same-epoch case
+
+        sent.removeAll()
+        provider.resumeFullToolCallContent(fullContent)
+        try await Task.sleep(nanoseconds: 250_000_000)   // > coalesce window
+        #expect(sent.isEmpty, "stale delta must be discarded once a same-epoch snapshot landed during serialize, got \(sent)")
+    }
+
     // Regression (codex review, PR #775): fetchOlder's page serialization has
     // the same suspend-then-stamp hazard as sendDelta — a structural resync
     // landing while a truncated tool call's content is being fetched must not

@@ -173,24 +173,25 @@ final class RemoteSessionGateway {
             refreshSessionList()
         case .fetchOlder(let id, let beforeIndex, let limit):
             // Ignore pages requested before a snapshot established sync state.
-            guard let session = provider.session(for: id), syncStates[id] != nil else { return }
+            guard let session = provider.session(for: id), let state = syncStates[id] else { return }
             let clamped = min(max(limit, RemoteTranscriptSync.pageLimitRange.lowerBound),
                               RemoteTranscriptSync.pageLimitRange.upperBound)
             let count = session.transcript.messages.count
             let hi = min(max(beforeIndex, 0), count)
             let lo = max(0, hi - clamped)
-            // Capture the epoch BEFORE the async serialize below. If a
-            // structural change lands on this same session while a truncated
-            // tool call's full content is being fetched, the concurrent
-            // resync snapshot already advances the client past this page's
-            // (now stale) positions — stamping the page with the epoch read
-            // AFTER the await would make it match the client's post-resync
-            // epoch and be wrongly accepted. Drop it instead.
-            let capturedEpoch = session.transcript.changeLog.epoch
+            // Capture the generation BEFORE the async serialize below — not
+            // just the epoch, since a same-epoch concurrent snapshot (e.g.
+            // takeOver, or a client resubscribe with no structural change)
+            // also supersedes this page without moving the epoch. If a
+            // snapshot lands on this same session while a truncated tool
+            // call's full content is being fetched, stamping the page with
+            // state read AFTER the await would make it look current and be
+            // wrongly accepted instead of dropped.
+            let capturedGeneration = state.generation
             let wire = await wireMessages(id: id, session: session, indices: Array(lo..<hi))
-            guard session.transcript.changeLog.epoch == capturedEpoch else { return }
+            guard state.generation == capturedGeneration else { return }
             send(.transcriptPage(sessionId: id,
-                                 epoch: capturedEpoch,
+                                 epoch: state.epoch,
                                  firstIndex: lo,
                                  messages: wire))
         }
@@ -315,10 +316,14 @@ final class RemoteSessionGateway {
         let first = max(0, count - RemoteTranscriptSync.tailWindow)
         // Capture version/epoch BEFORE the async serialize: anything that
         // mutates during the awaits lands at a higher version and is
-        // picked up by the next delta.
+        // picked up by the next delta. Bumping `generation` here — even
+        // when `epoch` itself is unchanged (e.g. a same-epoch takeOver or
+        // client resubscribe) — lets a concurrently-suspended delta/page
+        // detect that THIS snapshot already superseded it.
         state.epoch = log.epoch
         state.sentVersion = log.latestVersion
         state.revision = 0
+        state.generation += 1
         let wire = await wireMessages(id: id, session: session, indices: Array(first..<count))
         send(.transcriptSnapshot(sessionId: id,
                                  streamingState: Self.stateString(session.transcript.streamingState),
@@ -412,16 +417,16 @@ final class RemoteSessionGateway {
                 return
             }
             state.sentVersion = log.latestVersion
-            // Capture the epoch BEFORE the async serialize below. A concurrent
-            // structural change (e.g. a takeOver-triggered snapshot, or another
-            // coalesced delta observing a prepend/removal) can call sendSnapshot
-            // on this same `state` while we're suspended, resetting its epoch
-            // and revision. If that happens, this delta's `wire` content is
-            // stale relative to the just-resynced transcript — sending it would
-            // stamp stale upserts with the new epoch/revision, which the client
-            // would wrongly accept as legitimate. Discard instead; the
-            // concurrent resync snapshot already carries the correct state.
-            let capturedEpoch = state.epoch
+            // Capture the generation BEFORE the async serialize below. A
+            // concurrent sendSnapshot on this same `state` — from a
+            // structural change, a takeOver, or a client resubscribe —
+            // resets revision/sentVersion even when `epoch` itself doesn't
+            // change, so an epoch-only check would miss it. If the
+            // generation moved, this delta's `wire` content is stale
+            // relative to whatever the concurrent snapshot already sent;
+            // sending it would let stale upserts overwrite the newer
+            // content the client just received. Discard instead.
+            let capturedGeneration = state.generation
             // A dirty tool call's persisted content may have grown past the
             // cached copy — drop it so serialization re-fetches.
             for index in indices where session.transcript.messages.indices.contains(index) {
@@ -430,7 +435,7 @@ final class RemoteSessionGateway {
                 }
             }
             let wire = await wireMessages(id: id, session: session, indices: indices)
-            guard state.epoch == capturedEpoch else { return }
+            guard state.generation == capturedGeneration else { return }
             state.revision += 1
             send(.transcriptDelta(sessionId: id,
                                   streamingState: Self.stateString(session.transcript.streamingState),

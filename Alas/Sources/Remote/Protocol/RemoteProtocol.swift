@@ -190,6 +190,20 @@ extension RemoteClientMessage {
         if case .stop = self { return true }
         return false
     }
+
+    /// Messages that establish or change which turn is active, and so a
+    /// following `stop` must wait for them specifically (not the whole
+    /// ordered queue) before running — otherwise stop could land before a
+    /// still-in-flight `sendPrompt`/`takeOver` finishes, find no active turn
+    /// to cancel, and the turn the user just started would proceed anyway
+    /// right after they pressed Stop. Read/list/config verbs are excluded so
+    /// stop stays fast when a client is simply scrolled up mid-backfill.
+    var isDriveOrdering: Bool {
+        switch self {
+        case .sendPrompt, .takeOver: return true
+        default: return false
+        }
+    }
 }
 
 /// Server → client. `type` discriminates.

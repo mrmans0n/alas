@@ -165,6 +165,62 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    // Regression (codex review, PR #775): stop must NOT wait for unrelated
+    // queued read work (e.g. a scroll-triggered fetchOlder backfill) — only
+    // for a preceding sendPrompt/takeOver. Otherwise the original blocking-
+    // queue latency the fast lane exists to fix would reappear whenever a
+    // client scrolls up and then presses Stop.
+    @Test func stopBypassesBlockedNonDriveFetchOlder() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: String(repeating: "abcdef0123456789", count: 400), preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        // 100 messages: the tail-window snapshot (last 90) excludes index 0,
+        // so subscribing never fetches its content — fetchOlder below does
+        // the first, pausable fetch.
+        s.transcript.messages = [.toolCall(toolCall)] + (0..<99).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions[s.id] = s
+        provider.fullToolCallContents["\(s.id)|old"] = "full content"
+        provider.pauseFullToolCallContentOnCall = 1   // suspends inside the gateway's own await chain
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing, provider: provider)
+
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"test"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        task.resume()
+
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.subscribe(sessionId: s.id))))
+        try await task.send(.data(JSONEncoder().encode(
+            RemoteClientMessage.fetchOlder(sessionId: s.id, beforeIndex: 10, limit: 90))))
+        for _ in 0..<100 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
+
+        // stop must land while fetchOlder is still parked on its continuation.
+        for _ in 0..<100 where provider.stopped.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.stopped == [s.id])
+
+        provider.resumeFullToolCallContent("full content")
+        task.cancel(with: .goingAway, reason: nil)
+        server.stop()
+    }
+
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()
