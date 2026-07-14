@@ -1,6 +1,52 @@
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
 
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// The base directory `open`/`cwd` paths resolve against. Prefers the logical
+/// `$PWD` (which preserves the symlinked path the user `cd`'d through) and
+/// falls back to the process working directory, matching the old sh script.
+pub fn logical_base() -> PathBuf {
+    if let Some(pwd) = std::env::var_os("PWD") {
+        let p = PathBuf::from(pwd);
+        if p.is_absolute() {
+            return p;
+        }
+    }
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+}
+
+/// Absolute, lexically-normalized path for `input` resolved against `base`.
+/// Collapses `.`/`..`/repeated separators and strips a trailing slash. Does not
+/// touch the filesystem, so symlinks in `base` are preserved.
+pub fn absolutize(base: &Path, input: &str) -> String {
+    let joined = if Path::new(input).is_absolute() {
+        PathBuf::from(input)
+    } else {
+        base.join(input)
+    };
+
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    for component in joined.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part.to_os_string()),
+        }
+    }
+
+    let mut result = String::from("/");
+    for (i, part) in out.iter().enumerate() {
+        if i > 0 {
+            result.push('/');
+        }
+        result.push_str(&part.to_string_lossy());
+    }
+    result
+}
 
 /// One CLI request over the Alas Unix socket. `session_id` and `cwd` are both
 /// optional on the wire, but a valid request always carries at least one; the
@@ -65,6 +111,29 @@ pub struct Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn absolutize_joins_relative_against_base_without_resolving_symlinks() {
+        let base = Path::new("/logical/dir with spaces");
+        assert_eq!(
+            absolutize(base, "sub/file.txt"),
+            "/logical/dir with spaces/sub/file.txt"
+        );
+    }
+
+    #[test]
+    fn absolutize_normalizes_dot_and_dotdot_lexically() {
+        let base = Path::new("/a/b");
+        assert_eq!(absolutize(base, "../c/./d"), "/a/c/d");
+        assert_eq!(absolutize(base, "/x//y/"), "/x/y");
+    }
+
+    #[test]
+    fn absolutize_keeps_absolute_input() {
+        let base = Path::new("/a/b");
+        assert_eq!(absolutize(base, "/etc/hosts"), "/etc/hosts");
+    }
 
     #[test]
     fn open_request_omits_absent_fields() {
