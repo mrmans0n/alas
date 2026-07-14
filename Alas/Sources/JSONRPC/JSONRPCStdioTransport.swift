@@ -8,14 +8,25 @@ enum JSONRPCFraming {
 
 protocol JSONRPCStdioTransporting: AnyObject, Sendable {
     var incoming: AsyncStream<JSONRPCStdioTransport.Incoming> { get }
+    var requestIDPrefix: String? { get }
     func start() throws
     func send(_ data: Data) throws
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws
     func terminate()
+}
+
+extension JSONRPCStdioTransporting {
+    var requestIDPrefix: String? { nil }
+
+    func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
+        try send(data)
+        onWritten()
+    }
 }
 
 final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting {
     enum Incoming: Sendable {
-        case frame(Data)
+        case frame(Data, onConsumed: (@Sendable () -> Void)? = nil)
         case stderr(Data)
         case exited(Int32)
     }

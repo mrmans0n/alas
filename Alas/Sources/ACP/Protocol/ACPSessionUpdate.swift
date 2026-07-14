@@ -3,6 +3,38 @@ import Foundation
 struct ACPSessionUpdateParams: Codable, Equatable {
     let sessionId: String
     let update: ACPSessionUpdate
+    let durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
+
+    init(
+        sessionId: String,
+        update: ACPSessionUpdate,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        self.sessionId = sessionId
+        self.update = update
+        self.durableConsumptionAcknowledgement = durableConsumptionAcknowledgement
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionId, update
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(String.self, forKey: .sessionId)
+        update = try container.decode(ACPSessionUpdate.self, forKey: .update)
+        durableConsumptionAcknowledgement = nil
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sessionId, forKey: .sessionId)
+        try container.encode(update, forKey: .update)
+    }
+
+    static func == (lhs: ACPSessionUpdateParams, rhs: ACPSessionUpdateParams) -> Bool {
+        lhs.sessionId == rhs.sessionId && lhs.update == rhs.update
+    }
 }
 
 enum ACPSessionUpdate: Codable, Equatable {

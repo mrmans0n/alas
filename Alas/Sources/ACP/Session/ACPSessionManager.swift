@@ -226,6 +226,7 @@ final class ACPSessionManager: ObservableObject {
     private let setupEvaluator: ACPSetupEvaluator
     private let remoteAdapterResolver: ACPRemoteAdapterResolver
     private let connectionFactory: ACPConnectionFactory
+    private let injectedConnectionFactory: ACPConnectionFactory?
     private var resolvedRemoteAdapters: [String: ACPResolvedRemoteAdapter] = [:]
     private var inFlightHydrations: [ACPSession.ID: Task<Void, Never>] = [:]
     /// Per-session task that prepends pre-tail messages after the initial
@@ -314,37 +315,8 @@ final class ACPSessionManager: ObservableObject {
                 setupCheck: setupCheck
             )
         }
-        self.connectionFactory = connectionFactory ?? { spec, host, worktreePath in
-            let client: ACPStdioClient
-            if let host {
-                let invocation = ACPRemoteLaunch.channelInvocation(
-                    host: host,
-                    worktreePath: worktreePath,
-                    command: spec.command,
-                    arguments: spec.arguments,
-                    nodeBinDirectory: spec.remoteNodeBinDirectory
-                )
-                // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
-                // HOME, and any host-specific connection configuration.
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: invocation.executable),
-                    arguments: invocation.args,
-                    environment: nil
-                )
-            } else if spec.command.hasPrefix("/") {
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: spec.command),
-                    arguments: spec.arguments,
-                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
-            } else {
-                client = try ACPStdioClient(
-                    executable: URL(fileURLWithPath: "/usr/bin/env"),
-                    arguments: [spec.command] + spec.arguments,
-                    environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
-            }
-            try client.start()
-            return ACPConnection(client: client)
-        }
+        self.injectedConnectionFactory = connectionFactory
+        self.connectionFactory = connectionFactory ?? Self.makeStdioConnection
         let initialRecent = store.flatMap { try? $0.recentSessions() } ?? []
         self.recent = initialRecent
         self.persistedRows = Dictionary(uniqueKeysWithValues: initialRecent.map { ($0.id, $0) })
@@ -371,6 +343,28 @@ final class ACPSessionManager: ObservableObject {
         }
         persistenceTail = task
         return task
+    }
+
+    private func enqueuePersistenceResult<Result: Sendable>(
+        _ operation: @escaping @Sendable (ACPSessionPersistence) async throws -> Result
+    ) -> Task<Result?, Never> {
+        let previous = persistenceTail
+        let persistence = persistence
+        persistenceGeneration += 1
+        let resultTask = Task<Result?, Never> { @MainActor [weak self] in
+            await previous?.value
+            guard !Task.isCancelled else { return nil }
+            do {
+                return try await operation(persistence)
+            } catch {
+                self?.persistenceError = error.localizedDescription
+                return nil
+            }
+        }
+        persistenceTail = Task { @MainActor in
+            _ = await resultTask.value
+        }
+        return resultTask
     }
 
     func flushPersistence() async {
@@ -762,6 +756,7 @@ final class ACPSessionManager: ObservableObject {
     }
 
     func deleteSession(id: ACPSession.ID) {
+        killRemoteHelperACPProcIfPossible(sessionId: id)
         autoReconnectTasks.removeValue(forKey: id)?.cancel()
         cancelPendingDraftWrite(for: id)
         inFlightBackfills[id]?.cancel()
@@ -979,16 +974,21 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
-    private func persistSessionRemoteId(_ s: ACPSession) {
-        guard var row = persistedRows[s.id] else { return }
+    private func persistSessionRemoteId(_ s: ACPSession) async -> Bool {
+        guard var row = persistedRows[s.id] else { return false }
         row.remoteSessionId = s.remoteSessionId
-        persistedRows[s.id] = row
-        replaceRecentRow(row)
         let rowToPersist = row
         let fence = leaseFence(sessionId: s.id)
-        enqueuePersistence { persistence in
-            _ = try await persistence.upsertSession(rowToPersist, fence: fence)
+        let result = await enqueuePersistenceResult { persistence in
+            try await persistence.upsertSession(rowToPersist, fence: fence)
+        }.value
+        guard result == true else { return false }
+        if var currentRow = persistedRows[s.id] {
+            currentRow.remoteSessionId = s.remoteSessionId
+            persistedRows[s.id] = currentRow
+            replaceRecentRow(currentRow)
         }
+        return true
     }
 
     private func persistContextRecoveryPending(sessionId: ACPSession.ID, pending: Bool) {
@@ -1004,6 +1004,53 @@ final class ACPSessionManager: ObservableObject {
                 fence: fence
             )
         }
+    }
+
+    private func persistHelperProcOffsets(
+        sessionId: ACPSession.ID,
+        offsets: RemoteHelperACPTransport.OutputOffsets
+    ) {
+        guard !isMirror(sessionId: sessionId) else { return }
+        let stdoutOffset = offsets.stdout.flatMap(Self.sqliteOffset)
+        let stderrOffset = offsets.stderr.flatMap(Self.sqliteOffset)
+        guard stdoutOffset != nil || stderrOffset != nil else { return }
+        if var row = persistedRows[sessionId] {
+            if let stdoutOffset,
+               row.helperProcStdoutOffset == nil || row.helperProcStdoutOffset! < stdoutOffset {
+                row.helperProcStdoutOffset = stdoutOffset
+            }
+            if let stderrOffset,
+               row.helperProcStderrOffset == nil || row.helperProcStderrOffset! < stderrOffset {
+                row.helperProcStderrOffset = stderrOffset
+            }
+            persistedRows[sessionId] = row
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        enqueuePersistence { persistence in
+            _ = try await persistence.updateHelperProcOffsets(
+                sessionId: sessionId,
+                stdoutOffset: stdoutOffset,
+                stderrOffset: stderrOffset,
+                fence: fence
+            )
+        }
+    }
+
+    private func resetHelperProcOffsets(sessionId: ACPSession.ID) async {
+        guard !isMirror(sessionId: sessionId) else { return }
+        if var row = persistedRows[sessionId] {
+            row.helperProcStdoutOffset = 0
+            row.helperProcStderrOffset = 0
+            persistedRows[sessionId] = row
+        }
+        let fence = leaseFence(sessionId: sessionId)
+        let task = enqueuePersistence { persistence in
+            _ = try await persistence.resetHelperProcOffsets(
+                sessionId: sessionId,
+                fence: fence
+            )
+        }
+        await task.value
     }
 
     /// Rename a session with the given title and source. Updates both
@@ -1258,6 +1305,15 @@ final class ACPSessionManager: ObservableObject {
         }
     }
 
+    private func killRemoteHelperACPProcIfPossible(sessionId: ACPSession.ID) {
+        guard let host = RemoteHostRegistry.shared.host(forPath: worktreePath) else { return }
+        let procId = Self.helperACPProcId(sessionId: sessionId)
+        Task {
+            let client = await RemoteHelperClientPool.shared.client(for: host)
+            try? await client.killProc(procId: procId)
+        }
+    }
+
     private func replaceRecentRow(_ row: ACPSessionRow) {
         recent.removeAll { $0.id == row.id }
         guard !row.archived else { return }
@@ -1352,6 +1408,110 @@ final class ACPSessionManager: ObservableObject {
     /// the payload can't be decoded.
     func reloadFullToolCallContent(sessionId: ACPSession.ID, toolCallId: String) async -> String? {
         try? await persistence.loadToolCallContent(sessionId: sessionId, toolCallId: toolCallId)
+    }
+
+    private static func makeStdioConnection(
+        spec: ACPLaunchSpec,
+        host: String?,
+        worktreePath: String
+    ) throws -> ACPConnection {
+        try makeDefaultConnection(
+            spec: spec,
+            host: host,
+            worktreePath: worktreePath,
+            sessionId: nil,
+            useHelperProc: false
+        )
+    }
+
+    private static func makeDefaultConnection(
+        spec: ACPLaunchSpec,
+        host: String?,
+        worktreePath: String,
+        sessionId: ACPSession.ID?,
+        useHelperProc: Bool,
+        initialHelperProcOffsets: RemoteHelperACPTransport.OutputOffsets? = nil,
+        onFreshHelperProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
+        onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in }
+    ) throws -> ACPConnection {
+        let client: ACPStdioClient
+        if let host, useHelperProc, let sessionId {
+            let transport = RemoteHelperACPTransport(
+                host: host,
+                procId: helperACPProcId(sessionId: sessionId),
+                command: spec.command,
+                arguments: spec.arguments,
+                cwd: worktreePath,
+                environment: ACPProcessEnvironment.remoteOverridesForACP(extra: spec.extraEnv),
+                pathPrefixDirectories: spec.remoteNodeBinDirectory.map { [$0] } ?? [],
+                initialOutputOffsets: initialHelperProcOffsets,
+                onFreshProcSpawn: onFreshHelperProcSpawn,
+                onOutputOffsetsChanged: onHelperProcOffsetsChanged
+            )
+            client = ACPStdioClient.makeForTesting(transport: transport)
+        } else if let host {
+            let invocation = ACPRemoteLaunch.channelInvocation(
+                host: host,
+                worktreePath: worktreePath,
+                command: spec.command,
+                arguments: spec.arguments,
+                nodeBinDirectory: spec.remoteNodeBinDirectory
+            )
+            // Keep ssh's parent environment intact for SSH_AUTH_SOCK,
+            // HOME, and any host-specific connection configuration.
+            client = try ACPStdioClient(
+                executable: URL(fileURLWithPath: invocation.executable),
+                arguments: invocation.args,
+                environment: nil
+            )
+        } else if spec.command.hasPrefix("/") {
+            client = try ACPStdioClient(
+                executable: URL(fileURLWithPath: spec.command),
+                arguments: spec.arguments,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
+        } else {
+            client = try ACPStdioClient(
+                executable: URL(fileURLWithPath: "/usr/bin/env"),
+                arguments: [spec.command] + spec.arguments,
+                environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
+        }
+        try client.start()
+        return ACPConnection(client: client)
+    }
+
+    private static func helperACPProcId(sessionId: ACPSession.ID) -> String {
+        let allowed = sessionId.map { char -> Character in
+            if char.isLetter || char.isNumber || char == "-" || char == "_" {
+                return char
+            }
+            return "-"
+        }
+        return "acp-" + String(allowed)
+    }
+
+    private static func helperProcOffsets(from row: ACPSessionRow?) -> RemoteHelperACPTransport.OutputOffsets? {
+        guard let row else { return nil }
+        let stdout = row.helperProcStdoutOffset.flatMap { $0 >= 0 ? UInt64($0) : nil }
+        let stderr = row.helperProcStderrOffset.flatMap { $0 >= 0 ? UInt64($0) : nil }
+        guard stdout != nil || stderr != nil else { return nil }
+        return RemoteHelperACPTransport.OutputOffsets(stdout: stdout, stderr: stderr)
+    }
+
+    private static func sqliteOffset(_ offset: UInt64) -> Int64? {
+        guard offset <= UInt64(Int64.max) else { return nil }
+        return Int64(offset)
+    }
+
+    private func remoteHelperSupportsProc(host: String) async -> Bool {
+        if await RemoteHostCapabilityStore.shared.capabilities(for: host)?.helperHandshake == nil {
+            return false
+        }
+        do {
+            let client = await RemoteHelperClientPool.shared.client(for: host)
+            return try await client.hello().capabilities.proc == true
+        } catch {
+            return false
+        }
     }
 }
 
@@ -1991,7 +2151,29 @@ extension ACPSessionManager {
         do {
             let host = RemoteHostRegistry.shared.host(forPath: worktreePath)
             let launchSpec = await resolvedLaunchSpec(for: spec, host: host)
-            connection = try connectionFactory(launchSpec, host, worktreePath)
+            if let injectedConnectionFactory {
+                connection = try injectedConnectionFactory(launchSpec, host, worktreePath)
+            } else {
+                let useHelperProc = if let host {
+                    await remoteHelperSupportsProc(host: host)
+                } else {
+                    false
+                }
+                connection = try Self.makeDefaultConnection(
+                    spec: launchSpec,
+                    host: host,
+                    worktreePath: worktreePath,
+                    sessionId: sessionId,
+                    useHelperProc: useHelperProc,
+                    initialHelperProcOffsets: Self.helperProcOffsets(from: persistedRows[sessionId]),
+                    onFreshHelperProcSpawn: { [weak self] in
+                        await self?.resetHelperProcOffsets(sessionId: sessionId)
+                    },
+                    onHelperProcOffsetsChanged: { [weak self] offsets in
+                        self?.persistHelperProcOffsets(sessionId: sessionId, offsets: offsets)
+                    }
+                )
+            }
         } catch {
             let msg = "Failed to launch agent: \(error.localizedDescription)"
             session.lastError = msg
@@ -2077,10 +2259,11 @@ extension ACPSessionManager {
                 hasLocalTranscript: session.hasConversationTranscript
             )
             let shouldSuppressLoadReplay = (restoreOperation == .loadWithRecovery
-                || restoreOperation == .loadStrict)
+                || restoreOperation == .loadStrict
+                || restoreOperation == .resume)
                 && !freshlyCreated
                 && session.hydrationState == .ready
-                && session.hasConversationTranscript
+                && !session.transcript.messages.isEmpty
                 && !(session.remoteSessionId ?? "").isEmpty
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           sessionId: sessionId,
@@ -2158,6 +2341,9 @@ extension ACPSessionManager {
                     do {
                         result = try await connection.resumeSession(
                             cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
                         if !pendingRecovery {
                             session.contextRecoveryStatus = nil
                         }
@@ -2168,6 +2354,9 @@ extension ACPSessionManager {
                             )
                         }
                     } catch {
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
@@ -2302,8 +2491,17 @@ extension ACPSessionManager {
             session.promptSuggestions = result.promptSuggestions
             session.availableConfigOptions = result.configOptions
             session.contextRestoreWarning = restoreWarning
-            persistSessionRemoteId(session)
-            await flushPersistence()
+            guard await persistSessionRemoteId(session) else {
+                session.remoteSessionId = persistedRows[sessionId]?.remoteSessionId
+                await connection.shutdown()
+                startedRunner?.stop()
+                await startedRunner?.flushPersistence()
+                session.agentState = .idle
+                if !isDisposed { beginMirroring(sessionId: sessionId) }
+                await releaseWriterLease(sessionId: sessionId)
+                return
+            }
+            connection.acknowledgeDurableSessionResponses()
             startRunnerIfNeeded()
             runners[sessionId] = runner
             keepElicitationCoordinator = true

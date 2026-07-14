@@ -12,6 +12,8 @@ struct ACPInitializeOutcome: Equatable {
 /// methods for the messages we send.
 final class ACPConnection: @unchecked Sendable {
     let client: ACPClient
+    private let durableResponseLock = NSLock()
+    private var pendingDurableSessionResponses: [ACPDurableConsumptionAcknowledgement] = []
 
     init(client: ACPClient) { self.client = client }
 
@@ -26,6 +28,7 @@ final class ACPConnection: @unchecked Sendable {
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: true)))
         let resp = try await client.send(req)
+        defer { resp.acknowledgeDurableConsumption() }
         let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
         return ACPInitializeOutcome(
             promptCapabilities: result.agentCapabilities?.promptCapabilities ?? .init(),
@@ -47,14 +50,16 @@ final class ACPConnection: @unchecked Sendable {
                 debugDescription: "session/new response is missing sessionId"
             ))
         }
+        deferDurableSessionResponse(resp)
         return result
     }
 
     func authenticate(methodId: String) async throws {
-        _ = try await client.send(ACPRequest(
+        let resp = try await client.send(ACPRequest(
             method: "authenticate",
             params: ACPAuthenticateParams(methodId: methodId)
         ))
+        resp.acknowledgeDurableConsumption()
     }
 
     func loadSession(cwd: String, sessionId: String, mcpServers: [ACPMCPServer]) async throws -> ACPSessionNewResult {
@@ -62,6 +67,7 @@ final class ACPConnection: @unchecked Sendable {
                              params: ACPSessionLoadParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers))
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        deferDurableSessionResponse(resp)
         return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
     }
 
@@ -72,6 +78,7 @@ final class ACPConnection: @unchecked Sendable {
         )
         let resp = try await client.send(req)
         let result = try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
+        deferDurableSessionResponse(resp)
         return result.sessionId.isEmpty ? result.withSessionId(sessionId) : result
     }
 
@@ -81,6 +88,7 @@ final class ACPConnection: @unchecked Sendable {
             params: ACPSessionListParams(cwd: cwd, cursor: cursor)
         )
         let resp = try await client.send(req)
+        defer { resp.acknowledgeDurableConsumption() }
         return try JSONDecoder().decode(ACPSessionListResult.self, from: resp.body)
     }
 
@@ -90,6 +98,7 @@ final class ACPConnection: @unchecked Sendable {
             params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers)
         )
         let resp = try await client.send(req)
+        defer { resp.acknowledgeDurableConsumption() }
         return try JSONDecoder().decode(ACPSessionNewResult.self, from: resp.body)
     }
 
@@ -107,13 +116,15 @@ final class ACPConnection: @unchecked Sendable {
     // method-not-found camelCase variants, which previously left Alas
     // showing the new selection while the agent stayed on the old one.
     func setMode(sessionId: String, modeId: String) async throws {
-        _ = try await client.send(ACPRequest(method: "session/set_mode",
-                                             params: ACPSessionSetModeParams(sessionId: sessionId, modeId: modeId)))
+        let resp = try await client.send(ACPRequest(method: "session/set_mode",
+                                                    params: ACPSessionSetModeParams(sessionId: sessionId, modeId: modeId)))
+        resp.acknowledgeDurableConsumption()
     }
 
     func setModel(sessionId: String, modelId: String) async throws {
-        _ = try await client.send(ACPRequest(method: "session/set_model",
-                                             params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
+        let resp = try await client.send(ACPRequest(method: "session/set_model",
+                                                    params: ACPSessionSetModelParams(sessionId: sessionId, modelId: modelId)))
+        resp.acknowledgeDurableConsumption()
     }
 
     /// Sends a config-option change and returns the agent's refreshed
@@ -129,13 +140,32 @@ final class ACPConnection: @unchecked Sendable {
                                                         sessionId: sessionId,
                                                         configId: configId,
                                                         value: value)))
+        defer { resp.acknowledgeDurableConsumption() }
         let result = try? JSONDecoder().decode(ACPSessionSetConfigOptionResult.self, from: resp.body)
         return result?.configOptions ?? []
     }
 
     func prompt(sessionId: String, blocks: [ACPContentBlock]) async throws {
-        _ = try await client.send(ACPRequest(method: "session/prompt",
-                                             params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)))
+        let resp = try await client.send(ACPRequest(method: "session/prompt",
+                                                    params: ACPSessionPromptParams(sessionId: sessionId, prompt: blocks)))
+        resp.acknowledgeDurableConsumption()
+    }
+
+    func acknowledgeDurableSessionResponses() {
+        durableResponseLock.lock()
+        let acknowledgements = pendingDurableSessionResponses
+        pendingDurableSessionResponses.removeAll(keepingCapacity: true)
+        durableResponseLock.unlock()
+        for acknowledgement in acknowledgements {
+            acknowledgement()
+        }
+    }
+
+    private func deferDurableSessionResponse(_ response: ACPResponse) {
+        guard let acknowledgement = response.durableConsumptionAcknowledgement else { return }
+        durableResponseLock.lock()
+        pendingDurableSessionResponses.append(acknowledgement)
+        durableResponseLock.unlock()
     }
 
     func shutdown() async { await client.shutdown() }

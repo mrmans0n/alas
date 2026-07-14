@@ -34,7 +34,10 @@ struct ACPSessionStoreSchemaTests {
         let store = try ACPSessionStore(path: url.path)
         let columns = try store.db.query("PRAGMA table_info(session_leases)")
         #expect(columns.contains { ($0["name"] as? String) == "lease_token" })
-        #expect(try store.currentSchemaVersion() == 11)
+        let sessionColumns = try store.db.query("PRAGMA table_info(sessions)")
+        #expect(sessionColumns.contains { ($0["name"] as? String) == "helper_proc_stdout_offset" })
+        #expect(sessionColumns.contains { ($0["name"] as? String) == "helper_proc_stderr_offset" })
+        #expect(try store.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
 
         _ = try ACPSessionStore(path: url.path)
     }

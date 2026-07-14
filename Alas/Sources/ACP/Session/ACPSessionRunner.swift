@@ -74,6 +74,7 @@ final class ACPSessionRunner {
     private var pendingStreamingPersistRevisions: [Int: Int] = [:]
     private var streamingPersistInFlightIndices: Set<Int> = []
     private var pendingStreamingPersistSnapshots: [Int: StreamingPersistSnapshot] = [:]
+    private var pendingStreamingPersistAcknowledgements: [ACPDurableConsumptionAcknowledgement] = []
     /// The exact payload bytes this runner last wrote for each message row.
     /// Used as the compare-and-swap base when a takeover forces a stand-down
     /// flush, so the CAS never reads the (potentially growing) payload blob
@@ -534,6 +535,7 @@ final class ACPSessionRunner {
         flushQueueWhenBoundaryReady: Bool = true,
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
+        let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
         let preAppliedSessionInfoDirty: Set<Int>?
@@ -546,9 +548,13 @@ final class ACPSessionRunner {
         }
         if suppressingLoadReplay {
             if let dirty = preAppliedSessionInfoDirty {
-                persistIndices(dirty)
+                persistIndices(
+                    dirty,
+                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+                )
             } else {
                 _ = session.applySuppressedReplaySideEffects(params.update)
+                durableConsumptionAcknowledgement?()
             }
             if let target = loadReplaySuppressionTarget,
                observedUpdateCount >= target {
@@ -557,7 +563,10 @@ final class ACPSessionRunner {
             return
         }
         if let dirty = preAppliedSessionInfoDirty {
-            persistIndices(dirty)
+            persistIndices(
+                dirty,
+                completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+            )
         } else {
             let isPromptCompletionDrainUpdate = pendingCompletedOutputBoundaryUpdateCount
                 .map { appliedUpdateCount <= $0 } ?? false
@@ -583,16 +592,34 @@ final class ACPSessionRunner {
                 }
                 let dirty = session.apply(params.update)
                 if !streamingLeaseLost {
-                    scheduleStreamingPersist(dirty, mayCapturePersistedBases: holdsLease)
+                    scheduleStreamingPersist(
+                        dirty,
+                        mayCapturePersistedBases: holdsLease,
+                        durableConsumptionAcknowledgement: durableConsumptionAcknowledgement
+                    )
                 }
             } else {
                 let dirty = session.apply(params.update)
                 flushStreamingPersist()
-                persistIndices(dirty)
+                persistIndices(
+                    dirty,
+                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+                )
             }
         }
         if applyPendingCompletedOutputBoundaryIfReady(), flushQueueWhenBoundaryReady {
             flushQueueIfIdle()
+        }
+    }
+
+    private func persistenceCompletion(
+        acknowledging acknowledgement: ACPDurableConsumptionAcknowledgement?
+    ) -> ((Bool) -> Void)? {
+        guard let acknowledgement else { return nil }
+        return { succeeded in
+            if succeeded {
+                acknowledgement()
+            }
         }
     }
 
@@ -1766,8 +1793,15 @@ extension ACPSessionRunner {
         }
     }
 
-    private func scheduleStreamingPersist(_ indices: Set<Int>, mayCapturePersistedBases: Bool = true) {
-        guard !indices.isEmpty else { return }
+    private func scheduleStreamingPersist(
+        _ indices: Set<Int>,
+        mayCapturePersistedBases: Bool = true,
+        durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
+    ) {
+        guard !indices.isEmpty else {
+            durableConsumptionAcknowledgement?()
+            return
+        }
         // Per-chunk work is intentionally cheap: record the dirty indices and
         // arm the debounce. Encoding the (growing) message and reading its
         // stored payload happen once per debounce window in the flush, not
@@ -1788,6 +1822,9 @@ extension ACPSessionRunner {
             }
         }
         pendingStreamingPersistIndices.formUnion(indices)
+        if let durableConsumptionAcknowledgement {
+            pendingStreamingPersistAcknowledgements.append(durableConsumptionAcknowledgement)
+        }
         for index in indices {
             pendingStreamingPersistRevisions[index, default: 0] += 1
         }
@@ -1837,6 +1874,7 @@ extension ACPSessionRunner {
         pendingStreamingPersistRevisions.removeAll()
         streamingPersistInFlightIndices.removeAll()
         pendingStreamingPersistSnapshots.removeAll()
+        pendingStreamingPersistAcknowledgements.removeAll()
     }
 
     /// Bound the compare-and-swap base cache to the recent tail so it can't
@@ -1874,11 +1912,16 @@ extension ACPSessionRunner {
         let revisions = Dictionary(uniqueKeysWithValues: indices.map {
             ($0, pendingStreamingPersistRevisions[$0, default: 0])
         })
+        let acknowledgements = pendingStreamingPersistAcknowledgements
+        pendingStreamingPersistAcknowledgements.removeAll(keepingCapacity: true)
         streamingPersistInFlightIndices.formUnion(indices)
         if persistIndices(indices, requiresLease: true, completion: { [weak self] succeeded in
             guard let self else { return }
             self.streamingPersistInFlightIndices.subtract(indices)
             if succeeded {
+                for acknowledgement in acknowledgements {
+                    acknowledgement()
+                }
                 for index in indices where self.pendingStreamingPersistRevisions[index] == revisions[index] {
                     self.pendingStreamingPersistIndices.remove(index)
                     self.pendingStreamingPersistRevisions.removeValue(forKey: index)

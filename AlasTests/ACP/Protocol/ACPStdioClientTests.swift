@@ -54,6 +54,122 @@ struct ACPStdioClientTests {
         await client.shutdown()
     }
 
+    @Test("session update defers frame consumption until durable acknowledgement")
+    func sessionUpdateDefersFrameConsumption() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        var iterator = client.incomingUpdates.makeAsyncIterator()
+        let update = try #require(await iterator.next())
+        #expect(consumed.get() == nil)
+
+        update.durableConsumptionAcknowledgement?()
+        #expect(consumed.get() == true)
+        await client.shutdown()
+    }
+
+    @Test("response defers frame consumption until the caller acknowledges handling")
+    func responseDefersFrameConsumption() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+        let responseTask = Task {
+            try await client.send(ACPRequest(method: "initialize"))
+        }
+        try await Task.sleep(for: .milliseconds(20))
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        let response = try await responseTask.value
+        #expect(consumed.get() == nil)
+        response.acknowledgeDurableConsumption()
+        #expect(consumed.get() == true)
+        await client.shutdown()
+    }
+
+    @Test("transport request ID prefix namespaces outbound requests")
+    func requestIDPrefixNamespacesOutboundRequests() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.requestIDPrefix = "attachment-1"
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let responseTask = Task {
+            try await client.send(ACPRequest(method: "initialize"))
+        }
+        try await Task.sleep(for: .milliseconds(20))
+
+        let frame = try #require(transport.sentFrames.first)
+        let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
+        #expect(request["id"] as? String == "attachment-1:1")
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":"attachment-1:1","result":{"ok":true}}"#.utf8))
+
+        let response = try await responseTask.value
+        response.acknowledgeDurableConsumption()
+        await client.shutdown()
+    }
+
+    @Test("inbound request defers frame consumption until its response is sent")
+    func inboundRequestDefersFrameConsumption() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferWriteCompletions = true
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":7,"method":"fs/read_text_file","params":{"sessionId":"s","path":"/tmp/a","line":null,"limit":null}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        var iterator = client.fileRequests.makeAsyncIterator()
+        guard case .read(let id, _) = try #require(await iterator.next()) else {
+            Issue.record("expected read request")
+            return
+        }
+        #expect(consumed.get() == nil)
+        client.respondToFileRequest(
+            id: id,
+            result: .success(try JSONEncoder().encode(ACPFsReadResult(content: "ok")))
+        )
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(consumed.get() == nil)
+        transport.completePendingWrites()
+        #expect(consumed.get() == true)
+        await client.shutdown()
+    }
+
+    @Test("session response remains unconsumed until persisted state is acknowledged")
+    func sessionResponseWaitsForPersistenceAcknowledgement() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient.makeForTesting(transport: transport)
+        let connection = ACPConnection(client: client)
+        try client.start()
+        let consumed = ResultBox<Bool>()
+        let responseTask = Task {
+            try await connection.newSession(cwd: "/tmp", mcpServers: [])
+        }
+        try await Task.sleep(for: .milliseconds(20))
+
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"sessionId":"remote-1"}}"#.utf8)) {
+            consumed.set(true)
+        }
+
+        let result = try await responseTask.value
+        #expect(result.sessionId == "remote-1")
+        #expect(consumed.get() == nil)
+        connection.acknowledgeDurableSessionResponses()
+        #expect(consumed.get() == true)
+        await connection.shutdown()
+    }
+
     private final class ResultBox<T>: @unchecked Sendable {
         private let lock = NSLock()
         private var value: T?

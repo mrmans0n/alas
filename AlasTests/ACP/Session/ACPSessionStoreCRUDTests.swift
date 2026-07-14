@@ -89,6 +89,50 @@ struct ACPSessionStoreCRUDTests {
         #expect(row.currentModel == "opus")
     }
 
+    @Test("helper proc offsets persist monotonically within each proc generation")
+    func helperProcOffsetsPersistMonotonicallyWithinGeneration() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(
+            id: "local-1",
+            agentId: "claude",
+            title: "Remote",
+            titleSource: .manual,
+            currentModel: nil,
+            currentMode: nil,
+            autoRun: true,
+            createdAt: 1,
+            updatedAt: 2,
+            lastOpenedAt: 3,
+            archived: false
+        ))
+
+        #expect(try store.updateHelperProcOffsets(
+            sessionId: "local-1",
+            stdoutOffset: 20,
+            stderrOffset: nil
+        ))
+        #expect(try store.updateHelperProcOffsets(
+            sessionId: "local-1",
+            stdoutOffset: 12,
+            stderrOffset: 4
+        ))
+
+        let row = try #require(try store.loadSession(id: "local-1"))
+        #expect(row.helperProcStdoutOffset == 20)
+        #expect(row.helperProcStderrOffset == 4)
+
+        #expect(try store.resetHelperProcOffsets(sessionId: "local-1"))
+        #expect(try store.updateHelperProcOffsets(
+            sessionId: "local-1",
+            stdoutOffset: 3,
+            stderrOffset: 1
+        ))
+
+        let respawnedRow = try #require(try store.loadSession(id: "local-1"))
+        #expect(respawnedRow.helperProcStdoutOffset == 3)
+        #expect(respawnedRow.helperProcStderrOffset == 1)
+    }
+
     @Test("metadata-only upsert can preserve stored title")
     func sessionMetadataUpsertPreservesStoredTitleWhenRequested() throws {
         let store = try tmp()

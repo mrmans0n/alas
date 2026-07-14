@@ -39,4 +39,20 @@ struct ACPLaunchSpecTests {
         #expect(overridden.supportsModeSelection == true)
         #expect(overridden.npmPackageName == "@agentclientprotocol/codex-acp")
     }
+
+    @Test("remote ACP env preserves the remote shell environment")
+    func remoteOverridesForACP() {
+        let overrides = ACPProcessEnvironment.remoteOverridesForACP(extra: [
+            "PATH": "/remote/tool/bin",
+            "HOME": "/remote/home",
+            "CLAUDECODE": "1",
+            "CUSTOM": "value",
+        ])
+
+        #expect(overrides == [
+            "PATH": "/remote/tool/bin",
+            "HOME": "/remote/home",
+            "CUSTOM": "value",
+        ])
+    }
 }

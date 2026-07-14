@@ -4,12 +4,13 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use watch::{SubscriptionWatcher, WatchKind, WatchNotification};
@@ -45,6 +46,7 @@ struct HelperState {
     watchers: HashMap<String, SubscriptionWatcher>,
     searches: HashMap<String, Arc<AtomicBool>>,
     event_sender: Option<Sender<ServerMessage>>,
+    proc_tailers: HashSet<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -107,6 +109,72 @@ struct SearchCancelParams {
     search_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcSpawnParams {
+    proc_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    env: HashMap<String, String>,
+    path_prefix_directories: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcAttachParams {
+    proc_id: String,
+    stdout_offset: Option<u64>,
+    stderr_offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcWriteParams {
+    proc_id: String,
+    data_base64: String,
+    expected_stdin_offset: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcKillParams {
+    proc_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcMetadata {
+    proc_id: String,
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcPidMetadata {
+    pid: u32,
+    process_group_id: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProcSupervisorLaunch {
+    command: String,
+    args: Vec<String>,
+    cwd: String,
+    env: HashMap<String, String>,
+    path_prefix_directories: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ProcReplayFrame {
+    offset: u64,
+    data: Vec<u8>,
+}
+
+#[derive(Debug)]
 pub(crate) enum SearchNotification {
     Line {
         search_id: String,
@@ -120,10 +188,30 @@ pub(crate) enum SearchNotification {
     },
 }
 
+#[derive(Debug)]
+pub(crate) enum ProcNotification {
+    Stdout {
+        proc_id: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    Stderr {
+        proc_id: String,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    Exit {
+        proc_id: String,
+        exit_code: Option<i32>,
+    },
+}
+
+#[derive(Debug)]
 pub(crate) enum ServerMessage {
     Request(String),
     Watch(WatchNotification),
     Search(SearchNotification),
+    Proc(ProcNotification),
     InputClosed,
 }
 
@@ -146,12 +234,15 @@ fn capabilities() -> Value {
             "list": true
         },
         "search": true,
-        "ping": true
+        "ping": true,
+        "proc": true
     })
 }
 
 fn main() {
-    let command = std::env::args().nth(1);
+    let mut args = std::env::args();
+    let _program = args.next();
+    let command = args.next();
     match command.as_deref() {
         None | Some("version") => {
             println!(
@@ -162,6 +253,16 @@ fn main() {
         Some("serve") => {
             if let Err(error) = serve() {
                 eprintln!("alas-helper: {error}");
+                std::process::exit(1);
+            }
+        }
+        Some("proc-supervise") => {
+            let Some(dir) = args.next() else {
+                eprintln!("usage: alas-helper proc-supervise <proc-dir>");
+                std::process::exit(2);
+            };
+            if let Err(error) = proc_supervise(PathBuf::from(dir)) {
+                eprintln!("alas-helper proc-supervise: {}", error.message);
                 std::process::exit(1);
             }
         }
@@ -236,6 +337,10 @@ fn serve() -> io::Result<()> {
                 flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
                 write_search_notification(&mut stdout, &mut state, notification)?;
             }
+            Some(ServerMessage::Proc(notification)) => {
+                flush_due_watch_events(&mut stdout, &state, &mut pending_events, &mut flush_at)?;
+                write_proc_notification(&mut stdout, notification)?;
+            }
             Some(ServerMessage::InputClosed) => {
                 flush_watch_events(&mut stdout, &state, &mut pending_events)?;
                 break;
@@ -247,6 +352,48 @@ fn serve() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn write_proc_notification(
+    stdout: &mut impl Write,
+    notification: ProcNotification,
+) -> io::Result<()> {
+    let value = match notification {
+        ProcNotification::Stdout {
+            proc_id,
+            offset,
+            data,
+        } => json!({
+            "jsonrpc": "2.0",
+            "method": "proc/output",
+            "params": {
+                "procId": proc_id,
+                "stream": "stdout",
+                "offset": offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(data)
+            }
+        }),
+        ProcNotification::Stderr {
+            proc_id,
+            offset,
+            data,
+        } => json!({
+            "jsonrpc": "2.0",
+            "method": "proc/output",
+            "params": {
+                "procId": proc_id,
+                "stream": "stderr",
+                "offset": offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(data)
+            }
+        }),
+        ProcNotification::Exit { proc_id, exit_code } => json!({
+            "jsonrpc": "2.0",
+            "method": "proc/exit",
+            "params": { "procId": proc_id, "exitCode": exit_code }
+        }),
+    };
+    write_json_line(stdout, &value.to_string())
 }
 
 fn write_search_notification(
@@ -378,6 +525,11 @@ fn handle_request(
         "fs/list" => fs_list(state, params),
         "search/start" => search_start(state, params),
         "search/cancel" => search_cancel(state, params),
+        "proc/spawn" => proc_spawn(state, params),
+        "proc/attach" => proc_attach(state, params),
+        "proc/write" => proc_write(params),
+        "proc/kill" => proc_kill(params),
+        "proc/list" => proc_list(),
         _ => Err(jsonrpc_error(-32601, format!("method not found: {method}"))),
     }
 }
@@ -730,6 +882,927 @@ fn spawn_search(
     });
 }
 
+fn proc_spawn(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcSpawnParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let cwd = validated_proc_cwd(&params.cwd)?;
+    let dir = proc_dir(&params.proc_id)?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| jsonrpc_error(-32050, format!("proc dir failed: {error}")))?;
+    let status = proc_status_in_dir(&dir);
+    if status.running {
+        register_proc_cwd(state, &params.proc_id, cwd);
+        return Ok(json!({
+            "procId": params.proc_id,
+            "running": true,
+            "exitCode": null,
+            "spawned": false
+        }));
+    }
+    state
+        .proc_tailers
+        .remove(&proc_tailer_key(&params.proc_id, "io"));
+    state
+        .proc_tailers
+        .remove(&proc_tailer_key(&params.proc_id, "stdout"));
+    state
+        .proc_tailers
+        .remove(&proc_tailer_key(&params.proc_id, "stderr"));
+
+    let stdin_path = dir.join("stdin.log");
+    let stdout_path = dir.join("stdout.log");
+    let stderr_path = dir.join("stderr.log");
+    let exit_path = dir.join("exit");
+    let pid_path = dir.join("pid");
+    let _ = std::fs::remove_file(&exit_path);
+    let _ = std::fs::remove_file(&pid_path);
+    create_restrictive_empty_file(&stdin_path, "stdin")?;
+    create_restrictive_empty_file(&stdout_path, "stdout")?;
+    create_restrictive_empty_file(&stderr_path, "stderr")?;
+    let metadata = ProcMetadata {
+        proc_id: params.proc_id.clone(),
+        command: params.command.clone(),
+        args: params.args.clone(),
+        cwd: cwd.display().to_string(),
+    };
+    write_restrictive_bytes(
+        &dir.join("meta.json"),
+        &serde_json::to_vec(&metadata).expect("metadata serialization must succeed"),
+        "metadata",
+    )?;
+
+    for key in params.env.keys() {
+        if !is_safe_env_key(key) {
+            return Err(jsonrpc_error(-32602, format!("invalid env key: {key}")));
+        }
+    }
+    let launch = ProcSupervisorLaunch {
+        command: params.command,
+        args: params.args,
+        cwd: cwd.display().to_string(),
+        env: params.env,
+        path_prefix_directories: params.path_prefix_directories.unwrap_or_default(),
+    };
+    write_restrictive_bytes(
+        &dir.join("launch.json"),
+        &serde_json::to_vec(&launch).expect("launch serialization must succeed"),
+        "launch",
+    )?;
+    spawn_proc_supervisor(&dir)?;
+    register_proc_cwd(state, &params.proc_id, cwd);
+    let status = proc_status_in_dir(&dir);
+    Ok(json!({
+        "procId": params.proc_id,
+        "running": status.running,
+        "exitCode": status.exit_code,
+        "spawned": true
+    }))
+}
+
+fn validated_proc_cwd(requested_cwd: &str) -> Result<PathBuf, HelperError> {
+    let cwd = PathBuf::from(requested_cwd);
+    let metadata = std::fs::metadata(&cwd)
+        .map_err(|error| jsonrpc_error(-32050, format!("invalid cwd: {error}")))?;
+    if !metadata.is_dir() {
+        return Err(jsonrpc_error(-32050, "cwd is not a directory"));
+    }
+    Ok(cwd)
+}
+
+fn register_proc_cwd(state: &mut HelperState, proc_id: &str, cwd: PathBuf) {
+    state.subscriptions.insert(format!("proc:{proc_id}"), cwd);
+}
+
+fn register_persisted_proc_cwd(state: &mut HelperState, proc_id: &str, dir: &Path) {
+    let Ok(bytes) = std::fs::read(dir.join("meta.json")) else {
+        return;
+    };
+    let Ok(metadata) = serde_json::from_slice::<ProcMetadata>(&bytes) else {
+        return;
+    };
+    if metadata.proc_id != proc_id {
+        return;
+    }
+    let Ok(cwd) = validated_proc_cwd(&metadata.cwd) else {
+        return;
+    };
+    register_proc_cwd(state, proc_id, cwd);
+}
+
+fn spawn_proc_supervisor(dir: &Path) -> Result<(), HelperError> {
+    let exe = std::env::current_exe()
+        .map_err(|error| jsonrpc_error(-32050, format!("helper path failed: {error}")))?;
+    let mut command = Command::new(exe);
+    command
+        .arg("proc-supervise")
+        .arg(dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut supervisor = command
+        .spawn()
+        .map_err(|error| jsonrpc_error(-32050, format!("supervisor spawn failed: {error}")))?;
+    thread::spawn(move || {
+        let _ = supervisor.wait();
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if dir.join("pid").is_file() || dir.join("exit").is_file() {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    Err(jsonrpc_error(-32050, "supervisor did not start process"))
+}
+
+fn proc_supervise(dir: PathBuf) -> Result<(), HelperError> {
+    let launch_path = dir.join("launch.json");
+    let launch: ProcSupervisorLaunch = serde_json::from_slice(
+        &std::fs::read(&launch_path)
+            .map_err(|error| jsonrpc_error(-32050, format!("launch read failed: {error}")))?,
+    )
+    .map_err(|error| jsonrpc_error(-32050, format!("launch decode failed: {error}")))?;
+    let _ = std::fs::remove_file(&launch_path);
+
+    let script = proc_launch_script(
+        &launch.cwd,
+        &launch.command,
+        &launch.args,
+        &launch.env,
+        &launch.path_prefix_directories,
+    )?;
+    let stdout_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("stdout.log"))
+        .map_err(|error| jsonrpc_error(-32050, format!("stdout open failed: {error}")))?;
+    let stderr_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(dir.join("stderr.log"))
+        .map_err(|error| jsonrpc_error(-32050, format!("stderr open failed: {error}")))?;
+    let mut command = Command::new("/bin/sh");
+    command.arg("-c").arg(script);
+    configure_proc_child_stdio(&mut command, stdout_file, stderr_file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| jsonrpc_error(-32050, format!("spawn failed: {error}")))?;
+    write_proc_pid(&dir, child.id())?;
+    run_supervised_proc_child(child, dir.join("stdin.log"), dir.join("exit"));
+    Ok(())
+}
+
+fn configure_proc_child_stdio(
+    command: &mut Command,
+    stdout_file: std::fs::File,
+    stderr_file: std::fs::File,
+) {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
+}
+
+fn run_supervised_proc_child(
+    mut child: std::process::Child,
+    stdin_path: PathBuf,
+    exit_path: PathBuf,
+) {
+    let child_stdin = Option::take(&mut child.stdin);
+    pump_proc_stdin_and_record_exit(child, child_stdin, stdin_path, exit_path);
+}
+
+fn proc_launch_script(
+    cwd: &str,
+    command: &str,
+    args: &[String],
+    env: &HashMap<String, String>,
+    path_prefix_directories: &[String],
+) -> Result<String, HelperError> {
+    let mut env_parts: Vec<String> = vec!["env".to_string()];
+    env_parts.extend(
+        ACP_REMOTE_MARKER_SCRUB
+            .iter()
+            .flat_map(|key| ["-u".to_string(), (*key).to_string()]),
+    );
+    let mut env_keys: Vec<_> = env.keys().collect();
+    env_keys.sort();
+    for key in env_keys {
+        if !is_safe_env_key(key) {
+            return Err(jsonrpc_error(-32602, format!("invalid env key: {key}")));
+        }
+        let value = env.get(key).expect("key from map");
+        env_parts.push(format!("{}={}", key, shell_quote(value)));
+    }
+    let argv = std::iter::once(command)
+        .chain(args.iter().map(String::as_str))
+        .map(shell_quote)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let path_prefix = if path_prefix_directories.is_empty() {
+        String::new()
+    } else {
+        let joined = path_prefix_directories
+            .iter()
+            .map(|directory| shell_quote(directory))
+            .collect::<Vec<_>>()
+            .join(":");
+        format!("PATH={joined}:\"$PATH\" && export PATH && ")
+    };
+    Ok(format!(
+        "cd {cwd} && {path_prefix}exec {env_command} {argv}",
+        cwd = shell_quote(cwd),
+        path_prefix = path_prefix,
+        env_command = env_parts.join(" "),
+        argv = argv,
+    ))
+}
+
+fn create_restrictive_empty_file(path: &Path, label: &str) -> Result<(), HelperError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} create failed: {error}")))?;
+    drop(file);
+    set_restrictive_file_permissions(path, label)
+}
+
+fn write_restrictive_bytes(path: &Path, bytes: &[u8], label: &str) -> Result<(), HelperError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(path)
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} create failed: {error}")))?;
+    file.write_all(bytes)
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} write failed: {error}")))?;
+    file.flush()
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} flush failed: {error}")))?;
+    drop(file);
+    set_restrictive_file_permissions(path, label)
+}
+
+#[cfg(unix)]
+fn set_restrictive_file_permissions(path: &Path, label: &str) -> Result<(), HelperError> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| jsonrpc_error(-32050, format!("{label} chmod failed: {error}")))
+}
+
+#[cfg(not(unix))]
+fn set_restrictive_file_permissions(_path: &Path, _label: &str) -> Result<(), HelperError> {
+    Ok(())
+}
+
+fn proc_attach(state: &mut HelperState, params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcAttachParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let dir = proc_dir(&params.proc_id)?;
+    if !dir.is_dir() {
+        return Err(jsonrpc_error(-32051, "process not found"));
+    }
+    register_persisted_proc_cwd(state, &params.proc_id, &dir);
+    let stdout_offset = requested_log_offset(&dir.join("stdout.log"), params.stdout_offset);
+    let stderr_offset = requested_log_offset(&dir.join("stderr.log"), params.stderr_offset);
+    let mut stdout_frames = Vec::new();
+    let mut stderr_chunk = None;
+    let mut stdout_next_offset = stdout_offset;
+    let mut stderr_next_offset = stderr_offset;
+    collect_proc_replay(
+        &dir,
+        &mut stdout_next_offset,
+        &mut stderr_next_offset,
+        &mut stdout_frames,
+        &mut stderr_chunk,
+    )?;
+    let stdin_offset = std::fs::metadata(dir.join("stdin.log"))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let status = proc_status_in_dir(&dir);
+    if status.running {
+        if let Some(sender) = state.event_sender.clone() {
+            ensure_proc_tailers(
+                state,
+                &params.proc_id,
+                &dir,
+                stdout_next_offset,
+                stderr_next_offset,
+                sender,
+            );
+        }
+    } else {
+        collect_proc_replay(
+            &dir,
+            &mut stdout_next_offset,
+            &mut stderr_next_offset,
+            &mut stdout_frames,
+            &mut stderr_chunk,
+        )?;
+    }
+    Ok(json!({
+        "procId": params.proc_id,
+        "running": status.running,
+        "exitCode": status.exit_code,
+        "stdinOffset": stdin_offset,
+        "stdoutOffset": stdout_next_offset,
+        "stderrOffset": stderr_next_offset,
+        "stdoutFrames": stdout_frames.into_iter().map(|frame| {
+            json!({
+                "offset": frame.offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(frame.data)
+            })
+        }).collect::<Vec<_>>(),
+        "stderrChunks": stderr_chunk.into_iter().map(|(offset, data)| {
+            json!({
+                "offset": offset,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(data)
+            })
+        }).collect::<Vec<_>>()
+    }))
+}
+
+fn collect_proc_replay(
+    dir: &Path,
+    stdout_offset: &mut u64,
+    stderr_offset: &mut u64,
+    stdout_frames: &mut Vec<ProcReplayFrame>,
+    stderr_chunk: &mut Option<(u64, Vec<u8>)>,
+) -> Result<(), HelperError> {
+    let frames = read_stdout_frames(&dir.join("stdout.log"), *stdout_offset)?;
+    if let Some(frame) = frames.last() {
+        *stdout_offset = frame.offset;
+    }
+    stdout_frames.extend(frames);
+
+    if let Some((next_offset, data)) = read_file_tail(&dir.join("stderr.log"), *stderr_offset)? {
+        *stderr_offset = next_offset;
+        if let Some((offset, existing)) = stderr_chunk.as_mut() {
+            *offset = next_offset;
+            existing.extend(data);
+        } else {
+            *stderr_chunk = Some((next_offset, data));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_proc_tailers(
+    state: &mut HelperState,
+    proc_id: &str,
+    dir: &Path,
+    stdout_offset: u64,
+    stderr_offset: u64,
+    sender: Sender<ServerMessage>,
+) {
+    if state.proc_tailers.insert(proc_tailer_key(proc_id, "io")) {
+        spawn_proc_tail(
+            proc_id.to_string(),
+            dir.to_path_buf(),
+            stdout_offset,
+            stderr_offset,
+            sender,
+        );
+    }
+}
+
+fn proc_write(params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcWriteParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let dir = proc_dir(&params.proc_id)?;
+    if !dir.is_dir() {
+        return Err(jsonrpc_error(-32051, "process not found"));
+    }
+    proc_write_in_dir(&dir, &params)
+}
+
+fn proc_write_in_dir(dir: &Path, params: &ProcWriteParams) -> Result<Value, HelperError> {
+    if !proc_status_in_dir(dir).running {
+        return Err(jsonrpc_error(-32051, "process not running"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(params.data_base64.as_bytes())
+        .map_err(|error| jsonrpc_error(-32602, format!("invalid base64: {error}")))?;
+    let stdin_path = dir.join("stdin.log");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(&stdin_path)
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin open failed: {error}")))?;
+    let current_offset = file
+        .metadata()
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin metadata failed: {error}")))?
+        .len();
+    if let Some(expected_offset) = params.expected_stdin_offset {
+        if current_offset != expected_offset {
+            if input_log_already_contains(&mut file, expected_offset, &bytes)? {
+                return Ok(
+                    json!({ "ok": true, "stdinOffset": expected_offset + bytes.len() as u64 }),
+                );
+            }
+            return Err(jsonrpc_error(
+                -32053,
+                format!(
+                    "stdin offset mismatch: expected {expected_offset}, found {current_offset}"
+                ),
+            ));
+        }
+    }
+    file.write_all(&bytes)
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin write failed: {error}")))?;
+    file.flush()
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin flush failed: {error}")))?;
+    Ok(json!({ "ok": true, "stdinOffset": current_offset + bytes.len() as u64 }))
+}
+
+fn pump_proc_stdin_and_record_exit(
+    mut child: std::process::Child,
+    mut child_stdin: Option<std::process::ChildStdin>,
+    stdin_path: PathBuf,
+    exit_path: PathBuf,
+) {
+    let mut stdin_offset = 0_u64;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        if let Some(stdin) = child_stdin.as_mut() {
+            if pump_proc_stdin_once(&stdin_path, &mut stdin_offset, stdin, &mut buffer).is_err() {
+                child_stdin = None;
+            }
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                drop(child_stdin.take());
+                let code = status.code().unwrap_or(2);
+                let _ = std::fs::write(&exit_path, format!("{code}\n"));
+                break;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                drop(child_stdin.take());
+                let _ = child.kill();
+                let _ = std::fs::write(&exit_path, "2\n");
+                break;
+            }
+        }
+    }
+}
+
+fn pump_proc_stdin_once(
+    path: &Path,
+    offset: &mut u64,
+    stdin: &mut std::process::ChildStdin,
+    buffer: &mut [u8],
+) -> io::Result<()> {
+    let mut file = std::fs::File::open(path)?;
+    file.seek(SeekFrom::Start(*offset))?;
+    loop {
+        let read = file.read(buffer)?;
+        if read == 0 {
+            break;
+        }
+        stdin.write_all(&buffer[..read])?;
+        *offset += read as u64;
+    }
+    stdin.flush()
+}
+
+fn input_log_already_contains(
+    file: &mut std::fs::File,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<bool, HelperError> {
+    let end = offset + bytes.len() as u64;
+    let len = file
+        .metadata()
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin metadata failed: {error}")))?
+        .len();
+    if len < end {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin seek failed: {error}")))?;
+    let mut existing = vec![0_u8; bytes.len()];
+    file.read_exact(&mut existing)
+        .map_err(|error| jsonrpc_error(-32052, format!("stdin read failed: {error}")))?;
+    Ok(existing == bytes)
+}
+
+fn proc_kill(params: Option<Value>) -> Result<Value, HelperError> {
+    let params: ProcKillParams = decode_params(params)?;
+    validate_proc_id(&params.proc_id)?;
+    let dir = proc_dir(&params.proc_id)?;
+    if let Some(pid) = verified_proc_pid(&dir) {
+        terminate_process_group_and_wait(&dir, pid)?;
+    }
+    remove_proc_directory(&dir)?;
+    Ok(json!({ "ok": true }))
+}
+
+fn remove_proc_directory(dir: &Path) -> Result<(), HelperError> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(jsonrpc_error(
+            -32050,
+            format!("proc cleanup failed: {error}"),
+        )),
+    }
+}
+
+fn proc_list() -> Result<Value, HelperError> {
+    let root = proc_root()?;
+    let mut entries = Vec::new();
+    let Ok(read_dir) = std::fs::read_dir(root) else {
+        return Ok(json!({ "entries": entries }));
+    };
+    for entry in read_dir.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(proc_id) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        let status = proc_status_in_dir(&dir);
+        entries.push(json!({
+            "procId": proc_id,
+            "running": status.running,
+            "exitCode": status.exit_code
+        }));
+    }
+    Ok(json!({ "entries": entries }))
+}
+
+struct ProcStatus {
+    running: bool,
+    exit_code: Option<i32>,
+}
+
+fn proc_status_in_dir(dir: &Path) -> ProcStatus {
+    let exit_code = std::fs::read_to_string(dir.join("exit"))
+        .ok()
+        .and_then(|value| value.trim().parse::<i32>().ok());
+    let running = exit_code.is_none() && verified_proc_pid(dir).is_some();
+    ProcStatus { running, exit_code }
+}
+
+fn read_stdout_frames(path: &Path, offset: u64) -> Result<Vec<ProcReplayFrame>, HelperError> {
+    use std::io::{Read, Seek};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(jsonrpc_error(
+                -32053,
+                format!("stdout open failed: {error}"),
+            ));
+        }
+    };
+    file.seek(io::SeekFrom::Start(offset))
+        .map_err(|error| jsonrpc_error(-32053, format!("stdout seek failed: {error}")))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|error| jsonrpc_error(-32053, format!("stdout read failed: {error}")))?;
+    let mut frames = Vec::new();
+    let mut start = 0;
+    for (index, byte) in data.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        let end = index + 1;
+        let frame = data[start..index].to_vec();
+        frames.push(ProcReplayFrame {
+            offset: offset + end as u64,
+            data: frame,
+        });
+        start = end;
+    }
+    Ok(frames)
+}
+
+fn read_file_tail(path: &Path, offset: u64) -> Result<Option<(u64, Vec<u8>)>, HelperError> {
+    use std::io::{Read, Seek};
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(jsonrpc_error(
+                -32053,
+                format!("stderr open failed: {error}"),
+            ));
+        }
+    };
+    file.seek(io::SeekFrom::Start(offset))
+        .map_err(|error| jsonrpc_error(-32053, format!("stderr seek failed: {error}")))?;
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)
+        .map_err(|error| jsonrpc_error(-32053, format!("stderr read failed: {error}")))?;
+    if data.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some((offset + data.len() as u64, data)))
+    }
+}
+
+fn spawn_proc_tail(
+    proc_id: String,
+    dir: PathBuf,
+    mut stdout_offset: u64,
+    mut stderr_offset: u64,
+    sender: Sender<ServerMessage>,
+) {
+    thread::spawn(move || {
+        loop {
+            if drain_proc_output_once(
+                &proc_id,
+                &dir,
+                &sender,
+                &mut stdout_offset,
+                &mut stderr_offset,
+            )
+            .is_err()
+            {
+                return;
+            }
+            let status = proc_status_in_dir(&dir);
+            if !status.running {
+                finish_proc_tail(
+                    &proc_id,
+                    &dir,
+                    &sender,
+                    &mut stdout_offset,
+                    &mut stderr_offset,
+                    status.exit_code,
+                );
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+}
+
+fn finish_proc_tail(
+    proc_id: &str,
+    dir: &Path,
+    sender: &Sender<ServerMessage>,
+    stdout_offset: &mut u64,
+    stderr_offset: &mut u64,
+    exit_code: Option<i32>,
+) {
+    let _ = drain_proc_output_once(proc_id, dir, sender, stdout_offset, stderr_offset);
+    let _ = sender.send(ServerMessage::Proc(ProcNotification::Exit {
+        proc_id: proc_id.to_string(),
+        exit_code,
+    }));
+}
+
+fn drain_proc_output_once(
+    proc_id: &str,
+    dir: &Path,
+    sender: &Sender<ServerMessage>,
+    stdout_offset: &mut u64,
+    stderr_offset: &mut u64,
+) -> Result<(), ()> {
+    match read_stdout_frames(&dir.join("stdout.log"), *stdout_offset) {
+        Ok(frames) => {
+            for frame in frames {
+                *stdout_offset = frame.offset;
+                sender
+                    .send(ServerMessage::Proc(ProcNotification::Stdout {
+                        proc_id: proc_id.to_string(),
+                        offset: *stdout_offset,
+                        data: frame.data,
+                    }))
+                    .map_err(|_| ())?;
+            }
+        }
+        Err(_) => return Err(()),
+    }
+    match read_file_tail(&dir.join("stderr.log"), *stderr_offset) {
+        Ok(Some((next_offset, data))) => {
+            *stderr_offset = next_offset;
+            sender
+                .send(ServerMessage::Proc(ProcNotification::Stderr {
+                    proc_id: proc_id.to_string(),
+                    offset: *stderr_offset,
+                    data,
+                }))
+                .map_err(|_| ())?;
+        }
+        Ok(None) => {}
+        Err(_) => return Err(()),
+    }
+    Ok(())
+}
+
+fn proc_tailer_key(proc_id: &str, stream: &str) -> String {
+    format!("{proc_id}:{stream}")
+}
+
+const ACP_REMOTE_MARKER_SCRUB: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE",
+    "CLAUDE_PROJECT_DIR",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_SESSION_ID",
+];
+
+fn validate_proc_id(proc_id: &str) -> Result<(), HelperError> {
+    if proc_id.is_empty()
+        || proc_id.len() > 128
+        || !proc_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return Err(jsonrpc_error(-32602, "invalid procId"));
+    }
+    Ok(())
+}
+
+fn proc_root() -> Result<PathBuf, HelperError> {
+    let home = std::env::var("HOME").map_err(|_| jsonrpc_error(-32050, "HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".alas").join("procs"))
+}
+
+fn proc_dir(proc_id: &str) -> Result<PathBuf, HelperError> {
+    validate_proc_id(proc_id)?;
+    Ok(proc_root()?.join(proc_id))
+}
+
+fn read_pid(dir: &Path) -> Option<u32> {
+    std::fs::read_to_string(dir.join("pid"))
+        .ok()
+        .and_then(|value| value.split_whitespace().next()?.parse::<u32>().ok())
+}
+
+fn write_proc_pid(dir: &Path, pid: u32) -> Result<(), HelperError> {
+    write_restrictive_bytes(
+        dir.join("pid").as_path(),
+        format!("{pid}\n").as_bytes(),
+        "pid",
+    )?;
+    let metadata = ProcPidMetadata {
+        pid,
+        process_group_id: current_process_group_id(pid),
+    };
+    write_restrictive_bytes(
+        dir.join("pid.json").as_path(),
+        &serde_json::to_vec(&metadata).expect("pid metadata serialization must succeed"),
+        "pid metadata",
+    )
+}
+
+fn read_proc_pid_metadata(dir: &Path) -> Option<ProcPidMetadata> {
+    serde_json::from_slice(&std::fs::read(dir.join("pid.json")).ok()?).ok()
+}
+
+fn verified_proc_pid(dir: &Path) -> Option<u32> {
+    let pid = read_pid(dir)?;
+    if !pid_is_alive(pid) {
+        mark_stale_proc_pid(dir);
+        return None;
+    }
+    let Some(metadata) = read_proc_pid_metadata(dir) else {
+        return Some(pid);
+    };
+    if metadata.pid != pid {
+        mark_stale_proc_pid(dir);
+        return None;
+    }
+    if let Some(expected_pgid) = metadata.process_group_id {
+        if current_process_group_id(pid) != Some(expected_pgid) {
+            mark_stale_proc_pid(dir);
+            return None;
+        }
+    }
+    Some(pid)
+}
+
+fn mark_stale_proc_pid(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join("pid"));
+    let _ = std::fs::remove_file(dir.join("pid.json"));
+}
+
+fn file_len(path: &Path) -> io::Result<u64> {
+    Ok(std::fs::metadata(path)?.len())
+}
+
+fn requested_log_offset(path: &Path, requested_offset: Option<u64>) -> u64 {
+    let len = file_len(path).unwrap_or(0);
+    match requested_offset {
+        Some(u64::MAX) => len,
+        Some(offset) => offset.min(len),
+        None => 0,
+    }
+}
+
+#[cfg(unix)]
+fn pid_is_alive(pid: u32) -> bool {
+    unsafe { libc_kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn pid_is_alive(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn current_process_group_id(pid: u32) -> Option<u32> {
+    let pgid = unsafe { libc_getpgid(pid as i32) };
+    if pgid >= 0 { Some(pgid as u32) } else { None }
+}
+
+#[cfg(not(unix))]
+fn current_process_group_id(_pid: u32) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+fn terminate_process_group_and_wait(dir: &Path, pid: u32) -> Result<(), HelperError> {
+    signal_process_group(pid, 15);
+    if wait_for_proc_to_stop(dir, Duration::from_millis(500)) {
+        return Ok(());
+    }
+    signal_process_group(pid, 9);
+    if wait_for_proc_to_stop(dir, Duration::from_secs(2)) {
+        return Ok(());
+    }
+    Err(jsonrpc_error(
+        -32050,
+        "process did not exit after kill signal",
+    ))
+}
+
+#[cfg(not(unix))]
+fn terminate_process_group_and_wait(_dir: &Path, _pid: u32) -> Result<(), HelperError> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn signal_process_group(pid: u32, signal: i32) {
+    unsafe {
+        let _ = libc_kill(-(pid as i32), signal);
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_proc_to_stop(dir: &Path, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if proc_status_in_dir(dir).exit_code.is_some() || verified_proc_pid(dir).is_none() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    proc_status_in_dir(dir).exit_code.is_some() || verified_proc_pid(dir).is_none()
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+    fn getpgid(pid: i32) -> i32;
+}
+
+#[cfg(unix)]
+unsafe fn libc_kill(pid: i32, sig: i32) -> i32 {
+    unsafe { kill(pid, sig) }
+}
+
+#[cfg(unix)]
+unsafe fn libc_getpgid(pid: i32) -> i32 {
+    unsafe { getpgid(pid) }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn is_safe_env_key(key: &str) -> bool {
+    !key.is_empty()
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        && !key.as_bytes()[0].is_ascii_digit()
+}
+
 fn contained_existing_path(state: &HelperState, path: &str) -> Result<PathBuf, HelperError> {
     if state.subscriptions.is_empty() {
         return Err(jsonrpc_error(-32022, "no registered roots"));
@@ -975,6 +2048,11 @@ fn system_time_seconds(time: SystemTime) -> Option<f64> {
 mod tests {
     use super::*;
 
+    fn append_to_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+        file.write_all(bytes)
+    }
+
     #[test]
     fn bundled_manifest_matches_handshake() {
         let manifest: Handshake<'_> =
@@ -1009,6 +2087,125 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn input_log_already_contains_detects_idempotent_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-input-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("stdin.log");
+        std::fs::write(&path, b"first\nsecond\n").expect("input log");
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .append(true)
+            .open(&path)
+            .expect("open input log");
+
+        assert!(input_log_already_contains(&mut file, 6, b"second\n").expect("contains check"));
+        assert!(!input_log_already_contains(&mut file, 6, b"other\n").expect("contains mismatch"));
+        assert!(
+            !input_log_already_contains(&mut file, 20, b"later\n").expect("contains beyond eof")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_cwd_validation_preserves_symlink_path() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-cwd-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time after epoch")
+                .as_nanos()
+        ));
+        let target = root.join("target");
+        let link = root.join("link");
+        std::fs::create_dir_all(&target).expect("target cwd");
+        symlink(&target, &link).expect("cwd symlink");
+
+        let validated = validated_proc_cwd(link.to_str().expect("utf8 path"))
+            .expect("symlink cwd should be valid");
+
+        assert_eq!(validated, link);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_cwd_registration_uses_proc_subscription_key() {
+        let mut state = HelperState::default();
+        let cwd = PathBuf::from("/repo/link");
+
+        register_proc_cwd(&mut state, "session-1", cwd.clone());
+
+        assert_eq!(state.subscriptions.get("proc:session-1"), Some(&cwd));
+    }
+
+    #[test]
+    fn proc_attach_restores_cwd_registration_from_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-attach-cwd-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        let cwd = root.join("repo");
+        let proc_dir = root.join("proc");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+        std::fs::create_dir_all(&proc_dir).expect("proc dir");
+        let metadata = ProcMetadata {
+            proc_id: "session-1".to_string(),
+            command: "codex-acp".to_string(),
+            args: Vec::new(),
+            cwd: cwd.display().to_string(),
+        };
+        std::fs::write(
+            proc_dir.join("meta.json"),
+            serde_json::to_vec(&metadata).expect("metadata"),
+        )
+        .expect("metadata file");
+        let mut state = HelperState::default();
+
+        register_persisted_proc_cwd(&mut state, "session-1", &proc_dir);
+
+        assert_eq!(state.subscriptions.get("proc:session-1"), Some(&cwd));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_write_rejects_exited_process_without_appending() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-write-exited-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("time after epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("proc dir");
+        std::fs::write(root.join("stdin.log"), b"existing\n").expect("stdin log");
+        std::fs::write(root.join("exit"), b"0\n").expect("exit status");
+        let params = ProcWriteParams {
+            proc_id: "session-1".to_string(),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(b"prompt\n"),
+            expected_stdin_offset: Some(9),
+        };
+
+        let error = proc_write_in_dir(&root, &params).expect_err("exited proc must reject writes");
+
+        assert_eq!(error.code, -32051);
+        assert_eq!(
+            std::fs::read(root.join("stdin.log")).expect("stdin contents"),
+            b"existing\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1528,6 +2725,336 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_log_creation_forces_restrictive_permissions() {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-log-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("stdin.log");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o666)
+            .open(&path)
+            .expect("permissive input log");
+        drop(file);
+
+        create_restrictive_empty_file(&path, "stdin").expect("restrictive log");
+
+        let metadata = std::fs::metadata(&path).expect("log metadata");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        assert_eq!(metadata.len(), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_launch_file_uses_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-launch-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("launch.json");
+
+        write_restrictive_bytes(&path, br#"{"env":{"TOKEN":"secret"}}"#, "launch")
+            .expect("launch write");
+
+        let mode = std::fs::metadata(&path)
+            .expect("launch metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_metadata_file_uses_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-meta-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("meta.json");
+
+        let metadata = ProcMetadata {
+            proc_id: "acp-session-1".to_string(),
+            command: "codex-acp".to_string(),
+            args: vec!["--stdio".to_string()],
+            cwd: "/private/repo".to_string(),
+        };
+        write_restrictive_bytes(
+            &path,
+            &serde_json::to_vec(&metadata).expect("metadata"),
+            "metadata",
+        )
+        .expect("metadata write");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata file")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_launch_script_prepends_path_prefix_before_scrubbed_env() {
+        let script = proc_launch_script(
+            "/srv/repo",
+            "codex-acp",
+            &[],
+            &HashMap::new(),
+            &["/managed/node/bin".to_string()],
+        )
+        .expect("script");
+
+        assert!(script.starts_with(
+            "cd '/srv/repo' && PATH='/managed/node/bin':\"$PATH\" && export PATH && exec env "
+        ));
+        assert!(script.contains("-u CLAUDECODE"));
+        assert!(script.ends_with("'codex-acp'"));
+    }
+
+    #[test]
+    fn proc_tail_finishes_after_draining_stdout_and_stderr() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-tail-finish-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("stdout.log"), b"out\n").expect("stdout");
+        std::fs::write(root.join("stderr.log"), b"err").expect("stderr");
+        let (sender, receiver) = mpsc::channel();
+        let mut stdout_offset = 0;
+        let mut stderr_offset = 0;
+
+        finish_proc_tail(
+            "acp-session-1",
+            &root,
+            &sender,
+            &mut stdout_offset,
+            &mut stderr_offset,
+            Some(7),
+        );
+
+        match receiver.try_recv().expect("stdout message") {
+            ServerMessage::Proc(ProcNotification::Stdout {
+                proc_id,
+                offset,
+                data,
+            }) => {
+                assert_eq!(proc_id, "acp-session-1");
+                assert_eq!(offset, 4);
+                assert_eq!(data, b"out");
+            }
+            other => panic!("unexpected first message: {other:?}"),
+        }
+        match receiver.try_recv().expect("stderr message") {
+            ServerMessage::Proc(ProcNotification::Stderr {
+                proc_id,
+                offset,
+                data,
+            }) => {
+                assert_eq!(proc_id, "acp-session-1");
+                assert_eq!(offset, 3);
+                assert_eq!(data, b"err");
+            }
+            other => panic!("unexpected second message: {other:?}"),
+        }
+        match receiver.try_recv().expect("exit message") {
+            ServerMessage::Proc(ProcNotification::Exit { proc_id, exit_code }) => {
+                assert_eq!(proc_id, "acp-session-1");
+                assert_eq!(exit_code, Some(7));
+            }
+            other => panic!("unexpected third message: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn proc_replay_can_be_collected_again_before_terminal_attach_returns() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-terminal-replay-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("stdout.log"), b"early\n").expect("stdout");
+        std::fs::write(root.join("stderr.log"), b"early err").expect("stderr");
+        let mut stdout_offset = 0;
+        let mut stderr_offset = 0;
+        let mut stdout_frames = Vec::new();
+        let mut stderr_chunk = None;
+
+        collect_proc_replay(
+            &root,
+            &mut stdout_offset,
+            &mut stderr_offset,
+            &mut stdout_frames,
+            &mut stderr_chunk,
+        )
+        .expect("initial replay");
+        append_to_file(&root.join("stdout.log"), b"final\n").expect("stdout append");
+        append_to_file(&root.join("stderr.log"), b" final err").expect("stderr append");
+        collect_proc_replay(
+            &root,
+            &mut stdout_offset,
+            &mut stderr_offset,
+            &mut stdout_frames,
+            &mut stderr_chunk,
+        )
+        .expect("terminal replay");
+
+        assert_eq!(stdout_frames.len(), 2);
+        assert_eq!(stdout_frames[0].offset, 6);
+        assert_eq!(stdout_frames[0].data, b"early");
+        assert_eq!(stdout_frames[1].offset, 12);
+        assert_eq!(stdout_frames[1].data, b"final");
+        assert_eq!(stderr_chunk, Some((19, b"early err final err".to_vec())));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn remove_proc_directory_deletes_logs_and_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-cleanup-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("stdin.log"), b"request").expect("stdin");
+        std::fs::write(root.join("stdout.log"), b"response").expect("stdout");
+        std::fs::write(root.join("stderr.log"), b"error").expect("stderr");
+        std::fs::write(root.join("meta.json"), b"{}").expect("metadata");
+
+        remove_proc_directory(&root).expect("cleanup");
+
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_process_group_escalates_before_cleanup() {
+        use std::os::unix::process::CommandExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-kill-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let mut child = Command::new("/bin/sh");
+        child
+            .arg("-c")
+            .arg("trap '' TERM; sleep 30")
+            .process_group(0);
+        let mut child = child.spawn().expect("child");
+        write_proc_pid(&root, child.id()).expect("pid metadata");
+
+        terminate_process_group_and_wait(&root, child.id()).expect("terminated");
+        remove_proc_directory(&root).expect("cleanup");
+
+        let status = child.wait().expect("wait");
+        assert!(!status.success());
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn max_requested_log_offset_attaches_at_current_end() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-offset-end-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let path = root.join("stdout.log");
+        std::fs::write(&path, b"old response\n").expect("stdout");
+
+        assert_eq!(requested_log_offset(&path, Some(u64::MAX)), 13);
+        assert_eq!(requested_log_offset(&path, Some(4)), 4);
+        assert_eq!(requested_log_offset(&path, Some(99)), 13);
+        assert_eq!(requested_log_offset(&path, None), 0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_pid_metadata_uses_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-pid-mode-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+
+        write_proc_pid(&root, std::process::id()).expect("pid write");
+
+        let pid_mode = std::fs::metadata(root.join("pid"))
+            .expect("pid metadata")
+            .permissions()
+            .mode();
+        let pid_json_mode = std::fs::metadata(root.join("pid.json"))
+            .expect("pid json metadata")
+            .permissions()
+            .mode();
+        assert_eq!(pid_mode & 0o777, 0o600);
+        assert_eq!(pid_json_mode & 0o777, 0o600);
+        assert_eq!(verified_proc_pid(&root), Some(std::process::id()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn proc_status_rejects_pid_with_mismatched_process_group() {
+        let root = std::env::temp_dir().join(format!(
+            "alas-helper-proc-stale-pid-{}-{}",
+            std::process::id(),
+            system_time_seconds(SystemTime::now()).unwrap()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let pid = std::process::id();
+        write_restrictive_bytes(
+            root.join("pid").as_path(),
+            format!("{pid}\n").as_bytes(),
+            "pid",
+        )
+        .expect("pid write");
+        let wrong_group = current_process_group_id(pid).unwrap_or(pid).wrapping_add(1);
+        let metadata = ProcPidMetadata {
+            pid,
+            process_group_id: Some(wrong_group),
+        };
+        write_restrictive_bytes(
+            root.join("pid.json").as_path(),
+            &serde_json::to_vec(&metadata).expect("pid metadata"),
+            "pid metadata",
+        )
+        .expect("pid metadata write");
+
+        let status = proc_status_in_dir(&root);
+        assert!(!status.running);
+        assert!(!root.join("pid").exists());
+        assert!(!root.join("pid.json").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 
