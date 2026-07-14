@@ -285,6 +285,9 @@ enum RemoteHelperProcEvent: Equatable, Sendable {
 
 struct RemoteHelperProcAttachHandle: Sendable {
     let procId: String
+    let attachmentId: String
     let stdinOffset: UInt64
+    let stdoutOffset: UInt64
+    let stderrOffset: UInt64
     let events: AsyncStream<RemoteHelperProcEvent>
 }

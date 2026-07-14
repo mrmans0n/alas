@@ -8,6 +8,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     private let cwd: String
     private let environment: [String: String]
     private let pathPrefixDirectories: [String]
+    private let attachmentId = UUID().uuidString
     private let state = State()
     private var continuation: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation?
     private var attachTask: Task<Void, Never>?
@@ -55,9 +56,14 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
     func terminate() {
         guard state.markTerminated() else { return }
         attachTask?.cancel()
-        Task { [host, procId, stdoutOffset, stderrOffset] in
+        Task { [host, procId, attachmentId, stdoutOffset, stderrOffset] in
             let client = await RemoteHelperClientPool.shared.client(for: host)
-            await client.detachProc(procId: procId, stdoutOffset: stdoutOffset, stderrOffset: stderrOffset)
+            await client.detachProc(
+                procId: procId,
+                attachmentId: attachmentId,
+                stdoutOffset: stdoutOffset,
+                stderrOffset: stderrOffset
+            )
         }
         continuation?.yield(.exited(0))
         continuation?.finish()
@@ -103,10 +109,22 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 let requestedStderrOffset = stderrOffset == 0 ? nil : stderrOffset
                 let handle = try await client.attachProc(
                     procId: procId,
+                    attachmentId: attachmentId,
                     stdoutOffset: requestedStdoutOffset,
                     stderrOffset: requestedStderrOffset
                 )
                 stdinOffset = handle.stdinOffset
+                stdoutOffset = handle.stdoutOffset
+                stderrOffset = handle.stderrOffset
+                guard !Task.isCancelled, !state.isTerminated else {
+                    await client.detachProc(
+                        procId: procId,
+                        attachmentId: attachmentId,
+                        stdoutOffset: stdoutOffset,
+                        stderrOffset: stderrOffset
+                    )
+                    return
+                }
                 attempt = 0
                 for await event in handle.events {
                     guard !Task.isCancelled, !state.isTerminated else { return }

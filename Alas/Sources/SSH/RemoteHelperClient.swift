@@ -18,6 +18,7 @@ private struct ActiveRemoteHelperSearch {
 }
 
 private struct ActiveRemoteHelperProcAttachment {
+    let id: String
     let continuation: AsyncStream<RemoteHelperProcEvent>.Continuation
 }
 
@@ -297,24 +298,36 @@ actor RemoteHelperClient {
 
     func attachProc(
         procId: String,
+        attachmentId: String = UUID().uuidString,
         stdoutOffset: UInt64? = nil,
         stderrOffset: UInt64? = nil
     ) async throws -> RemoteHelperProcAttachHandle {
         let rememberedOffsets = procOffsets[procId]
         let requestedStdoutOffset = stdoutOffset ?? rememberedOffsets?.stdout
         let requestedStderrOffset = stderrOffset ?? rememberedOffsets?.stderr
-        let result: RemoteHelperProcAttachResult = try await request(
-            method: "proc/attach",
-            params: RemoteHelperProcAttachParams(
-                procId: procId,
-                stdoutOffset: requestedStdoutOffset,
-                stderrOffset: requestedStderrOffset
+        let wasDetached = detachedProcIds.remove(procId) != nil
+        let result: RemoteHelperProcAttachResult
+        do {
+            result = try await request(
+                method: "proc/attach",
+                params: RemoteHelperProcAttachParams(
+                    procId: procId,
+                    stdoutOffset: requestedStdoutOffset,
+                    stderrOffset: requestedStderrOffset
+                )
             )
-        )
+        } catch {
+            if wasDetached {
+                detachedProcIds.insert(procId)
+            }
+            throw error
+        }
         var continuation: AsyncStream<RemoteHelperProcEvent>.Continuation!
         let events = AsyncStream<RemoteHelperProcEvent> { continuation = $0 }
-        detachedProcIds.remove(procId)
-        activeProcAttachments[procId] = ActiveRemoteHelperProcAttachment(continuation: continuation)
+        activeProcAttachments[procId] = ActiveRemoteHelperProcAttachment(
+            id: attachmentId,
+            continuation: continuation
+        )
         for frame in result.stdoutFrames {
             if let data = Data(base64Encoded: frame.dataBase64) {
                 rememberProcOffset(procId: procId, stream: "stdout", offset: frame.offset)
@@ -350,12 +363,24 @@ actor RemoteHelperClient {
         }
         return RemoteHelperProcAttachHandle(
             procId: procId,
+            attachmentId: attachmentId,
             stdinOffset: result.stdinOffset,
+            stdoutOffset: result.stdoutOffset,
+            stderrOffset: result.stderrOffset,
             events: events
         )
     }
 
-    func detachProc(procId: String, stdoutOffset: UInt64, stderrOffset: UInt64) {
+    func detachProc(
+        procId: String,
+        attachmentId: String? = nil,
+        stdoutOffset: UInt64,
+        stderrOffset: UInt64
+    ) {
+        if let attachmentId,
+           activeProcAttachments[procId]?.id != attachmentId {
+            return
+        }
         rememberProcOffsets(procId: procId, stdout: stdoutOffset, stderr: stderrOffset)
         earlyProcEvents.removeValue(forKey: procId)
         detachedProcIds.insert(procId)

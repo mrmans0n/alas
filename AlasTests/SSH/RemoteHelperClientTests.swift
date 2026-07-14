@@ -338,6 +338,134 @@ struct RemoteHelperClientTests {
         #expect(await reattachIterator.next() == .available)
     }
 
+    @Test func procReattachBuffersOutputBeforeAttachResultReturns() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let attach = Task {
+            try await client.attachProc(procId: "acp-session-1", stdoutOffset: 0, stderrOffset: 0)
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":1,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":0,
+          "stdoutOffset":12,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        let handle = try await attach.value
+        var iterator = handle.events.makeAsyncIterator()
+        #expect(await iterator.next() == .available)
+
+        await client.detachProc(procId: "acp-session-1", stdoutOffset: 12, stderrOffset: 0)
+        #expect(await iterator.next() == nil)
+
+        let reattach = Task {
+            try await client.attachProc(procId: "acp-session-1")
+        }
+        try await waitUntil { transport.sentFrames.count == 2 }
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"proc/output","params":{
+          "procId":"acp-session-1",
+          "stream":"stdout",
+          "offset":30,
+          "dataBase64":"bGl2ZQ=="
+        }}
+        """#.utf8))
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":2,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":0,
+          "stdoutOffset":12,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+
+        let reattachHandle = try await reattach.value
+        var reattachIterator = reattachHandle.events.makeAsyncIterator()
+        #expect(await reattachIterator.next() == .stdout(Data("live".utf8), offset: 30))
+        #expect(await reattachIterator.next() == .available)
+    }
+
+    @Test func staleProcDetachDoesNotCloseFreshAttachment() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let firstAttach = Task {
+            try await client.attachProc(procId: "acp-session-1", stdoutOffset: 0, stderrOffset: 0)
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":1,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":0,
+          "stdoutOffset":12,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        let firstHandle = try await firstAttach.value
+        var firstIterator = firstHandle.events.makeAsyncIterator()
+        #expect(await firstIterator.next() == .available)
+
+        let secondAttach = Task {
+            try await client.attachProc(procId: "acp-session-1", attachmentId: "fresh-attachment")
+        }
+        try await waitUntil { transport.sentFrames.count == 2 }
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":2,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":0,
+          "stdoutOffset":12,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        let secondHandle = try await secondAttach.value
+        var secondIterator = secondHandle.events.makeAsyncIterator()
+        #expect(await secondIterator.next() == .available)
+
+        await client.detachProc(
+            procId: "acp-session-1",
+            attachmentId: firstHandle.attachmentId,
+            stdoutOffset: 12,
+            stderrOffset: 0
+        )
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","method":"proc/output","params":{
+          "procId":"acp-session-1",
+          "stream":"stdout",
+          "offset":30,
+          "dataBase64":"ZnJlc2g="
+        }}
+        """#.utf8))
+
+        #expect(await secondIterator.next() == .stdout(Data("fresh".utf8), offset: 30))
+    }
+
     @Test func procAttachWithoutRememberedOffsetRequestsReplayFromStart() async throws {
         let transport = FakeJSONRPCTransport()
         let client = RemoteHelperClient(
