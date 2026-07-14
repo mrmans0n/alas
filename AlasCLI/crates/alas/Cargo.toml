@@ -10,3 +10,4 @@ path = "src/main.rs"
 
 [dependencies]
 alas-client = { path = "../alas-client" }
+serde_json = "1"

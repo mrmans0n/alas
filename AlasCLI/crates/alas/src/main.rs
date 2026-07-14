@@ -1,4 +1,5 @@
 mod parse;
+mod mcp;
 
 use alas_client::{dispatch, logical_base, resolve_target, DispatchError, TransportError};
 use parse::{is_ao, parse};
