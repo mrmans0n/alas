@@ -182,10 +182,37 @@ fn process_alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
+/// True if `dir` is safe to trust for socket discovery: a real directory (not
+/// a symlink), owned by the current uid, with no group/other permission
+/// bits. Mirrors the app's own guard
+/// (`AgentHookSocketServer.prepareSocketDirectory`) — another local user
+/// could otherwise pre-create a permissive `/tmp/alas-<uid>` at our
+/// predictable path and plant sockets we'd trust.
+fn socket_dir_is_safe(dir: &Path) -> bool {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let Ok(c_path) = CString::new(dir.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::lstat(c_path.as_ptr(), &mut st) } != 0 {
+        return false;
+    }
+    let is_dir = (st.st_mode & libc::S_IFMT) == libc::S_IFDIR;
+    let owned_by_us = st.st_uid == unsafe { libc::getuid() };
+    let no_group_or_other_bits = (st.st_mode as u32 & 0o777) & 0o077 == 0;
+    is_dir && owned_by_us && no_group_or_other_bits
+}
+
 /// Live `pid-<pid>` sockets in `dir`, filtering out entries whose process has
 /// exited. Non-`pid-` entries (e.g. per-leaf `sock-` symlinks) are ignored.
+/// Refuses to trust `dir` at all unless it passes [`socket_dir_is_safe`].
 pub fn discover_live_sockets_in(dir: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
+    if !socket_dir_is_safe(dir) {
+        return result;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return result;
     };
@@ -198,7 +225,7 @@ pub fn discover_live_sockets_in(dir: &Path) -> Vec<PathBuf> {
         let Ok(pid) = pid_str.parse::<i32>() else {
             continue;
         };
-        if process_alive(pid) {
+        if pid > 0 && process_alive(pid) {
             result.push(entry.path());
         }
     }
@@ -316,6 +343,7 @@ pub fn dispatch_to_sockets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
     #[test]
@@ -404,16 +432,71 @@ mod tests {
         let root = std::env::temp_dir().join(format!("alas-cli-disc-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        // Live: our own pid. Dead: pid 999999999 (out of range, guaranteed absent).
-        let live = root.join(format!("pid-{}", std::process::id()));
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // A second live process we actually own, to exercise multi-entry sort
+        // order (string-sorted paths, not numeric pid order).
+        let mut child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+
+        // Live: our own pid and the spawned child. Dead: pid 999999999 (out of
+        // range, guaranteed absent). Junk: non-`pid-` entry and a non-numeric
+        // pid suffix, both ignored.
+        let live_a = root.join(format!("pid-{}", std::process::id()));
+        let live_b = root.join(format!("pid-{}", child.id()));
         let dead = root.join("pid-999999999");
         let junk = root.join("sock-abc"); // symlink-style entry, ignored by prefix
-        std::fs::write(&live, b"").unwrap();
+        let non_numeric = root.join("pid-abc"); // unparsable pid, skipped
+        std::fs::write(&live_a, b"").unwrap();
+        std::fs::write(&live_b, b"").unwrap();
         std::fs::write(&dead, b"").unwrap();
         std::fs::write(&junk, b"").unwrap();
+        std::fs::write(&non_numeric, b"").unwrap();
+
+        let found = discover_live_sockets_in(&root);
+        let mut expected = vec![live_a, live_b];
+        expected.sort();
+        assert_eq!(found, expected);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_live_sockets_in_skips_non_positive_pids() {
+        let root = std::env::temp_dir().join(format!("alas-cli-disc-pidguard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let live = root.join(format!("pid-{}", std::process::id()));
+        let zero = root.join("pid-0");
+        let negative = root.join("pid--5");
+        std::fs::write(&live, b"").unwrap();
+        std::fs::write(&zero, b"").unwrap();
+        std::fs::write(&negative, b"").unwrap();
 
         let found = discover_live_sockets_in(&root);
         assert_eq!(found, vec![live]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn discover_live_sockets_in_rejects_dir_with_group_or_other_bits() {
+        let root = std::env::temp_dir().join(format!("alas-cli-disc-perm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let live = root.join(format!("pid-{}", std::process::id()));
+        std::fs::write(&live, b"").unwrap();
+
+        let found = discover_live_sockets_in(&root);
+        assert!(
+            found.is_empty(),
+            "a dir with group/other permission bits must not be trusted"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 }
