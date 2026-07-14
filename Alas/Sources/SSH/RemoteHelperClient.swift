@@ -300,16 +300,11 @@ actor RemoteHelperClient {
         procId: String,
         attachmentId: String = UUID().uuidString,
         stdoutOffset: UInt64? = nil,
-        stderrOffset: UInt64? = nil,
-        attachAtEndIfOffsetUnknown: Bool = false
+        stderrOffset: UInt64? = nil
     ) async throws -> RemoteHelperProcAttachHandle {
         let rememberedOffsets = procOffsets[procId]
-        let requestedStdoutOffset = stdoutOffset
-            ?? rememberedOffsets?.stdout
-            ?? (attachAtEndIfOffsetUnknown ? UInt64.max : nil)
-        let requestedStderrOffset = stderrOffset
-            ?? rememberedOffsets?.stderr
-            ?? (attachAtEndIfOffsetUnknown ? UInt64.max : nil)
+        let requestedStdoutOffset = stdoutOffset ?? rememberedOffsets?.stdout
+        let requestedStderrOffset = stderrOffset ?? rememberedOffsets?.stderr
         let wasDetached = detachedProcIds.remove(procId) != nil
         let result: RemoteHelperProcAttachResult
         do {

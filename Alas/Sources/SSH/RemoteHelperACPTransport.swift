@@ -116,8 +116,7 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     procId: procId,
                     attachmentId: attachmentId,
                     stdoutOffset: requestedOffsets.stdout,
-                    stderrOffset: requestedOffsets.stderr,
-                    attachAtEndIfOffsetUnknown: requestedOffsets.attachAtEndIfOffsetUnknown
+                    stderrOffset: requestedOffsets.stderr
                 )
                 stdinOffset = handle.stdinOffset
                 stdoutOffset = handle.stdoutOffset
@@ -133,10 +132,12 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                 }
                 attempt = 0
                 attachFreshSpawnFromStart = false
+                var didBecomeAvailable = false
                 for await event in handle.events {
                     guard !Task.isCancelled, !state.isTerminated else { return }
                     switch event {
                     case .available:
+                        didBecomeAvailable = true
                         state.setWritesEnabled(true)
                         await flushPendingWrites()
                     case .unavailable:
@@ -144,6 +145,9 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                         throw RemoteHelperClientError.notRunning
                     case .stdout(let data, let offset):
                         stdoutOffset = offset
+                        if !didBecomeAvailable, Self.shouldSuppressPreAvailableReplayFrame(data) {
+                            continue
+                        }
                         continuation?.yield(.frame(data))
                     case .stderr(let data, let offset):
                         stderrOffset = offset
@@ -167,15 +171,21 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         stdoutOffset: UInt64,
         stderrOffset: UInt64,
         attachFreshSpawnFromStart: Bool
-    ) -> (stdout: UInt64?, stderr: UInt64?, attachAtEndIfOffsetUnknown: Bool) {
+    ) -> (stdout: UInt64?, stderr: UInt64?) {
         if attachFreshSpawnFromStart {
-            return (0, 0, false)
+            return (0, 0)
         }
         return (
             stdoutOffset == 0 ? nil : stdoutOffset,
-            stderrOffset == 0 ? nil : stderrOffset,
-            true
+            stderrOffset == 0 ? nil : stderrOffset
         )
+    }
+
+    static func shouldSuppressPreAvailableReplayFrame(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return object["id"] != nil && object["method"] == nil
     }
 
     private func flushPendingWrites() async {
