@@ -22,6 +22,48 @@ struct ACPSessionManagerRemoteRestoreTests {
         await manager.detach(sessionId: session.id)
     }
 
+    @Test("Alas-owned resume suppresses helper stdout replay when locally hydrated")
+    func localSessionResumeSuppressesHydratedHelperReplay() async throws {
+        let persistedToolCall = ACPMessage.toolCall(.init(
+            toolCallId: "tool-1",
+            title: "Read file",
+            kind: "read",
+            status: "completed",
+            content: "done"
+        ))
+        let (manager, store, client, session) = try fixture(
+            origin: .alasCreated,
+            localMessage: persistedToolCall
+        )
+        scriptInitialize(client, canLoad: true, canResume: true)
+        client.scriptAsync(method: "session/resume") { _ in
+            client.emit(.init(sessionId: "remote-id", update: .toolCall(.init(
+                toolCallId: "tool-1",
+                title: "Read file",
+                kind: "read",
+                status: "completed",
+                content: [.content(.text("done"))],
+                locations: nil,
+                rawInput: nil,
+                rawOutput: nil
+            ))))
+            return Data("{}".utf8)
+        }
+
+        await manager.hydrateIfNeeded(id: session.id)
+        await manager.attach(to: session.id, freshlyCreated: false)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(client.sent.map(\.method).contains("session/resume"))
+        #expect(client.yieldedUpdateCount == 1)
+        #expect(session.transcript.messages.count == 1)
+        #expect(try store.messageCount(sessionId: session.id) == 1)
+
+        client.emit(.init(sessionId: "remote-id", update: .agentMessageChunk(.text("live follow-up"))))
+        try await waitUntil { session.transcript.messages.count == 2 }
+        await manager.detach(sessionId: session.id)
+    }
+
     @Test("Alas-owned sessions recover locally when resume fails")
     func localSessionResumeFailureRecoversWithNewSession() async throws {
         let (manager, store, client, session) = try fixture(

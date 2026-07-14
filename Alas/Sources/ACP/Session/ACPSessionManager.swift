@@ -2159,10 +2159,11 @@ extension ACPSessionManager {
                 hasLocalTranscript: session.hasConversationTranscript
             )
             let shouldSuppressLoadReplay = (restoreOperation == .loadWithRecovery
-                || restoreOperation == .loadStrict)
+                || restoreOperation == .loadStrict
+                || restoreOperation == .resume)
                 && !freshlyCreated
                 && session.hydrationState == .ready
-                && session.hasConversationTranscript
+                && !session.transcript.messages.isEmpty
                 && !(session.remoteSessionId ?? "").isEmpty
             let runner = ACPSessionRunner(session: session, connection: connection,
                                           sessionId: sessionId,
@@ -2240,6 +2241,9 @@ extension ACPSessionManager {
                     do {
                         result = try await connection.resumeSession(
                             cwd: worktreePath, sessionId: remoteId, mcpServers: wireMCPServers)
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
                         if !pendingRecovery {
                             session.contextRecoveryStatus = nil
                         }
@@ -2250,6 +2254,9 @@ extension ACPSessionManager {
                             )
                         }
                     } catch {
+                        runner.finishSuppressingLoadReplay(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
                         guard session.origin == .alasCreated,
                               ACPAuthFailure.message(from: error) == nil
                         else { throw error }
