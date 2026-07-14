@@ -109,6 +109,14 @@ struct DiffReviewProgrammaticScrollController: Equatable {
         isSuppressing = false
     }
 
+    /// Whether `token` still refers to the in-flight programmatic scroll.
+    /// A newer `beginProgrammaticScroll` supersedes older tokens (the
+    /// generation advances), so a delayed scroll task can use this to abort
+    /// rather than yank the viewport back to a stale destination.
+    func isCurrent(_ token: Token) -> Bool {
+        token.generation == generation
+    }
+
     func acceptsScrollSpyUpdate(for id: DiffReviewFileID) -> Bool {
         !isSuppressing || id == target
     }

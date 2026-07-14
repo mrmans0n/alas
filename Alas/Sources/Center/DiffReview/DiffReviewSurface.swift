@@ -45,6 +45,11 @@ struct DiffReviewSurface: View {
     @State private var scrollCommand: DiffReviewScrollCommand?
     @State private var contextExpandedFileIDs: Set<DiffReviewFileID> = []
     @State private var synchronizedFileSetKey: String?
+    /// The file the scrollspy last reported as scrolled into view. Used to tell
+    /// cross-file comment navigation (file section not yet realized → needs a
+    /// two-phase scroll) from same-file navigation (section already realized →
+    /// a direct scroll suffices and avoids a detour through the file header).
+    @State private var scrollSpyActiveFileID: DiffReviewFileID?
 
     init(
         session: DiffReviewLoadedSession,
@@ -276,14 +281,10 @@ struct DiffReviewSurface: View {
                     )
                 }
                 if let command = inlineFeedbackScrollCommand {
-                    Task { @MainActor in
-                        scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
-                    }
+                    scrollToInlineFeedback(command, scrollProxy: scrollProxy, animated: false)
                 }
                 if let draftCommand = draftCommentScrollCommand {
-                    Task { @MainActor in
-                        scrollToDraftComment(draftCommand, scrollProxy: scrollProxy, animated: false)
-                    }
+                    scrollToDraftComment(draftCommand, scrollProxy: scrollProxy, animated: false)
                 }
             }
             .onChange(of: inlineFeedbackScrollCommand) { _, command in
@@ -373,13 +374,12 @@ struct DiffReviewSurface: View {
         animated: Bool
     ) {
         selectedFileID = command.fileID
-        if animated {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                scrollProxy.scrollTo(command.targetID, anchor: .center)
-            }
-        } else {
-            scrollProxy.scrollTo(command.targetID, anchor: .center)
-        }
+        scrollToReviewItem(
+            fileID: command.fileID,
+            targetID: command.targetID,
+            scrollProxy: scrollProxy,
+            animated: animated
+        )
     }
 
     private func scrollToDraftComment(
@@ -388,12 +388,77 @@ struct DiffReviewSurface: View {
         animated: Bool
     ) {
         selectedFileID = command.fileID
-        if animated {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                scrollProxy.scrollTo(command.targetID, anchor: .center)
+        scrollToReviewItem(
+            fileID: command.fileID,
+            targetID: command.targetID,
+            scrollProxy: scrollProxy,
+            animated: animated
+        )
+    }
+
+    /// Scrolls the review stream to a specific inline item — a draft comment
+    /// or provider feedback card.
+    ///
+    /// The card is nested inside its file section, which is a lazy child of
+    /// the review stream's `LazyVStack`. When the item's file isn't currently
+    /// realized (the reviewer was looking at another file), a direct
+    /// `scrollTo(cardID)` silently no-ops because the card view isn't in the
+    /// tree yet. Mirror the file-rail scroll for that case: first land on the
+    /// file section (a direct lazy child SwiftUI reliably realizes), let
+    /// layout settle, then scroll to the nested card. When the file is
+    /// already in view the section is realized, so a single direct scroll
+    /// reaches the card without a detour through the file header.
+    ///
+    /// A programmatic-scroll token suppresses the scrollspy during the move so
+    /// it doesn't snap the selection back to whichever file ends up at the top
+    /// of the viewport.
+    private func scrollToReviewItem(
+        fileID: DiffReviewFileID,
+        targetID: some Hashable,
+        scrollProxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        let fileAlreadyVisible = scrollSpyActiveFileID == fileID
+        selectedFileID = fileID
+        // Lock the scrollspy's active file to the destination now. The visibility
+        // callback early-returns once `selectedFileID` already matches (and is
+        // suppressed during the programmatic scroll), so without this the
+        // active-file tracker would stay on the previous file and a later
+        // same-file-shortcut click on that now-off-screen file would no-op.
+        scrollSpyActiveFileID = fileID
+        let token = programmaticScroll.beginProgrammaticScroll(to: fileID)
+
+        func scrollToCard() {
+            if animated {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    scrollProxy.scrollTo(targetID, anchor: .center)
+                }
+            } else {
+                scrollProxy.scrollTo(targetID, anchor: .center)
             }
-        } else {
-            scrollProxy.scrollTo(command.targetID, anchor: .center)
+        }
+
+        if fileAlreadyVisible {
+            // The file section (and every nested card within it) is already
+            // realized — scroll straight to the card in one motion.
+            scrollToCard()
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                programmaticScroll.finishProgrammaticScroll(token)
+            }
+            return
+        }
+
+        // Cross-file: realize the file section first, then scroll to the card
+        // once layout has settled.
+        let sectionID = DiffReviewSurfaceSelectionSync.sectionVisibilityTargetID(for: fileID)
+        scrollProxy.scrollTo(sectionID, anchor: .top)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard programmaticScroll.isCurrent(token) else { return }
+            scrollToCard()
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            programmaticScroll.finishProgrammaticScroll(token)
         }
     }
 
@@ -406,6 +471,7 @@ struct DiffReviewSurface: View {
         ) else { return }
 
         selectedFileID = updated
+        scrollSpyActiveFileID = updated
     }
 
     private func synchronizeSelectionWithSession() {
@@ -439,6 +505,7 @@ struct DiffReviewSurface: View {
 
     private func queueProgrammaticFileScroll(to id: DiffReviewFileID) {
         let token = programmaticScroll.beginProgrammaticScroll(to: id)
+        scrollSpyActiveFileID = id
         scrollCommand = scrollCommandController.command(to: id)
 
         Task { @MainActor in
