@@ -26,7 +26,8 @@ struct AlasCLICommandRouter {
     var activateApp: () -> Void
 
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
-        guard let originWorktreeId = sessionWorktreeId(request.sessionId),
+        guard let sessionId = request.sessionId,
+              let originWorktreeId = sessionWorktreeId(sessionId),
               let origin = originatingWorktree(originWorktreeId) else {
             return .error("Unknown Alas terminal session.")
         }
@@ -38,6 +39,8 @@ struct AlasCLICommandRouter {
             return await handleWorktree(command, origin: origin)
         case .review(let command):
             return await handleReview(command, origin: origin)
+        case .resolve:
+            return .error("resolve is not available yet.")
         }
     }
 

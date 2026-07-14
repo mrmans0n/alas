@@ -14,6 +14,7 @@ struct AlasCLIRequest: Equatable {
         case open(paths: [String])
         case worktree(WorktreeCommand)
         case review(ReviewCommand)
+        case resolve
     }
 
     enum WorktreeCommand: Equatable {
@@ -29,7 +30,8 @@ struct AlasCLIRequest: Equatable {
     }
 
     let version: Int
-    let sessionId: String
+    let sessionId: String?
+    let cwd: String?
     let command: Command
 
     var paths: [String] {
@@ -43,6 +45,7 @@ struct AlasCLIRequest: Equatable {
         var command: String?
         var subcommand: String?
         var session_id: String?
+        var cwd: String?
         var paths: [String]?
         var target: String?
         var branch: String?
@@ -79,8 +82,17 @@ struct AlasCLIRequest: Equatable {
         }
         guard raw.kind == "cli" else { throw AlasCLIRequestError.unsupportedKind }
         guard raw.v == 1 else { throw AlasCLIRequestError.unsupportedVersion }
-        guard let sessionId = raw.session_id,
-              !sessionId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        let sessionId = raw.session_id?.nilIfBlank
+        let cwd = try raw.cwd.map { rawCwd -> String in
+            let trimmed = rawCwd.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty,
+                  trimmed.hasPrefix("/"),
+                  URL(fileURLWithPath: trimmed).path == trimmed else {
+                throw AlasCLIRequestError.malformed
+            }
+            return trimmed
+        }
+        guard sessionId != nil || cwd != nil else {
             throw AlasCLIRequestError.missingSession
         }
 
@@ -111,11 +123,13 @@ struct AlasCLIRequest: Equatable {
             } else {
                 command = .review(.localChanges)
             }
+        case "resolve":
+            command = .resolve
         default:
             throw AlasCLIRequestError.unsupportedCommand
         }
 
-        return AlasCLIRequest(version: 1, sessionId: sessionId, command: command)
+        return AlasCLIRequest(version: 1, sessionId: sessionId, cwd: cwd, command: command)
     }
 }
 

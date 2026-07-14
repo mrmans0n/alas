@@ -41,7 +41,7 @@ struct AppStateCLIRoutingTests {
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { sessionId in
             sessionId == "s1" ? worktree.id : nil
         })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [file.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [file.path])))
 
         #expect(response == .ok)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
@@ -72,7 +72,7 @@ struct AppStateCLIRoutingTests {
         state.startHarness()
 
         let handler = try #require(state.harness.socketServer.onCLIRequest)
-        let response = await handler(.init(version: 1, sessionId: "s1", command: .open(paths: [file.path])))
+        let response = await handler(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [file.path])))
 
         #expect(response == .ok)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
@@ -439,7 +439,7 @@ struct AppStateCLIRoutingTests {
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { sessionId in
             sessionId == "s1" ? worktree.id : nil
         })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [externalFile.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [externalFile.path])))
 
         #expect(response == .ok)
         #expect(state.selectedWorktreeId == worktree.id)
@@ -468,7 +468,7 @@ struct AppStateCLIRoutingTests {
         state.projectsManager.insertOptimisticWorktree(other)
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.switch(target: "feature"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "feature"))))
 
         #expect(response == .ok)
         #expect(state.selectedWorktreeId == other.id)
@@ -479,7 +479,7 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
 
         #expect(response == .ok)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
@@ -501,7 +501,7 @@ struct AppStateCLIRoutingTests {
         state.selectedWorktreeId = other.id
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
 
         #expect(response == .ok)
         #expect(state.selectedWorktreeId == main.id)
@@ -516,7 +516,7 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.provider(target: "not-a-review"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "not-a-review"))))
 
         #expect(response == .error("unsupported review URL"))
     }
@@ -526,7 +526,7 @@ struct AppStateCLIRoutingTests {
         defer { try? FileManager.default.removeItem(at: worktree.path) }
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.provider(target: "123"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "123"))))
 
         #expect(response == .error("no code host remote found for this worktree"))
     }
@@ -540,6 +540,7 @@ struct AppStateCLIRoutingTests {
         let response = await router.handle(.init(
             version: 1,
             sessionId: "s1",
+            cwd: nil,
             command: .review(.provider(target: "https://github.com/mrmans0n/alas/pull/580"))
         ))
 
@@ -558,7 +559,7 @@ struct AppStateCLIRoutingTests {
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{repo}-{branch}"
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "feature/cli", base: "missing-base"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.new(branch: "feature/cli", base: "missing-base"))))
 
         let destination = WorktreePathTemplateRenderer.render(
             template: state.config.worktrees.pathTemplate,
@@ -584,7 +585,7 @@ struct AppStateCLIRoutingTests {
         let existingBranch = main.path.lastPathComponent
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: existingBranch, base: "main"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.new(branch: existingBranch, base: "main"))))
 
         #expect(response == .error("A worktree already exists at this path."))
         #expect(state.projectsManager.worktrees(projectId: project.id).filter { $0.id == main.id }.count == 1)
@@ -602,7 +603,7 @@ struct AppStateCLIRoutingTests {
         state.config.worktrees.pathTemplate = "{worktreeRoot}/{branch}"
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "already-there", base: "main"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.new(branch: "already-there", base: "main"))))
 
         #expect(response == .error("A worktree already exists at this path."))
     }
@@ -620,7 +621,7 @@ struct AppStateCLIRoutingTests {
         state.config.worktrees.baseBranch = "stale-default"
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "from-master", base: nil))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.new(branch: "from-master", base: nil))))
 
         let canonicalCreatedPath = createdPath
             .deletingLastPathComponent()
@@ -651,7 +652,7 @@ struct AppStateCLIRoutingTests {
         let target = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.branch == "delete-target" })
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "delete-target", force: false, keepBranch: true))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-target", force: false, keepBranch: true))))
 
         #expect(response == .ok)
         #expect(state.projectsManager.operationState(for: target.id) == .deleting)
@@ -673,7 +674,7 @@ struct AppStateCLIRoutingTests {
         state.projectsManager.setOperationState(id: target.id, state: .deleting)
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "feature/delete", force: true, keepBranch: true))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature/delete", force: true, keepBranch: true))))
 
         #expect(response == .ok)
         #expect(state.projectsManager.operationState(for: target.id) == .deleting)
@@ -701,7 +702,7 @@ struct AppStateCLIRoutingTests {
         )
 
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "delete-force-target", force: true, keepBranch: true))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "delete-force-target", force: true, keepBranch: true))))
 
         #expect(response == .ok)
         #expect(state.pendingForceDeleteWorktree == nil)

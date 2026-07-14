@@ -30,7 +30,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("a.txt").path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("a.txt").path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -63,7 +63,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [nestedRoot.appendingPathComponent("file.txt").path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [nestedRoot.appendingPathComponent("file.txt").path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -93,7 +93,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [logicalFile.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [logicalFile.path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -125,7 +125,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [caseVariantFile.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [caseVariantFile.path])))
 
         #expect(response == .ok)
         #expect(opened.count == 1)
@@ -151,7 +151,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [external.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [external.path])))
 
         #expect(response == .ok)
         #expect(externalOpens.count == 1)
@@ -180,7 +180,7 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [siblingFile.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [siblingFile.path])))
 
         #expect(response == .ok)
         #expect(externalCount == 1)
@@ -201,8 +201,8 @@ struct AlasCLICommandRouterTests {
             activateApp: {}
         )
 
-        let missing = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("missing.txt").path])))
-        let directory = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.path])))
+        let missing = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("missing.txt").path])))
+        let directory = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.path])))
 
         guard case .error(let missingMessage) = missing else {
             Issue.record("expected missing file error")
@@ -233,7 +233,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { Issue.record("expected no activation") }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [missingPath, root.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [missingPath, root.path])))
 
         guard case .error(let message) = response else {
             Issue.record("expected combined error")
@@ -260,7 +260,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("a.txt").path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("a.txt").path])))
 
         #expect(response == .ok)
         #expect(activationCount == 1)
@@ -283,7 +283,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        _ = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [root.appendingPathComponent("missing.txt").path, root.path])))
+        _ = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [root.appendingPathComponent("missing.txt").path, root.path])))
 
         #expect(activationCount == 0)
     }
@@ -308,7 +308,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .open(paths: [first.path, second.path])))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: [first.path, second.path])))
 
         #expect(response == .ok)
         #expect(activationCount == 1)
@@ -320,7 +320,7 @@ struct AlasCLICommandRouterTests {
         let differentProject = Self.worktree(branch: "main", path: "/tmp/other", projectId: "p2")
         let router = Self.router(origin: current, visibleWorktrees: [current, other, differentProject])
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.list)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.list)))
 
         #expect(response == .text(AlasCLIWorktreeResolver.rows(worktrees: [current, other], currentWorktreeId: current.id)))
     }
@@ -337,7 +337,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.switch(target: "feature"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "feature"))))
 
         #expect(response == .ok)
         #expect(focused?.id == target.id)
@@ -351,8 +351,8 @@ struct AlasCLICommandRouterTests {
         let second = Self.worktree(branch: "feature/b", path: "/tmp/b", projectId: "p1")
         let router = Self.router(origin: current, visibleWorktrees: [current, first, second])
 
-        let missing = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.switch(target: "missing"))))
-        let ambiguous = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "feature", force: false, keepBranch: false))))
+        let missing = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.switch(target: "missing"))))
+        let ambiguous = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature", force: false, keepBranch: false))))
 
         #expect(missing == .error("unknown worktree \"missing\""))
         #expect(ambiguous == .error("ambiguous worktree \"feature\"; matches: feature/a, feature/b"))
@@ -370,7 +370,7 @@ struct AlasCLICommandRouterTests {
             }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.new(branch: "feature/cli", base: "main"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.new(branch: "feature/cli", base: "main"))))
 
         #expect(response == .text(["created"]))
         #expect(created?.origin == current)
@@ -391,7 +391,7 @@ struct AlasCLICommandRouterTests {
             }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .worktree(.delete(target: "feature", force: true, keepBranch: true))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .worktree(.delete(target: "feature", force: true, keepBranch: true))))
 
         #expect(response == .ok)
         #expect(deleted?.worktree == target)
@@ -410,7 +410,7 @@ struct AlasCLICommandRouterTests {
             activateApp: { activationCount += 1 }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.localChanges)))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
 
         #expect(response == .ok)
         #expect(opened == current.id)
@@ -429,7 +429,7 @@ struct AlasCLICommandRouterTests {
             }
         )
 
-        let response = await router.handle(.init(version: 1, sessionId: "s1", command: .review(.provider(target: "123"))))
+        let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.provider(target: "123"))))
 
         #expect(response == .ok)
         #expect(opened?.origin == current)
