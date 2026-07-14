@@ -83,6 +83,42 @@ struct RemoteServerIntegrationTests {
         server.stop()
     }
 
+    @Test func stopBypassesBlockedOrderedQueue() async throws {
+        let provider = FakeSessionsProvider()
+        let mgr = try makeManager()
+        let s = mgr.createSession(agentId: "claude")
+        provider.sessions[s.id] = s
+        provider.pauseSessionSummaries = true            // blocks the ordered chain
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let (server, port) = try await startServer(pairing: pairing, provider: provider)
+
+        // Pair: mint a code in-process (UI would show its QR), redeem via HTTP.
+        let code = pairing.beginPairing()
+        var pairReq = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/pair")!)
+        pairReq.httpMethod = "POST"
+        pairReq.httpBody = Data(#"{"code":"\#(code)","deviceName":"test"}"#.utf8)
+        let (pairData, _) = try await URLSession.shared.data(for: pairReq)
+        struct PairResp: Decodable { let token: String }
+        let token = try JSONDecoder().decode(PairResp.self, from: pairData).token
+
+        // Connect WS with token as subprotocol.
+        let wsURL = URL(string: "ws://127.0.0.1:\(port)/ws")!
+        let task = URLSession.shared.webSocketTask(with: wsURL, protocols: [token])
+        task.resume()
+
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.listSessions)))   // parks the chain
+        try await task.send(.data(JSONEncoder().encode(RemoteClientMessage.stop(sessionId: s.id))))
+        // stop must land while listSessions is still parked on its continuation.
+        for _ in 0..<100 where provider.stopped.isEmpty {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.stopped == [s.id])
+
+        provider.resumeSessionSummaries()
+        task.cancel(with: .goingAway, reason: nil)
+        server.stop()
+    }
+
     @Test func revokingDeviceDropsLiveWebSocket() async throws {
         let provider = FakeSessionsProvider()
         let mgr = try makeManager()

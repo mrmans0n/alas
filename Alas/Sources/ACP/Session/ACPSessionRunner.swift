@@ -987,7 +987,7 @@ final class ACPSessionRunner {
     /// any pending permission continuation, marks in-flight tool calls as
     /// canceled, posts a system notice, and flips `streamingState` back
     /// to `.idle`. Persists all mutations so they survive a reload.
-    func userCancel() async {
+    func userCancel(confirmingLease: Bool = true) async {
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         // Capture the prompt + queue head the user INTENDED to stop
         // BEFORE awaiting `connection.cancel`. Without this snapshot, a
@@ -1017,12 +1017,14 @@ final class ACPSessionRunner {
             }
             return snapshot
         }
-        // A former writer that lost the lease must not send a cancel RPC to
-        // the agent for a session another instance now owns. The local
-        // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
-        // it only affects this runner's own sendNow catch path and has no
-        // cross-instance side effects.
-        guard await hasConfirmedLeaseForSideEffect() else { return }
+        if confirmingLease {
+            // A former writer that lost the lease must not send a cancel RPC to
+            // the agent for a session another instance now owns. The local
+            // bookkeeping above (cancelledPromptIDs insert) is fine to keep —
+            // it only affects this runner's own sendNow catch path and has no
+            // cross-instance side effects.
+            guard await hasConfirmedLeaseForSideEffect() else { return }
+        }
         onUserCancel?()
         let remoteId = session.remoteSessionId ?? sessionId
         try? await connection.cancel(sessionId: remoteId)

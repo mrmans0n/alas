@@ -165,6 +165,16 @@ final class ACPSessionManager: ObservableObject {
         await runner.userCancel()
     }
 
+    /// Remote-web emergency brake: cancel this instance's in-flight turn
+    /// WITHOUT confirming the writer lease. `session/cancel` is idempotent
+    /// and only reaches this instance's own adapter — if another instance
+    /// took the lease and drives the session, our runner has no active
+    /// prompt and the cancel is a harmless no-op there.
+    func interruptBypassingLease(for id: ACPSession.ID) async {
+        guard let runner = runners[id] else { return }
+        await runner.userCancel(confirmingLease: false)
+    }
+
     /// Pending model/mode to apply once a runner registers (the writer took over
     /// but `attach` is still in flight). Keyed by session id. Applied in `attach`.
     var pendingModel: [ACPSession.ID: String] = [:]

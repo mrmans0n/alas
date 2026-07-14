@@ -279,6 +279,14 @@ final class RemoteConnection: @unchecked Sendable {
     private func dispatchMessage(_ payload: Data) {
         guard let msg = try? JSONDecoder().decode(RemoteClientMessage.self, from: payload),
               let gateway else { return }
+        // Control messages (stop) are idempotent and latency-critical: run
+        // them immediately instead of queueing behind transcript work.
+        // Everything else keeps strict arrival order (takeOver before
+        // sendPrompt, etc.).
+        if msg.isControl {
+            Task { @MainActor in await gateway.handle(msg) }
+            return
+        }
         let previous = processingTail
         processingTail = Task { @MainActor in
             await previous?.value

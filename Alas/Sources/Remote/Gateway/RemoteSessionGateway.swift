@@ -148,7 +148,10 @@ final class RemoteSessionGateway {
             }
             refusalIsSynchronous = false
         case .stop(let id):
-            guard provider.isWriter(for: id) else { return }
+            // Emergency brake: any authenticated subscriber may cancel the
+            // running turn; no writer lease required. Ack immediately so the
+            // client flips to "stopping" before the ACP round-trip completes.
+            send(.stopPending(sessionId: id))
             await provider.stop(for: id)
         case .setModel(let id, let modelId):
             guard provider.isWriter(for: id) else { return }

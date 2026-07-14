@@ -876,14 +876,28 @@ struct RemoteSessionGatewayTests {
         #expect(sent.contains(.promptRejected(sessionId: "s1")))
     }
 
-    @Test func stopRoutesOnlyWhenWriter() async {
+    @Test func stopWorksRegardlessOfWriterStatus() async {
+        // Stop is a fast-lane emergency brake: it no longer requires the
+        // writer lease, so it must succeed whether or not the caller is
+        // the current writer.
         let provider = FakeSessionsProvider()
         let gw = RemoteSessionGateway(provider: provider) { _ in }
         await gw.handle(.stop(sessionId: "s1"))
-        #expect(provider.stopped.isEmpty)
+        #expect(provider.stopped == ["s1"])
         provider.writers.insert("s1")
         await gw.handle(.stop(sessionId: "s1"))
+        #expect(provider.stopped == ["s1", "s1"])
+    }
+
+    @Test func stopWorksWithoutWriterLeaseAndAcksImmediately() async throws {
+        let provider = FakeSessionsProvider()
+        provider.sessions["s1"] = try makeSessionWithAgentText("hi")
+        // NOTE: provider.writers is intentionally empty — not the writer.
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+        await gw.handle(.stop(sessionId: "s1"))
         #expect(provider.stopped == ["s1"])
+        #expect(sent.first == .stopPending(sessionId: "s1"))
     }
 
     @Test func snapshotCarriesCanDrive() async throws {
