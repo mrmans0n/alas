@@ -116,7 +116,8 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
                     procId: procId,
                     attachmentId: attachmentId,
                     stdoutOffset: requestedOffsets.stdout,
-                    stderrOffset: requestedOffsets.stderr
+                    stderrOffset: requestedOffsets.stderr,
+                    attachAtEndIfOffsetUnknown: requestedOffsets.attachAtEndIfOffsetUnknown
                 )
                 stdinOffset = handle.stdinOffset
                 stdoutOffset = handle.stdoutOffset
@@ -166,13 +167,14 @@ final class RemoteHelperACPTransport: @unchecked Sendable, JSONRPCStdioTransport
         stdoutOffset: UInt64,
         stderrOffset: UInt64,
         attachFreshSpawnFromStart: Bool
-    ) -> (stdout: UInt64?, stderr: UInt64?) {
+    ) -> (stdout: UInt64?, stderr: UInt64?, attachAtEndIfOffsetUnknown: Bool) {
         if attachFreshSpawnFromStart {
-            return (0, 0)
+            return (0, 0, false)
         }
         return (
             stdoutOffset == 0 ? nil : stdoutOffset,
-            stderrOffset == 0 ? nil : stderrOffset
+            stderrOffset == 0 ? nil : stderrOffset,
+            true
         )
     }
 

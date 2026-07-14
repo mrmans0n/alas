@@ -501,6 +501,40 @@ struct RemoteHelperClientTests {
         _ = try await attach.value
     }
 
+    @Test func procAttachCanRequestEndWhenOffsetIsUnknown() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = RemoteHelperClient(
+            host: "devbox",
+            idleShutdownNanoseconds: 0,
+            transportFactory: { transport }
+        )
+
+        let attach = Task {
+            try await client.attachProc(
+                procId: "acp-session-1",
+                attachAtEndIfOffsetUnknown: true
+            )
+        }
+        try await waitUntil { transport.sentFrames.count == 1 }
+        let request = String(data: transport.sentFrames[0], encoding: .utf8) ?? ""
+        #expect(request.contains(#""stdoutOffset":18446744073709551615"#))
+        #expect(request.contains(#""stderrOffset":18446744073709551615"#))
+
+        transport.send(frame: Data(#"""
+        {"jsonrpc":"2.0","id":1,"result":{
+          "procId":"acp-session-1",
+          "running":true,
+          "exitCode":null,
+          "stdinOffset":0,
+          "stdoutOffset":30,
+          "stderrOffset":0,
+          "stdoutFrames":[],
+          "stderrChunks":[]
+        }}
+        """#.utf8))
+        _ = try await attach.value
+    }
+
     @Test func remoteHelperACPTransportFramesWritesAsNewlineDelimitedACP() {
         let framed = RemoteHelperACPTransport.frameForProcWrite(Data(#"{"id":1}"#.utf8))
         #expect(framed == Data("{\"id\":1}\n".utf8))
@@ -514,6 +548,7 @@ struct RemoteHelperClientTests {
         )
         #expect(freshOffsets.stdout == 0)
         #expect(freshOffsets.stderr == 0)
+        #expect(!freshOffsets.attachAtEndIfOffsetUnknown)
 
         let rememberedOffsets = RemoteHelperACPTransport.attachReplayOffsets(
             stdoutOffset: 0,
@@ -522,6 +557,7 @@ struct RemoteHelperClientTests {
         )
         #expect(rememberedOffsets.stdout == nil)
         #expect(rememberedOffsets.stderr == nil)
+        #expect(rememberedOffsets.attachAtEndIfOffsetUnknown)
     }
 
     @Test func procWriteUsesExpectedOffsetAndReturnsAcknowledgedOffset() async throws {
