@@ -324,15 +324,26 @@ final class RemoteSessionGateway {
         state.sentVersion = log.latestVersion
         state.revision = 0
         state.generation += 1
+        let capturedGeneration = state.generation
         let wire = await wireMessages(id: id, session: session, indices: Array(first..<count))
-        send(.transcriptSnapshot(sessionId: id,
-                                 streamingState: Self.stateString(session.transcript.streamingState),
-                                 canDrive: provider.isWriter(for: id),
-                                 messages: wire,
-                                 firstIndex: first,
-                                 totalCount: count,
-                                 epoch: state.epoch,
-                                 revision: 0))
+        // If another send (a concurrent snapshot or dirty delta) claimed a
+        // later generation while this one was suspended fetching truncated
+        // tool-call content, THIS snapshot's payload is now stale relative
+        // to what the client already has or is about to receive. Sending it
+        // anyway would roll the client back — snapshots are applied
+        // unconditionally client-side (no epoch/revision ordering check),
+        // unlike deltas/pages. Discard; whatever claimed the later
+        // generation read fresher state and is authoritative.
+        if state.generation == capturedGeneration {
+            send(.transcriptSnapshot(sessionId: id,
+                                     streamingState: Self.stateString(session.transcript.streamingState),
+                                     canDrive: provider.isWriter(for: id),
+                                     messages: wire,
+                                     firstIndex: first,
+                                     totalCount: count,
+                                     epoch: state.epoch,
+                                     revision: 0))
+        }
         emitPendingPermissionIfAny(id: id, session: session)
         emitPendingQuestionIfAny(id: id, session: session)
         emitPendingElicitationIfAny(id: id, session: session)

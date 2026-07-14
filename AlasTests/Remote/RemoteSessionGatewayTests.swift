@@ -1531,6 +1531,58 @@ struct RemoteSessionGatewayTests {
         #expect(sent.isEmpty, "stale overlapping delta must be discarded, got \(sent)")
     }
 
+    // Regression (codex review, PR #775): sendSnapshot bumps `generation`
+    // but, unlike the delta/page paths, never re-checked it after its own
+    // await — so a snapshot superseded by a concurrent send (another
+    // snapshot, or a dirty delta) still went out unconditionally. Because
+    // the web client applies snapshots without any epoch/revision ordering
+    // check (unlike deltas), this could roll the client back to stale
+    // content until a later resync happened to correct it.
+    @Test func sendSnapshotDropsStaleSendWhenSupersededDuringSerialize() async throws {
+        let provider = FakeSessionsProvider()
+        let fullContent = String(repeating: "abcdef0123456789", count: 400)
+        var toolCall = ACPMessage.ToolCall(
+            toolCallId: "old", title: "read", status: "completed",
+            content: fullContent, preview: "abcdef")
+        toolCall.truncateForOffWindow()
+        let mgr = try makeManager()
+        let session = mgr.createSession(agentId: "claude")
+        // Small transcript: the tool call is inside the tail window, so
+        // both subscribe's and takeOver's snapshots must serialize it.
+        session.transcript.messages = [.toolCall(toolCall)] + (0..<5).map {
+            .user(id: UUID(), messageId: "u\($0)", text: "msg \($0)", attachments: [])
+        }
+        provider.sessions["s1"] = session
+        provider.fullToolCallContents["s1|old"] = fullContent
+        provider.pauseFullToolCallContentOnCall = 1   // only subscribe's first fetch pauses
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(provider: provider) { sent.append($0) }
+
+        let subscribeTask = Task { @MainActor in
+            await gw.handle(.subscribe(sessionId: "s1"))
+        }
+        for _ in 0..<50 where provider.fullToolCallContentCallCount == 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(provider.fullToolCallContentCallCount == 1)
+
+        // A concurrent takeOver's own snapshot completes and sends first
+        // (its own fetch is call #2, not paused).
+        await gw.handle(.takeOver(sessionId: "s1"))
+        let snapshotsAfterTakeOver = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotsAfterTakeOver == 1)
+
+        // Resume subscribe's suspended fetch. With the fix, it must detect
+        // it was superseded and NOT send a second, stale snapshot.
+        provider.resumeFullToolCallContent(fullContent)
+        await subscribeTask.value
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let snapshotCount = sent.filter { if case .transcriptSnapshot = $0 { return true }
+        return false }.count
+        #expect(snapshotCount == 1, "the superseded subscribe snapshot must be discarded, got \(sent)")
+    }
+
     // Regression (codex review, PR #775): fetchOlder's page serialization has
     // the same suspend-then-stamp hazard as sendDelta — a structural resync
     // landing while a truncated tool call's content is being fetched must not
