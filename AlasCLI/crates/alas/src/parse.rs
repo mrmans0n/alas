@@ -68,56 +68,44 @@ fn parse_wt(args: &[&str]) -> Result<Command, String> {
 
 fn parse_wt_new(args: &[&str]) -> Result<Command, String> {
     const USAGE: &str = "usage: alas wt new <branch> [--base <ref>]";
-    let mut branch: Option<String> = None;
+    let (branch, rest) = match args.split_first() {
+        Some((first, rest)) if !first.starts_with("--") => (first.to_string(), rest),
+        _ => return Err(USAGE.into()),
+    };
     let mut base: Option<String> = None;
     let mut i = 0;
-    while i < args.len() {
-        match args[i] {
+    while i < rest.len() {
+        match rest[i] {
             "--base" => {
                 i += 1;
-                if i >= args.len() || args[i].starts_with("--") {
+                if i >= rest.len() || rest[i].starts_with("--") {
                     return Err(USAGE.into());
                 }
-                base = Some(args[i].to_string());
+                base = Some(rest[i].to_string());
             }
-            a if a.starts_with("--") => return Err(USAGE.into()),
-            a => {
-                if branch.is_some() {
-                    return Err(USAGE.into());
-                }
-                branch = Some(a.to_string());
-            }
+            _ => return Err(USAGE.into()),
         }
         i += 1;
     }
-    match branch {
-        Some(branch) => Ok(Command::WtNew { branch, base }),
-        None => Err(USAGE.into()),
-    }
+    Ok(Command::WtNew { branch, base })
 }
 
 fn parse_wt_delete(args: &[&str]) -> Result<Command, String> {
     const USAGE: &str = "usage: alas wt delete <name-or-branch> [--force] [--keep-branch]";
-    let mut target: Option<String> = None;
+    let (target, rest) = match args.split_first() {
+        Some((first, rest)) if !first.starts_with("--") => (first.to_string(), rest),
+        _ => return Err(USAGE.into()),
+    };
     let mut force = false;
     let mut keep_branch = false;
-    for a in args {
+    for a in rest {
         match *a {
             "--force" => force = true,
             "--keep-branch" => keep_branch = true,
-            s if s.starts_with("--") => return Err(USAGE.into()),
-            s => {
-                if target.is_some() {
-                    return Err(USAGE.into());
-                }
-                target = Some(s.to_string());
-            }
+            _ => return Err(USAGE.into()),
         }
     }
-    match target {
-        Some(target) => Ok(Command::WtDelete { target, force, keep_branch }),
-        None => Err(USAGE.into()),
-    }
+    Ok(Command::WtDelete { target, force, keep_branch })
 }
 
 #[cfg(test)]
@@ -142,19 +130,66 @@ mod tests {
 
     #[test]
     fn wt_new_parses_base_flag() {
-        let cmd = parse(&s(&["wt", "new", "feat", "--base", "main"]), Path::new("/b")).unwrap();
-        assert_eq!(cmd, Command::WtNew { branch: "feat".into(), base: Some("main".into()) });
+        let cmd = parse(&s(&["wt", "new", "feature", "--base", "main"]), Path::new("/b")).unwrap();
+        assert_eq!(cmd, Command::WtNew { branch: "feature".into(), base: Some("main".into()) });
+    }
+
+    #[test]
+    fn wt_new_no_base_is_ok() {
+        let cmd = parse(&s(&["wt", "new", "feat"]), Path::new("/b")).unwrap();
+        assert_eq!(cmd, Command::WtNew { branch: "feat".into(), base: None });
     }
 
     #[test]
     fn wt_new_rejects_leading_flag() {
         assert!(parse(&s(&["wt", "new", "--base"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["wt", "new", "--base", "main", "feature-x"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn wt_new_rejects_second_positional() {
+        assert!(parse(&s(&["wt", "new", "feature", "extra"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn wt_new_rejects_base_with_missing_value() {
+        assert!(parse(&s(&["wt", "new", "feature", "--base"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn wt_new_rejects_base_value_that_is_a_flag() {
+        assert!(parse(&s(&["wt", "new", "feature", "--base", "--x"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn wt_new_rejects_unknown_flag() {
+        assert!(parse(&s(&["wt", "new", "feature", "--unknown"]), Path::new("/b")).is_err());
     }
 
     #[test]
     fn wt_delete_parses_flags() {
-        let cmd = parse(&s(&["wt", "delete", "feat", "--force"]), Path::new("/b")).unwrap();
-        assert_eq!(cmd, Command::WtDelete { target: "feat".into(), force: true, keep_branch: false });
+        let cmd = parse(
+            &s(&["wt", "delete", "target", "--force", "--keep-branch"]),
+            Path::new("/b"),
+        )
+        .unwrap();
+        assert_eq!(cmd, Command::WtDelete { target: "target".into(), force: true, keep_branch: true });
+    }
+
+    #[test]
+    fn wt_delete_no_flags_is_ok() {
+        let cmd = parse(&s(&["wt", "delete", "target"]), Path::new("/b")).unwrap();
+        assert_eq!(cmd, Command::WtDelete { target: "target".into(), force: false, keep_branch: false });
+    }
+
+    #[test]
+    fn wt_delete_rejects_leading_flag() {
+        assert!(parse(&s(&["wt", "delete", "--force", "some-target"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn wt_delete_rejects_second_positional() {
+        assert!(parse(&s(&["wt", "delete", "target", "extra"]), Path::new("/b")).is_err());
     }
 
     #[test]

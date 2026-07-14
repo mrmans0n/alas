@@ -48,7 +48,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn describe(err: &DispatchError, target: &Target) -> (String, u8) {
+fn describe(err: &DispatchError, _target: &Target) -> (String, u8) {
     match err {
         DispatchError::NoAlas => ("no running Alas found".into(), 2),
         DispatchError::NotInWorktree => ("not inside an Alas worktree".into(), 2),
@@ -56,9 +56,6 @@ fn describe(err: &DispatchError, target: &Target) -> (String, u8) {
             "multiple running Alas instances own this directory".into(),
             1,
         ),
-        DispatchError::Transport(_) => match target {
-            Target::Session { .. } => ("could not reach Alas".into(), 1),
-            Target::Directory { .. } => ("could not reach Alas".into(), 1),
-        },
+        DispatchError::Transport(_) => ("could not reach Alas".into(), 1),
     }
 }
