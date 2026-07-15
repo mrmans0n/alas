@@ -4,7 +4,7 @@
 //! be the largest dependency in the workspace.
 
 use alas_client::{Command, Response, TransportError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -15,6 +15,7 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 pub struct McpEnv {
     pub socket: PathBuf,
     pub worktree_dir: String,
+    pub session_id: String,
 }
 
 /// Build the env from a lookup function (`std::env::var` in production,
@@ -29,7 +30,14 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
     if !worktree_dir.starts_with('/') {
         return Err("ALAS_WORKTREE_DIR must be an absolute path".into());
     }
-    Ok(McpEnv { socket: PathBuf::from(socket), worktree_dir })
+    let session_id = get("ALAS_SESSION_ID")
+        .filter(|s| !s.is_empty())
+        .ok_or("alas mcp requires ALAS_SESSION_ID (it is launched by Alas, not by hand)")?;
+    Ok(McpEnv {
+        socket: PathBuf::from(socket),
+        worktree_dir,
+        session_id,
+    })
 }
 
 /// Handle one raw input line. Returns the JSON-RPC reply to write, or None
@@ -49,7 +57,10 @@ pub fn handle_line(
     }
     // Messages without an id are notifications (e.g. notifications/initialized).
     let id = msg.get("id").cloned()?;
-    let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
+    let method = msg
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let reply = match method {
         "initialize" => Ok(initialize_result()),
         "ping" => Ok(json!({})),
@@ -99,6 +110,23 @@ pub fn tool_definitions() -> Vec<Value> {
                     }
                 },
                 "required": ["paths"]
+            }
+        }),
+        json!({
+            "name": "notify",
+            "description": "Post a macOS notification through Alas and optionally flag this session's sidebar row for attention.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "body": { "type": "string", "description": "Notification body." },
+                    "title": { "type": "string", "description": "Optional notification title." },
+                    "level": {
+                        "type": "string",
+                        "enum": ["info", "attention"],
+                        "description": "Default: attention. Attention also marks the session row as needing input."
+                    }
+                },
+                "required": ["body"]
             }
         }),
         json!({
@@ -243,8 +271,23 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             }
             Ok(Command::Open { paths: resolved })
         }
+        "notify" => {
+            let level = optional_string(args, "level");
+            if let Some(level) = &level {
+                if level != "info" && level != "attention" {
+                    return Err("notify 'level' must be 'info' or 'attention'".into());
+                }
+            }
+            Ok(Command::Notify {
+                body: required_string(args, "body")?,
+                title: optional_string(args, "title"),
+                level,
+            })
+        }
         "worktree_list" => Ok(Command::WtList),
-        "worktree_switch" => Ok(Command::WtSwitch { target: required_string(args, "target")? }),
+        "worktree_switch" => Ok(Command::WtSwitch {
+            target: required_string(args, "target")?,
+        }),
         "worktree_new" => Ok(Command::WtNew {
             branch: required_string(args, "branch")?,
             base: optional_string(args, "base"),
@@ -252,17 +295,28 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         "worktree_delete" => Ok(Command::WtDelete {
             target: required_string(args, "target")?,
             force: args.get("force").and_then(Value::as_bool).unwrap_or(false),
-            keep_branch: args.get("keep_branch").and_then(Value::as_bool).unwrap_or(false),
+            keep_branch: args
+                .get("keep_branch")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         }),
-        "review" => Ok(Command::Review { target: review_target(args)? }),
+        "review" => Ok(Command::Review {
+            target: review_target(args)?,
+        }),
         "review_comments" => {
             let state = optional_string(args, "state");
             if let Some(state) = &state {
                 if !["active", "resolved", "dismissed", "all"].contains(&state.as_str()) {
-                    return Err("review_comments 'state' must be one of active|resolved|dismissed|all".into());
+                    return Err(
+                        "review_comments 'state' must be one of active|resolved|dismissed|all"
+                            .into(),
+                    );
                 }
             }
-            Ok(Command::ReviewComments { session_id: optional_string(args, "session_id"), state })
+            Ok(Command::ReviewComments {
+                session_id: optional_string(args, "session_id"),
+                state,
+            })
         }
         "review_reply" => Ok(Command::ReviewReply {
             comment_id: required_string(args, "comment_id")?,
@@ -272,7 +326,9 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             let reopen = match optional_string(args, "state").as_deref() {
                 None | Some("resolved") => false,
                 Some("active") => true,
-                Some(_) => return Err("review_resolve 'state' must be 'resolved' or 'active'".into()),
+                Some(_) => {
+                    return Err("review_resolve 'state' must be 'resolved' or 'active'".into());
+                }
             };
             Ok(Command::ReviewResolve {
                 comment_id: required_string(args, "comment_id")?,
@@ -314,7 +370,10 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             let verdict = optional_string(args, "verdict");
             if let Some(verdict) = &verdict {
                 if !["approve", "request_changes", "comment"].contains(&verdict.as_str()) {
-                    return Err("review_finish 'verdict' must be approve, request_changes, or comment".into());
+                    return Err(
+                        "review_finish 'verdict' must be approve, request_changes, or comment"
+                            .into(),
+                    );
                 }
             }
             Ok(Command::ReviewFinish {
@@ -335,7 +394,11 @@ fn review_target(args: &Value) -> Result<Option<String>, String> {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) => {
             let s = s.trim();
-            Ok(if s.is_empty() { None } else { Some(s.to_string()) })
+            Ok(if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            })
         }
         Some(Value::Number(n)) => Ok(Some(n.to_string())),
         Some(_) => Err("review 'target' must be a string (PR/MR number or URL)".into()),
@@ -357,7 +420,11 @@ fn optional_string(args: &Value, key: &str) -> Option<String> {
 /// Send one command to the owning app instance, addressed by worktree
 /// directory (never session id — the MCP server has no terminal session).
 pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportError> {
-    let req = alas_client::build_request(command, None, Some(env.worktree_dir.clone()));
+    let req = alas_client::build_request(
+        command,
+        Some(env.session_id.clone()),
+        Some(env.worktree_dir.clone()),
+    );
     alas_client::send(&env.socket, &req)
 }
 
@@ -373,7 +440,10 @@ fn call_tool(
         .get("name")
         .and_then(Value::as_str)
         .ok_or((-32602, "tools/call requires a tool name".to_string()))?;
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let command = command_for_tool(name, &args, worktree_dir).map_err(|msg| (-32602, msg))?;
     Ok(match dispatch(&command) {
         Ok(resp) => tool_result(&command, resp),
@@ -396,10 +466,13 @@ fn tool_result(command: &Command, resp: Response) -> Value {
 fn success_message(command: &Command) -> String {
     match command {
         Command::Open { paths } => format!("Opened {} file(s) in Alas.", paths.len()),
+        Command::Notify { .. } => "Notification sent.".into(),
         Command::WtSwitch { target } => format!("Switched Alas to worktree '{target}'."),
         Command::WtNew { branch, .. } => format!("Created worktree for branch '{branch}' in Alas."),
         Command::WtDelete { target, .. } => format!("Deleted worktree '{target}'."),
-        Command::Review { target: Some(target) } => format!("Opened review for '{target}' in Alas."),
+        Command::Review {
+            target: Some(target),
+        } => format!("Opened review for '{target}' in Alas."),
         Command::Review { target: None } => "Opened review of local changes in Alas.".into(),
         Command::ReviewComments { .. } => "No review comments found.".into(),
         Command::ReviewReply { .. } => "Reply posted.".into(),
@@ -448,12 +521,16 @@ pub fn serve(env: &McpEnv) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_for_tool, dispatch, env_from, handle_line, McpEnv, PROTOCOL_VERSION};
+    use super::{McpEnv, PROTOCOL_VERSION, command_for_tool, dispatch, env_from, handle_line};
     use alas_client::Response;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     fn ok_dispatch(_: &alas_client::Command) -> Result<Response, alas_client::TransportError> {
-        Ok(Response { ok: true, lines: None, error: None })
+        Ok(Response {
+            ok: true,
+            lines: None,
+            error: None,
+        })
     }
 
     fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
@@ -466,17 +543,56 @@ mod tests {
 
     #[test]
     fn env_from_requires_both_vars() {
-        assert!(env_from(env(&[("ALAS_WORKTREE_DIR", "/wt")])).is_err());
-        assert!(env_from(env(&[("ALAS_SOCKET_PATH", "/tmp/s")])).is_err());
-        assert!(env_from(env(&[("ALAS_SOCKET_PATH", ""), ("ALAS_WORKTREE_DIR", "/wt")])).is_err());
-        let ok = env_from(env(&[("ALAS_SOCKET_PATH", "/tmp/s"), ("ALAS_WORKTREE_DIR", "/wt")])).unwrap();
+        assert!(
+            env_from(env(&[
+                ("ALAS_WORKTREE_DIR", "/wt"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", "/tmp/s"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", "/tmp/s"),
+                ("ALAS_WORKTREE_DIR", "/wt")
+            ]))
+            .is_err()
+        );
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", ""),
+                ("ALAS_WORKTREE_DIR", "/wt"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
+        let ok = env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/tmp/s"),
+            ("ALAS_WORKTREE_DIR", "/wt"),
+            ("ALAS_SESSION_ID", "s1"),
+        ]))
+        .unwrap();
         assert_eq!(ok.socket, std::path::PathBuf::from("/tmp/s"));
         assert_eq!(ok.worktree_dir, "/wt");
+        assert_eq!(ok.session_id, "s1");
     }
 
     #[test]
     fn env_from_rejects_relative_worktree_dir() {
-        assert!(env_from(env(&[("ALAS_SOCKET_PATH", "/tmp/s"), ("ALAS_WORKTREE_DIR", "wt")])).is_err());
+        assert!(
+            env_from(env(&[
+                ("ALAS_SOCKET_PATH", "/tmp/s"),
+                ("ALAS_WORKTREE_DIR", "wt"),
+                ("ALAS_SESSION_ID", "s1")
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -502,6 +618,34 @@ mod tests {
         let reply = handle_line(line, "/wt", ok_dispatch).unwrap();
         assert_eq!(reply["id"], json!("p1"));
         assert_eq!(reply["result"], json!({}));
+    }
+
+    #[test]
+    fn command_for_notify_tool_validates_and_maps_arguments() {
+        let cmd = command_for_tool(
+            "notify",
+            &json!({ "body": "Blocked on input", "title": "Need input", "level": "attention" }),
+            "/wt",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            alas_client::Command::Notify {
+                body: "Blocked on input".into(),
+                title: Some("Need input".into()),
+                level: Some("attention".into()),
+            }
+        );
+
+        assert!(
+            command_for_tool(
+                "notify",
+                &json!({ "body": "Done", "level": "urgent" }),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(command_for_tool("notify", &json!({ "title": "Missing body" }), "/wt").is_err());
     }
 
     #[test]
@@ -537,6 +681,7 @@ mod tests {
             names,
             [
                 "open",
+                "notify",
                 "worktree_list",
                 "worktree_switch",
                 "worktree_new",
@@ -557,10 +702,13 @@ mod tests {
 
     #[test]
     fn open_maps_paths_and_absolutizes_relative_ones() {
-        let cmd = command_for_tool("open", &json!({"paths": ["a.txt", "/abs/b.txt"]}), "/wt").unwrap();
+        let cmd =
+            command_for_tool("open", &json!({"paths": ["a.txt", "/abs/b.txt"]}), "/wt").unwrap();
         assert_eq!(
             cmd,
-            alas_client::Command::Open { paths: vec!["/wt/a.txt".into(), "/abs/b.txt".into()] }
+            alas_client::Command::Open {
+                paths: vec!["/wt/a.txt".into(), "/abs/b.txt".into()]
+            }
         );
     }
 
@@ -580,15 +728,28 @@ mod tests {
         );
         assert_eq!(
             command_for_tool("worktree_switch", &json!({"target": "feat"}), "/wt").unwrap(),
-            alas_client::Command::WtSwitch { target: "feat".into() }
+            alas_client::Command::WtSwitch {
+                target: "feat".into()
+            }
         );
         assert_eq!(
-            command_for_tool("worktree_new", &json!({"branch": "feat", "base": "main"}), "/wt").unwrap(),
-            alas_client::Command::WtNew { branch: "feat".into(), base: Some("main".into()) }
+            command_for_tool(
+                "worktree_new",
+                &json!({"branch": "feat", "base": "main"}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::WtNew {
+                branch: "feat".into(),
+                base: Some("main".into())
+            }
         );
         assert_eq!(
             command_for_tool("worktree_new", &json!({"branch": "feat"}), "/wt").unwrap(),
-            alas_client::Command::WtNew { branch: "feat".into(), base: None }
+            alas_client::Command::WtNew {
+                branch: "feat".into(),
+                base: None
+            }
         );
         assert_eq!(
             command_for_tool(
@@ -597,11 +758,19 @@ mod tests {
                 "/wt"
             )
             .unwrap(),
-            alas_client::Command::WtDelete { target: "feat".into(), force: true, keep_branch: true }
+            alas_client::Command::WtDelete {
+                target: "feat".into(),
+                force: true,
+                keep_branch: true
+            }
         );
         assert_eq!(
             command_for_tool("worktree_delete", &json!({"target": "feat"}), "/wt").unwrap(),
-            alas_client::Command::WtDelete { target: "feat".into(), force: false, keep_branch: false }
+            alas_client::Command::WtDelete {
+                target: "feat".into(),
+                force: false,
+                keep_branch: false
+            }
         );
     }
 
@@ -620,7 +789,9 @@ mod tests {
         );
         assert_eq!(
             command_for_tool("review", &json!({"target": "123"}), "/wt").unwrap(),
-            alas_client::Command::Review { target: Some("123".into()) }
+            alas_client::Command::Review {
+                target: Some("123".into())
+            }
         );
     }
 
@@ -628,7 +799,9 @@ mod tests {
     fn review_coerces_numeric_target_and_rejects_other_types() {
         assert_eq!(
             command_for_tool("review", &json!({"target": 123}), "/wt").unwrap(),
-            alas_client::Command::Review { target: Some("123".into()) }
+            alas_client::Command::Review {
+                target: Some("123".into())
+            }
         );
         assert_eq!(
             command_for_tool("review", &json!({"target": null}), "/wt").unwrap(),
@@ -642,11 +815,22 @@ mod tests {
     fn review_comments_tool_maps_and_validates_state() {
         assert_eq!(
             command_for_tool("review_comments", &json!({}), "/wt").unwrap(),
-            alas_client::Command::ReviewComments { session_id: None, state: None }
+            alas_client::Command::ReviewComments {
+                session_id: None,
+                state: None
+            }
         );
         assert_eq!(
-            command_for_tool("review_comments", &json!({"session_id": "sid", "state": "resolved"}), "/wt").unwrap(),
-            alas_client::Command::ReviewComments { session_id: Some("sid".into()), state: Some("resolved".into()) }
+            command_for_tool(
+                "review_comments",
+                &json!({"session_id": "sid", "state": "resolved"}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::ReviewComments {
+                session_id: Some("sid".into()),
+                state: Some("resolved".into())
+            }
         );
         assert!(command_for_tool("review_comments", &json!({"state": "bogus"}), "/wt").is_err());
     }
@@ -654,20 +838,48 @@ mod tests {
     #[test]
     fn review_reply_and_resolve_tools_map_to_commands() {
         assert_eq!(
-            command_for_tool("review_reply", &json!({"comment_id": "c1", "body": "hi"}), "/wt").unwrap(),
-            alas_client::Command::ReviewReply { comment_id: "c1".into(), body: "hi".into() }
+            command_for_tool(
+                "review_reply",
+                &json!({"comment_id": "c1", "body": "hi"}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::ReviewReply {
+                comment_id: "c1".into(),
+                body: "hi".into()
+            }
         );
         assert!(command_for_tool("review_reply", &json!({"comment_id": "c1"}), "/wt").is_err());
 
         assert_eq!(
             command_for_tool("review_resolve", &json!({"comment_id": "c1"}), "/wt").unwrap(),
-            alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: false }
+            alas_client::Command::ReviewResolve {
+                comment_id: "c1".into(),
+                reply: None,
+                reopen: false
+            }
         );
         assert_eq!(
-            command_for_tool("review_resolve", &json!({"comment_id": "c1", "reply": "done", "state": "active"}), "/wt").unwrap(),
-            alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: Some("done".into()), reopen: true }
+            command_for_tool(
+                "review_resolve",
+                &json!({"comment_id": "c1", "reply": "done", "state": "active"}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::ReviewResolve {
+                comment_id: "c1".into(),
+                reply: Some("done".into()),
+                reopen: true
+            }
         );
-        assert!(command_for_tool("review_resolve", &json!({"comment_id": "c1", "state": "bogus"}), "/wt").is_err());
+        assert!(
+            command_for_tool(
+                "review_resolve",
+                &json!({"comment_id": "c1", "state": "bogus"}),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -688,8 +900,22 @@ mod tests {
                 session_id: None,
             }
         );
-        assert!(command_for_tool("review_comment_add", &json!({"path": "a.swift", "body": "hm"}), "/wt").is_err());
-        assert!(command_for_tool("review_comment_add", &json!({"path": "a.swift", "start_line": 0, "body": "hm"}), "/wt").is_err());
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "body": "hm"}),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 0, "body": "hm"}),
+                "/wt"
+            )
+            .is_err()
+        );
         assert!(
             command_for_tool(
                 "review_comment_add",
@@ -704,7 +930,11 @@ mod tests {
     fn review_finish_tool_maps_and_validates_verdict() {
         assert_eq!(
             command_for_tool("review_finish", &json!({}), "/wt").unwrap(),
-            alas_client::Command::ReviewFinish { session_id: None, verdict: None, summary: None }
+            alas_client::Command::ReviewFinish {
+                session_id: None,
+                verdict: None,
+                summary: None
+            }
         );
         assert_eq!(
             command_for_tool(
@@ -739,7 +969,11 @@ mod tests {
     #[test]
     fn tools_call_returns_joined_lines_on_success() {
         let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
-            Ok(Response { ok: true, lines: Some(vec!["main *".into(), "feat".into()]), error: None })
+            Ok(Response {
+                ok: true,
+                lines: Some(vec!["main *".into(), "feat".into()]),
+                error: None,
+            })
         })
         .unwrap();
         let result = &reply["result"];
@@ -750,26 +984,46 @@ mod tests {
 
     #[test]
     fn tools_call_synthesizes_confirmation_when_no_lines() {
-        let reply = handle_line(&call("open", json!({"paths": ["a.txt", "b.txt"]})), "/wt", |cmd| {
-            assert_eq!(
-                cmd,
-                &alas_client::Command::Open { paths: vec!["/wt/a.txt".into(), "/wt/b.txt".into()] }
-            );
-            Ok(Response { ok: true, lines: None, error: None })
-        })
+        let reply = handle_line(
+            &call("open", json!({"paths": ["a.txt", "b.txt"]})),
+            "/wt",
+            |cmd| {
+                assert_eq!(
+                    cmd,
+                    &alas_client::Command::Open {
+                        paths: vec!["/wt/a.txt".into(), "/wt/b.txt".into()]
+                    }
+                );
+                Ok(Response {
+                    ok: true,
+                    lines: None,
+                    error: None,
+                })
+            },
+        )
         .unwrap();
         assert_eq!(reply["result"]["isError"], json!(false));
-        assert_eq!(reply["result"]["content"][0]["text"], json!("Opened 2 file(s) in Alas."));
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            json!("Opened 2 file(s) in Alas.")
+        );
     }
 
     #[test]
     fn tools_call_maps_app_failure_to_error_result() {
         let reply = handle_line(&call("review", json!({})), "/wt", |_| {
-            Ok(Response { ok: false, lines: None, error: Some("no changes to review".into()) })
+            Ok(Response {
+                ok: false,
+                lines: None,
+                error: Some("no changes to review".into()),
+            })
         })
         .unwrap();
         assert_eq!(reply["result"]["isError"], json!(true));
-        assert_eq!(reply["result"]["content"][0]["text"], json!("no changes to review"));
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            json!("no changes to review")
+        );
     }
 
     #[test]
@@ -779,20 +1033,30 @@ mod tests {
         })
         .unwrap();
         assert_eq!(reply["result"]["isError"], json!(true));
-        assert_eq!(reply["result"]["content"][0]["text"], json!("could not reach Alas"));
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            json!("could not reach Alas")
+        );
 
         let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
             Err(alas_client::TransportError::Malformed)
         })
         .unwrap();
-        assert_eq!(reply["result"]["content"][0]["text"], json!("malformed response from Alas"));
+        assert_eq!(
+            reply["result"]["content"][0]["text"],
+            json!("malformed response from Alas")
+        );
         assert_eq!(reply["result"]["isError"], json!(true));
     }
 
     #[test]
     fn empty_lines_vec_falls_back_to_confirmation_text() {
         let reply = handle_line(&call("worktree_list", json!({})), "/wt", |_| {
-            Ok(Response { ok: true, lines: Some(vec![]), error: None })
+            Ok(Response {
+                ok: true,
+                lines: Some(vec![]),
+                error: None,
+            })
         })
         .unwrap();
         assert_eq!(reply["result"]["isError"], json!(false));
@@ -809,10 +1073,15 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_sends_cwd_addressed_request_over_the_socket() {
+    fn dispatch_sends_session_and_cwd_addressed_request_over_the_socket() {
         use std::io::{Read, Write};
 
-        let dir = std::env::temp_dir().join(format!("alas-mcp-it-{}", std::process::id()));
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::path::PathBuf::from("/private/tmp")
+            .join(format!("alas-mcp-it-{}-{unique}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("stub.sock");
@@ -822,13 +1091,18 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut buf = [0u8; 65536];
             let n = stream.read(&mut buf).unwrap();
-            tx.send(String::from_utf8_lossy(&buf[..n]).into_owned()).unwrap();
+            tx.send(String::from_utf8_lossy(&buf[..n]).into_owned())
+                .unwrap();
             stream
                 .write_all(br#"{"ok":true,"lines":["main *"]}"#)
                 .unwrap();
         });
 
-        let env = McpEnv { socket: path.clone(), worktree_dir: "/wt".into() };
+        let env = McpEnv {
+            socket: path.clone(),
+            worktree_dir: "/wt".into(),
+            session_id: "acp-1".into(),
+        };
         let resp = dispatch(&env, &alas_client::Command::WtList).unwrap();
         assert!(resp.ok);
         assert_eq!(resp.lines, Some(vec!["main *".into()]));
@@ -839,7 +1113,7 @@ mod tests {
         assert_eq!(seen["command"], json!("wt"));
         assert_eq!(seen["subcommand"], json!("list"));
         assert_eq!(seen["cwd"], json!("/wt"));
-        assert!(seen.get("session_id").is_none());
+        assert_eq!(seen["session_id"], json!("acp-1"));
 
         let _ = handle.join();
         let _ = std::fs::remove_dir_all(&dir);

@@ -8,14 +8,16 @@ struct BuiltInAlasMCPTests {
         configuredServers: [ProjectMCPServer] = [],
         binaryPath: String? = "/support/bin/alas",
         socketPath: String? = "/tmp/alas-501/pid-42",
-        worktreePath: String = "/repos/proj/wt"
+        worktreePath: String = "/repos/proj/wt",
+        sessionId: String = "acp-1"
     ) -> BuiltInAlasMCP.Injection? {
         BuiltInAlasMCP.injection(
             enabled: enabled,
             configuredServers: configuredServers,
             binaryPath: binaryPath,
             socketPath: socketPath,
-            worktreePath: worktreePath
+            worktreePath: worktreePath,
+            sessionId: sessionId
         )
     }
 
@@ -29,6 +31,7 @@ struct BuiltInAlasMCPTests {
             env: [
                 .init(name: "ALAS_SOCKET_PATH", value: "/tmp/alas-501/pid-42"),
                 .init(name: "ALAS_WORKTREE_DIR", value: "/repos/proj/wt"),
+                .init(name: "ALAS_SESSION_ID", value: "acp-1"),
             ]
         ))
         #expect(injection?.status == .init(

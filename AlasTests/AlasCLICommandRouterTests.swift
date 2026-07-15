@@ -61,6 +61,41 @@ struct AlasCLICommandRouterTests {
         #expect(opened.first?.relativePath == "a.txt")
     }
 
+    @Test func notifyRoutesToOriginatingSessionAndWorktree() async throws {
+        let root = try makeFile("repo/a.txt").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var captured: (sessionId: String?, worktreeId: String, body: String, title: String?, level: AlasCLINotifyLevel)?
+        let router = AlasCLICommandRouter(
+            sessionWorktreeId: { $0 == "acp-1" ? "wt1" : nil },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            notifySession: { sessionId, origin, body, title, level in
+                captured = (sessionId, origin.id, body, title, level)
+                return .ok
+            },
+            activateApp: {}
+        )
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "acp-1",
+            cwd: nil,
+            command: .notify(body: "Blocked", title: "Need input", level: .attention)
+        ))
+
+        #expect(response == .ok)
+        #expect(captured?.sessionId == "acp-1")
+        #expect(captured?.worktreeId == "wt1")
+        #expect(captured?.body == "Blocked")
+        #expect(captured?.title == "Need input")
+        #expect(captured?.level == .attention)
+    }
+
     @Test func resolvesOriginFromSymlinkedWorktreeRootCwd() async throws {
         let realRoot = try makeFile("repo/a.txt").deletingLastPathComponent()
         let logicalRoot = realRoot.deletingLastPathComponent().appendingPathComponent("logical-repo")

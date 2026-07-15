@@ -30,9 +30,15 @@ enum ReviewVerdictWire: String, Equatable {
     }
 }
 
+enum AlasCLINotifyLevel: String, Equatable {
+    case info
+    case attention
+}
+
 struct AlasCLIRequest: Equatable {
     enum Command: Equatable {
         case open(paths: [String])
+        case notify(body: String, title: String?, level: AlasCLINotifyLevel)
         case worktree(WorktreeCommand)
         case review(ReviewCommand)
         case resolve
@@ -115,6 +121,12 @@ struct AlasCLIRequest: Equatable {
         var summary: String?
     }
 
+    private struct NotifyParams: Decodable {
+        var body: String
+        var title: String?
+        var level: String?
+    }
+
     /// Typed access to the `params` object new-style commands carry.
     /// Returns nil when `params` is absent or explicitly null (`Decodable`
     /// synthesis treats both the same way); throws `.malformed` when
@@ -185,6 +197,22 @@ struct AlasCLIRequest: Equatable {
         switch raw.command {
         case "open":
             command = .open(paths: try validatedAbsolutePaths(raw.paths))
+        case "notify":
+            let params = try Self.decodeParams(NotifyParams.self, from: data)
+            let level: AlasCLINotifyLevel
+            if let rawLevel = params.level?.nilIfBlank {
+                guard let parsed = AlasCLINotifyLevel(rawValue: rawLevel) else {
+                    throw AlasCLIRequestError.malformed
+                }
+                level = parsed
+            } else {
+                level = .attention
+            }
+            command = .notify(
+                body: try requiredNonEmpty(params.body),
+                title: params.title?.nilIfBlank,
+                level: level
+            )
         case "wt":
             switch raw.subcommand {
             case "list":
