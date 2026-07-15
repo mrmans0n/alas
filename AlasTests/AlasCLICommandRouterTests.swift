@@ -905,6 +905,55 @@ struct AlasCLICommandRouterTests {
         #expect(record.handoffs.map(\.status) == [.addressed])
     }
 
+    @Test func reopeningAResolvedCommentDemotesAnAddressedHandoff() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ReviewDraftCommentStore(url: dir.appendingPathComponent("drafts.json"))
+        let sessionStore = ReviewSessionStore(url: dir.appendingPathComponent("sessions.json"))
+        var comment = makeDraftComment(id: "c1", worktreeID: "wt1", state: .resolved)
+        comment.resolvedBy = .agent(name: "Agent")
+        try store.save(comment)
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        try sessionStore.save(ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            status: .addressed,
+            handoffs: [ReviewFeedbackHandoff(
+                id: "h1",
+                sessionID: target.id,
+                commentIDs: ["c1"],
+                target: .newChat(agentID: "claude", title: "New chat"),
+                createdAt: Date(timeIntervalSince1970: 1),
+                promptRevision: "rev",
+                status: .addressed
+            )],
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        ))
+
+        let router = makeReviewRouter(worktree: worktree, store: store, sessionStore: sessionStore)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.resolve(commentID: "c1", reply: nil, reopen: true))
+        ))
+
+        #expect(response == .ok)
+        let updated = try #require(try store.find(commentID: "c1"))
+        #expect(updated.state == .active)
+        #expect(updated.resolvedBy == nil)
+        let record = try #require(try sessionStore.load(id: target.id))
+        #expect(record.status == .sent)
+        #expect(record.handoffs.map(\.status) == [.sent])
+    }
+
     @Test func mutationsRejectCommentsFromOtherWorktrees() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(

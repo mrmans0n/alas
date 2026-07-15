@@ -339,9 +339,7 @@ struct AlasActionService {
             comment.resolvedBy = reopen ? nil : Self.cliAgentAuthor
             comment.updatedAt = timestamp
             try store.save(comment)
-            if !reopen {
-                try markAddressedHandoffs(worktreeID: origin.id, store: store, timestamp: timestamp)
-            }
+            try recomputeHandoffProgress(worktreeID: origin.id, store: store, timestamp: timestamp)
         } catch {
             return .error("could not update review comment: \(error.localizedDescription)")
         }
@@ -349,7 +347,7 @@ struct AlasActionService {
         return .ok
     }
 
-    private func markAddressedHandoffs(worktreeID: String, store: ReviewDraftCommentStore, timestamp: Date) throws {
+    private func recomputeHandoffProgress(worktreeID: String, store: ReviewDraftCommentStore, timestamp: Date) throws {
         let sessions = reviewSessionStore()
         for record in try sessions.list(worktreeID: worktreeID) {
             guard let updated = ReviewHandoffProgress.recomputingAddressed(
