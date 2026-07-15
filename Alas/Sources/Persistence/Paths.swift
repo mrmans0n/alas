@@ -41,6 +41,10 @@ extension Paths {
     static func acpSessionsDB(forWorktreeId id: String) -> URL {
         acpSessionsRoot.appendingPathComponent("\(id).sqlite")
     }
+
+    static var acpOrchestrationDB: URL {
+        appSupportRoot.appendingPathComponent("acp-orchestration.sqlite")
+    }
 }
 
 extension Paths {
