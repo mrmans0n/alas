@@ -220,6 +220,8 @@ Inside an Alas-spawned terminal:
 
 - `type alas` reports the script path under Alas's per-user bin dir.
 - `alas open README.md` opens the file in the editor.
+- `alas open README.md --line 10 --end-line 12` opens the file, scrolls to line 10, and temporarily highlights lines 10–12.
+- `alas open README.md -- --line` treats `--line` as a second filename, preserving flag-shaped paths.
 - `alas wt list` prints the visible worktrees and marks the current one.
 - `alas wt switch <name-or-branch>` focuses the matching worktree.
 - `alas wt new manual-test-branch --base main` starts worktree creation and shows progress in the sidebar.

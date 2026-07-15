@@ -11,6 +11,7 @@ pub fn is_ao(argv0: &str) -> bool {
 /// Usage text for the whole tool (stderr on top-level misuse).
 pub const USAGE_ALL: &str = "\
 usage: alas open <path> [path...]
+usage: alas open <path> --line <n> [--end-line <n>]
 usage: alas notify <body> [--title <title>] [--level <info|attention>]
 usage: alas wt list
 usage: alas wt switch <name-or-branch>
@@ -29,15 +30,8 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
     let mut it = args.iter();
     match it.next().map(String::as_str) {
         Some("open") => {
-            let rest: Vec<&String> = it.collect();
-            if rest.is_empty() {
-                return Err("usage: alas open <path> [path...]".into());
-            }
-            let paths = rest
-                .iter()
-                .map(|p| alas_client::absolutize(base, p))
-                .collect();
-            Ok(Command::Open { paths })
+            let rest: Vec<&str> = it.map(String::as_str).collect();
+            parse_open(&rest, base)
         }
         Some("notify") => parse_notify(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
@@ -77,6 +71,62 @@ fn parse_notify(args: &[&str]) -> Result<Command, String> {
         i += 1;
     }
     Ok(Command::Notify { body, title, level })
+}
+
+fn parse_open(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas open <path> [path...]\n\
+usage: alas open <path> --line <n> [--end-line <n>]";
+    if args.len() > 1
+        && let Some(separator) = args.iter().position(|arg| *arg == "--")
+    {
+        let paths: Vec<String> = args[..separator]
+            .iter()
+            .chain(&args[separator + 1..])
+            .map(|path| alas_client::absolutize(base, path))
+            .collect();
+        if paths.is_empty() {
+            return Err(USAGE.into());
+        }
+        return Ok(Command::Open { paths });
+    }
+    let (first, rest) = args.split_first().ok_or(USAGE)?;
+    if rest.iter().all(|arg| !matches!(*arg, "--line" | "--end-line")) {
+        let paths = args.iter().map(|path| alas_client::absolutize(base, path)).collect();
+        return Ok(Command::Open { paths });
+    }
+
+    let mut line = None;
+    let mut end_line = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--line" => {
+                if line.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                line = Some(flag_value(rest, i).ok_or(USAGE)?.parse::<u64>().map_err(|_| USAGE)?);
+            }
+            "--end-line" => {
+                if end_line.is_some() {
+                    return Err(USAGE.into());
+                }
+                i += 1;
+                end_line = Some(flag_value(rest, i).ok_or(USAGE)?.parse::<u64>().map_err(|_| USAGE)?);
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    let line = line.filter(|line| *line >= 1).ok_or(USAGE)?;
+    if end_line.is_some_and(|end| end < line) {
+        return Err(USAGE.into());
+    }
+    Ok(Command::OpenAt {
+        path: alas_client::absolutize(base, first),
+        line,
+        end_line,
+    })
 }
 
 pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
@@ -385,6 +435,59 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn open_preserves_flag_shaped_legacy_paths() {
+        let cmd = parse(&s(&["open", "--notes"]), Path::new("/b")).unwrap();
+        assert_eq!(cmd, Command::Open { paths: vec!["/b/--notes".into()] });
+
+        let cmd = parse(&s(&["open", "--"]), Path::new("/b")).unwrap();
+        assert_eq!(cmd, Command::Open { paths: vec!["/b/--".into()] });
+
+        let cmd = parse(&s(&["open", "a.txt", "--", "--line"]), Path::new("/b")).unwrap();
+        assert_eq!(
+            cmd,
+            Command::Open { paths: vec!["/b/a.txt".into(), "/b/--line".into()] }
+        );
+    }
+
+    #[test]
+    fn open_parses_line_range_for_one_path() {
+        let cmd = parse(
+            &s(&["open", "a.txt", "--line", "12", "--end-line", "15"]),
+            Path::new("/b"),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::OpenAt {
+                path: "/b/a.txt".into(),
+                line: 12,
+                end_line: Some(15),
+            }
+        );
+    }
+
+    #[test]
+    fn open_rejects_invalid_line_targets() {
+        assert!(parse(&s(&["open", "a.txt", "--line", "0"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["open", "a.txt", "--end-line", "12"]), Path::new("/b")).is_err());
+        assert!(parse(
+            &s(&["open", "a.txt", "--line", "15", "--end-line", "12"]),
+            Path::new("/b")
+        )
+        .is_err());
+        assert!(parse(
+            &s(&["open", "a.txt", "b.txt", "--line", "12"]),
+            Path::new("/b")
+        )
+        .is_err());
+        assert!(parse(
+            &s(&["open", "a.txt", "--line", "12", "--line", "13"]),
+            Path::new("/b")
+        )
+        .is_err());
     }
 
     #[test]

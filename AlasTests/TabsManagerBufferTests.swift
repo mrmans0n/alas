@@ -382,13 +382,26 @@ struct TabsManagerBufferTests {
 
     @Test func updateEditorPathPersistsTabMetadata() throws {
         let (manager, _, _) = makeManager()
-        let tab = manager.appendEditor(worktreeId: "wt", title: "a.txt", relativePath: "a.txt")
+        let tab = manager.openEditor(
+            worktreeId: "wt",
+            relativePath: "a.txt",
+            revealLine: 2,
+            revealCharacter: 0,
+            revealEndLine: 4
+        )
 
         #expect(manager.updateEditorPath(worktreeId: "wt", tabId: tab.id, relativePath: "src/b.txt"))
 
         let updated = manager.tabs(forWorktree: "wt").first { $0.id == tab.id }
         #expect(updated?.title == "b.txt")
         #expect(updated?.relativeFilePath == "src/b.txt")
+        if let updated, case .editor(let state) = updated {
+            #expect(state.revealLine == nil)
+            #expect(state.revealEndLine == nil)
+            #expect(state.revealCharacter == nil)
+        } else {
+            Issue.record("expected editor tab")
+        }
     }
 
     @Test func hasEditorCanExcludeCurrentTab() throws {

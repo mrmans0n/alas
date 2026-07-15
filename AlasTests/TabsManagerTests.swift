@@ -509,6 +509,52 @@ struct TabsManagerTests {
         }
     }
 
+    @Test func openExternalMarkdownForcesEditorModeWhenRevealing() {
+        let worktreeId = "tabs-manager-external-markdown-reveal"
+        defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }
+        let mgr = TabsManager()
+        let url = URL(fileURLWithPath: "/tmp/README.md")
+        let first = mgr.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: url,
+            revealLine: nil,
+            revealCharacter: nil
+        )
+        if case .editor(let state) = first {
+            mgr.setMarkdownViewMode(worktreeId: worktreeId, tabId: state.id, mode: .preview)
+        } else {
+            Issue.record("expected editor tab")
+        }
+
+        let revealed = mgr.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: url,
+            revealLine: 3,
+            revealCharacter: 0,
+            revealEndLine: 5
+        )
+
+        if case .editor(let state) = revealed {
+            #expect(state.markdownViewMode == .editor)
+            #expect(state.revealLine == 3)
+            #expect(state.revealEndLine == 5)
+        } else {
+            Issue.record("expected editor tab")
+        }
+
+        let newTab = mgr.openExternalEditor(
+            worktreeId: worktreeId,
+            absoluteURL: URL(fileURLWithPath: "/tmp/CHANGELOG.md"),
+            revealLine: 1,
+            revealCharacter: 0
+        )
+        if case .editor(let state) = newTab {
+            #expect(state.markdownViewMode == .editor)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
+
     @Test func openExternalEditorReuseRefreshesOriginatingRelativePath() {
         let worktreeId = "tabs-manager-reuse-refresh-origin"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

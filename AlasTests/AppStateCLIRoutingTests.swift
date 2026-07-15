@@ -50,6 +50,29 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func cliOpenLineRangeRevealsTheRequestedEditorLines() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "open-line-range")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let file = worktree.path.appendingPathComponent("a.txt")
+        try "one\ntwo\nthree\nfour\n".write(to: file, atomically: true, encoding: .utf8)
+        let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
+
+        let response = await router.handle(.init(
+            version: 1,
+            sessionId: "s1",
+            cwd: nil,
+            command: .openAt(path: file.path, line: 2, endLine: 3)
+        ))
+
+        #expect(response == .ok)
+        let editor = try #require(state.tabs.tabs(forWorktree: worktree.id).compactMap { tab -> EditorTabState? in
+            guard case .editor(let editor) = tab else { return nil }
+            return editor
+        }.first)
+        #expect(editor.revealLine == 1)
+        #expect(editor.revealEndLine == 2)
+    }
+
     @Test func startHarnessCLIRequestUsesRealTerminalRegistry() async throws {
         let (state, project, worktree) = try await makeStateWithWorktree(name: "socket-callback")
         defer {

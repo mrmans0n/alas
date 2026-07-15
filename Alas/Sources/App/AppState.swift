@@ -1866,6 +1866,29 @@ final class AppState {
                     self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
                 }
             },
+            openRelativeFileAtLines: { [weak self] relativePath, worktreeId, lines in
+                self?.openFile(
+                    relativePath: relativePath,
+                    worktreeId: worktreeId,
+                    revealLine: lines.lowerBound,
+                    revealEndLine: lines.upperBound,
+                    revealCharacter: 0
+                )
+            },
+            openExternalFileAtLines: { [weak self] url, worktreeId, lines in
+                guard let self else { return }
+                _ = self.tabs.openExternalEditor(
+                    worktreeId: worktreeId,
+                    absoluteURL: url,
+                    revealLine: lines.lowerBound,
+                    revealCharacter: 0,
+                    revealEndLine: lines.upperBound
+                )
+                if self.selectedWorktreeId != worktreeId,
+                   let worktree = self.worktree(withId: worktreeId) {
+                    self.focusGlobalWorktree(id: worktreeId, projectId: worktree.projectId)
+                }
+            },
             focusWorktree: { [weak self] worktree in
                 self?.focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
             },
@@ -3250,6 +3273,7 @@ final class AppState {
         relativePath: String,
         worktreeId: String,
         revealLine: Int? = nil,
+        revealEndLine: Int? = nil,
         revealCharacter: Int? = nil
     ) {
         guard let worktree = worktree(withId: worktreeId) else { return }
@@ -3273,7 +3297,8 @@ final class AppState {
             worktreeId: worktree.id,
             relativePath: relativePath,
             revealLine: revealLine,
-            revealCharacter: revealCharacter
+            revealCharacter: revealCharacter,
+            revealEndLine: revealEndLine
         )
     }
 

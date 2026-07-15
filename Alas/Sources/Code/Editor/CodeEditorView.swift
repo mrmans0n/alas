@@ -107,6 +107,7 @@ struct CodeEditorView: NSViewRepresentable {
     let relativePath: String
     let tabId: TabID
     let revealLine: Int?
+    var revealEndLine: Int? = nil
     let revealCharacter: Int?
     let revealRevision: Int?
     let appState: AppState
@@ -210,6 +211,7 @@ struct CodeEditorView: NSViewRepresentable {
             worktreeRoot: worktreeRoot,
             tabId: tabId,
             revealLine: revealLine,
+            revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
             revealRevision: revealRevision,
             theme: theme,
@@ -227,6 +229,7 @@ struct CodeEditorView: NSViewRepresentable {
             relativePath: relativePath,
             tabId: tabId,
             revealLine: revealLine,
+            revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
             revealRevision: revealRevision,
             theme: theme,

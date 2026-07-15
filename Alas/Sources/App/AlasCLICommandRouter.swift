@@ -7,6 +7,8 @@ struct AlasCLICommandRouter {
     var visibleWorktrees: () -> [Worktree]
     var openRelativeFile: (String, String) -> Void
     var openExternalFile: (URL, String) -> Void
+    var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
+    var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var focusWorktree: (Worktree) -> Void = { _ in }
     var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
         .error("Creating worktrees from the terminal is not available yet.")
@@ -36,6 +38,8 @@ struct AlasCLICommandRouter {
             visibleWorktrees: visibleWorktrees,
             openRelativeFile: openRelativeFile,
             openExternalFile: openExternalFile,
+            openRelativeFileAtLines: openRelativeFileAtLines,
+            openExternalFileAtLines: openExternalFileAtLines,
             focusWorktree: focusWorktree,
             createWorktree: createWorktree,
             deleteWorktreeAction: deleteWorktree,
@@ -74,6 +78,13 @@ struct AlasCLICommandRouter {
             return .ok
         case .open(let paths):
             return service.open(paths: paths, fallbackWorktreeId: origin.id)
+        case .openAt(let path, let line, let endLine):
+            return service.openAt(
+                path: path,
+                line: line,
+                endLine: endLine,
+                fallbackWorktreeId: origin.id
+            )
         case .notify(let body, let title, let level):
             return service.notify(
                 sessionId: request.sessionId,
