@@ -670,6 +670,37 @@ struct AlasCLICommandRouterTests {
         #expect(saved[0].startLine == 4)
     }
 
+    @Test func commentAddRejectsSessionIDFromAnotherWorktree() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let foreignSession = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt2", worktreePath: URL(fileURLWithPath: "/other-repo"), scope: .all
+        )
+
+        let router = makeReviewRouter(worktree: worktree, store: store)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "a.swift", startLine: 4, endLine: nil, side: nil, body: "sneaky",
+                sessionID: foreignSession.rawValue
+            ))
+        ))
+
+        guard case .error(let message) = response else {
+            Issue.record("expected error, got \(response)")
+            return
+        }
+        #expect(message.contains("unknown review session id"))
+        #expect(try store.load(sessionID: foreignSession).isEmpty)
+    }
+
     @Test func reviewLocalReturnsItsSessionID() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(
