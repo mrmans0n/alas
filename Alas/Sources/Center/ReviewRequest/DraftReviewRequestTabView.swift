@@ -821,7 +821,8 @@ struct DraftReviewRequestTabView: View {
     private func draftCommentActions() -> ReviewDraftCommentActions {
         ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
-            sender: reviewFeedbackAgentSender
+            sender: reviewFeedbackAgentSender,
+            worktreeID: worktreeId
         )
     }
 
