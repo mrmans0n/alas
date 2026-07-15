@@ -138,6 +138,7 @@ pub enum Command {
         body: String,
         session_id: Option<String>,
     },
+    ReviewFinish { session_id: Option<String>, verdict: Option<String>, summary: Option<String> },
     Resolve,
 }
 
@@ -225,6 +226,21 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             params.insert("body".into(), serde_json::Value::String(body.clone()));
             if let Some(session_id) = session_id {
                 params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::ReviewFinish { session_id, verdict, summary } => {
+            let mut r = Request::new("review_finish");
+            let mut params = serde_json::Map::new();
+            if let Some(session_id) = session_id {
+                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+            }
+            if let Some(verdict) = verdict {
+                params.insert("verdict".into(), serde_json::Value::String(verdict.clone()));
+            }
+            if let Some(summary) = summary {
+                params.insert("summary".into(), serde_json::Value::String(summary.clone()));
             }
             r.params = Some(serde_json::Value::Object(params));
             r
@@ -599,6 +615,25 @@ mod tests {
                 "end_line": 12,
                 "side": "new",
                 "body": "consider guard"
+            }))
+        );
+    }
+
+    #[test]
+    fn builds_review_finish_params() {
+        let cmd = Command::ReviewFinish {
+            session_id: Some("sid".into()),
+            verdict: Some("request_changes".into()),
+            summary: Some("Fix the race.".into()),
+        };
+        let req = build_request(&cmd, None, Some("/wt".into()));
+        assert_eq!(req.command, "review_finish");
+        assert_eq!(
+            req.params,
+            Some(serde_json::json!({
+                "session_id": "sid",
+                "verdict": "request_changes",
+                "summary": "Fix the race."
             }))
         );
     }

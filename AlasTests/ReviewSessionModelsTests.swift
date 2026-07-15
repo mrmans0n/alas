@@ -152,4 +152,33 @@ struct ReviewSessionModelsTests {
         #expect(focused.focusedCommentID == "comment-1")
         #expect(focused.updatedAt == Date(timeIntervalSince1970: 30))
     }
+
+    @Test func markingReviewedStoresTheVerdictAndEndsTheSession() {
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let record = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 10),
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+
+        let reviewed = record.markedReviewed(
+            verdict: .approve,
+            summary: "Looks good.",
+            now: Date(timeIntervalSince1970: 20)
+        )
+
+        #expect(reviewed.status == .reviewed)
+        #expect(reviewed.verdict == ReviewSessionVerdict(
+            verdict: .approve,
+            summary: "Looks good.",
+            reviewedAt: Date(timeIntervalSince1970: 20)
+        ))
+        #expect(reviewed.updatedAt == Date(timeIntervalSince1970: 20))
+        #expect(reviewed.markedAddressed(now: Date(timeIntervalSince1970: 30)).status == .reviewed)
+    }
 }

@@ -286,7 +286,14 @@ enum ReviewSessionStatus: String, Codable, Equatable, Hashable, Sendable {
     case sent
     case addressing
     case addressed
+    case reviewed
     case archived
+}
+
+struct ReviewSessionVerdict: Codable, Equatable, Sendable {
+    let verdict: ReviewVerdict
+    let summary: String
+    let reviewedAt: Date
 }
 
 enum ReviewFeedbackHandoffStatus: String, Codable, Equatable, Hashable, Sendable {
@@ -329,6 +336,7 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
     var selectedFileID: DiffReviewFileID?
     var focusedCommentID: String?
     var status: ReviewSessionStatus
+    var verdict: ReviewSessionVerdict?
     var handoffs: [ReviewFeedbackHandoff]
     var lastSendError: String?
     let createdAt: Date
@@ -340,6 +348,7 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
         selectedFileID: DiffReviewFileID? = nil,
         focusedCommentID: String? = nil,
         status: ReviewSessionStatus = .active,
+        verdict: ReviewSessionVerdict? = nil,
         handoffs: [ReviewFeedbackHandoff] = [],
         lastSendError: String? = nil,
         createdAt: Date,
@@ -350,6 +359,7 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
         self.selectedFileID = selectedFileID
         self.focusedCommentID = focusedCommentID
         self.status = status
+        self.verdict = verdict
         self.handoffs = handoffs
         self.lastSendError = lastSendError
         self.createdAt = createdAt
@@ -359,7 +369,9 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
     func recording(handoff: ReviewFeedbackHandoff) -> ReviewSessionRecord {
         var record = self
         record.handoffs.append(handoff)
-        record.status = handoff.status == .failed ? .active : .sent
+        if record.status != .reviewed {
+            record.status = handoff.status == .failed ? .active : .sent
+        }
         record.lastSendError = nil
         record.updatedAt = handoff.createdAt
         return record
@@ -367,12 +379,22 @@ struct ReviewSessionRecord: Codable, Equatable, Identifiable, Sendable {
 
     func markedAddressed(now: Date) -> ReviewSessionRecord {
         var record = self
-        record.status = .addressed
+        if record.status != .reviewed {
+            record.status = .addressed
+        }
         record.handoffs = record.handoffs.map { handoff in
             var updated = handoff
             updated.status = .addressed
             return updated
         }
+        record.updatedAt = now
+        return record
+    }
+
+    func markedReviewed(verdict: ReviewVerdict, summary: String, now: Date) -> ReviewSessionRecord {
+        var record = self
+        record.status = .reviewed
+        record.verdict = ReviewSessionVerdict(verdict: verdict, summary: summary, reviewedAt: now)
         record.updatedAt = now
         return record
     }

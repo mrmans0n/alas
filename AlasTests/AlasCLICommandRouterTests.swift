@@ -1198,6 +1198,74 @@ struct AlasCLICommandRouterTests {
         #expect(object?["session_id"] == expected.rawValue)
     }
 
+    @Test func reviewFinishRecordsVerdictForTheRequestedSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let sessionStore = ReviewSessionStore(url: directory.appendingPathComponent("sessions.json"))
+        let target = ReviewSessionTarget.localChanges(worktreeID: "wt1", repositoryPath: root, scope: .all)
+        try sessionStore.save(ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        ))
+        var changed = 0
+        let router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(url: directory.appendingPathComponent("drafts.json")),
+            sessionStore: sessionStore,
+            onChange: { changed += 1 }
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.finish(
+                sessionID: target.draftSessionID.rawValue,
+                verdict: .requestChanges,
+                summary: "Fix the race."
+            ))
+        ))
+
+        #expect(response == .ok)
+        #expect(changed == 1)
+        let record = try #require(try sessionStore.load(id: target.id))
+        #expect(record.status == .reviewed)
+        #expect(record.verdict?.verdict == .requestChanges)
+        #expect(record.verdict?.summary == "Fix the race.")
+        #expect(try sessionStore.findActive(targetID: target.id) == nil)
+    }
+
+    @Test func reviewFinishRejectsChangeRequestWithoutSummary() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let sessionStore = ReviewSessionStore(
+            url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")
+        )
+        let router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(
+                url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")
+            ),
+            sessionStore: sessionStore
+        )
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.finish(sessionID: nil, verdict: .requestChanges, summary: "  "))
+        ))
+
+        #expect(response == .error("request_changes requires a non-empty summary"))
+        let target = ReviewSessionTarget.localChanges(worktreeID: "wt1", repositoryPath: root, scope: .all)
+        #expect(try sessionStore.load(id: target.id) == nil)
+    }
+
     @Test func replyAppendsAgentReplyAndNotifies() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(

@@ -204,6 +204,18 @@ pub fn tool_definitions() -> Vec<Value> {
                 "required": ["path", "start_line", "body"]
             }
         }),
+        json!({
+            "name": "review_finish",
+            "description": "Finish an Alas review session with its capstone verdict and optional summary after filing findings. Requesting changes requires a summary.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Review session to finish, returned by the review tool. Defaults to the current worktree's local-changes review." },
+                    "verdict": { "type": "string", "enum": ["approve", "request_changes", "comment"], "description": "Review verdict. Default: comment." },
+                    "summary": { "type": "string", "description": "Optional review summary. Required when verdict is request_changes." }
+                }
+            }
+        }),
     ]
 }
 
@@ -298,6 +310,19 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 session_id: optional_string(args, "session_id"),
             })
         }
+        "review_finish" => {
+            let verdict = optional_string(args, "verdict");
+            if let Some(verdict) = &verdict {
+                if !["approve", "request_changes", "comment"].contains(&verdict.as_str()) {
+                    return Err("review_finish 'verdict' must be approve, request_changes, or comment".into());
+                }
+            }
+            Ok(Command::ReviewFinish {
+                session_id: optional_string(args, "session_id"),
+                verdict,
+                summary: optional_string(args, "summary"),
+            })
+        }
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -381,6 +406,7 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: false, .. } => "Comment resolved.".into(),
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
+        Command::ReviewFinish { .. } => "Review finished.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -519,7 +545,8 @@ mod tests {
                 "review_comments",
                 "review_reply",
                 "review_resolve",
-                "review_comment_add"
+                "review_comment_add",
+                "review_finish"
             ]
         );
         for tool in tools {
@@ -671,6 +698,28 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn review_finish_tool_maps_and_validates_verdict() {
+        assert_eq!(
+            command_for_tool("review_finish", &json!({}), "/wt").unwrap(),
+            alas_client::Command::ReviewFinish { session_id: None, verdict: None, summary: None }
+        );
+        assert_eq!(
+            command_for_tool(
+                "review_finish",
+                &json!({"session_id": "sid", "verdict": "approve", "summary": "Looks good."}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::ReviewFinish {
+                session_id: Some("sid".into()),
+                verdict: Some("approve".into()),
+                summary: Some("Looks good.".into()),
+            }
+        );
+        assert!(command_for_tool("review_finish", &json!({"verdict": "reject"}), "/wt").is_err());
     }
 
     #[test]

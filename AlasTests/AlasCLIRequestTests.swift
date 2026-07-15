@@ -188,6 +188,25 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test func decodesReviewFinishWithDefaultsAndVerdict() throws {
+        let bare = #"{"v":1,"kind":"cli","command":"review_finish","session_id":"s1"}"#
+        #expect(try AlasCLIRequest.decode(from: Data(bare.utf8)).command == .review(.finish(
+            sessionID: nil, verdict: .comment, summary: ""
+        )))
+
+        let full = #"{"v":1,"kind":"cli","command":"review_finish","session_id":"s1","params":{"session_id":"rs1","verdict":"request_changes","summary":"Fix the race."}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(full.utf8)).command == .review(.finish(
+            sessionID: "rs1", verdict: .requestChanges, summary: "Fix the race."
+        )))
+    }
+
+    @Test func rejectsUnknownReviewFinishVerdict() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_finish","session_id":"s1","params":{"verdict":"reject"}}"#
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?
