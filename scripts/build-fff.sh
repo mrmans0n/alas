@@ -11,6 +11,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script_path="${script_dir}/$(basename "${BASH_SOURCE[0]}")"
 srcroot="${SRCROOT:-$(cd "${script_dir}/.." && pwd)}"
 fff_src="${srcroot}/ThirdParty/fff"
+rustup_bin="${ALAS_RUSTUP_BIN:-rustup}"
+rust_toolchain="${ALAS_RUST_TOOLCHAIN:-stable}"
 
 if [ -z "${ALAS_FFF_TARGET_ARCH:-}" ] && [ "${CURRENT_ARCH:-}" = "undefined_arch" ]; then
     target_arch="universal"
@@ -87,7 +89,7 @@ if [ "${target_arch}" = "universal" ]; then
 fi
 
 [ -d "${fff_src}/.git" ] || [ -f "${fff_src}/.git" ] || die "submodule missing: ${fff_src}"
-command -v cargo >/dev/null 2>&1 || die "cargo not found. Install Rust or ensure cargo is on PATH"
+command -v "${rustup_bin}" >/dev/null 2>&1 || die "rustup not found"
 
 case "${target_arch}" in
     arm64) cargo_target="aarch64-apple-darwin" ;;
@@ -97,16 +99,23 @@ esac
 
 mkdir -p "${lib_dir}" "${include_root}"
 
-if command -v rustup >/dev/null 2>&1; then
-    if ! rustup target list --installed | grep -qx "${cargo_target}"; then
-        rustup target add "${cargo_target}"
-    fi
+"${rustup_bin}" toolchain install "${rust_toolchain}" --profile minimal
+installed_targets="$("${rustup_bin}" target list --installed --toolchain "${rust_toolchain}")"
+if ! printf '%s\n' "${installed_targets}" | grep -qx "${cargo_target}"; then
+    "${rustup_bin}" target add --toolchain "${rust_toolchain}" "${cargo_target}"
+fi
+
+rustc_bin="$("${rustup_bin}" which --toolchain "${rust_toolchain}" rustc)"
+if [ -n "${ALAS_CARGO_BIN:-}" ]; then
+    cargo_bin="${ALAS_CARGO_BIN}"
+else
+    cargo_bin="$("${rustup_bin}" which --toolchain "${rust_toolchain}" cargo)"
 fi
 
 (
     cd "${fff_src}"
     MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-14.0}" \
-        cargo build \
+        RUSTC="${rustc_bin}" "${cargo_bin}" build \
             --package fff-c \
             --release \
             --target "${cargo_target}" \
