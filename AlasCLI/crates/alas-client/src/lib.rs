@@ -78,6 +78,11 @@ pub struct Request {
     pub keep_branch: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<String>>,
+    /// Command-specific arguments for commands added after the flat fields
+    /// above. New commands put ALL their arguments here; the flat fields
+    /// stay for wire compatibility with the original six commands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
 }
 
 impl Request {
@@ -96,6 +101,7 @@ impl Request {
             force: None,
             keep_branch: None,
             paths: None,
+            params: None,
         }
     }
 }
@@ -419,6 +425,21 @@ mod tests {
             json,
             r#"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
         );
+    }
+
+    #[test]
+    fn params_envelope_serializes_only_when_present() {
+        let mut req = Request::new("review_comments");
+        req.session_id = Some("s1".into());
+        req.params = Some(serde_json::json!({ "state": "all" }));
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1","params":{"state":"all"}}"#
+        );
+
+        let bare = serde_json::to_string(&Request::new("resolve")).unwrap();
+        assert!(!bare.contains("params"), "absent params must not serialize");
     }
 
     #[test]
