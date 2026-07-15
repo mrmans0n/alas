@@ -23,6 +23,7 @@ struct AlasCLICommandRouter {
     var notifyReviewCommentsChanged: () -> Void = {
         NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
     }
+    var now: () -> Date = Date.init
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -38,6 +39,7 @@ struct AlasCLICommandRouter {
             draftCommentStore: draftCommentStore,
             reviewSessionStore: reviewSessionStore,
             notifyReviewCommentsChanged: notifyReviewCommentsChanged,
+            now: now,
             activateApp: activateApp
         )
     }
