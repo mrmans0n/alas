@@ -266,6 +266,7 @@ struct DiffReviewFileSection: View {
                 copyFeedback.show("Copied prompt")
             },
             publishProvider: draftCommentActions.publishProvider,
+            agent: draftCommentActions.agent,
             agentTargets: draftCommentActions.agentTargets,
             sendToAgent: draftCommentActions.sendToAgent
         )
@@ -1931,16 +1932,20 @@ struct ReviewDraftCommentCard: View {
                 let existingTargets = targets.filter { !$0.isNewChat }
                 let newChatTargets = targets.filter { $0.isNewChat }
                 ForEach(existingTargets) { target in
-                    Button(target.title) {
+                    Button {
                         actions.sendToAgent(feedbackBundle, target)
+                    } label: {
+                        sendToAgentTargetLabel(target)
                     }
                 }
                 if !existingTargets.isEmpty, !newChatTargets.isEmpty {
                     Divider()
                 }
                 ForEach(newChatTargets) { target in
-                    Button(target.title) {
+                    Button {
                         actions.sendToAgent(feedbackBundle, target)
+                    } label: {
+                        sendToAgentTargetLabel(target)
                     }
                 }
             }
@@ -1952,6 +1957,18 @@ struct ReviewDraftCommentCard: View {
             actionButton(id: "send", title: "Send", enabled: isEnabled) {
                 guard let target = targets.first else { return }
                 actions.sendToAgent(feedbackBundle, target)
+            }
+        }
+    }
+
+    private func sendToAgentTargetLabel(_ target: ReviewFeedbackAgentTarget) -> some View {
+        Label {
+            Text(target.title)
+        } icon: {
+            if let agent = actions.agent(target) {
+                Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
+            } else {
+                Image(systemName: "sparkle")
             }
         }
     }
