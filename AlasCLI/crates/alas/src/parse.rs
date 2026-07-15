@@ -15,7 +15,11 @@ usage: alas wt list
 usage: alas wt switch <name-or-branch>
 usage: alas wt new <branch> [--base <ref>]
 usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
-usage: alas review [pr-number-or-url]";
+usage: alas review [pr-number-or-url]
+usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
+usage: alas review reply <comment-id> <body>
+usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
+usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
@@ -35,15 +39,137 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         }
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
-            let rest: Vec<&String> = it.collect();
-            match rest.len() {
-                0 => Ok(Command::Review { target: None }),
-                1 => Ok(Command::Review { target: Some(rest[0].clone()) }),
-                _ => Err("usage: alas review [pr-number-or-url]".into()),
-            }
+            let rest: Vec<&str> = it.map(String::as_str).collect();
+            parse_review(&rest, base)
         }
         _ => Err(USAGE_ALL.into()),
     }
+}
+
+pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
+
+fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    match args.first().copied() {
+        None => Ok(Command::Review { target: None }),
+        Some("comments") => parse_review_comments(&args[1..]),
+        Some("comment") => parse_review_comment(&args[1..], base),
+        Some("reply") => {
+            const USAGE: &str = "usage: alas review reply <comment-id> <body>";
+            if args.len() != 3 || args[1].starts_with("--") {
+                return Err(USAGE.into());
+            }
+            Ok(Command::ReviewReply { comment_id: args[1].to_string(), body: args[2].to_string() })
+        }
+        Some("resolve") => parse_review_resolve(&args[1..]),
+        Some(target) if args.len() == 1 && !target.starts_with("--") => {
+            Ok(Command::Review { target: Some(target.to_string()) })
+        }
+        _ => Err(USAGE_ALL.into()),
+    }
+}
+
+fn parse_review_resolve(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review resolve <comment-id> [--reply <body>] [--reopen]";
+    let (comment_id, rest) = match args.split_first() {
+        Some((first, rest)) if !first.starts_with("--") => (first.to_string(), rest),
+        _ => return Err(USAGE.into()),
+    };
+    let mut reply: Option<String> = None;
+    let mut reopen = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--reply" => {
+                i += 1;
+                reply = Some(flag_value(rest, i).ok_or(USAGE)?.to_string());
+            }
+            "--reopen" => reopen = true,
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewResolve { comment_id, reply, reopen })
+}
+
+fn parse_review_comments(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]";
+    let mut state: Option<String> = None;
+    let mut session_id: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--state" => {
+                i += 1;
+                let value = flag_value(args, i).ok_or(USAGE)?;
+                if !REVIEW_STATES.contains(&value) {
+                    return Err(USAGE.into());
+                }
+                state = Some(value.to_string());
+            }
+            "--session" => {
+                i += 1;
+                session_id = Some(flag_value(args, i).ok_or(USAGE)?.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewComments { session_id, state })
+}
+
+fn parse_review_comment(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]";
+    if args.len() < 3 || args[..3].iter().any(|a| a.starts_with("--")) {
+        return Err(USAGE.into());
+    }
+    // Resolved against the caller's cwd, same as `open`: the app treats an
+    // already-relative path as worktree-root-relative, which is wrong when
+    // the command is run from a subdirectory.
+    let path = alas_client::absolutize(base, args[0]);
+    let start_line: u64 = args[1].parse().map_err(|_| USAGE.to_string())?;
+    if start_line == 0 {
+        return Err(USAGE.into());
+    }
+    let body = args[2].to_string();
+
+    let mut end_line: Option<u64> = None;
+    let mut side: Option<String> = None;
+    let mut session_id: Option<String> = None;
+    let rest = &args[3..];
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--end-line" => {
+                i += 1;
+                let value = flag_value(rest, i).ok_or(USAGE)?;
+                let parsed: u64 = value.parse().map_err(|_| USAGE.to_string())?;
+                if parsed < start_line {
+                    return Err(USAGE.into());
+                }
+                end_line = Some(parsed);
+            }
+            "--side" => {
+                i += 1;
+                let value = flag_value(rest, i).ok_or(USAGE)?;
+                if value != "old" && value != "new" {
+                    return Err(USAGE.into());
+                }
+                side = Some(value.to_string());
+            }
+            "--session" => {
+                i += 1;
+                session_id = Some(flag_value(rest, i).ok_or(USAGE)?.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewCommentAdd { path, start_line, end_line, side, body, session_id })
+}
+
+/// Value at `i` unless it is missing or looks like another flag.
+fn flag_value<'a>(args: &[&'a str], i: usize) -> Option<&'a str> {
+    args.get(i).copied().filter(|v| !v.starts_with("--"))
 }
 
 fn parse_wt(args: &[&str]) -> Result<Command, String> {
@@ -198,6 +324,132 @@ mod tests {
         assert_eq!(
             parse(&s(&["review"]), Path::new("/b")).unwrap(),
             Command::Review { target: None }
+        );
+    }
+
+    #[test]
+    fn review_comments_parses_flags_and_rejects_bad_state() {
+        assert_eq!(
+            parse(&s(&["review", "comments"]), Path::new("/b")).unwrap(),
+            Command::ReviewComments { session_id: None, state: None }
+        );
+        assert_eq!(
+            parse(&s(&["review", "comments", "--state", "all", "--session", "sid"]), Path::new("/b")).unwrap(),
+            Command::ReviewComments { session_id: Some("sid".into()), state: Some("all".into()) }
+        );
+        assert!(parse(&s(&["review", "comments", "--state", "bogus"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comments", "--session"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comments", "extra"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_reply_takes_exactly_id_and_body() {
+        assert_eq!(
+            parse(&s(&["review", "reply", "c1", "looks good"]), Path::new("/b")).unwrap(),
+            Command::ReviewReply { comment_id: "c1".into(), body: "looks good".into() }
+        );
+        assert!(parse(&s(&["review", "reply", "c1"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "reply", "c1", "a", "b"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_resolve_parses_flags() {
+        assert_eq!(
+            parse(&s(&["review", "resolve", "c1"]), Path::new("/b")).unwrap(),
+            Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: false }
+        );
+        assert_eq!(
+            parse(&s(&["review", "resolve", "c1", "--reply", "fixed", "--reopen"]), Path::new("/b")).unwrap(),
+            Command::ReviewResolve { comment_id: "c1".into(), reply: Some("fixed".into()), reopen: true }
+        );
+        assert!(parse(&s(&["review", "resolve"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "resolve", "--reopen"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "resolve", "c1", "--reply"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_comment_parses_positionals_and_flags() {
+        assert_eq!(
+            parse(&s(&["review", "comment", "src/a.swift", "10", "fix this"]), Path::new("/b")).unwrap(),
+            Command::ReviewCommentAdd {
+                path: "/b/src/a.swift".into(),
+                start_line: 10,
+                end_line: None,
+                side: None,
+                body: "fix this".into(),
+                session_id: None,
+            }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "comment", "a.swift", "3", "b", "--end-line", "5", "--side", "old", "--session", "sid"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::ReviewCommentAdd {
+                path: "/b/a.swift".into(),
+                start_line: 3,
+                end_line: Some(5),
+                side: Some("old".into()),
+                body: "b".into(),
+                session_id: Some("sid".into()),
+            }
+        );
+        assert!(parse(&s(&["review", "comment", "a.swift", "0", "b"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comment", "a.swift", "x", "b"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comment", "a.swift", "3", "b", "--side", "sideways"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comment", "a.swift"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_comment_resolves_relative_path_against_the_callers_subdirectory() {
+        // `cd Sources && alas review comment App.swift 10 "..."` must resolve
+        // to the actual changed file `/repo/Sources/App.swift`, not
+        // `/repo/App.swift` (base is the worktree root; the caller's cwd is
+        // a subdirectory of it, same as `open`).
+        let cmd = parse(
+            &s(&["review", "comment", "App.swift", "10", "fix this"]),
+            Path::new("/repo/Sources"),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ReviewCommentAdd {
+                path: "/repo/Sources/App.swift".into(),
+                start_line: 10,
+                end_line: None,
+                side: None,
+                body: "fix this".into(),
+                session_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn review_comment_keeps_an_already_absolute_path_unchanged() {
+        let cmd = parse(
+            &s(&["review", "comment", "/repo/Sources/App.swift", "10", "fix this"]),
+            Path::new("/repo/Sources"),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ReviewCommentAdd {
+                path: "/repo/Sources/App.swift".into(),
+                start_line: 10,
+                end_line: None,
+                side: None,
+                body: "fix this".into(),
+                session_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn plain_review_targets_still_parse() {
+        assert_eq!(
+            parse(&s(&["review", "123"]), Path::new("/b")).unwrap(),
+            Command::Review { target: Some("123".into()) }
         );
     }
 

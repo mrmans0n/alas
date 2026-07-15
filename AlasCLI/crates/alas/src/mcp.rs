@@ -79,7 +79,7 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// The six agent-facing tools, mirroring the CLI 1:1. Descriptions make
+/// The agent-facing tools, mirroring the CLI 1:1. Descriptions make
 /// explicit that these act on the user's Alas UI — that is what makes the
 /// agent-side permission prompt legible. `resolve` is internal and not
 /// exposed.
@@ -144,12 +144,64 @@ pub fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "review",
-            "description": "Open Alas's review pane for the user: on the current local changes when target is omitted, or on a provider pull/merge request when target (a PR/MR number or URL) is given.",
+            "description": "Open Alas's review pane for the user: on the current local changes when target is omitted, or on a provider pull/merge request when target (a PR/MR number or URL) is given. Returns the review session id for use with review_comment_add.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "target": { "type": "string", "description": "PR/MR number or URL. Omit to review local changes." }
                 }
+            }
+        }),
+        json!({
+            "name": "review_comments",
+            "description": "List review comments from the user's Alas review pane for this worktree, as a JSON array. Each comment has an id, path, line range, side, state (active/resolved/dismissed), author, body, and replies. Defaults to active comments only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Limit to one review session (from the review tool). Omit to list across the worktree's review sessions." },
+                    "state": { "type": "string", "enum": ["active", "resolved", "dismissed", "all"], "description": "Filter by comment state. Default: active." }
+                }
+            }
+        }),
+        json!({
+            "name": "review_reply",
+            "description": "Reply to a review comment thread in the user's Alas review pane. Use review_resolve instead when the reply also settles the comment.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "comment_id": { "type": "string", "description": "Comment id, from review_comments." },
+                    "body": { "type": "string", "description": "Reply body, Markdown." }
+                },
+                "required": ["comment_id", "body"]
+            }
+        }),
+        json!({
+            "name": "review_resolve",
+            "description": "Resolve a review comment in the user's Alas review pane after addressing it, optionally posting a reply first. Pass state 'active' to reopen a comment instead.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "comment_id": { "type": "string", "description": "Comment id, from review_comments." },
+                    "reply": { "type": "string", "description": "Optional reply to post before changing state, e.g. a one-line summary of the fix." },
+                    "state": { "type": "string", "enum": ["resolved", "active"], "description": "Target state. Default: resolved." }
+                },
+                "required": ["comment_id"]
+            }
+        }),
+        json!({
+            "name": "review_comment_add",
+            "description": "File a review comment into the user's Alas review pane, attributed to the agent. The user sees it inline in the diff. Use after the review tool to leave findings on specific lines.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File path relative to the worktree root." },
+                    "start_line": { "type": "integer", "minimum": 1, "description": "First line the comment refers to." },
+                    "end_line": { "type": "integer", "minimum": 1, "description": "Last line of the range, when commenting on a range." },
+                    "side": { "type": "string", "enum": ["old", "new"], "description": "Which side of the diff the lines refer to. Default: new." },
+                    "body": { "type": "string", "description": "Comment body, Markdown." },
+                    "session_id": { "type": "string", "description": "Review session to file into (returned by the review tool). Omit for the worktree's local-changes review." }
+                },
+                "required": ["path", "start_line", "body"]
             }
         }),
     ]
@@ -191,6 +243,61 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             keep_branch: args.get("keep_branch").and_then(Value::as_bool).unwrap_or(false),
         }),
         "review" => Ok(Command::Review { target: review_target(args)? }),
+        "review_comments" => {
+            let state = optional_string(args, "state");
+            if let Some(state) = &state {
+                if !["active", "resolved", "dismissed", "all"].contains(&state.as_str()) {
+                    return Err("review_comments 'state' must be one of active|resolved|dismissed|all".into());
+                }
+            }
+            Ok(Command::ReviewComments { session_id: optional_string(args, "session_id"), state })
+        }
+        "review_reply" => Ok(Command::ReviewReply {
+            comment_id: required_string(args, "comment_id")?,
+            body: required_string(args, "body")?,
+        }),
+        "review_resolve" => {
+            let reopen = match optional_string(args, "state").as_deref() {
+                None | Some("resolved") => false,
+                Some("active") => true,
+                Some(_) => return Err("review_resolve 'state' must be 'resolved' or 'active'".into()),
+            };
+            Ok(Command::ReviewResolve {
+                comment_id: required_string(args, "comment_id")?,
+                reply: optional_string(args, "reply"),
+                reopen,
+            })
+        }
+        "review_comment_add" => {
+            let start_line = args
+                .get("start_line")
+                .and_then(Value::as_u64)
+                .filter(|line| *line >= 1)
+                .ok_or("review_comment_add requires an integer 'start_line' >= 1")?;
+            let end_line = match args.get("end_line") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_u64()
+                        .filter(|line| *line >= start_line)
+                        .ok_or("review_comment_add 'end_line' must be an integer >= start_line")?,
+                ),
+            };
+            let side = optional_string(args, "side");
+            if let Some(side) = &side {
+                if side != "old" && side != "new" {
+                    return Err("review_comment_add 'side' must be 'old' or 'new'".into());
+                }
+            }
+            Ok(Command::ReviewCommentAdd {
+                path: required_string(args, "path")?,
+                start_line,
+                end_line,
+                side,
+                body: required_string(args, "body")?,
+                session_id: optional_string(args, "session_id"),
+            })
+        }
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -269,6 +376,11 @@ fn success_message(command: &Command) -> String {
         Command::WtDelete { target, .. } => format!("Deleted worktree '{target}'."),
         Command::Review { target: Some(target) } => format!("Opened review for '{target}' in Alas."),
         Command::Review { target: None } => "Opened review of local changes in Alas.".into(),
+        Command::ReviewComments { .. } => "No review comments found.".into(),
+        Command::ReviewReply { .. } => "Reply posted.".into(),
+        Command::ReviewResolve { reopen: false, .. } => "Comment resolved.".into(),
+        Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
+        Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -390,14 +502,25 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_the_six_tools() {
+    fn tools_list_returns_all_tools() {
         let line = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#;
         let reply = handle_line(line, "/wt", ok_dispatch).unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
-            ["open", "worktree_list", "worktree_switch", "worktree_new", "worktree_delete", "review"]
+            [
+                "open",
+                "worktree_list",
+                "worktree_switch",
+                "worktree_new",
+                "worktree_delete",
+                "review",
+                "review_comments",
+                "review_reply",
+                "review_resolve",
+                "review_comment_add"
+            ]
         );
         for tool in tools {
             assert!(tool["description"].as_str().unwrap().len() > 20);
@@ -486,6 +609,68 @@ mod tests {
         );
         assert!(command_for_tool("review", &json!({"target": true}), "/wt").is_err());
         assert!(command_for_tool("review", &json!({"target": ["1"]}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_comments_tool_maps_and_validates_state() {
+        assert_eq!(
+            command_for_tool("review_comments", &json!({}), "/wt").unwrap(),
+            alas_client::Command::ReviewComments { session_id: None, state: None }
+        );
+        assert_eq!(
+            command_for_tool("review_comments", &json!({"session_id": "sid", "state": "resolved"}), "/wt").unwrap(),
+            alas_client::Command::ReviewComments { session_id: Some("sid".into()), state: Some("resolved".into()) }
+        );
+        assert!(command_for_tool("review_comments", &json!({"state": "bogus"}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_reply_and_resolve_tools_map_to_commands() {
+        assert_eq!(
+            command_for_tool("review_reply", &json!({"comment_id": "c1", "body": "hi"}), "/wt").unwrap(),
+            alas_client::Command::ReviewReply { comment_id: "c1".into(), body: "hi".into() }
+        );
+        assert!(command_for_tool("review_reply", &json!({"comment_id": "c1"}), "/wt").is_err());
+
+        assert_eq!(
+            command_for_tool("review_resolve", &json!({"comment_id": "c1"}), "/wt").unwrap(),
+            alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: false }
+        );
+        assert_eq!(
+            command_for_tool("review_resolve", &json!({"comment_id": "c1", "reply": "done", "state": "active"}), "/wt").unwrap(),
+            alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: Some("done".into()), reopen: true }
+        );
+        assert!(command_for_tool("review_resolve", &json!({"comment_id": "c1", "state": "bogus"}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_comment_add_tool_maps_and_validates() {
+        assert_eq!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 3, "body": "hm"}),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::ReviewCommentAdd {
+                path: "a.swift".into(),
+                start_line: 3,
+                end_line: None,
+                side: None,
+                body: "hm".into(),
+                session_id: None,
+            }
+        );
+        assert!(command_for_tool("review_comment_add", &json!({"path": "a.swift", "body": "hm"}), "/wt").is_err());
+        assert!(command_for_tool("review_comment_add", &json!({"path": "a.swift", "start_line": 0, "body": "hm"}), "/wt").is_err());
+        assert!(
+            command_for_tool(
+                "review_comment_add",
+                &json!({"path": "a.swift", "start_line": 3, "body": "hm", "side": "sideways"}),
+                "/wt"
+            )
+            .is_err()
+        );
     }
 
     #[test]

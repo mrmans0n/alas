@@ -52,8 +52,8 @@ struct ReviewFeedbackBundleTests {
         let aHeader = try #require(prompt.range(of: "## Sources/A.swift")?.lowerBound)
         let bHeader = try #require(prompt.range(of: "## Sources/B.swift")?.lowerBound)
         #expect(aHeader < bHeader)
-        #expect(prompt.contains("- `Sources/A.swift:2 (new)` — Extract helper."))
-        #expect(prompt.contains("- `Sources/B.swift:9 (new)` — Rename this."))
+        #expect(prompt.contains("- `Sources/A.swift:2 (new)` [comment-id: a] — Extract helper."))
+        #expect(prompt.contains("- `Sources/B.swift:9 (new)` [comment-id: b] — Rename this."))
         #expect(!prompt.contains("Resolved body."))
     }
 
@@ -124,8 +124,8 @@ struct ReviewFeedbackBundleTests {
 
         #expect(prompt.contains("## Sources/App.swift [staged]"))
         #expect(prompt.contains("## Sources/App.swift [unstaged]"))
-        #expect(prompt.contains("- `Sources/App.swift:4 (new, staged)` — Fix the staged edit."))
-        #expect(prompt.contains("- `Sources/App.swift:4 (new, unstaged)` — Fix the working tree edit."))
+        #expect(prompt.contains("- `Sources/App.swift:4 (new, staged)` [comment-id: staged] — Fix the staged edit."))
+        #expect(prompt.contains("- `Sources/App.swift:4 (new, unstaged)` [comment-id: unstaged] — Fix the working tree edit."))
     }
 
     @Test func promptPreservesMultilineMarkdownBodies() {
@@ -233,6 +233,38 @@ struct ReviewFeedbackBundleTests {
         #expect(prompt.contains("Review session: commit deadbeef"))
         #expect(prompt.contains("Revision: deadbeef"))
         #expect(prompt.contains("Previously sent to Codex"))
+    }
+
+    @Test func promptCarriesCommentIDsAndResolveInstruction() {
+        let comment = ReviewDraftComment(
+            id: "cid-42",
+            sessionID: .localChanges(
+                worktreeID: "wt-1",
+                worktreePath: URL(fileURLWithPath: "/repo"),
+                scope: .all
+            ),
+            fileID: DiffReviewFileID(namespace: "review", path: "a.swift"),
+            path: "a.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: 5,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: "tighten this",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let bundle = ReviewFeedbackBundle(
+            target: ReviewFeedbackTarget(title: "Review", sourceDescription: "Local changes"),
+            comments: [comment]
+        )
+
+        let prompt = bundle.promptMarkdown()
+
+        #expect(prompt.contains("[comment-id: cid-42]"))
+        #expect(prompt.contains("review_resolve"))
+        #expect(prompt.contains("review_reply"))
     }
 
     private func comment(

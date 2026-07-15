@@ -24,6 +24,13 @@ struct AlasActionService {
     var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
+    var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
+    var reviewSessionStore: () -> ReviewSessionStore = { ReviewSessionStore() }
+    var notifyReviewCommentsChanged: () -> Void = {
+        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+    }
+    var now: () -> Date = Date.init
+    var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -41,9 +48,9 @@ struct AlasActionService {
         // symlinks on both sides before comparing file identities, otherwise a
         // command run from a symlinked checkout root reports "not inside an
         // Alas worktree".
-        if let directoryIdentity = fileIdentity(at: url.resolvingSymlinksInPath().path),
+        if let directoryIdentity = Self.fileIdentity(at: url.resolvingSymlinksInPath().path),
            let exactMatch = visibleWorktrees().first(where: { worktree in
-               fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
+               Self.fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
            }) {
             return exactMatch
         }
@@ -109,11 +116,327 @@ struct AlasActionService {
     func reviewLocal(origin: Worktree) -> AlasCLIResponse {
         openReviewChanges(origin)
         activateApp()
-        return .ok
+        let sessionID = ReviewDraftSessionID.localChanges(
+            worktreeID: origin.id,
+            worktreePath: origin.path,
+            scope: .all
+        )
+        return .text([
+            "Opened review of local changes in Alas.",
+            Self.jsonLine(["session_id": sessionID.rawValue]),
+        ])
     }
 
     func reviewProvider(origin: Worktree, target: String) async -> AlasCLIResponse {
         await openProviderReview(origin, target)
+    }
+
+    func reviewComments(origin: Worktree, sessionID: String?, filter: ReviewCommentWireFilter) -> AlasCLIResponse {
+        let all: [ReviewDraftComment]
+        do {
+            all = try draftCommentStore().loadAll()
+        } catch {
+            return .error("could not read review comments: \(error.localizedDescription)")
+        }
+        let scoped = all.filter { comment in
+            guard comment.sessionID.isFor(worktreeID: origin.id) else { return false }
+            if let sessionID {
+                return comment.sessionID.rawValue == sessionID
+            }
+            return true
+        }
+        let filtered = scoped.filter { comment in
+            switch filter {
+            case .all: return true
+            case .active: return comment.state == .active
+            case .resolved: return comment.state == .resolved
+            case .dismissed: return comment.state == .dismissed
+            }
+        }
+        return .text([ReviewCommentWireDTO.jsonLine(filtered.map(ReviewCommentWireDTO.init))])
+    }
+
+    /// The author identity CLI/MCP mutations write. Phase 2+ can thread a
+    /// real agent name through the wire; the enum already supports it.
+    static let cliAgentAuthor = ReviewDraftCommentAuthor.agent(name: "Agent")
+
+    /// One deterministic JSON line for machine-readable CLI/MCP output.
+    static func jsonLine(_ object: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    func reviewCommentAdd(
+        origin: Worktree,
+        path: String,
+        startLine: Int,
+        endLine: Int?,
+        side: String?,
+        body: String,
+        sessionID: String?
+    ) async -> AlasCLIResponse {
+        let targetSessionID: ReviewDraftSessionID
+        if let sessionID {
+            guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
+                  parsed.isFor(worktreeID: origin.id) else {
+                return .error("unknown review session id")
+            }
+            targetSessionID = parsed
+        } else {
+            targetSessionID = .localChanges(worktreeID: origin.id, worktreePath: origin.path, scope: .all)
+        }
+        guard let relativePath = Self.worktreeRelativePath(path, worktreeRoot: origin.path),
+              !relativePath.isEmpty else {
+            return .error("review comment path must point at a file inside the worktree")
+        }
+        let namespace: String
+        switch await fileIDNamespace(for: targetSessionID, path: relativePath, worktreePath: origin.path) {
+        case .resolved(let resolved):
+            namespace = resolved
+        case .failed(let message):
+            return .error(message)
+        }
+        let timestamp = now()
+        let comment = ReviewDraftComment(
+            id: UUID().uuidString,
+            sessionID: targetSessionID,
+            fileID: DiffReviewFileID(namespace: namespace, path: relativePath),
+            path: relativePath,
+            originalPath: nil,
+            side: side == "old" ? .old : .new,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: nil,
+            bodyMarkdown: body,
+            state: .active,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            author: Self.cliAgentAuthor
+        )
+        do {
+            try draftCommentStore().save(comment)
+        } catch {
+            return .error("could not save review comment: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .text([
+            "Filed review comment.",
+            Self.jsonLine(["comment_id": comment.id]),
+        ])
+    }
+
+    /// Worktree-relative form of `path`: absolute paths under the worktree
+    /// root are relativized; already-relative paths are lexically
+    /// normalized (collapsing `.`/`..`/repeated separators) and treated as
+    /// already worktree-relative — MCP callers may send `./Sources/App.swift`
+    /// or `Sources/../Sources/App.swift`, and an unnormalized form would
+    /// miss the exact-match `gitStatus`/`DiffReviewFileID` lookups downstream.
+    /// Absolute paths try the path as given first, then with symlinks
+    /// resolved on both sides — the CLI absolutizes against the caller's
+    /// logical `$PWD`, which preserves a symlinked checkout path, while
+    /// `worktreeRoot` may be the resolved real path Alas tracks (same
+    /// two-step pattern `relativePathAndDepth` already uses for `open`).
+    /// Returns nil when an absolute path is outside the worktree root even
+    /// after symlink resolution and a file-identity walk-up, so callers
+    /// don't file a comment against a path that can never match a file in
+    /// the review.
+    static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String? {
+        guard path.hasPrefix("/") else { return normalizedRelativePath(path) }
+        if let relative = relativePath(path, against: worktreeRoot.standardizedFileURL.path) {
+            return relative
+        }
+        let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        if let relative = relativePath(resolvedPath, against: resolvedRoot) {
+            return relative
+        }
+        // Falls back to comparing filesystem identity (inode + device)
+        // instead of path strings — the default case-insensitive-but-
+        // case-preserving macOS volume can give the CLI's cwd and the
+        // tracked worktree root different casing for the same directory,
+        // which a string prefix check would reject as "outside the
+        // worktree" even though it's the identical file. Mirrors the
+        // `open` command's `fileSystemRelativePathAndDepth` fallback.
+        return fileSystemRelativePath(URL(fileURLWithPath: path), worktreeRoot: worktreeRoot)
+    }
+
+    private static func fileSystemRelativePath(_ url: URL, worktreeRoot: URL) -> String? {
+        guard let rootIdentity = fileIdentity(at: worktreeRoot.path) else { return nil }
+        var ancestor = url.deletingLastPathComponent()
+        var relativeComponents = [url.lastPathComponent]
+        while ancestor.path != "/" {
+            if fileIdentity(at: ancestor.path) == rootIdentity {
+                return relativeComponents.reversed().joined(separator: "/")
+            }
+            relativeComponents.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        return nil
+    }
+
+    /// Collapses `.`/`..`/repeated separators in a relative path purely
+    /// lexically (no filesystem access, no process cwd involved). A leading
+    /// `..` that would climb above the path's own root is dropped rather
+    /// than followed, since this path is already meant to be worktree-root
+    /// relative.
+    private static func normalizedRelativePath(_ path: String) -> String {
+        var components: [String] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if component == "." { continue }
+            if component == ".." {
+                if !components.isEmpty { components.removeLast() }
+                continue
+            }
+            components.append(String(component))
+        }
+        return components.joined(separator: "/")
+    }
+
+    private static func relativePath(_ path: String, against rootPath: String) -> String? {
+        if path == rootPath { return "" }
+        if path.hasPrefix(rootPath + "/") {
+            return String(path.dropFirst(rootPath.count + 1))
+        }
+        return nil
+    }
+
+    /// The `DiffReviewFileID` namespace matching how each review surface
+    /// loads files for a session, so an agent-filed comment lands in the
+    /// same file bucket the UI reads from instead of becoming an orphan
+    /// (`DiffReviewSurface` matches on the exact namespace+path). Every
+    /// session kind except `.localChanges` carries enough in its own
+    /// `sourceKind` (and, for `.reviewRequest`, its encoded provider) to
+    /// resolve without touching the filesystem; local changes need a live
+    /// git-status lookup because the same path can be staged and unstaged
+    /// at once (partial staging) — unstaged wins when both are present,
+    /// since it reflects the more current working-tree state.
+    private enum FileIDNamespaceResolution {
+        case resolved(String)
+        case failed(String)
+    }
+
+    private func fileIDNamespace(
+        for sessionID: ReviewDraftSessionID,
+        path: String,
+        worktreePath: URL
+    ) async -> FileIDNamespaceResolution {
+        switch sessionID.sourceKind {
+        case .commit:
+            return .resolved("commit")
+        case .commitRange, .branch:
+            return .resolved("range")
+        case .draftCommit:
+            return .resolved(ChangeStage.staged.rawValue)
+        case .draftReviewRequest:
+            return .resolved("draft-review-request")
+        case .reviewRequest:
+            switch sessionID.reviewRequestProvider {
+            case .github: return .resolved("github-pr")
+            case .gitlab: return .resolved("gitlab-mr")
+            case nil: return .failed("could not resolve the code host for that review session")
+            }
+        case .localChanges:
+            do {
+                let files = try await gitStatus(worktreePath)
+                let stages = Set(files.filter { $0.path == path }.map(\.stage))
+                switch sessionID.localChangesScope {
+                case .staged:
+                    guard stages.contains(.staged) else {
+                        return .failed("no staged changes found for \"\(path)\"")
+                    }
+                    return .resolved(ChangeStage.staged.rawValue)
+                case .unstaged:
+                    guard stages.contains(.unstaged) else {
+                        return .failed("no unstaged changes found for \"\(path)\"")
+                    }
+                    return .resolved(ChangeStage.unstaged.rawValue)
+                case .all, nil:
+                    if stages.contains(.unstaged) {
+                        return .resolved(ChangeStage.unstaged.rawValue)
+                    }
+                    if stages.contains(.staged) {
+                        return .resolved(ChangeStage.staged.rawValue)
+                    }
+                    return .failed("no local changes found for \"\(path)\"")
+                }
+            } catch {
+                return .failed("could not read git status: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func reviewReply(origin: Worktree, commentID: String, body: String) -> AlasCLIResponse {
+        let store = draftCommentStore()
+        do {
+            guard var comment = try store.find(commentID: commentID),
+                  comment.sessionID.isFor(worktreeID: origin.id) else {
+                return .error("unknown review comment id \"\(commentID)\"")
+            }
+            let timestamp = now()
+            var replies = comment.allReplies
+            replies.append(ReviewCommentReply(
+                id: UUID().uuidString,
+                author: Self.cliAgentAuthor,
+                bodyMarkdown: body,
+                createdAt: timestamp
+            ))
+            comment.replies = replies
+            comment.updatedAt = timestamp
+            try store.save(comment)
+        } catch {
+            return .error("could not update review comment: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .ok
+    }
+
+    func reviewResolve(origin: Worktree, commentID: String, reply: String?, reopen: Bool) -> AlasCLIResponse {
+        let store = draftCommentStore()
+        do {
+            guard var comment = try store.find(commentID: commentID),
+                  comment.sessionID.isFor(worktreeID: origin.id) else {
+                return .error("unknown review comment id \"\(commentID)\"")
+            }
+            let timestamp = now()
+            if let reply {
+                var replies = comment.allReplies
+                replies.append(ReviewCommentReply(
+                    id: UUID().uuidString,
+                    author: Self.cliAgentAuthor,
+                    bodyMarkdown: reply,
+                    createdAt: timestamp
+                ))
+                comment.replies = replies
+            }
+            comment.state = reopen ? .active : .resolved
+            comment.resolvedBy = reopen ? nil : Self.cliAgentAuthor
+            comment.updatedAt = timestamp
+            try store.save(comment)
+            // Best-effort: the comment mutation above already succeeded and
+            // must not be retried, so a failure recomputing handoff/session
+            // status (a separate store) is swallowed rather than reported
+            // as an overall failure a caller would retry.
+            try? recomputeHandoffProgress(worktreeID: origin.id, store: store, timestamp: timestamp)
+        } catch {
+            return .error("could not update review comment: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .ok
+    }
+
+    private func recomputeHandoffProgress(worktreeID: String, store: ReviewDraftCommentStore, timestamp: Date) throws {
+        let sessions = reviewSessionStore()
+        for record in try sessions.list(worktreeID: worktreeID) {
+            guard let updated = ReviewHandoffProgress.recomputingAddressed(
+                record: record,
+                isResolved: { id in (try? store.find(commentID: id))?.state == .resolved },
+                now: timestamp
+            ) else { continue }
+            try sessions.save(updated)
+        }
     }
 
     // MARK: - Worktree matching (moved verbatim from AlasCLICommandRouter)
@@ -159,12 +482,12 @@ struct AlasActionService {
     }
 
     private func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
-        guard let rootIdentity = fileIdentity(at: rootURL.path) else { return nil }
+        guard let rootIdentity = Self.fileIdentity(at: rootURL.path) else { return nil }
         var ancestor = url.deletingLastPathComponent()
         var relativeComponents = [url.lastPathComponent]
 
         while ancestor.path != "/" {
-            if fileIdentity(at: ancestor.path) == rootIdentity {
+            if Self.fileIdentity(at: ancestor.path) == rootIdentity {
                 return (relativeComponents.reversed().joined(separator: "/"), rootURL.pathComponents.count)
             }
             relativeComponents.append(ancestor.lastPathComponent)
@@ -173,7 +496,7 @@ struct AlasActionService {
         return nil
     }
 
-    private func fileIdentity(at path: String) -> FileIdentity? {
+    private static func fileIdentity(at path: String) -> FileIdentity? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let systemNumber = attributes[.systemNumber] as? NSNumber,
               let fileNumber = attributes[.systemFileNumber] as? NSNumber else { return nil }

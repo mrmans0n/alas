@@ -18,6 +18,13 @@ struct AlasCLICommandRouter {
     var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
+    var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
+    var reviewSessionStore: () -> ReviewSessionStore = { ReviewSessionStore() }
+    var notifyReviewCommentsChanged: () -> Void = {
+        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+    }
+    var now: () -> Date = Date.init
+    var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -30,6 +37,11 @@ struct AlasCLICommandRouter {
             deleteWorktreeAction: deleteWorktree,
             openReviewChanges: openReviewChanges,
             openProviderReview: openProviderReview,
+            draftCommentStore: draftCommentStore,
+            reviewSessionStore: reviewSessionStore,
+            notifyReviewCommentsChanged: notifyReviewCommentsChanged,
+            now: now,
+            gitStatus: gitStatus,
             activateApp: activateApp
         )
     }
@@ -68,6 +80,17 @@ struct AlasCLICommandRouter {
             return service.reviewLocal(origin: origin)
         case .review(.provider(let target)):
             return await service.reviewProvider(origin: origin, target: target)
+        case .review(.comments(let sessionID, let state)):
+            return service.reviewComments(origin: origin, sessionID: sessionID, filter: state)
+        case .review(.reply(let commentID, let body)):
+            return service.reviewReply(origin: origin, commentID: commentID, body: body)
+        case .review(.resolve(let commentID, let reply, let reopen)):
+            return service.reviewResolve(origin: origin, commentID: commentID, reply: reply, reopen: reopen)
+        case .review(.commentAdd(let path, let startLine, let endLine, let side, let body, let sessionID)):
+            return await service.reviewCommentAdd(
+                origin: origin, path: path, startLine: startLine, endLine: endLine,
+                side: side, body: body, sessionID: sessionID
+            )
         }
     }
 }

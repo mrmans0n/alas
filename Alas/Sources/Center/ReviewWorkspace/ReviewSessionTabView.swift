@@ -166,6 +166,7 @@ struct ReviewSessionTabView: View {
     static func testView(
         record: ReviewSessionRecord,
         loaded: ReviewSessionLoadedContext,
+        sessionStore: ReviewSessionStore = ReviewSessionStore(),
         draftCommentStore: ReviewDraftCommentStore = ReviewDraftCommentStore(),
         provider: any CodeHostProvider
     ) -> some View {
@@ -173,6 +174,7 @@ struct ReviewSessionTabView: View {
             tabState: ReviewSessionTabState(worktreeId: record.target.worktreeID, record: record),
             record: record,
             loaded: loaded,
+            sessionStore: sessionStore,
             draftCommentStore: draftCommentStore,
             feedbackSender: ReviewFeedbackAgentSender(availableTargets: { [] }, send: { _, _, _ in }),
             providerRegistry: CodeHostProviderRegistry(providers: [provider.kind: provider]),
@@ -194,6 +196,12 @@ struct ReviewSessionTabView: View {
             guard loadsOnAppear else { return }
             let token = beginLoadReviewSession()
             await loadReviewSession(token: token)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
+            try? draftCommentController?.load()
+            if let refreshed = try? sessionStore.load(id: tabState.sessionID) {
+                record = refreshed
+            }
         }
     }
 

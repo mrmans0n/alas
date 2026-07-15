@@ -78,6 +78,11 @@ pub struct Request {
     pub keep_branch: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paths: Option<Vec<String>>,
+    /// Command-specific arguments for commands added after the flat fields
+    /// above. New commands put ALL their arguments here; the flat fields
+    /// stay for wire compatibility with the original six commands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
 }
 
 impl Request {
@@ -96,6 +101,7 @@ impl Request {
             force: None,
             keep_branch: None,
             paths: None,
+            params: None,
         }
     }
 }
@@ -121,6 +127,17 @@ pub enum Command {
     WtNew { branch: String, base: Option<String> },
     WtDelete { target: String, force: bool, keep_branch: bool },
     Review { target: Option<String> },
+    ReviewComments { session_id: Option<String>, state: Option<String> },
+    ReviewReply { comment_id: String, body: String },
+    ReviewResolve { comment_id: String, reply: Option<String>, reopen: bool },
+    ReviewCommentAdd {
+        path: String,
+        start_line: u64,
+        end_line: Option<u64>,
+        side: Option<String>,
+        body: String,
+        session_id: Option<String>,
+    },
     Resolve,
 }
 
@@ -162,6 +179,54 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
         Command::Review { target } => {
             let mut r = Request::new("review");
             r.target = target.clone();
+            r
+        }
+        Command::ReviewComments { session_id, state } => {
+            let mut r = Request::new("review_comments");
+            let mut params = serde_json::Map::new();
+            if let Some(session_id) = session_id {
+                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+            }
+            if let Some(state) = state {
+                params.insert("state".into(), serde_json::Value::String(state.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::ReviewReply { comment_id, body } => {
+            let mut r = Request::new("review_reply");
+            r.params = Some(serde_json::json!({ "comment_id": comment_id, "body": body }));
+            r
+        }
+        Command::ReviewResolve { comment_id, reply, reopen } => {
+            let mut r = Request::new("review_resolve");
+            let mut params = serde_json::Map::new();
+            params.insert("comment_id".into(), serde_json::Value::String(comment_id.clone()));
+            if let Some(reply) = reply {
+                params.insert("reply".into(), serde_json::Value::String(reply.clone()));
+            }
+            if *reopen {
+                params.insert("reopen".into(), serde_json::Value::Bool(true));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::ReviewCommentAdd { path, start_line, end_line, side, body, session_id } => {
+            let mut r = Request::new("review_comment_add");
+            let mut params = serde_json::Map::new();
+            params.insert("path".into(), serde_json::Value::String(path.clone()));
+            params.insert("start_line".into(), serde_json::Value::from(*start_line));
+            if let Some(end_line) = end_line {
+                params.insert("end_line".into(), serde_json::Value::from(*end_line));
+            }
+            if let Some(side) = side {
+                params.insert("side".into(), serde_json::Value::String(side.clone()));
+            }
+            params.insert("body".into(), serde_json::Value::String(body.clone()));
+            if let Some(session_id) = session_id {
+                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
             r
         }
         Command::Resolve => Request::new("resolve"),
@@ -422,6 +487,21 @@ mod tests {
     }
 
     #[test]
+    fn params_envelope_serializes_only_when_present() {
+        let mut req = Request::new("review_comments");
+        req.session_id = Some("s1".into());
+        req.params = Some(serde_json::json!({ "state": "all" }));
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1","params":{"state":"all"}}"#
+        );
+
+        let bare = serde_json::to_string(&Request::new("resolve")).unwrap();
+        assert!(!bare.contains("params"), "absent params must not serialize");
+    }
+
+    #[test]
     fn response_parses_lines_and_error_defaults() {
         let ok: Response = serde_json::from_str(r#"{"ok":true}"#).unwrap();
         assert!(ok.ok && ok.lines.is_none() && ok.error.is_none());
@@ -458,6 +538,69 @@ mod tests {
         assert!(local.target.is_none());
         let provider = build_request(&Command::Review { target: Some("123".into()) }, Some("s1".into()), None);
         assert_eq!(provider.target.as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn builds_review_comments_with_params_envelope() {
+        let cmd = Command::ReviewComments { session_id: Some("sid".into()), state: Some("all".into()) };
+        let req = build_request(&cmd, None, Some("/wt".into()));
+        assert_eq!(req.command, "review_comments");
+        let params = req.params.expect("params must be set");
+        assert_eq!(params["session_id"], serde_json::json!("sid"));
+        assert_eq!(params["state"], serde_json::json!("all"));
+
+        let bare = build_request(&Command::ReviewComments { session_id: None, state: None }, None, Some("/wt".into()));
+        assert_eq!(bare.params, Some(serde_json::json!({})));
+    }
+
+    #[test]
+    fn builds_review_reply_and_resolve_params() {
+        let reply = build_request(
+            &Command::ReviewReply { comment_id: "c1".into(), body: "done".into() },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(reply.command, "review_reply");
+        assert_eq!(reply.params, Some(serde_json::json!({"comment_id": "c1", "body": "done"})));
+
+        let resolve = build_request(
+            &Command::ReviewResolve { comment_id: "c1".into(), reply: Some("fixed".into()), reopen: false },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(resolve.command, "review_resolve");
+        assert_eq!(resolve.params, Some(serde_json::json!({"comment_id": "c1", "reply": "fixed"})));
+
+        let reopen = build_request(
+            &Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: true },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(reopen.params, Some(serde_json::json!({"comment_id": "c1", "reopen": true})));
+    }
+
+    #[test]
+    fn builds_review_comment_add_params() {
+        let cmd = Command::ReviewCommentAdd {
+            path: "src/a.swift".into(),
+            start_line: 10,
+            end_line: Some(12),
+            side: Some("new".into()),
+            body: "consider guard".into(),
+            session_id: None,
+        };
+        let req = build_request(&cmd, None, Some("/wt".into()));
+        assert_eq!(req.command, "review_comment_add");
+        assert_eq!(
+            req.params,
+            Some(serde_json::json!({
+                "path": "src/a.swift",
+                "start_line": 10,
+                "end_line": 12,
+                "side": "new",
+                "body": "consider guard"
+            }))
+        );
     }
 
     #[test]

@@ -9,6 +9,13 @@ enum AlasCLIRequestError: Error, Equatable {
     case missingPaths
 }
 
+enum ReviewCommentWireFilter: String, Equatable {
+    case active
+    case resolved
+    case dismissed
+    case all
+}
+
 struct AlasCLIRequest: Equatable {
     enum Command: Equatable {
         case open(paths: [String])
@@ -27,6 +34,10 @@ struct AlasCLIRequest: Equatable {
     enum ReviewCommand: Equatable {
         case localChanges
         case provider(target: String)
+        case comments(sessionID: String?, state: ReviewCommentWireFilter)
+        case reply(commentID: String, body: String)
+        case resolve(commentID: String, reply: String?, reopen: Bool)
+        case commentAdd(path: String, startLine: Int, endLine: Int?, side: String?, body: String, sessionID: String?)
     }
 
     let version: Int
@@ -52,6 +63,55 @@ struct AlasCLIRequest: Equatable {
         var base: String?
         var force: Bool?
         var keep_branch: Bool?
+    }
+
+    private struct ParamsEnvelope<P: Decodable>: Decodable {
+        var params: P?
+    }
+
+    private struct ReviewCommentsParams: Decodable {
+        var session_id: String?
+        var state: String?
+    }
+
+    private struct ReviewReplyParams: Decodable {
+        var comment_id: String
+        var body: String
+    }
+
+    private struct ReviewResolveParams: Decodable {
+        var comment_id: String
+        var reply: String?
+        var reopen: Bool?
+    }
+
+    private struct ReviewCommentAddParams: Decodable {
+        var path: String
+        var start_line: Int
+        var end_line: Int?
+        var side: String?
+        var body: String
+        var session_id: String?
+    }
+
+    /// Typed access to the `params` object new-style commands carry.
+    /// Returns nil when `params` is absent or explicitly null (`Decodable`
+    /// synthesis treats both the same way); throws `.malformed` when
+    /// `params` is present with a non-null value that does not match `P`.
+    static func decodeParamsIfPresent<P: Decodable>(_ type: P.Type, from data: Data) throws -> P? {
+        do {
+            return try JSONDecoder().decode(ParamsEnvelope<P>.self, from: data).params
+        } catch {
+            throw AlasCLIRequestError.malformed
+        }
+    }
+
+    /// Like `decodeParamsIfPresent`, but the command requires arguments.
+    static func decodeParams<P: Decodable>(_ type: P.Type, from data: Data) throws -> P {
+        guard let params = try decodeParamsIfPresent(type, from: data) else {
+            throw AlasCLIRequestError.malformed
+        }
+        return params
     }
 
     static func decode(from data: Data) throws -> AlasCLIRequest {
@@ -127,6 +187,49 @@ struct AlasCLIRequest: Equatable {
             } else {
                 command = .review(.localChanges)
             }
+        case "review_comments":
+            let params = try Self.decodeParamsIfPresent(ReviewCommentsParams.self, from: data)
+            let filter: ReviewCommentWireFilter
+            if let rawState = params?.state?.nilIfBlank {
+                guard let parsed = ReviewCommentWireFilter(rawValue: rawState) else {
+                    throw AlasCLIRequestError.malformed
+                }
+                filter = parsed
+            } else {
+                filter = .active
+            }
+            command = .review(.comments(sessionID: params?.session_id?.nilIfBlank, state: filter))
+        case "review_reply":
+            let params = try Self.decodeParams(ReviewReplyParams.self, from: data)
+            command = .review(.reply(
+                commentID: try requiredNonEmpty(params.comment_id),
+                body: try requiredNonEmpty(params.body)
+            ))
+        case "review_resolve":
+            let params = try Self.decodeParams(ReviewResolveParams.self, from: data)
+            command = .review(.resolve(
+                commentID: try requiredNonEmpty(params.comment_id),
+                reply: params.reply?.nilIfBlank,
+                reopen: params.reopen ?? false
+            ))
+        case "review_comment_add":
+            let params = try Self.decodeParams(ReviewCommentAddParams.self, from: data)
+            guard params.start_line >= 1,
+                  params.end_line.map({ $0 >= params.start_line }) ?? true else {
+                throw AlasCLIRequestError.malformed
+            }
+            let side = try params.side.map { raw -> String in
+                guard raw == "old" || raw == "new" else { throw AlasCLIRequestError.malformed }
+                return raw
+            }
+            command = .review(.commentAdd(
+                path: try requiredNonEmpty(params.path),
+                startLine: params.start_line,
+                endLine: params.end_line,
+                side: side,
+                body: try requiredNonEmpty(params.body),
+                sessionID: params.session_id?.nilIfBlank
+            ))
         case "resolve":
             command = .resolve
         default:

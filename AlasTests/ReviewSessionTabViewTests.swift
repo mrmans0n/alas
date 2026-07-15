@@ -1311,6 +1311,67 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-inline-feedback-focused-thread-1", in: host) != nil)
     }
 
+    @Test func externalCommentChangeReloadsTheSessionRecordNotJustDraftComments() throws {
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let initialRecord = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-review-session-external-reload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sessionStore = ReviewSessionStore(url: directory.appendingPathComponent("sessions.json"))
+
+        // Simulate what an external `review_resolve` already wrote to disk
+        // (e.g. a handoff/session flipped to addressed) before this tab
+        // reacts to the change notification.
+        var externallyUpdatedRecord = initialRecord
+        externallyUpdatedRecord.lastSendError = "external change reached the disk"
+        try sessionStore.save(externallyUpdatedRecord)
+
+        let loaded = ReviewSessionLoadedContext(
+            session: DiffReviewLoadedSession(
+                files: [Self.file(path: "A.swift", namespace: "unstaged")],
+                summary: DiffReviewSessionModel(files: [Self.summary(path: "A.swift", namespace: "unstaged")], groupsEnabled: true)
+            ),
+            feedbackTarget: ReviewFeedbackTarget(
+                title: target.title,
+                repositoryPath: "/repo",
+                providerDescription: nil,
+                sourceDescription: target.sourceDescription
+            ),
+            providerContext: nil
+        )
+        let request = Self.reviewRequest(provider: .github)
+        let view = ReviewSessionTabView.testView(
+            record: initialRecord,
+            loaded: loaded,
+            sessionStore: sessionStore,
+            provider: FakeProviderReviewMutator(
+                kind: .github,
+                result: ProviderReviewPublishResult(published: [], failed: [], refreshedRequest: request, warnings: [])
+            )
+        )
+        .environment(\.theme, try ThemeStore().current)
+
+        let host = NSHostingView(rootView: view.frame(width: 900, height: 700))
+        host.layoutSubtreeIfNeeded()
+        #expect(!recursiveDescription(host).contains("external change reached the disk"))
+
+        NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        host.layoutSubtreeIfNeeded()
+
+        #expect(recursiveDescription(host).contains("external change reached the disk"))
+    }
+
     @Test func providerFeedbackMatcherPrefersExactOldSidePathWhenOriginalPathIsMissing() {
         let modified = DiffReviewFileSummary(
             path: "Sources/App.swift",

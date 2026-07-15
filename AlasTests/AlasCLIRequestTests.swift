@@ -131,4 +131,86 @@ struct AlasCLIRequestTests {
         #expect(encoded.contains(#""ok":true"#))
         #expect(encoded.contains(#""lines":["a","b"]"#))
     }
+
+    @Test func decodesReviewCommentsWithAndWithoutParams() throws {
+        let bare = #"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1"}"#
+        let bareRequest = try AlasCLIRequest.decode(from: Data(bare.utf8))
+        #expect(bareRequest.command == .review(.comments(sessionID: nil, state: .active)))
+
+        let full = #"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1","params":{"session_id":"rsid","state":"all"}}"#
+        let fullRequest = try AlasCLIRequest.decode(from: Data(full.utf8))
+        #expect(fullRequest.command == .review(.comments(sessionID: "rsid", state: .all)))
+    }
+
+    @Test func rejectsUnknownReviewCommentsState() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1","params":{"state":"bogus"}}"#
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
+    @Test func decodesReviewReplyAndResolve() throws {
+        let reply = #"{"v":1,"kind":"cli","command":"review_reply","session_id":"s1","params":{"comment_id":"c1","body":"done"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(reply.utf8)).command == .review(.reply(commentID: "c1", body: "done")))
+
+        let resolve = #"{"v":1,"kind":"cli","command":"review_resolve","session_id":"s1","params":{"comment_id":"c1"}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(resolve.utf8)).command == .review(.resolve(commentID: "c1", reply: nil, reopen: false)))
+
+        let reopen = #"{"v":1,"kind":"cli","command":"review_resolve","session_id":"s1","params":{"comment_id":"c1","reply":"oops","reopen":true}}"#
+        #expect(try AlasCLIRequest.decode(from: Data(reopen.utf8)).command == .review(.resolve(commentID: "c1", reply: "oops", reopen: true)))
+    }
+
+    @Test func reviewReplyRequiresParams() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_reply","session_id":"s1"}"#
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
+    @Test func decodesReviewCommentAdd() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":3,"end_line":5,"side":"new","body":"tighten"}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.command == .review(.commentAdd(
+            path: "a.swift", startLine: 3, endLine: 5, side: "new", body: "tighten", sessionID: nil
+        )))
+    }
+
+    @Test func rejectsInvalidReviewCommentAdd() throws {
+        for bad in [
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":0,"body":"x"}}"#,
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":5,"end_line":3,"body":"x"}}"#,
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":3,"side":"sideways","body":"x"}}"#,
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1"}"#,
+        ] {
+            #expect(throws: AlasCLIRequestError.self, "should reject: \(bad)") {
+                try AlasCLIRequest.decode(from: Data(bad.utf8))
+            }
+        }
+    }
+
+    private struct ProbeParams: Decodable, Equatable {
+        var name: String
+        var count: Int?
+    }
+
+    @Test func decodesTypedParamsEnvelope() throws {
+        let json = #"{"v":1,"kind":"cli","command":"x","session_id":"s1","params":{"name":"a","count":2}}"#
+        let params = try AlasCLIRequest.decodeParams(ProbeParams.self, from: Data(json.utf8))
+        #expect(params == ProbeParams(name: "a", count: 2))
+    }
+
+    @Test func missingParamsIsNilForOptionalDecodeAndThrowsForRequired() throws {
+        let json = #"{"v":1,"kind":"cli","command":"x","session_id":"s1"}"#
+        #expect(try AlasCLIRequest.decodeParamsIfPresent(ProbeParams.self, from: Data(json.utf8)) == nil)
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decodeParams(ProbeParams.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test func mistypedParamsThrowsMalformed() throws {
+        let json = #"{"v":1,"kind":"cli","command":"x","session_id":"s1","params":{"name":5}}"#
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decodeParamsIfPresent(ProbeParams.self, from: Data(json.utf8))
+        }
+    }
 }
