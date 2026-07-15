@@ -16,7 +16,9 @@ usage: alas wt switch <name-or-branch>
 usage: alas wt new <branch> [--base <ref>]
 usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
 usage: alas review [pr-number-or-url]
-usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]";
+usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
+usage: alas review reply <comment-id> <body>
+usage: alas review resolve <comment-id> [--reply <body>] [--reopen]";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
@@ -49,11 +51,42 @@ fn parse_review(args: &[&str]) -> Result<Command, String> {
     match args.first().copied() {
         None => Ok(Command::Review { target: None }),
         Some("comments") => parse_review_comments(&args[1..]),
+        Some("reply") => {
+            const USAGE: &str = "usage: alas review reply <comment-id> <body>";
+            if args.len() != 3 || args[1].starts_with("--") {
+                return Err(USAGE.into());
+            }
+            Ok(Command::ReviewReply { comment_id: args[1].to_string(), body: args[2].to_string() })
+        }
+        Some("resolve") => parse_review_resolve(&args[1..]),
         Some(target) if args.len() == 1 && !target.starts_with("--") => {
             Ok(Command::Review { target: Some(target.to_string()) })
         }
         _ => Err(USAGE_ALL.into()),
     }
+}
+
+fn parse_review_resolve(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review resolve <comment-id> [--reply <body>] [--reopen]";
+    let (comment_id, rest) = match args.split_first() {
+        Some((first, rest)) if !first.starts_with("--") => (first.to_string(), rest),
+        _ => return Err(USAGE.into()),
+    };
+    let mut reply: Option<String> = None;
+    let mut reopen = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--reply" => {
+                i += 1;
+                reply = Some(flag_value(rest, i).ok_or(USAGE)?.to_string());
+            }
+            "--reopen" => reopen = true,
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewResolve { comment_id, reply, reopen })
 }
 
 fn parse_review_comments(args: &[&str]) -> Result<Command, String> {
@@ -255,6 +288,31 @@ mod tests {
         assert!(parse(&s(&["review", "comments", "--state", "bogus"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "comments", "--session"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "comments", "extra"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_reply_takes_exactly_id_and_body() {
+        assert_eq!(
+            parse(&s(&["review", "reply", "c1", "looks good"]), Path::new("/b")).unwrap(),
+            Command::ReviewReply { comment_id: "c1".into(), body: "looks good".into() }
+        );
+        assert!(parse(&s(&["review", "reply", "c1"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "reply", "c1", "a", "b"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_resolve_parses_flags() {
+        assert_eq!(
+            parse(&s(&["review", "resolve", "c1"]), Path::new("/b")).unwrap(),
+            Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: false }
+        );
+        assert_eq!(
+            parse(&s(&["review", "resolve", "c1", "--reply", "fixed", "--reopen"]), Path::new("/b")).unwrap(),
+            Command::ReviewResolve { comment_id: "c1".into(), reply: Some("fixed".into()), reopen: true }
+        );
+        assert!(parse(&s(&["review", "resolve"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "resolve", "--reopen"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "resolve", "c1", "--reply"]), Path::new("/b")).is_err());
     }
 
     #[test]

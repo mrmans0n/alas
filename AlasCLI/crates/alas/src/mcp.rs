@@ -163,6 +163,31 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "review_reply",
+            "description": "Reply to a review comment thread in the user's Alas review pane. Use review_resolve instead when the reply also settles the comment.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "comment_id": { "type": "string", "description": "Comment id, from review_comments." },
+                    "body": { "type": "string", "description": "Reply body, Markdown." }
+                },
+                "required": ["comment_id", "body"]
+            }
+        }),
+        json!({
+            "name": "review_resolve",
+            "description": "Resolve a review comment in the user's Alas review pane after addressing it, optionally posting a reply first. Pass state 'active' to reopen a comment instead.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "comment_id": { "type": "string", "description": "Comment id, from review_comments." },
+                    "reply": { "type": "string", "description": "Optional reply to post before changing state, e.g. a one-line summary of the fix." },
+                    "state": { "type": "string", "enum": ["resolved", "active"], "description": "Target state. Default: resolved." }
+                },
+                "required": ["comment_id"]
+            }
+        }),
     ]
 }
 
@@ -210,6 +235,22 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 }
             }
             Ok(Command::ReviewComments { session_id: optional_string(args, "session_id"), state })
+        }
+        "review_reply" => Ok(Command::ReviewReply {
+            comment_id: required_string(args, "comment_id")?,
+            body: required_string(args, "body")?,
+        }),
+        "review_resolve" => {
+            let reopen = match optional_string(args, "state").as_deref() {
+                None | Some("resolved") => false,
+                Some("active") => true,
+                Some(_) => return Err("review_resolve 'state' must be 'resolved' or 'active'".into()),
+            };
+            Ok(Command::ReviewResolve {
+                comment_id: required_string(args, "comment_id")?,
+                reply: optional_string(args, "reply"),
+                reopen,
+            })
         }
         other => Err(format!("unknown tool: {other}")),
     }
@@ -290,6 +331,9 @@ fn success_message(command: &Command) -> String {
         Command::Review { target: Some(target) } => format!("Opened review for '{target}' in Alas."),
         Command::Review { target: None } => "Opened review of local changes in Alas.".into(),
         Command::ReviewComments { .. } => "No review comments found.".into(),
+        Command::ReviewReply { .. } => "Reply posted.".into(),
+        Command::ReviewResolve { reopen: false, .. } => "Comment resolved.".into(),
+        Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -418,7 +462,17 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
-            ["open", "worktree_list", "worktree_switch", "worktree_new", "worktree_delete", "review", "review_comments"]
+            [
+                "open",
+                "worktree_list",
+                "worktree_switch",
+                "worktree_new",
+                "worktree_delete",
+                "review",
+                "review_comments",
+                "review_reply",
+                "review_resolve"
+            ]
         );
         for tool in tools {
             assert!(tool["description"].as_str().unwrap().len() > 20);
@@ -520,6 +574,25 @@ mod tests {
             alas_client::Command::ReviewComments { session_id: Some("sid".into()), state: Some("resolved".into()) }
         );
         assert!(command_for_tool("review_comments", &json!({"state": "bogus"}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_reply_and_resolve_tools_map_to_commands() {
+        assert_eq!(
+            command_for_tool("review_reply", &json!({"comment_id": "c1", "body": "hi"}), "/wt").unwrap(),
+            alas_client::Command::ReviewReply { comment_id: "c1".into(), body: "hi".into() }
+        );
+        assert!(command_for_tool("review_reply", &json!({"comment_id": "c1"}), "/wt").is_err());
+
+        assert_eq!(
+            command_for_tool("review_resolve", &json!({"comment_id": "c1"}), "/wt").unwrap(),
+            alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: false }
+        );
+        assert_eq!(
+            command_for_tool("review_resolve", &json!({"comment_id": "c1", "reply": "done", "state": "active"}), "/wt").unwrap(),
+            alas_client::Command::ReviewResolve { comment_id: "c1".into(), reply: Some("done".into()), reopen: true }
+        );
+        assert!(command_for_tool("review_resolve", &json!({"comment_id": "c1", "state": "bogus"}), "/wt").is_err());
     }
 
     #[test]

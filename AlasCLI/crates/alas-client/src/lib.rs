@@ -128,6 +128,8 @@ pub enum Command {
     WtDelete { target: String, force: bool, keep_branch: bool },
     Review { target: Option<String> },
     ReviewComments { session_id: Option<String>, state: Option<String> },
+    ReviewReply { comment_id: String, body: String },
+    ReviewResolve { comment_id: String, reply: Option<String>, reopen: bool },
     Resolve,
 }
 
@@ -179,6 +181,24 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             }
             if let Some(state) = state {
                 params.insert("state".into(), serde_json::Value::String(state.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::ReviewReply { comment_id, body } => {
+            let mut r = Request::new("review_reply");
+            r.params = Some(serde_json::json!({ "comment_id": comment_id, "body": body }));
+            r
+        }
+        Command::ReviewResolve { comment_id, reply, reopen } => {
+            let mut r = Request::new("review_resolve");
+            let mut params = serde_json::Map::new();
+            params.insert("comment_id".into(), serde_json::Value::String(comment_id.clone()));
+            if let Some(reply) = reply {
+                params.insert("reply".into(), serde_json::Value::String(reply.clone()));
+            }
+            if *reopen {
+                params.insert("reopen".into(), serde_json::Value::Bool(true));
             }
             r.params = Some(serde_json::Value::Object(params));
             r
@@ -505,6 +525,32 @@ mod tests {
 
         let bare = build_request(&Command::ReviewComments { session_id: None, state: None }, None, Some("/wt".into()));
         assert_eq!(bare.params, Some(serde_json::json!({})));
+    }
+
+    #[test]
+    fn builds_review_reply_and_resolve_params() {
+        let reply = build_request(
+            &Command::ReviewReply { comment_id: "c1".into(), body: "done".into() },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(reply.command, "review_reply");
+        assert_eq!(reply.params, Some(serde_json::json!({"comment_id": "c1", "body": "done"})));
+
+        let resolve = build_request(
+            &Command::ReviewResolve { comment_id: "c1".into(), reply: Some("fixed".into()), reopen: false },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(resolve.command, "review_resolve");
+        assert_eq!(resolve.params, Some(serde_json::json!({"comment_id": "c1", "reply": "fixed"})));
+
+        let reopen = build_request(
+            &Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: true },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(reopen.params, Some(serde_json::json!({"comment_id": "c1", "reopen": true})));
     }
 
     #[test]
