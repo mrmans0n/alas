@@ -761,7 +761,7 @@ struct AlasCLICommandRouterTests {
             .appendingPathComponent("drafts.json")
         let store = ReviewDraftCommentStore(url: storeURL)
         let session = ReviewDraftSessionID.reviewRequest(
-            worktreeID: "wt1", provider: .github, host: "github.com", repositorySlug: "org/repo", number: 7
+            worktreeID: "wt1", provider: .gitlab, host: "gitlab.com", repositorySlug: "group/repo", number: 7
         )
 
         let router = makeReviewRouter(
@@ -776,6 +776,44 @@ struct AlasCLICommandRouterTests {
             ))
         ))
 
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].originalPath == nil)
+    }
+
+    @Test func commentAddDoesNotResolveOriginalPathForGitHubReview() async throws {
+        let root = try makeFile("repo/Sources/New.swift").deletingLastPathComponent().deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt1", provider: .github, host: "github.com", repositorySlug: "org/repo", number: 7
+        )
+        var resolverCalled = false
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            providerReviewOriginalPath: { _, _ in
+                resolverCalled = true
+                return "Sources/Old.swift"
+            }
+        )
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "Sources/New.swift", startLine: 3, endLine: nil, side: nil,
+                body: "github comment", sessionID: session.rawValue
+            ))
+        ))
+
+        // GitHub publishing ignores originalPath, so the resolver (which loads
+        // the provider diff) must not run for a GitHub review.
+        #expect(!resolverCalled)
         let saved = try store.load(sessionID: session)
         #expect(saved.count == 1)
         #expect(saved[0].originalPath == nil)

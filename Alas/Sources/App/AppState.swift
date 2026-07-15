@@ -3696,10 +3696,13 @@ final class AppState {
 
             let registry = CodeHostProviderRegistry.live()
             let supportedRemotes = try await cliSupportedRemotes(for: worktree, registry: registry)
-            let remote = supportedRemotes.first(where: {
+            // Require the exact remote the session was opened against. Falling
+            // back to a different remote would load that repository's PR/MR of
+            // the same number and could stamp an `originalPath` from an
+            // unrelated review; nil is the correct best-effort result instead.
+            guard let remote = supportedRemotes.first(where: {
                 $0.host == host && $0.repositorySlug.lowercased() == repositorySlug.lowercased()
-            }) ?? supportedRemotes.first
-            guard let remote, let provider = registry.provider(for: remote.kind) else { return nil }
+            }), let provider = registry.provider(for: remote.kind) else { return nil }
 
             let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
             let loaded = try await ReviewRequestDiffLoader(provider: provider)

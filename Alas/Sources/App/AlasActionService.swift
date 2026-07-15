@@ -200,8 +200,14 @@ struct AlasActionService {
         case .failed(let message):
             return .error(message)
         }
+        // Only GitLab publishing consumes `originalPath` (`oldPath` for a
+        // renamed file); GitHub's review-comment API keys off the post-rename
+        // path only. Resolving it loads the provider diff, so gating to
+        // GitLab keeps `review_comment_add` on a GitHub PR from waiting on an
+        // unnecessary `gh pr diff` fetch that would publish identically.
         let originalPath: String?
-        if targetSessionID.sourceKind == .reviewRequest {
+        if targetSessionID.sourceKind == .reviewRequest,
+           targetSessionID.reviewRequestProvider == .gitlab {
             originalPath = await providerReviewOriginalPath(targetSessionID, relativePath)
         } else {
             originalPath = nil
