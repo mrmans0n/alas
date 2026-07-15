@@ -54,6 +54,29 @@ struct AlasCLIRequest: Equatable {
         var keep_branch: Bool?
     }
 
+    private struct ParamsEnvelope<P: Decodable>: Decodable {
+        var params: P?
+    }
+
+    /// Typed access to the `params` object new-style commands carry.
+    /// Returns nil when the request has no `params` key at all; throws
+    /// `.malformed` when `params` is present but does not match `P`.
+    static func decodeParamsIfPresent<P: Decodable>(_ type: P.Type, from data: Data) throws -> P? {
+        do {
+            return try JSONDecoder().decode(ParamsEnvelope<P>.self, from: data).params
+        } catch {
+            throw AlasCLIRequestError.malformed
+        }
+    }
+
+    /// Like `decodeParamsIfPresent`, but the command requires arguments.
+    static func decodeParams<P: Decodable>(_ type: P.Type, from data: Data) throws -> P {
+        guard let params = try decodeParamsIfPresent(type, from: data) else {
+            throw AlasCLIRequestError.malformed
+        }
+        return params
+    }
+
     static func decode(from data: Data) throws -> AlasCLIRequest {
         func requiredNonEmpty(_ value: String?) throws -> String {
             guard let value else { throw AlasCLIRequestError.malformed }

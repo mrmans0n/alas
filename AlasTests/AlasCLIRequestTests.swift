@@ -131,4 +131,30 @@ struct AlasCLIRequestTests {
         #expect(encoded.contains(#""ok":true"#))
         #expect(encoded.contains(#""lines":["a","b"]"#))
     }
+
+    private struct ProbeParams: Decodable, Equatable {
+        var name: String
+        var count: Int?
+    }
+
+    @Test func decodesTypedParamsEnvelope() throws {
+        let json = #"{"v":1,"kind":"cli","command":"x","session_id":"s1","params":{"name":"a","count":2}}"#
+        let params = try AlasCLIRequest.decodeParams(ProbeParams.self, from: Data(json.utf8))
+        #expect(params == ProbeParams(name: "a", count: 2))
+    }
+
+    @Test func missingParamsIsNilForOptionalDecodeAndThrowsForRequired() throws {
+        let json = #"{"v":1,"kind":"cli","command":"x","session_id":"s1"}"#
+        #expect(try AlasCLIRequest.decodeParamsIfPresent(ProbeParams.self, from: Data(json.utf8)) == nil)
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decodeParams(ProbeParams.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test func mistypedParamsThrowsMalformed() throws {
+        let json = #"{"v":1,"kind":"cli","command":"x","session_id":"s1","params":{"name":5}}"#
+        #expect(throws: AlasCLIRequestError.malformed) {
+            try AlasCLIRequest.decodeParamsIfPresent(ProbeParams.self, from: Data(json.utf8))
+        }
+    }
 }
