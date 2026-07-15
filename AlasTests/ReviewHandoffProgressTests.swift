@@ -32,6 +32,56 @@ struct ReviewHandoffProgressTests {
         )
     }
 
+    @Test func recomputeAndPersistSavesOnlyRecordsThatActuallyChanged() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("review-sessions.json")
+        let sessionStore = ReviewSessionStore(url: url)
+        let addressableTarget = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo-a"),
+            scope: .all
+        )
+        let untouchedTarget = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo-b"),
+            scope: .all
+        )
+        let addressableRecord = ReviewSessionRecord(
+            id: addressableTarget.id,
+            target: addressableTarget,
+            status: .sent,
+            handoffs: [makeHandoff(id: "h1", commentIDs: ["c1"])],
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        let untouchedRecord = ReviewSessionRecord(
+            id: untouchedTarget.id,
+            target: untouchedTarget,
+            status: .active,
+            handoffs: [],
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try sessionStore.save(addressableRecord)
+        try sessionStore.save(untouchedRecord)
+        let now = Date(timeIntervalSince1970: 99)
+
+        try ReviewHandoffProgress.recomputeAndPersist(
+            worktreeID: "wt-1",
+            sessionStore: sessionStore,
+            isResolved: { $0 == "c1" },
+            now: now
+        )
+
+        let addressed = try #require(try sessionStore.load(id: addressableTarget.id))
+        #expect(addressed.status == .addressed)
+        #expect(addressed.handoffs.map(\.status) == [.addressed])
+        #expect(addressed.updatedAt == now)
+        let untouched = try #require(try sessionStore.load(id: untouchedTarget.id))
+        #expect(untouched.updatedAt == Date(timeIntervalSince1970: 1))
+    }
+
     @Test func marksHandoffAndSessionAddressedWhenAllCommentsResolve() throws {
         let record = makeRecord(handoffs: [makeHandoff(id: "h1", commentIDs: ["c1", "c2"])], status: .sent)
         let now = Date(timeIntervalSince1970: 99)
