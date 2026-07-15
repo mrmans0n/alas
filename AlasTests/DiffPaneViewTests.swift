@@ -162,6 +162,107 @@ struct DiffPaneViewTests {
         #expect(context.group(id: group.id)?.segments == expectedSegments.items)
     }
 
+    @Test func diffTabDraftAccessoriesResolveSemanticLanesAndSegmentGeometry() throws {
+        let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
+        let group = try #require(model.groups.first)
+        let fileID = DiffReviewFileID(namespace: "diff-tab", path: "Sources/App.swift")
+        let comment = reviewDraftComment(id: "draft-new-lane", fileID: fileID)
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .old,
+            line: 2,
+            rowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 2, isChange: true),
+            ],
+            selectedText: "let b = 2"
+        )
+        let context = DiffTabRenderContextBuilder.build(
+            model: model,
+            comments: [comment],
+            pendingDraftAnchor: pendingAnchor
+        )
+        let segment = try #require(context.group(id: group.id)?.segments.first {
+            !$0.draftComments.isEmpty || $0.showsComposer
+        })
+
+        #expect(DiffFeedbackLaneResolver.lane(for: comment) == .right)
+        #expect(DiffFeedbackLaneResolver.lane(for: pendingAnchor) == .left)
+        #expect(segment.rows.isEmpty == false)
+
+        let splitFrame = DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 900,
+            layoutMode: .split,
+            lane: .left,
+            gutterWidth: 42
+        )
+        let stackedFrame = DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 900,
+            layoutMode: .stacked,
+            lane: .left,
+            gutterWidth: 42
+        )
+        #expect(splitFrame.width == 407)
+        #expect(stackedFrame.width == 858)
+    }
+
+    @Test func pendingDraftComposerLaneUsesAnchorResolverInSplitAndStackedLayouts() throws {
+        let rows = try #require(model().groups.first?.rows)
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .old,
+            line: 2,
+            rowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 2, isChange: true),
+            ],
+            selectedText: "let b = 2"
+        )
+        let splitController = NSHostingController(rootView:
+            DiffFeedbackLaneView(
+                lane: DiffFeedbackLaneResolver.lane(for: pendingAnchor),
+                layoutMode: .split,
+                rows: rows
+            ) {
+                FrameProbe(identifier: "diff-review-draft-composer")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 64)
+            }
+            .environment(\.theme, theme())
+        )
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 80)
+        splitController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-left",
+            in: splitController.view
+        ) != nil)
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-draft-composer",
+            in: splitController.view
+        ) != nil)
+
+        let stackedController = NSHostingController(rootView:
+            DiffFeedbackLaneView(
+                lane: DiffFeedbackLaneResolver.lane(for: pendingAnchor),
+                layoutMode: .stacked,
+                rows: rows
+            ) {
+                FrameProbe(identifier: "diff-review-draft-composer")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 64)
+            }
+            .environment(\.theme, theme())
+        )
+        stackedController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 80)
+        stackedController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-full",
+            in: stackedController.view
+        ) != nil)
+    }
+
     @MainActor
     @Test func diffTabRenderContextCacheReusesMatchingKeyAndEvictsPastLimit() throws {
         let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")

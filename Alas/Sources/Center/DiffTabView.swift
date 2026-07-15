@@ -697,10 +697,10 @@ struct DiffTabView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     }
                     if !segment.draftComments.isEmpty {
-                        reviewDraftCommentStack(segment.draftComments)
+                        reviewDraftCommentStack(segment.draftComments, rows: segment.rows)
                     }
-                    if segment.showsComposer {
-                        reviewDraftComposer
+                    if segment.showsComposer, let pendingDraftAnchor {
+                        reviewDraftComposer(anchor: pendingDraftAnchor, rows: segment.rows)
                     }
                 }
             }
@@ -807,7 +807,47 @@ struct DiffTabView: View {
         }
     }
 
-    private var reviewDraftComposer: some View {
+    @ViewBuilder
+    private func reviewDraftCommentStack(_ comments: [ReviewDraftComment], rows: [DiffDisplayRow]) -> some View {
+        if !comments.isEmpty {
+            let actions = makeDraftCommentActions()
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(comments) { comment in
+                    DiffFeedbackLaneView(
+                        lane: DiffFeedbackLaneResolver.lane(for: comment),
+                        layoutMode: diffPreferences.layoutMode.wrappedValue,
+                        rows: rows
+                    ) {
+                        ReviewDraftCommentCard(
+                            comment: comment,
+                            file: fileSummary,
+                            isFocused: false,
+                            actions: actions,
+                            reviewFeedbackTarget: reviewFeedbackTarget,
+                            onSelect: { _ in }
+                        )
+                        .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: fileID))
+                        .padding(.horizontal, 14)
+                    }
+                }
+            }
+            .padding(.vertical, 10)
+            .background(theme.color("bg-1"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        }
+    }
+
+    private func reviewDraftComposer(anchor: DiffReviewLineAnchor, rows: [DiffDisplayRow]) -> some View {
+        DiffFeedbackLaneView(
+            lane: DiffFeedbackLaneResolver.lane(for: anchor),
+            layoutMode: diffPreferences.layoutMode.wrappedValue,
+            rows: rows
+        ) {
+            reviewDraftComposerContent
+        }
+    }
+
+    private var reviewDraftComposerContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             ReviewDraftComposerTextEditor(
                 text: $pendingDraftBody,
