@@ -296,27 +296,16 @@ struct DiffReviewFileSection: View {
     private func fileLevelDraftCommentStack(renderContext: DiffReviewRenderContext?) -> some View {
         let fileLevel = fileLevelDraftComments(renderContext: renderContext)
         if !fileLevel.isEmpty {
-            draftCommentStack(fileLevel)
+            fullWidthDraftCommentStack(fileLevel)
         }
     }
 
     @ViewBuilder
-    private func draftCommentStack(_ comments: [ReviewDraftComment]) -> some View {
+    private func fullWidthDraftCommentStack(_ comments: [ReviewDraftComment]) -> some View {
         if !comments.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(comments) { comment in
-                    ReviewDraftCommentCard(
-                        comment: comment,
-                        file: file.summary,
-                        isFocused: comment.id == focusedDraftCommentID,
-                        actions: feedbackDraftCommentActions,
-                        reviewFeedbackTarget: effectiveReviewFeedbackTarget,
-                        onSelect: onSelectDraftComment,
-                        onHoverChange: { isHovered in
-                            hoveredDraftCommentID = isHovered ? comment.id : (hoveredDraftCommentID == comment.id ? nil : hoveredDraftCommentID)
-                        }
-                    )
-                    .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
+                    draftCommentCard(comment)
                 }
             }
             .padding(.horizontal, 14)
@@ -324,6 +313,45 @@ struct DiffReviewFileSection: View {
             .background(theme.color("bg-1"))
             .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
+    }
+
+    @ViewBuilder
+    private func draftCommentStack(
+        _ comments: [ReviewDraftComment],
+        rows: [DiffDisplayRow]
+    ) -> some View {
+        if !comments.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(comments) { comment in
+                    DiffFeedbackLaneView(
+                        lane: DiffFeedbackLaneResolver.lane(for: comment),
+                        layoutMode: layoutMode,
+                        rows: rows
+                    ) {
+                        draftCommentCard(comment)
+                            .padding(.horizontal, 14)
+                    }
+                }
+            }
+            .padding(.vertical, 10)
+            .background(theme.color("bg-1"))
+            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+        }
+    }
+
+    private func draftCommentCard(_ comment: ReviewDraftComment) -> some View {
+        ReviewDraftCommentCard(
+            comment: comment,
+            file: file.summary,
+            isFocused: comment.id == focusedDraftCommentID,
+            actions: feedbackDraftCommentActions,
+            reviewFeedbackTarget: effectiveReviewFeedbackTarget,
+            onSelect: onSelectDraftComment,
+            onHoverChange: { isHovered in
+                hoveredDraftCommentID = isHovered ? comment.id : (hoveredDraftCommentID == comment.id ? nil : hoveredDraftCommentID)
+            }
+        )
+        .id(DiffReviewDraftCommentTargetID.targetID(commentID: comment.id, fileID: file.id))
     }
 
     @ViewBuilder
@@ -335,35 +363,68 @@ struct DiffReviewFileSection: View {
     }
 
     @ViewBuilder
-    private func inlineFeedbackStack(_ items: [DiffReviewInlineFeedback], file: DiffReviewFileSummary) -> some View {
+    private func inlineFeedbackStack(
+        _ items: [DiffReviewInlineFeedback],
+        file: DiffReviewFileSummary,
+        rows: [DiffDisplayRow]? = nil
+    ) -> some View {
         if !items.isEmpty {
             let display = DiffReviewInlineFeedbackDisplayPolicy.display(
                 for: items,
                 includingRequiredIDs: requiredInlineFeedbackIDs
             )
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(display.visibleItems) { item in
-                    DiffReviewInlineFeedbackCard(
-                        item: item,
-                        file: file,
-                        isFocused: item.id == focusedFeedbackID,
-                        actions: inlineFeedbackActions,
-                        onSelect: onSelectInlineFeedback,
-                        onHoverChange: { isHovered in
-                            hoveredInlineFeedbackID = isHovered ? item.id : (hoveredInlineFeedbackID == item.id ? nil : hoveredInlineFeedbackID)
+            if let rows {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(display.visibleItems) { item in
+                        DiffFeedbackLaneView(
+                            lane: DiffFeedbackLaneResolver.lane(for: item),
+                            layoutMode: layoutMode,
+                            rows: rows
+                        ) {
+                            inlineFeedbackCard(item, file: file)
+                                .padding(.horizontal, 14)
                         }
-                    )
-                    .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
+                    }
+                    if display.hiddenCount > 0 {
+                        DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
+                            .padding(.horizontal, 14)
+                    }
                 }
-                if display.hiddenCount > 0 {
-                    DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
+                .padding(.vertical, 10)
+                .background(theme.color("bg-1"))
+                .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(display.visibleItems) { item in
+                        inlineFeedbackCard(item, file: file)
+                    }
+                    if display.hiddenCount > 0 {
+                        DiffReviewInlineFeedbackMoreRow(hiddenCount: display.hiddenCount)
+                    }
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(theme.color("bg-1"))
+                .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(theme.color("bg-1"))
-            .overlay(Rectangle().fill(theme.color("line")).frame(height: 0.5), alignment: .bottom)
         }
+    }
+
+    private func inlineFeedbackCard(
+        _ item: DiffReviewInlineFeedback,
+        file: DiffReviewFileSummary
+    ) -> some View {
+        DiffReviewInlineFeedbackCard(
+            item: item,
+            file: file,
+            isFocused: item.id == focusedFeedbackID,
+            actions: inlineFeedbackActions,
+            onSelect: onSelectInlineFeedback,
+            onHoverChange: { isHovered in
+                hoveredInlineFeedbackID = isHovered ? item.id : (hoveredInlineFeedbackID == item.id ? nil : hoveredInlineFeedbackID)
+            }
+        )
+        .id(DiffReviewInlineFeedbackTargetID.targetID(feedbackID: item.id, fileID: file.id))
     }
 
     private var requiredInlineFeedbackIDs: Set<String> {
@@ -497,7 +558,11 @@ struct DiffReviewFileSection: View {
             VStack(spacing: 0) {
                 ForEach(renderContext.groups) { group in
                     if !group.inlineFeedback.isEmpty {
-                        inlineFeedbackStack(group.inlineFeedback, file: file.summary)
+                        inlineFeedbackStack(
+                            group.inlineFeedback,
+                            file: file.summary,
+                            rows: group.displayGroup.rows
+                        )
                     }
                     reviewGroup(group, displayModel: displayModel)
                 }
@@ -560,33 +625,45 @@ struct DiffReviewFileSection: View {
                                 )
                                 .fixedSize(horizontal: false, vertical: true)
                             case .thread(let thread):
-                                DiffInlineCommentCard(
-                                    thread: thread,
-                                    onReply: { body in onReply(thread, body) },
-                                    onStageReply: { body in onStageReply(thread, body) },
-                                    onResolve: { onResolve(thread) },
-                                    onUnresolve: { onUnresolve(thread) },
-                                    onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
-                                    onDelete: { comment in onDelete(thread, comment) },
-                                    canReply: canReply && thread.viewerCanReply,
-                                    canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
-                                    canAddToReview: canAddToReview,
-                                    onActiveChange: { active in
-                                        activeThreadID = active ? thread.id : (activeThreadID == thread.id ? nil : activeThreadID)
-                                    }
-                                )
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            case .annotation(let annotation):
-                                DiffInlineAnnotationCard(annotation: annotation)
+                                DiffFeedbackLaneView(
+                                    lane: DiffFeedbackLaneResolver.lane(for: thread),
+                                    layoutMode: layoutMode,
+                                    rows: segment.rows
+                                ) {
+                                    DiffInlineCommentCard(
+                                        thread: thread,
+                                        onReply: { body in onReply(thread, body) },
+                                        onStageReply: { body in onStageReply(thread, body) },
+                                        onResolve: { onResolve(thread) },
+                                        onUnresolve: { onUnresolve(thread) },
+                                        onEdit: { comment, newBody in onEdit(thread, comment, newBody) },
+                                        onDelete: { comment in onDelete(thread, comment) },
+                                        canReply: canReply && thread.viewerCanReply,
+                                        canResolve: canResolve && (thread.viewerCanResolve || thread.viewerCanUnresolve),
+                                        canAddToReview: canAddToReview,
+                                        onActiveChange: { active in
+                                            activeThreadID = active ? thread.id : (activeThreadID == thread.id ? nil : activeThreadID)
+                                        }
+                                    )
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            case .annotation(let annotation):
+                                DiffFeedbackLaneView(
+                                    lane: DiffFeedbackLaneResolver.lane(for: annotation),
+                                    layoutMode: layoutMode,
+                                    rows: segment.rows
+                                ) {
+                                    DiffInlineAnnotationCard(annotation: annotation)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
                         }
                     }
                     if !segment.draftComments.isEmpty {
-                        draftCommentStack(segment.draftComments)
+                        draftCommentStack(segment.draftComments, rows: segment.rows)
                     }
                     if segment.showsComposer {
-                        draftComposer
+                        draftComposer(rows: segment.rows)
                     }
                 }
             }
@@ -732,11 +809,15 @@ struct DiffReviewFileSection: View {
     }
 
     @ViewBuilder
-    private var draftComposer: some View {
-        if !allowsDraftCommentCreation {
-            EmptyView()
-        } else {
-            draftComposerBody
+    private func draftComposer(rows: [DiffDisplayRow]) -> some View {
+        if allowsDraftCommentCreation, let pendingDraftAnchor {
+            DiffFeedbackLaneView(
+                lane: DiffFeedbackLaneResolver.lane(for: pendingDraftAnchor),
+                layoutMode: layoutMode,
+                rows: rows
+            ) {
+                draftComposerBody
+            }
         }
     }
 
