@@ -355,7 +355,11 @@ struct AlasActionService {
             comment.resolvedBy = reopen ? nil : Self.cliAgentAuthor
             comment.updatedAt = timestamp
             try store.save(comment)
-            try recomputeHandoffProgress(worktreeID: origin.id, store: store, timestamp: timestamp)
+            // Best-effort: the comment mutation above already succeeded and
+            // must not be retried, so a failure recomputing handoff/session
+            // status (a separate store) is swallowed rather than reported
+            // as an overall failure a caller would retry.
+            try? recomputeHandoffProgress(worktreeID: origin.id, store: store, timestamp: timestamp)
         } catch {
             return .error("could not update review comment: \(error.localizedDescription)")
         }

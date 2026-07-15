@@ -1012,6 +1012,42 @@ struct AlasCLICommandRouterTests {
         #expect(record.handoffs.map(\.status) == [.sent])
     }
 
+    private struct FailingReviewSessionPersistenceStore: PersistenceStoreProtocol {
+        struct Failure: Error {}
+        func write<T: Encodable>(_ value: T, to url: URL) throws { throw Failure() }
+        func readIfExists<T: Decodable>(_ type: T.Type, from url: URL) throws -> T? { throw Failure() }
+    }
+
+    @Test func resolveSucceedsAndNotifiesEvenWhenHandoffRecomputationFails() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let store = ReviewDraftCommentStore(url: dir.appendingPathComponent("drafts.json"))
+        try store.save(makeDraftComment(id: "c1", worktreeID: "wt1"))
+        let brokenSessionStore = ReviewSessionStore(
+            store: FailingReviewSessionPersistenceStore(),
+            url: dir.appendingPathComponent("sessions.json")
+        )
+        var changed = 0
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store, sessionStore: brokenSessionStore, onChange: { changed += 1 }
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.resolve(commentID: "c1", reply: "fixed", reopen: false))
+        ))
+
+        #expect(response == .ok)
+        #expect(changed == 1)
+        let updated = try #require(try store.find(commentID: "c1"))
+        #expect(updated.state == .resolved)
+        #expect(updated.allReplies.map(\.bodyMarkdown) == ["fixed"])
+    }
+
     @Test func mutationsRejectCommentsFromOtherWorktrees() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(
