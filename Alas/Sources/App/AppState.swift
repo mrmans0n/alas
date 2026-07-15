@@ -1819,6 +1819,13 @@ final class AppState {
         }
     }
 
+    /// Caches the loaded file summaries of a provider review, keyed by its
+    /// draft session id, so repeated `review_comment_add` calls in the same
+    /// review share one `gh`/`glab diff` fetch. Best-effort and never
+    /// invalidated: rename mappings rarely change mid-review, and a miss
+    /// simply falls back to nil (today's behavior).
+    private var providerReviewFileSummaryCache: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:]
+
     func makeCLICommandRouter(
         sessionWorktreeLookup: @escaping (String) -> String?
     ) -> AlasCLICommandRouter {
@@ -1869,6 +1876,9 @@ final class AppState {
             openProviderReview: { [weak self] worktree, target in
                 guard let self else { return .error("Alas is not available.") }
                 return await self.cliOpenProviderReview(worktree: worktree, target: target)
+            },
+            providerReviewOriginalPath: { [weak self] sessionID, relativePath in
+                await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
@@ -3573,21 +3583,7 @@ final class AppState {
 
         do {
             let providerRegistry = CodeHostProviderRegistry.live()
-            let remotes = try await GitService().remotes(worktreePath: worktree.path)
-            let baseBranch = rightPaneStore.state(
-                for: worktree,
-                baseBranch: config.worktrees.baseBranch,
-                comparisonMode: config.changes.comparisonMode
-            ).baseBranch
-            let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-                forBaseBranch: baseBranch,
-                remotes: remotes
-            )
-            let supportedRemotes = CodeHostRemoteDetector.detectAll(
-                from: remotes,
-                supportedKinds: providerRegistry.supportedKinds,
-                preferredRemoteName: preferredRemoteName
-            )
+            let supportedRemotes = try await cliSupportedRemotes(for: worktree, registry: providerRegistry)
             guard !supportedRemotes.isEmpty else {
                 return .error("no code host remote found for this worktree")
             }
@@ -3643,6 +3639,76 @@ final class AppState {
             ])
         } catch {
             return .error(Self.describeCLIError(error))
+        }
+    }
+
+    /// Supported code-host remotes for `worktree`, ordered with the preferred
+    /// remote (derived from the base branch) first. Shared by
+    /// `cliOpenProviderReview` and the review-comment original-path resolver.
+    private func cliSupportedRemotes(
+        for worktree: Worktree,
+        registry: CodeHostProviderRegistry
+    ) async throws -> [CodeHostRemote] {
+        let remotes = try await GitService().remotes(worktreePath: worktree.path)
+        let baseBranch = rightPaneStore.state(
+            for: worktree,
+            baseBranch: config.worktrees.baseBranch,
+            comparisonMode: config.changes.comparisonMode
+        ).baseBranch
+        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
+            forBaseBranch: baseBranch,
+            remotes: remotes
+        )
+        return CodeHostRemoteDetector.detectAll(
+            from: remotes,
+            supportedKinds: registry.supportedKinds,
+            preferredRemoteName: preferredRemoteName
+        )
+    }
+
+    /// Resolves the pre-rename `originalPath` for `relativePath` in the
+    /// provider review identified by `sessionID`, by loading the review's
+    /// diff (cached per session). Returns nil on any failure — a nil
+    /// `originalPath` is exactly the prior behavior, so this never blocks or
+    /// alters filing a comment.
+    func reviewRequestOriginalPath(
+        forDraftSessionID sessionID: ReviewDraftSessionID,
+        relativePath: String
+    ) async -> String? {
+        if let cached = providerReviewFileSummaryCache[sessionID] {
+            return ProviderReviewOriginalPathResolver.originalPath(forRelativePath: relativePath, in: cached)
+        }
+        do {
+            // Find the persisted review session record for this draft session.
+            let sessionStore = ReviewSessionStore()
+            let allWorktrees = projects.flatMap { projectsManager.visibleWorktrees(projectId: $0.id) }
+            var record: ReviewSessionRecord?
+            for worktree in allWorktrees where sessionID.isFor(worktreeID: worktree.id) {
+                record = try sessionStore.list(worktreeID: worktree.id)
+                    .first(where: { $0.target.draftSessionID == sessionID })
+                if record != nil { break }
+            }
+            guard let record,
+                  case .reviewRequest(_, let host, let repositorySlug, let number, _) = record.target.payload,
+                  let worktree = worktree(withId: record.target.worktreeID) else {
+                return nil
+            }
+
+            let registry = CodeHostProviderRegistry.live()
+            let supportedRemotes = try await cliSupportedRemotes(for: worktree, registry: registry)
+            let remote = supportedRemotes.first(where: {
+                $0.host == host && $0.repositorySlug.lowercased() == repositorySlug.lowercased()
+            }) ?? supportedRemotes.first
+            guard let remote, let provider = registry.provider(for: remote.kind) else { return nil }
+
+            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+            let loaded = try await ReviewRequestDiffLoader(provider: provider)
+                .load(remote: remote, request: request, cwd: worktree.path)
+            let files = loaded.summary.files
+            providerReviewFileSummaryCache[sessionID] = files
+            return ProviderReviewOriginalPathResolver.originalPath(forRelativePath: relativePath, in: files)
+        } catch {
+            return nil
         }
     }
 
