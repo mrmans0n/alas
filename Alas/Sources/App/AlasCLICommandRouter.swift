@@ -25,6 +25,7 @@ struct AlasCLICommandRouter {
     }
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
+    var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -42,6 +43,7 @@ struct AlasCLICommandRouter {
             notifyReviewCommentsChanged: notifyReviewCommentsChanged,
             now: now,
             gitStatus: gitStatus,
+            providerReviewOriginalPath: providerReviewOriginalPath,
             activateApp: activateApp
         )
     }
