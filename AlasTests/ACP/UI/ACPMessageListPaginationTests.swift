@@ -174,22 +174,6 @@ struct ACPMessageListPaginationTests {
         #expect(ACPMessageList.topVisibleAnchorID(in: frames) == "first")
     }
 
-    @Test("top visible scroll target ignores non-message targets")
-    func topVisibleScrollTargetIgnoresNonMessageTargets() {
-        #expect(ACPMessageList.topVisibleScrollTargetID(
-            in: ["__pending_perm__", "message-2", "message-3"],
-            visibleMessageIds: ["message-1", "message-2", "message-3"]
-        ) == "message-2")
-    }
-
-    @Test("top visible scroll target returns nil without visible messages")
-    func topVisibleScrollTargetReturnsNilWithoutMessages() {
-        #expect(ACPMessageList.topVisibleScrollTargetID(
-            in: ["__pending_question__", "__composer_spacer__"],
-            visibleMessageIds: ["message-1"]
-        ) == nil)
-    }
-
     @Test("row frame preferences are legacy-only")
     func rowFramePreferencesAreLegacyOnly() {
         #expect(ACPMessageList.shouldUseLegacyRowFramePreferences(
@@ -211,6 +195,74 @@ struct ACPMessageListPaginationTests {
         #expect(!lookup.contains("message-39"))
         #expect(lookup.transcriptIndex(for: "message-41") == 41)
         #expect(lookup.firstStableId == "message-40")
+    }
+
+    @Test("tail pause anchor selection prefers sampled anchors before fallback")
+    func tailPauseAnchorSelectionUsesSampledAnchorBeforeFallback() {
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40"),
+            (index: 41, stableId: "message-41")
+        ])
+
+        #expect(ACPMessageList.rememberedAnchorWhenPausingTailFollow(
+            latestTopVisibleAnchor: "message-41",
+            lookup: lookup,
+            allowFirstRenderedAnchorFallback: true
+        ) == "message-41")
+        #expect(ACPMessageList.rememberedAnchorWhenPausingTailFollow(
+            latestTopVisibleAnchor: nil,
+            lookup: lookup,
+            allowFirstRenderedAnchorFallback: true
+        ) == "message-40")
+        #expect(ACPMessageList.rememberedAnchorWhenPausingTailFollow(
+            latestTopVisibleAnchor: "message-41",
+            lookup: lookup,
+            allowFirstRenderedAnchorFallback: false
+        ) == "message-41")
+        #expect(ACPMessageList.rememberedAnchorWhenPausingTailFollow(
+            latestTopVisibleAnchor: "stale-message",
+            lookup: lookup,
+            allowFirstRenderedAnchorFallback: true
+        ) == "message-40")
+        #expect(ACPMessageList.rememberedAnchorWhenPausingTailFollow(
+            latestTopVisibleAnchor: nil,
+            lookup: lookup,
+            allowFirstRenderedAnchorFallback: false
+        ) == nil)
+    }
+
+    @Test("first rendered anchor fallback is used only near the rendered window start")
+    func firstRenderedAnchorFallbackRequiresWindowStart() {
+        #expect(ACPMessageList.shouldUseFirstRenderedAnchorFallback(
+            newMinY: 0,
+            threshold: 1
+        ))
+        #expect(ACPMessageList.shouldUseFirstRenderedAnchorFallback(
+            newMinY: 1,
+            threshold: 1
+        ))
+        #expect(!ACPMessageList.shouldUseFirstRenderedAnchorFallback(
+            newMinY: 120,
+            threshold: 1
+        ))
+    }
+
+    @Test("tail forward preservation prefers sampled anchor before first row")
+    func tailForwardPreservationUsesSampledAnchorBeforeFallback() {
+        let lookup = ACPMessageList.visibleMessageLookup(rows: [
+            (index: 40, stableId: "message-40"),
+            (index: 41, stableId: "message-41"),
+            (index: 42, stableId: "message-42")
+        ])
+
+        #expect(ACPMessageList.anchorForTailForwardPreservation(
+            latestTopVisibleAnchor: "message-41",
+            lookup: lookup
+        ) == "message-41")
+        #expect(ACPMessageList.anchorForTailForwardPreservation(
+            latestTopVisibleAnchor: "stale-message",
+            lookup: lookup
+        ) == "message-40")
     }
 
     @Test("visible rows contain only transcript indices and stable ids")

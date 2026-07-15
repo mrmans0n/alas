@@ -40,6 +40,7 @@ struct ACPMessageList: View {
     @State private var latestRememberedScrollAnchorIndex: Int?
     @State private var restoredRememberedAnchor: String?
     @State private var pendingTailScrollTask: Task<Void, Never>?
+    @State private var modernRowFrames: [String: CGRect] = [:]
 
     /// Height of an invisible spacer at the tail of the transcript stack. The
     /// composer pill plus its outer padding occupies roughly this much
@@ -50,6 +51,10 @@ struct ACPMessageList: View {
     /// Step the visible head back when the "Earlier messages…" marker
     /// crosses this many points from the top edge during scroll.
     private let headStepScrollThreshold: CGFloat = 200
+    /// `visibleMessageLookup.firstStableId` is safe to persist only when the
+    /// viewport is effectively at the start of the rendered window. Otherwise
+    /// it may be older than the row the user actually stopped on.
+    private let firstRenderedAnchorFallbackThreshold: CGFloat = 1
     /// Minimum gap between automatic head-back steps so a single scroll
     /// doesn't decrement multiple times before layout settles.
     private let headStepDebounceInterval: TimeInterval = 0.3
@@ -211,7 +216,6 @@ struct ACPMessageList: View {
                     .padding(.top, 24)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .environment(\.openURL, openTranscriptURLAction)
-                    .modifier(ACPScrollTargetLayoutTracking())
                 }
                 .coordinateSpace(.named(scrollSpaceName))
                 .modifier(ACPTranscriptScrollTracking(
@@ -231,9 +235,6 @@ struct ACPMessageList: View {
                             contentHeight: new.contentHeight,
                             proxy: proxy)
                     }
-                ))
-                .modifier(ACPScrollTargetVisibilityTracking(
-                    onVisibleTargetIDs: { ids in handleVisibleTargetIDs(ids, proxy: proxy) }
                 ))
                 .onAppear {
                     restoreTailIfNeeded(proxy: proxy, animated: false)
@@ -418,25 +419,34 @@ struct ACPMessageList: View {
         }
     }
 
-    private func setFollowsTranscriptTail(_ follows: Bool) {
-        guard session.followsTranscriptTail != follows else { return }
-        session.followsTranscriptTail = follows
+    private func setFollowsTranscriptTail(
+        _ follows: Bool,
+        allowFirstRenderedAnchorFallback: Bool = true
+    ) {
         if follows {
+            guard !session.followsTranscriptTail else { return }
+            session.followsTranscriptTail = true
             transcript.resetWindowToTail()
             onRememberScrollAnchor(nil, nil, true)
             latestRememberedScrollAnchorIndex = nil
         } else {
+            session.followsTranscriptTail = false
             pendingTailScrollTask?.cancel()
             pendingTailScrollTask = nil
             let lookup = visibleMessageLookup
-            let anchorIndex = lookup.transcriptIndex(for: latestTopVisibleAnchor.value)
+            let anchor = Self.rememberedAnchorWhenPausingTailFollow(
+                latestTopVisibleAnchor: latestTopVisibleAnchor.value,
+                lookup: lookup,
+                allowFirstRenderedAnchorFallback: allowFirstRenderedAnchorFallback
+            )
+            let anchorIndex = lookup.transcriptIndex(for: anchor)
             onRememberScrollAnchor(
-                latestTopVisibleAnchor.value,
+                anchor,
                 anchorIndex,
                 false
             )
             latestRememberedScrollAnchorIndex = anchorIndex
-            restoredRememberedAnchor = latestTopVisibleAnchor.value
+            restoredRememberedAnchor = anchor
         }
     }
 
@@ -468,25 +478,40 @@ struct ACPMessageList: View {
         restoredRememberedAnchor = anchor
     }
 
-    private func handleVisibleTargetIDs(_ ids: [String], proxy: ScrollViewProxy) {
+    private func handleModernRowFrame(id: String, frame: CGRect) {
         let lookup = visibleMessageLookup
-        guard let anchor = Self.topVisibleScrollTargetID(
-            in: ids,
-            visibleMessageIds: lookup.ids
-        ) else { return }
+        modernRowFrames = modernRowFrames.filter { lookup.contains($0.key) }
+        if lookup.contains(id), frame.height > 0, frame.maxY > 0 {
+            modernRowFrames[id] = frame
+        } else {
+            modernRowFrames.removeValue(forKey: id)
+        }
+        guard let anchor = Self.topVisibleAnchorID(in: modernRowFrames) else { return }
         let anchorChanged = latestTopVisibleAnchor.value != anchor
         if anchorChanged {
             latestTopVisibleAnchor.value = anchor
         }
-        guard !isRestoringTail, !session.followsTranscriptTail else { return }
+        guard !isRestoringTail else { return }
+        guard !session.followsTranscriptTail else { return }
+        guard !transcript.isBackfillingOlderMessages else { return }
         let rememberedAnchor = rememberedScrollAnchor()
         let anchorIndex = lookup.transcriptIndex(for: anchor)
         let anchorIndexChanged = rememberedAnchor == anchor && latestRememberedScrollAnchorIndex != anchorIndex
         guard anchorChanged || rememberedAnchor != anchor || anchorIndexChanged else { return }
-        guard !transcript.isBackfillingOlderMessages else { return }
         onRememberScrollAnchor(anchor, anchorIndex, false)
         latestRememberedScrollAnchorIndex = anchorIndex
         restoredRememberedAnchor = anchor
+    }
+
+    private func pauseTailFollowFromGeometry(newMinY: CGFloat) {
+        let shouldUseWindowStartFallback = Self.shouldUseFirstRenderedAnchorFallback(
+            newMinY: newMinY,
+            threshold: firstRenderedAnchorFallbackThreshold
+        )
+        setFollowsTranscriptTail(
+            false,
+            allowFirstRenderedAnchorFallback: shouldUseWindowStartFallback
+        )
     }
 
     private func stepTailForwardPreservingScroll(
@@ -498,7 +523,10 @@ struct ACPMessageList: View {
         let now = Date()
         guard now.timeIntervalSince(lastTailStepAt) > headStepDebounceInterval else { return }
         lastTailStepAt = now
-        let anchorId = latestTopVisibleAnchor.value ?? lookup.firstStableId
+        let anchorId = Self.anchorForTailForwardPreservation(
+            latestTopVisibleAnchor: latestTopVisibleAnchor.value,
+            lookup: lookup
+        )
         let anchorIndex = lookup.transcriptIndex(for: anchorId)
         isRestoringTail = true
         transcript.stepTailForward(preserving: anchorIndex)
@@ -522,14 +550,20 @@ struct ACPMessageList: View {
         }
     }
 
-    private func handleAtBottom(proxy: ScrollViewProxy, shouldPageHiddenTail: Bool) {
+    private func handleAtBottom(
+        proxy: ScrollViewProxy,
+        shouldPageHiddenTail: Bool
+    ) {
         if Self.shouldResumeTailFollowAtBottom(
             visibleTail: transcript.visibleTailBound,
             messageCount: transcript.messages.count
         ) {
             setFollowsTranscriptTail(true)
         } else if shouldPageHiddenTail {
-            stepTailForwardPreservingScroll(proxy: proxy, lookup: visibleMessageLookup)
+            stepTailForwardPreservingScroll(
+                proxy: proxy,
+                lookup: visibleMessageLookup
+            )
         }
     }
 
@@ -539,7 +573,7 @@ struct ACPMessageList: View {
             if Self.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: true) {
                 legacyRowFrameReporter(id: id)
             } else {
-                EmptyView()
+                modernRowFrameReporter(id: id)
             }
         } else if Self.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: false) {
             legacyRowFrameReporter(id: id)
@@ -554,6 +588,15 @@ struct ACPMessageList: View {
                 key: ACPRowFramesPreferenceKey.self,
                 value: [id: rowGeometry.frame(in: .named(scrollSpaceName))]
             )
+        }
+    }
+
+    @available(macOS 15, *)
+    private func modernRowFrameReporter(id: String) -> some View {
+        Color.clear.onGeometryChange(for: CGRect.self) { rowGeometry in
+            rowGeometry.frame(in: .named(scrollSpaceName))
+        } action: { frame in
+            handleModernRowFrame(id: id, frame: frame)
         }
     }
 
@@ -703,13 +746,6 @@ struct ACPMessageList: View {
             .key
     }
 
-    nonisolated static func topVisibleScrollTargetID(
-        in ids: [String],
-        visibleMessageIds: Set<String>
-    ) -> String? {
-        ids.first { visibleMessageIds.contains($0) }
-    }
-
     nonisolated static func shouldUseLegacyRowFramePreferences(
         isModernScrollTrackingAvailable: Bool
     ) -> Bool {
@@ -770,6 +806,31 @@ struct ACPMessageList: View {
             indexByStableId: indexByStableId,
             firstStableId: rows.first?.stableId
         )
+    }
+
+    nonisolated static func rememberedAnchorWhenPausingTailFollow(
+        latestTopVisibleAnchor: String?,
+        lookup: VisibleMessageLookup,
+        allowFirstRenderedAnchorFallback: Bool
+    ) -> String? {
+        if lookup.contains(latestTopVisibleAnchor) { return latestTopVisibleAnchor }
+        guard allowFirstRenderedAnchorFallback else { return nil }
+        return lookup.firstStableId
+    }
+
+    nonisolated static func shouldUseFirstRenderedAnchorFallback(
+        newMinY: CGFloat,
+        threshold: CGFloat
+    ) -> Bool {
+        newMinY.isFinite && newMinY <= threshold
+    }
+
+    nonisolated static func anchorForTailForwardPreservation(
+        latestTopVisibleAnchor: String?,
+        lookup: VisibleMessageLookup
+    ) -> String? {
+        if lookup.contains(latestTopVisibleAnchor) { return latestTopVisibleAnchor }
+        return lookup.firstStableId
     }
 
     nonisolated static func shouldRememberVisibleAnchor(
@@ -843,7 +904,8 @@ struct ACPMessageList: View {
             isUserDriven: isUserDriven
         )
         switch decision {
-        case .userScrolledUp: setFollowsTranscriptTail(false)
+        case .userScrolledUp:
+            pauseTailFollowFromGeometry(newMinY: newMinY)
         case .userAtBottom:
             handleAtBottom(
                 proxy: proxy,
@@ -1012,32 +1074,6 @@ private struct ACPRowFramePreferenceTracking: ViewModifier {
             }
         } else if ACPMessageList.shouldUseLegacyRowFramePreferences(isModernScrollTrackingAvailable: false) {
             content.onPreferenceChange(ACPRowFramesPreferenceKey.self, perform: onFrames)
-        } else {
-            content
-        }
-    }
-}
-
-private struct ACPScrollTargetLayoutTracking: ViewModifier {
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content.scrollTargetLayout()
-        } else {
-            content
-        }
-    }
-}
-
-private struct ACPScrollTargetVisibilityTracking: ViewModifier {
-    let onVisibleTargetIDs: ([String]) -> Void
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 15, *) {
-            content.onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
-                onVisibleTargetIDs(ids)
-            }
         } else {
             content
         }
