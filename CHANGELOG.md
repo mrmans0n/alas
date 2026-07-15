@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-15
+
+### ✨ Features
+
+- Expose the `alas` CLI as a built-in MCP server and auto-inject it into ACP sessions (#786).
+
 ## [0.10.7] - 2026-07-14
 
 ### ✨ Features
