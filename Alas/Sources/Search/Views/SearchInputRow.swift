@@ -16,6 +16,11 @@ struct SearchInputRow: View {
                 .font(.system(size: 15))
                 .foregroundColor(theme.color("fg"))
                 .autocorrectionDisabled(true)
+            if model.isLoading {
+                Spinner(lineWidth: 1.5, duration: 0.7)
+                    .frame(width: 12, height: 12)
+                    .accessibilityLabel("Searching")
+            }
             if !model.query.isEmpty {
                 Button {
                     model.query = ""

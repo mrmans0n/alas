@@ -18,6 +18,9 @@ struct SearchEnvironment: Sendable {
     var entries: @Sendable (SearchWorktree) async throws -> [FileIndex.Entry]
     var statuses: @Sendable (SearchWorktree) async throws -> [String: GitStatusBadge]
     var fileSearch: @Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?
+    var rankFiles: @Sendable (
+        String, [FileSearchRankingSource]
+    ) async throws -> [FileSearchResult]
     var contentSearch: @Sendable (
         String, SearchContentOptions, [SearchWorktree]
     ) -> AsyncThrowingStream<ContentSearchHit, Error>
@@ -51,7 +54,7 @@ final class SearchModel {
         didSet { if isOpen { onQueryChanged() } }
     }
     var contentOptions: SearchContentOptions = SearchContentOptions() {
-        didSet { if kind == .content { reschedule() } }
+        didSet { if isOpen && kind == .content { reschedule() } }
     }
     var kind: SearchKind = .files {
         didSet { if isOpen { reschedule() } }
@@ -114,10 +117,13 @@ final class SearchModel {
 
     func close() {
         isOpen = false
+        taskGeneration &+= 1
         searchTask?.cancel()
         searchTask = nil
+        isLoading = false
         results = SearchResults()
         query = ""
+        signalIdle()
     }
 
     func toggleKind() {
@@ -148,6 +154,7 @@ final class SearchModel {
         let snapshotKind = kind
         let snapshotScope = scope
         let snapshotQuery = trimmedQuery
+        let snapshotContentOptions = contentOptions
         taskGeneration &+= 1
         let myGeneration = taskGeneration
 
@@ -156,19 +163,25 @@ final class SearchModel {
             let debounce = (snapshotKind == .files) ? self.fileDebounce : self.contentDebounce
             try? await Task.sleep(nanoseconds: debounce)
             if Task.isCancelled { return }
-            await self.runSearch(kind: snapshotKind, scope: snapshotScope, query: snapshotQuery)
-            if Task.isCancelled { return }
-            self.signalIdle()
-            // Only clear if no newer reschedule has supplanted this one.
-            if self.taskGeneration == myGeneration {
-                self.searchTask = nil
-            }
+            await self.runSearch(
+                kind: snapshotKind,
+                scope: snapshotScope,
+                query: snapshotQuery,
+                contentOptions: snapshotContentOptions,
+                taskGeneration: myGeneration
+            )
         }
     }
 
-    private func runSearch(kind: SearchKind, scope: SearchScope, query: String) async {
+    private func runSearch(
+        kind: SearchKind,
+        scope: SearchScope,
+        query: String,
+        contentOptions: SearchContentOptions,
+        taskGeneration: Int
+    ) async {
+        guard isCurrent(taskGeneration) else { return }
         isLoading = true
-        defer { isLoading = false }
 
         let targets: [SearchWorktree]
         switch scope {
@@ -185,190 +198,66 @@ final class SearchModel {
 
         switch kind {
         case .files:
-            await runFileSearch(query: query, targets: targets)
+            await runFileSearch(query: query, targets: targets, taskGeneration: taskGeneration)
         case .content:
-            await runContentSearch(query: query, targets: targets)
+            await runContentSearch(
+                query: query,
+                options: contentOptions,
+                targets: targets,
+                taskGeneration: taskGeneration
+            )
         }
 
+        guard isCurrent(taskGeneration) else { return }
         if selectedIndex >= totalResultRows {
             moveSelection(to: 0)
         }
+        isLoading = false
+        searchTask = nil
+        signalIdle()
     }
 
-    private func runFileSearch(query: String, targets: [SearchWorktree]) async {
-        var rows: [FileSearchResult] = []
+    private func runFileSearch(
+        query: String,
+        targets: [SearchWorktree],
+        taskGeneration: Int
+    ) async {
+        var sources: [FileSearchRankingSource] = []
         var failures: [String] = []
-        var sinceCancelCheck = 0
         for wt in targets {
+            async let statusTask = env.statuses(wt)
+            async let entriesTask = env.entries(wt)
+            let backendResults: [FileSearchBackendResult]?
+            if Self.canUseFileSearchBackend(query: query) {
+                backendResults = try? await env.fileSearch(query, wt)
+            } else {
+                backendResults = nil
+            }
+            let entries: [FileIndex.Entry]
             do {
-                async let statusTask = env.statuses(wt)
-                async let candidateRowsTask = fileSearchCandidateRows(query: query, worktree: wt)
-
-                let candidateRows = try await candidateRowsTask
-                let statuses = (try? await statusTask) ?? [:]
-                if case let .backend(backendRows) = candidateRows {
-                    appendBackendRows(backendRows, worktree: wt, statuses: statuses, into: &rows)
-                    try await appendBackendOmittedFallbackRows(
-                        query: query,
-                        backendRows: backendRows,
-                        worktree: wt,
-                        statuses: statuses,
-                        into: &rows,
-                        sinceCancelCheck: &sinceCancelCheck
-                    )
-                    continue
-                }
-
-                guard case let .entries(entries) = candidateRows else {
-                    continue
-                }
-                if Task.isCancelled { return }
-
-                for entry in entries {
-                    // Cooperative cancellation inside the scoring loop —
-                    // a large worktree (or `.allRepos`) can have tens of
-                    // thousands of entries; without periodic checks a
-                    // stale task keeps scoring and overwrites a newer
-                    // task's results when it eventually publishes.
-                    sinceCancelCheck &+= 1
-                    if sinceCancelCheck >= 256 {
-                        sinceCancelCheck = 0
-                        if Task.isCancelled { return }
-                    }
-                    let badge = statuses[entry.relativePath]
-                    if query.isEmpty {
-                        rows.append(FileSearchResult(
-                            worktreeId: wt.id,
-                            projectId: wt.projectId,
-                            relativePath: entry.relativePath,
-                            ext: entry.ext,
-                            statusBadge: badge,
-                            matchIndices: [],
-                            score: badge != nil ? 100 : 0
-                        ))
-                    } else if let m = FuzzyMatch.score(query: query, target: entry.relativePath) {
-                        let slash = entry.relativePath.lastIndex(of: "/")
-                        let prefixLen = slash.map { entry.relativePath.distance(from: entry.relativePath.startIndex, to: $0) + 1 } ?? 0
-                        let inName = m.indices.allSatisfy { $0 >= prefixLen }
-                        let score = m.score + (inName ? 8 : 0) + (badge != nil ? 2 : 0)
-                        rows.append(FileSearchResult(
-                            worktreeId: wt.id,
-                            projectId: wt.projectId,
-                            relativePath: entry.relativePath,
-                            ext: entry.ext,
-                            statusBadge: badge,
-                            matchIndices: m.indices,
-                            score: score
-                        ))
-                    }
-                }
+                entries = try await entriesTask
             } catch {
                 failures.append(wt.displayName)
+                entries = []
             }
+            let statuses = (try? await statusTask) ?? [:]
+            sources.append(FileSearchRankingSource(
+                worktreeId: wt.id,
+                projectId: wt.projectId,
+                entries: entries,
+                backendResults: backendResults,
+                statuses: statuses
+            ))
         }
 
-        if query.isEmpty {
-            // Status-tagged files first, then alphabetical.
-            rows.sort { lhs, rhs in
-                if (lhs.statusBadge != nil) != (rhs.statusBadge != nil) {
-                    return lhs.statusBadge != nil
-                }
-                return lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
-            }
-        } else {
-            rows.sort { $0.score > $1.score }
-        }
-
-        let capped = Array(rows.prefix(50))
-        // Final cancellation check before publishing — stops a stale task
-        // from clobbering a newer query's results during the time we spent
-        // sorting/capping.
-        if Task.isCancelled { return }
-        results = SearchResults(
-            fileResults: capped,
+        guard let rows = try? await env.rankFiles(query, sources) else { return }
+        publish(SearchResults(
+            fileResults: rows,
             contentGroups: [],
             partialFailureMessage: failures.isEmpty
                 ? nil
                 : "Couldn't read files for \(failures.joined(separator: ", "))"
-        )
-    }
-
-    private func appendBackendRows(
-        _ backendRows: [FileSearchBackendResult],
-        worktree wt: SearchWorktree,
-        statuses: [String: GitStatusBadge],
-        into rows: inout [FileSearchResult]
-    ) {
-        rows.append(contentsOf: backendRows.map { row in
-            let ext = (row.relativePath as NSString).pathExtension.lowercased()
-            return FileSearchResult(
-                worktreeId: wt.id,
-                projectId: wt.projectId,
-                relativePath: row.relativePath,
-                ext: ext,
-                statusBadge: statuses[row.relativePath],
-                matchIndices: row.matchIndices,
-                score: row.score + (statuses[row.relativePath] != nil ? 2 : 0)
-            )
-        })
-    }
-
-    private func appendBackendOmittedFallbackRows(
-        query: String,
-        backendRows: [FileSearchBackendResult],
-        worktree wt: SearchWorktree,
-        statuses: [String: GitStatusBadge],
-        into rows: inout [FileSearchResult],
-        sinceCancelCheck: inout Int
-    ) async throws {
-        let backendPaths = Set(backendRows.map(\.relativePath))
-        let entries = try await env.entries(wt)
-        for entry in entries where !backendPaths.contains(entry.relativePath) {
-            sinceCancelCheck &+= 1
-            if sinceCancelCheck >= 256 {
-                sinceCancelCheck = 0
-                if Task.isCancelled { return }
-            }
-
-            let badge = statuses[entry.relativePath]
-            if query.isEmpty {
-                rows.append(FileSearchResult(
-                    worktreeId: wt.id,
-                    projectId: wt.projectId,
-                    relativePath: entry.relativePath,
-                    ext: entry.ext,
-                    statusBadge: badge,
-                    matchIndices: [],
-                    score: badge != nil ? 100 : 0
-                ))
-            } else if let match = FuzzyMatch.score(query: query, target: entry.relativePath) {
-                let slash = entry.relativePath.lastIndex(of: "/")
-                let prefixLen = slash.map { entry.relativePath.distance(from: entry.relativePath.startIndex, to: $0) + 1 } ?? 0
-                let inName = match.indices.allSatisfy { $0 >= prefixLen }
-                rows.append(FileSearchResult(
-                    worktreeId: wt.id,
-                    projectId: wt.projectId,
-                    relativePath: entry.relativePath,
-                    ext: entry.ext,
-                    statusBadge: badge,
-                    matchIndices: match.indices,
-                    score: match.score + (inName ? 8 : 0) + (badge != nil ? 2 : 0)
-                ))
-            }
-        }
-    }
-
-    private enum FileSearchCandidateRows {
-        case backend([FileSearchBackendResult])
-        case entries([FileIndex.Entry])
-    }
-
-    private func fileSearchCandidateRows(query: String, worktree wt: SearchWorktree) async throws -> FileSearchCandidateRows {
-        if Self.canUseFileSearchBackend(query: query),
-           let backendRows = try? await env.fileSearch(query, wt) {
-            return .backend(backendRows)
-        }
-        return .entries(try await env.entries(wt))
+        ), taskGeneration: taskGeneration)
     }
 
     private static func canUseFileSearchBackend(query: String) -> Bool {
@@ -377,12 +266,17 @@ final class SearchModel {
             .contains { $0.count >= 2 }
     }
 
-    private func runContentSearch(query: String, targets: [SearchWorktree]) async {
+    private func runContentSearch(
+        query: String,
+        options: SearchContentOptions,
+        targets: [SearchWorktree],
+        taskGeneration: Int
+    ) async {
         // Empty content queries match everything; rg would scan the whole
         // worktree for nothing useful. Short-circuit to a clean state so the
         // empty-state copy renders instead.
         guard !query.isEmpty else {
-            results = SearchResults()
+            publish(SearchResults(), taskGeneration: taskGeneration)
             return
         }
 
@@ -393,15 +287,15 @@ final class SearchModel {
         // is ICU-regex; rg uses Rust's regex crate. Most simple patterns
         // (`[`, `(`, `\?`) are flagged identically; for exotic features
         // they may diverge, in which case this just falls through to rg.
-        if contentOptions.regex {
+        if options.regex {
             do {
                 _ = try NSRegularExpression(pattern: query, options: [])
             } catch {
-                results = SearchResults(
+                publish(SearchResults(
                     fileResults: [],
                     contentGroups: [],
                     partialFailureMessage: "Invalid regex pattern."
-                )
+                ), taskGeneration: taskGeneration)
                 return
             }
         }
@@ -418,9 +312,9 @@ final class SearchModel {
         var totalHits = 0
 
         do {
-            let stream = env.contentSearch(query, contentOptions, targets)
+            let stream = env.contentSearch(query, options, targets)
             for try await hit in stream {
-                if Task.isCancelled { return }
+                guard isCurrent(taskGeneration) else { return }
 
                 let key = hit.groupKey
                 if let idx = groupIndex[key] {
@@ -443,39 +337,35 @@ final class SearchModel {
 
                 // Push partial results every 25 hits so the UI animates.
                 if totalHits % partialEvery == 0 {
-                    results = SearchResults(
+                    publish(SearchResults(
                         fileResults: [],
                         contentGroups: groups,
                         partialFailureMessage: nil
-                    )
+                    ), taskGeneration: taskGeneration)
                 }
 
                 if totalHits >= maxHits { break }
             }
-            // Final flush — but only if we haven't been superseded by a
-            // newer query. Otherwise the about-to-be-overwritten newer
-            // task's results would be clobbered with our stale snapshot.
-            if Task.isCancelled { return }
-            results = SearchResults(
+            publish(SearchResults(
                 fileResults: [],
                 contentGroups: groups,
                 partialFailureMessage: nil
-            )
+            ), taskGeneration: taskGeneration)
         } catch ContentSearcher.SearchError.rgNotFound {
-            results = SearchResults(
+            publish(SearchResults(
                 fileResults: [],
                 contentGroups: [],
                 partialFailureMessage: "Install ripgrep (`brew install ripgrep`) to enable content search."
-            )
+            ), taskGeneration: taskGeneration)
         } catch ContentSearcher.SearchError.regexInvalid {
             // rg's stderr-detected regex parse error — covers patterns
             // that the up-front NSRegularExpression preflight accepted
             // but rg's Rust regex rejects (look-around, backrefs).
-            results = SearchResults(
+            publish(SearchResults(
                 fileResults: [],
                 contentGroups: [],
                 partialFailureMessage: "Invalid regex pattern."
-            )
+            ), taskGeneration: taskGeneration)
         } catch ContentSearcher.SearchError.rgFailed {
             // ripgrep exit 2 covers both regex-syntax errors and soft I/O
             // errors (unreadable file, permission denied, etc.) — see
@@ -486,23 +376,32 @@ final class SearchModel {
             let message = groups.isEmpty
                 ? "Content search failed."
                 : "Some files couldn't be searched."
-            results = SearchResults(
+            publish(SearchResults(
                 fileResults: [],
                 contentGroups: groups,
                 partialFailureMessage: message
-            )
+            ), taskGeneration: taskGeneration)
         } catch is CancellationError {
             // A newer keystroke superseded this query — let the new task
             // own `results`. Don't surface a banner.
             return
         } catch {
             // Flush whatever was accumulated so far.
-            results = SearchResults(
+            publish(SearchResults(
                 fileResults: [],
                 contentGroups: groups,
                 partialFailureMessage: "Content search interrupted."
-            )
+            ), taskGeneration: taskGeneration)
         }
+    }
+
+    private func isCurrent(_ generation: Int) -> Bool {
+        isOpen && taskGeneration == generation
+    }
+
+    private func publish(_ newResults: SearchResults, taskGeneration generation: Int) {
+        guard isCurrent(generation) else { return }
+        results = newResults
     }
 
     private func signalIdle() {

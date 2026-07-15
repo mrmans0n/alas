@@ -3128,6 +3128,7 @@ final class AppState {
 
     private func makeSearchEnvironment() -> SearchEnvironment {
         let fileSearchBackend = FffFileSearchBackend()
+        let fileSearchRanker = FileSearchRanker()
         // Invariant: the two synchronous closures below are only invoked
         // from `SearchModel`, which is `@MainActor` — so `assumeIsolated`
         // is sound. If a future caller invokes them off-main this will
@@ -3161,6 +3162,9 @@ final class AppState {
             },
             fileSearch: { query, wt in
                 try await fileSearchBackend.search(query: query, worktree: wt, limit: 50)
+            },
+            rankFiles: { query, sources in
+                try await fileSearchRanker.rank(query: query, sources: sources)
             },
             contentSearch: { [contentSearcher = ContentSearcher()] query, options, targets in
                 contentSearcher.search(query: query, options: options, worktrees: targets)

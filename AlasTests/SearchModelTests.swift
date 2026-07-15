@@ -61,15 +61,21 @@ struct SearchModelTests {
         worktrees: [SearchWorktree] = [],
         files: [String: [FileIndex.Entry]] = [:],
         statuses: [String: [String: GitStatusBadge]] = [:],
+        entries: (@Sendable (SearchWorktree) async throws -> [FileIndex.Entry])? = nil,
         fileSearch: (@Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?)? = nil,
+        rankFiles: (@Sendable (String, [FileSearchRankingSource]) async throws -> [FileSearchResult])? = nil,
         contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil
     ) -> SearchEnvironment {
-        SearchEnvironment(
+        let ranker = FileSearchRanker()
+        return SearchEnvironment(
             currentWorktreeId: { worktrees.first?.id },
             allWorktrees: { worktrees },
-            entries: { wt in files[wt.id] ?? [] },
+            entries: entries ?? { wt in files[wt.id] ?? [] },
             statuses: { wt in statuses[wt.id] ?? [:] },
             fileSearch: fileSearch ?? { _, _ in nil },
+            rankFiles: rankFiles ?? { query, sources in
+                try await ranker.rank(query: query, sources: sources)
+            },
             contentSearch: contentSearch ?? { _, _, _ in AsyncThrowingStream { $0.finish() } }
         )
     }
@@ -97,6 +103,9 @@ struct SearchModelTests {
             entries: { _ in [] },
             statuses: { _ in [:] },
             fileSearch: { _, _ in nil },
+            rankFiles: { [ranker = FileSearchRanker()] query, sources in
+                try await ranker.rank(query: query, sources: sources)
+            },
             contentSearch: { _, _, _ in AsyncThrowingStream { $0.finish() } }
         )
         let model2 = SearchModel(environment: env)
@@ -166,6 +175,27 @@ struct SearchModelTests {
         #expect(model.results.fileResults.first?.statusBadge == .modified)
         #expect(model.results.fileResults.first?.score == 44)
         #expect(model.results.fileResults.first?.matchIndices == [4, 5, 6])
+    }
+
+    @Test func fileSearchPreservesBackendResultsWhenEntryEnumerationFails() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            entries: { _ in throw CocoaError(.fileReadUnknown) },
+            fileSearch: { _, _ in
+                [FileSearchBackendResult(
+                    relativePath: "src/backend_result.swift",
+                    score: 42,
+                    matchIndices: [4, 5, 6]
+                )]
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "backend"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["src/backend_result.swift"])
+        #expect(model.results.partialFailureMessage == "Couldn't read files for wt-a")
     }
 
     @Test func fileSearchMergesDeletedFallbackRowsWithBackendResults() async {
@@ -598,6 +628,146 @@ extension SearchModelTests {
         #expect(model.results.contentGroups.count == 1)
         #expect(model.results.partialFailureMessage == "Some files couldn't be searched.")
     }
+
+    @Test func staleFileRankingCannotPublishOrClearSuccessorLoading() async throws {
+        let gate = RankGate()
+        let ranker = FileSearchRanker()
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [
+                .init(relativePath: "old.swift", ext: "swift"),
+                .init(relativePath: "new.swift", ext: "swift"),
+            ]],
+            rankFiles: { query, sources in
+                guard query == "old" || query == "new" else {
+                    return try await ranker.rank(query: query, sources: sources)
+                }
+                return try await gate.rank(query: query)
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        await model.waitForIdle()
+
+        model.query = "old"
+        await gate.waitUntilStarted(query: "old")
+        model.query = "new"
+        await gate.waitUntilStarted(query: "new")
+
+        await gate.release(query: "old", results: [fileResult(path: "old.swift")])
+        await drainMainActor()
+        #expect(model.isLoading)
+        #expect(model.results.fileResults.map(\.relativePath) != ["old.swift"])
+
+        await gate.release(query: "new", results: [fileResult(path: "new.swift")])
+        await model.waitForIdle()
+        #expect(model.results.fileResults.map(\.relativePath) == ["new.swift"])
+        #expect(!model.isLoading)
+    }
+
+    @Test func staleContentPartialAndErrorCannotOverwriteCompletedSuccessor() async {
+        let streams = ContentStreamGate()
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            contentSearch: { query, _, _ in streams.stream(for: query) }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        await model.waitForIdle()
+        model.kind = .content
+        model.query = "old"
+        await streams.waitUntilStarted(query: "old")
+
+        await streams.yield(
+            query: "old",
+            hits: (0..<25).map { contentHit(path: "old.swift", line: $0 + 1) }
+        )
+        await waitUntil { model.results.contentGroups.first?.relativePath == "old.swift" }
+
+        model.query = "new"
+        await streams.waitUntilStarted(query: "new")
+        await streams.yield(query: "new", hits: [contentHit(path: "new.swift", line: 1)])
+        await streams.finish(query: "new")
+        await model.waitForIdle()
+        #expect(model.results.contentGroups.map(\.relativePath) == ["new.swift"])
+        #expect(model.results.partialFailureMessage == nil)
+
+        await streams.finish(
+            query: "old",
+            throwing: ContentSearcher.SearchError.rgFailed(exitCode: 2)
+        )
+        await drainMainActor()
+        #expect(model.results.contentGroups.map(\.relativePath) == ["new.swift"])
+        #expect(model.results.partialFailureMessage == nil)
+    }
+
+    @Test func closeInvalidatesActiveSearchAndReleasesIdleWaiters() async {
+        let gate = RankGate()
+        let ranker = FileSearchRanker()
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            files: ["a": [.init(relativePath: "active.swift", ext: "swift")]],
+            rankFiles: { query, sources in
+                guard query == "active" else {
+                    return try await ranker.rank(query: query, sources: sources)
+                }
+                return try await gate.rank(query: query)
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        await model.waitForIdle()
+        model.query = "active"
+        await gate.waitUntilStarted(query: "active")
+        #expect(model.isLoading)
+
+        let idleWaiter = Task { @MainActor in await model.waitForIdle() }
+        model.close()
+        await idleWaiter.value
+
+        #expect(!model.isOpen)
+        #expect(!model.isLoading)
+        #expect(model.query.isEmpty)
+        #expect(model.results == SearchResults())
+
+        await gate.release(query: "active", results: [fileResult(path: "active.swift")])
+        await drainMainActor()
+        #expect(model.results == SearchResults())
+        #expect(!model.isLoading)
+    }
+
+    private func fileResult(path: String) -> FileSearchResult {
+        FileSearchResult(
+            worktreeId: "a",
+            projectId: "p1",
+            relativePath: path,
+            ext: "swift",
+            statusBadge: nil,
+            matchIndices: [],
+            score: 1
+        )
+    }
+
+    private func contentHit(path: String, line: Int) -> ContentSearchHit {
+        ContentSearchHit(
+            worktreeId: "a",
+            projectId: "p1",
+            relativePath: path,
+            line: line,
+            column: 1,
+            revealColumn: nil,
+            snippet: "match",
+            matchCharRange: nil
+        )
+    }
+
+    private func drainMainActor() async {
+        for _ in 0..<10 { await Task.yield() }
+    }
+
+    private func waitUntil(_ predicate: @MainActor () -> Bool) async {
+        while !predicate() { await Task.yield() }
+    }
 }
 
 /// Test helper used by `invalidRegexIsCaughtBeforeBackendRuns` to flag
@@ -606,4 +776,73 @@ private actor InvocationFlag {
     private var invoked = false
     func set() { invoked = true }
     var value: Bool { invoked }
+}
+
+private actor RankGate {
+    private var startedQueries: Set<String> = []
+    private var startWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    private var rankWaiters: [String: CheckedContinuation<[FileSearchResult], Error>] = [:]
+
+    func rank(query: String) async throws -> [FileSearchResult] {
+        startedQueries.insert(query)
+        let waiters = startWaiters.removeValue(forKey: query) ?? []
+        waiters.forEach { $0.resume() }
+        return try await withCheckedThrowingContinuation { continuation in
+            rankWaiters[query] = continuation
+        }
+    }
+
+    func waitUntilStarted(query: String) async {
+        guard !startedQueries.contains(query) else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters[query, default: []].append(continuation)
+        }
+    }
+
+    func release(query: String, results: [FileSearchResult]) {
+        rankWaiters.removeValue(forKey: query)?.resume(returning: results)
+    }
+}
+
+private actor ContentStreamGate {
+    private var continuations: [String: AsyncThrowingStream<ContentSearchHit, Error>.Continuation] = [:]
+    private var startedQueries: Set<String> = []
+    private var startWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    nonisolated func stream(for query: String) -> AsyncThrowingStream<ContentSearchHit, Error> {
+        AsyncThrowingStream { continuation in
+            Task { await self.register(continuation, for: query) }
+        }
+    }
+
+    func waitUntilStarted(query: String) async {
+        guard !startedQueries.contains(query) else { return }
+        await withCheckedContinuation { continuation in
+            startWaiters[query, default: []].append(continuation)
+        }
+    }
+
+    func yield(query: String, hits: [ContentSearchHit]) {
+        guard let continuation = continuations[query] else { return }
+        for hit in hits { continuation.yield(hit) }
+    }
+
+    func finish(query: String, throwing error: Error? = nil) {
+        guard let continuation = continuations.removeValue(forKey: query) else { return }
+        if let error {
+            continuation.finish(throwing: error)
+        } else {
+            continuation.finish()
+        }
+    }
+
+    private func register(
+        _ continuation: AsyncThrowingStream<ContentSearchHit, Error>.Continuation,
+        for query: String
+    ) {
+        continuations[query] = continuation
+        startedQueries.insert(query)
+        let waiters = startWaiters.removeValue(forKey: query) ?? []
+        waiters.forEach { $0.resume() }
+    }
 }
