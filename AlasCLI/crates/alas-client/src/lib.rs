@@ -127,6 +127,7 @@ pub enum Command {
     WtNew { branch: String, base: Option<String> },
     WtDelete { target: String, force: bool, keep_branch: bool },
     Review { target: Option<String> },
+    ReviewComments { session_id: Option<String>, state: Option<String> },
     Resolve,
 }
 
@@ -168,6 +169,18 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
         Command::Review { target } => {
             let mut r = Request::new("review");
             r.target = target.clone();
+            r
+        }
+        Command::ReviewComments { session_id, state } => {
+            let mut r = Request::new("review_comments");
+            let mut params = serde_json::Map::new();
+            if let Some(session_id) = session_id {
+                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+            }
+            if let Some(state) = state {
+                params.insert("state".into(), serde_json::Value::String(state.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
             r
         }
         Command::Resolve => Request::new("resolve"),
@@ -479,6 +492,19 @@ mod tests {
         assert!(local.target.is_none());
         let provider = build_request(&Command::Review { target: Some("123".into()) }, Some("s1".into()), None);
         assert_eq!(provider.target.as_deref(), Some("123"));
+    }
+
+    #[test]
+    fn builds_review_comments_with_params_envelope() {
+        let cmd = Command::ReviewComments { session_id: Some("sid".into()), state: Some("all".into()) };
+        let req = build_request(&cmd, None, Some("/wt".into()));
+        assert_eq!(req.command, "review_comments");
+        let params = req.params.expect("params must be set");
+        assert_eq!(params["session_id"], serde_json::json!("sid"));
+        assert_eq!(params["state"], serde_json::json!("all"));
+
+        let bare = build_request(&Command::ReviewComments { session_id: None, state: None }, None, Some("/wt".into()));
+        assert_eq!(bare.params, Some(serde_json::json!({})));
     }
 
     #[test]

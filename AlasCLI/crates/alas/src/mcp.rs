@@ -79,7 +79,7 @@ fn error_reply(id: Value, code: i64, message: &str) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "error": { "code": code, "message": message } })
 }
 
-/// The six agent-facing tools, mirroring the CLI 1:1. Descriptions make
+/// The agent-facing tools, mirroring the CLI 1:1. Descriptions make
 /// explicit that these act on the user's Alas UI — that is what makes the
 /// agent-side permission prompt legible. `resolve` is internal and not
 /// exposed.
@@ -152,6 +152,17 @@ pub fn tool_definitions() -> Vec<Value> {
                 }
             }
         }),
+        json!({
+            "name": "review_comments",
+            "description": "List review comments from the user's Alas review pane for this worktree, as a JSON array. Each comment has an id, path, line range, side, state (active/resolved/dismissed), author, body, and replies. Defaults to active comments only.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Limit to one review session (from the review tool). Omit to list across the worktree's review sessions." },
+                    "state": { "type": "string", "enum": ["active", "resolved", "dismissed", "all"], "description": "Filter by comment state. Default: active." }
+                }
+            }
+        }),
     ]
 }
 
@@ -191,6 +202,15 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             keep_branch: args.get("keep_branch").and_then(Value::as_bool).unwrap_or(false),
         }),
         "review" => Ok(Command::Review { target: review_target(args)? }),
+        "review_comments" => {
+            let state = optional_string(args, "state");
+            if let Some(state) = &state {
+                if !["active", "resolved", "dismissed", "all"].contains(&state.as_str()) {
+                    return Err("review_comments 'state' must be one of active|resolved|dismissed|all".into());
+                }
+            }
+            Ok(Command::ReviewComments { session_id: optional_string(args, "session_id"), state })
+        }
         other => Err(format!("unknown tool: {other}")),
     }
 }
@@ -269,6 +289,7 @@ fn success_message(command: &Command) -> String {
         Command::WtDelete { target, .. } => format!("Deleted worktree '{target}'."),
         Command::Review { target: Some(target) } => format!("Opened review for '{target}' in Alas."),
         Command::Review { target: None } => "Opened review of local changes in Alas.".into(),
+        Command::ReviewComments { .. } => "No review comments found.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -390,14 +411,14 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_returns_the_six_tools() {
+    fn tools_list_returns_all_tools() {
         let line = r#"{"jsonrpc":"2.0","id":3,"method":"tools/list"}"#;
         let reply = handle_line(line, "/wt", ok_dispatch).unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert_eq!(
             names,
-            ["open", "worktree_list", "worktree_switch", "worktree_new", "worktree_delete", "review"]
+            ["open", "worktree_list", "worktree_switch", "worktree_new", "worktree_delete", "review", "review_comments"]
         );
         for tool in tools {
             assert!(tool["description"].as_str().unwrap().len() > 20);
@@ -486,6 +507,19 @@ mod tests {
         );
         assert!(command_for_tool("review", &json!({"target": true}), "/wt").is_err());
         assert!(command_for_tool("review", &json!({"target": ["1"]}), "/wt").is_err());
+    }
+
+    #[test]
+    fn review_comments_tool_maps_and_validates_state() {
+        assert_eq!(
+            command_for_tool("review_comments", &json!({}), "/wt").unwrap(),
+            alas_client::Command::ReviewComments { session_id: None, state: None }
+        );
+        assert_eq!(
+            command_for_tool("review_comments", &json!({"session_id": "sid", "state": "resolved"}), "/wt").unwrap(),
+            alas_client::Command::ReviewComments { session_id: Some("sid".into()), state: Some("resolved".into()) }
+        );
+        assert!(command_for_tool("review_comments", &json!({"state": "bogus"}), "/wt").is_err());
     }
 
     #[test]

@@ -15,7 +15,8 @@ usage: alas wt list
 usage: alas wt switch <name-or-branch>
 usage: alas wt new <branch> [--base <ref>]
 usage: alas wt delete <name-or-branch> [--force] [--keep-branch]
-usage: alas review [pr-number-or-url]";
+usage: alas review [pr-number-or-url]
+usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
@@ -35,15 +36,55 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         }
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
-            let rest: Vec<&String> = it.collect();
-            match rest.len() {
-                0 => Ok(Command::Review { target: None }),
-                1 => Ok(Command::Review { target: Some(rest[0].clone()) }),
-                _ => Err("usage: alas review [pr-number-or-url]".into()),
-            }
+            let rest: Vec<&str> = it.map(String::as_str).collect();
+            parse_review(&rest)
         }
         _ => Err(USAGE_ALL.into()),
     }
+}
+
+pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
+
+fn parse_review(args: &[&str]) -> Result<Command, String> {
+    match args.first().copied() {
+        None => Ok(Command::Review { target: None }),
+        Some("comments") => parse_review_comments(&args[1..]),
+        Some(target) if args.len() == 1 && !target.starts_with("--") => {
+            Ok(Command::Review { target: Some(target.to_string()) })
+        }
+        _ => Err(USAGE_ALL.into()),
+    }
+}
+
+fn parse_review_comments(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]";
+    let mut state: Option<String> = None;
+    let mut session_id: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--state" => {
+                i += 1;
+                let value = flag_value(args, i).ok_or(USAGE)?;
+                if !REVIEW_STATES.contains(&value) {
+                    return Err(USAGE.into());
+                }
+                state = Some(value.to_string());
+            }
+            "--session" => {
+                i += 1;
+                session_id = Some(flag_value(args, i).ok_or(USAGE)?.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewComments { session_id, state })
+}
+
+/// Value at `i` unless it is missing or looks like another flag.
+fn flag_value<'a>(args: &[&'a str], i: usize) -> Option<&'a str> {
+    args.get(i).copied().filter(|v| !v.starts_with("--"))
 }
 
 fn parse_wt(args: &[&str]) -> Result<Command, String> {
@@ -198,6 +239,29 @@ mod tests {
         assert_eq!(
             parse(&s(&["review"]), Path::new("/b")).unwrap(),
             Command::Review { target: None }
+        );
+    }
+
+    #[test]
+    fn review_comments_parses_flags_and_rejects_bad_state() {
+        assert_eq!(
+            parse(&s(&["review", "comments"]), Path::new("/b")).unwrap(),
+            Command::ReviewComments { session_id: None, state: None }
+        );
+        assert_eq!(
+            parse(&s(&["review", "comments", "--state", "all", "--session", "sid"]), Path::new("/b")).unwrap(),
+            Command::ReviewComments { session_id: Some("sid".into()), state: Some("all".into()) }
+        );
+        assert!(parse(&s(&["review", "comments", "--state", "bogus"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comments", "--session"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "comments", "extra"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn plain_review_targets_still_parse() {
+        assert_eq!(
+            parse(&s(&["review", "123"]), Path::new("/b")).unwrap(),
+            Command::Review { target: Some("123".into()) }
         );
     }
 
