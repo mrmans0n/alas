@@ -40,7 +40,7 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
         Some("wt") => parse_wt(&it.map(|s| s.as_str()).collect::<Vec<_>>()),
         Some("review") => {
             let rest: Vec<&str> = it.map(String::as_str).collect();
-            parse_review(&rest)
+            parse_review(&rest, base)
         }
         _ => Err(USAGE_ALL.into()),
     }
@@ -48,11 +48,11 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
 
 pub const REVIEW_STATES: [&str; 4] = ["active", "resolved", "dismissed", "all"];
 
-fn parse_review(args: &[&str]) -> Result<Command, String> {
+fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
     match args.first().copied() {
         None => Ok(Command::Review { target: None }),
         Some("comments") => parse_review_comments(&args[1..]),
-        Some("comment") => parse_review_comment(&args[1..]),
+        Some("comment") => parse_review_comment(&args[1..], base),
         Some("reply") => {
             const USAGE: &str = "usage: alas review reply <comment-id> <body>";
             if args.len() != 3 || args[1].starts_with("--") {
@@ -117,12 +117,15 @@ fn parse_review_comments(args: &[&str]) -> Result<Command, String> {
     Ok(Command::ReviewComments { session_id, state })
 }
 
-fn parse_review_comment(args: &[&str]) -> Result<Command, String> {
+fn parse_review_comment(args: &[&str], base: &std::path::Path) -> Result<Command, String> {
     const USAGE: &str = "usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]";
     if args.len() < 3 || args[..3].iter().any(|a| a.starts_with("--")) {
         return Err(USAGE.into());
     }
-    let path = args[0].to_string();
+    // Resolved against the caller's cwd, same as `open`: the app treats an
+    // already-relative path as worktree-root-relative, which is wrong when
+    // the command is run from a subdirectory.
+    let path = alas_client::absolutize(base, args[0]);
     let start_line: u64 = args[1].parse().map_err(|_| USAGE.to_string())?;
     if start_line == 0 {
         return Err(USAGE.into());
@@ -369,7 +372,7 @@ mod tests {
         assert_eq!(
             parse(&s(&["review", "comment", "src/a.swift", "10", "fix this"]), Path::new("/b")).unwrap(),
             Command::ReviewCommentAdd {
-                path: "src/a.swift".into(),
+                path: "/b/src/a.swift".into(),
                 start_line: 10,
                 end_line: None,
                 side: None,
@@ -384,7 +387,7 @@ mod tests {
             )
             .unwrap(),
             Command::ReviewCommentAdd {
-                path: "a.swift".into(),
+                path: "/b/a.swift".into(),
                 start_line: 3,
                 end_line: Some(5),
                 side: Some("old".into()),
@@ -396,6 +399,50 @@ mod tests {
         assert!(parse(&s(&["review", "comment", "a.swift", "x", "b"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "comment", "a.swift", "3", "b", "--side", "sideways"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "comment", "a.swift"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_comment_resolves_relative_path_against_the_callers_subdirectory() {
+        // `cd Sources && alas review comment App.swift 10 "..."` must resolve
+        // to the actual changed file `/repo/Sources/App.swift`, not
+        // `/repo/App.swift` (base is the worktree root; the caller's cwd is
+        // a subdirectory of it, same as `open`).
+        let cmd = parse(
+            &s(&["review", "comment", "App.swift", "10", "fix this"]),
+            Path::new("/repo/Sources"),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ReviewCommentAdd {
+                path: "/repo/Sources/App.swift".into(),
+                start_line: 10,
+                end_line: None,
+                side: None,
+                body: "fix this".into(),
+                session_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn review_comment_keeps_an_already_absolute_path_unchanged() {
+        let cmd = parse(
+            &s(&["review", "comment", "/repo/Sources/App.swift", "10", "fix this"]),
+            Path::new("/repo/Sources"),
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            Command::ReviewCommentAdd {
+                path: "/repo/Sources/App.swift".into(),
+                start_line: 10,
+                end_line: None,
+                side: None,
+                body: "fix this".into(),
+                session_id: None,
+            }
+        );
     }
 
     #[test]
