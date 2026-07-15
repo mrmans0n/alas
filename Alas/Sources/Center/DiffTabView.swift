@@ -499,7 +499,8 @@ struct DiffTabView: View {
     private func makeDraftCommentActions() -> ReviewDraftCommentActions {
         ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
-            sender: ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId)
+            sender: ReviewFeedbackAgentSender.production(appState: appState, worktreeID: worktreeId),
+            worktreeID: worktreeId
         )
     }
 

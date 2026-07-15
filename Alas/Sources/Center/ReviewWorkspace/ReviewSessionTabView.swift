@@ -499,7 +499,10 @@ struct ReviewSessionTabView: View {
             sender: feedbackSender,
             sessionID: tabState.sessionID,
             recordHandoff: recordSessionHandoff,
-            recordSendFailure: recordSessionSendFailure
+            recordSendFailure: recordSessionSendFailure,
+            worktreeID: persistsState ? tabState.worktreeId : nil,
+            now: now,
+            sessionStore: { sessionStore }
         )
         let baseAvailability = actions.availability
         actions.availability = { comment in

@@ -419,24 +419,17 @@ struct AlasActionService {
             // must not be retried, so a failure recomputing handoff/session
             // status (a separate store) is swallowed rather than reported
             // as an overall failure a caller would retry.
-            try? recomputeHandoffProgress(worktreeID: origin.id, store: store, timestamp: timestamp)
+            try? ReviewHandoffProgress.recomputeAndPersist(
+                worktreeID: origin.id,
+                sessionStore: reviewSessionStore(),
+                isResolved: { id in (try? store.find(commentID: id))?.state == .resolved },
+                now: timestamp
+            )
         } catch {
             return .error("could not update review comment: \(error.localizedDescription)")
         }
         notifyReviewCommentsChanged()
         return .ok
-    }
-
-    private func recomputeHandoffProgress(worktreeID: String, store: ReviewDraftCommentStore, timestamp: Date) throws {
-        let sessions = reviewSessionStore()
-        for record in try sessions.list(worktreeID: worktreeID) {
-            guard let updated = ReviewHandoffProgress.recomputingAddressed(
-                record: record,
-                isResolved: { id in (try? store.find(commentID: id))?.state == .resolved },
-                now: timestamp
-            ) else { continue }
-            try sessions.save(updated)
-        }
     }
 
     // MARK: - Worktree matching (moved verbatim from AlasCLICommandRouter)

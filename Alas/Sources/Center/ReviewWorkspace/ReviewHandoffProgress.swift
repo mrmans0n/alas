@@ -55,4 +55,20 @@ enum ReviewHandoffProgress {
         updated.updatedAt = now
         return updated
     }
+
+    /// Recomputes and persists addressed status for every review session
+    /// belonging to `worktreeID`. Shared by the CLI/MCP `review_resolve`
+    /// path and the UI's Resolve action, so both keep handoff/session
+    /// status consistent the same way.
+    static func recomputeAndPersist(
+        worktreeID: String,
+        sessionStore: ReviewSessionStore,
+        isResolved: (String) -> Bool,
+        now: Date
+    ) throws {
+        for record in try sessionStore.list(worktreeID: worktreeID) {
+            guard let updated = recomputingAddressed(record: record, isResolved: isResolved, now: now) else { continue }
+            try sessionStore.save(updated)
+        }
+    }
 }

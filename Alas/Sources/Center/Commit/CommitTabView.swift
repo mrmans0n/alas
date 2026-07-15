@@ -562,7 +562,8 @@ struct CommitReviewBody: View {
         }
         return ReviewDraftWorkspaceActions.make(
             controller: draftCommentController,
-            sender: reviewFeedbackAgentSender
+            sender: reviewFeedbackAgentSender,
+            worktreeID: worktreeId
         )
     }
 
