@@ -320,6 +320,85 @@ struct DiffPaneViewTests {
         #expect(controller.view.subviews.isEmpty == false)
     }
 
+    @Test func providerAccessoriesUseSemanticLanesAndStackedFullWidth() throws {
+        let thread = DiffInlineCommentThread(
+            id: "thread-old",
+            filePath: "a.swift",
+            newLine: 2,
+            isOldSide: true,
+            isResolved: false,
+            isOutdated: false,
+            comments: [
+                DiffInlineComment(id: "comment-old", author: "reviewer", body: "Old-side feedback"),
+            ]
+        )
+        let annotation = DiffInlineAnnotation(
+            id: "annotation-new",
+            checkName: "SwiftLint",
+            newLine: 2,
+            level: .warning,
+            message: "New-side annotation",
+            rawDetails: nil
+        )
+        var splitLayout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let splitView = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { splitLayout }, set: { splitLayout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            threads: [thread],
+            annotations: [annotation],
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let splitController = NSHostingController(rootView: splitView)
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        splitController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-left",
+            in: splitController.view
+        ) != nil)
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-right",
+            in: splitController.view
+        ) != nil)
+
+        var stackedLayout = DiffLayoutMode.stacked
+        let stackedView = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { stackedLayout }, set: { stackedLayout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            threads: [thread],
+            annotations: [annotation],
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let stackedController = NSHostingController(rootView: stackedView)
+        stackedController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        stackedController.view.layoutSubtreeIfNeeded()
+
+        let fullLaneMarkers = allSubviews(of: stackedController.view).filter {
+            $0.accessibilityIdentifier() == "diff-feedback-lane-full"
+        }
+        #expect(fullLaneMarkers.count == 2)
+    }
+
     @Test func defaultModeShowsDiffToolbar() {
         var layout = DiffLayoutMode.split
         var wrap = false
