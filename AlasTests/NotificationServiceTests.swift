@@ -98,6 +98,31 @@ struct NotificationServiceTests {
         #expect(requests[0].content.body == "Session is waiting for an answer.")
     }
 
+    @Test func alasNotifyUsesClickableNotificationRequest() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { request in
+            requests.append(request)
+        })
+
+        service.notifyAlas(
+            body: "Blocked on input",
+            title: "Need input",
+            agent: .codex,
+            projectId: "project-1",
+            worktreeId: "worktree-1",
+            sessionId: "session-1"
+        )
+
+        #expect(requests.count == 1)
+        #expect(requests[0].identifier.hasPrefix("session-1-notify-"))
+        #expect(requests[0].content.title == "Need input")
+        #expect(requests[0].content.body == "Blocked on input")
+        #expect(requests[0].content.sound != nil)
+        #expect(requests[0].content.userInfo["projectId"] as? String == "project-1")
+        #expect(requests[0].content.userInfo["worktreeId"] as? String == "worktree-1")
+        #expect(requests[0].content.userInfo["sessionId"] as? String == "session-1")
+    }
+
     @Test func finishEnabledFlagDoesNotDisableAwaitingNotifications() {
         var requests: [UNNotificationRequest] = []
         let service = NotificationService(notificationAdder: { request in

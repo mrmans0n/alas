@@ -121,15 +121,43 @@ pub struct Response {
 /// absolutized by the caller.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    Open { paths: Vec<String> },
+    Open {
+        paths: Vec<String>,
+    },
+    Notify {
+        body: String,
+        title: Option<String>,
+        level: Option<String>,
+    },
     WtList,
-    WtSwitch { target: String },
-    WtNew { branch: String, base: Option<String> },
-    WtDelete { target: String, force: bool, keep_branch: bool },
-    Review { target: Option<String> },
-    ReviewComments { session_id: Option<String>, state: Option<String> },
-    ReviewReply { comment_id: String, body: String },
-    ReviewResolve { comment_id: String, reply: Option<String>, reopen: bool },
+    WtSwitch {
+        target: String,
+    },
+    WtNew {
+        branch: String,
+        base: Option<String>,
+    },
+    WtDelete {
+        target: String,
+        force: bool,
+        keep_branch: bool,
+    },
+    Review {
+        target: Option<String>,
+    },
+    ReviewComments {
+        session_id: Option<String>,
+        state: Option<String>,
+    },
+    ReviewReply {
+        comment_id: String,
+        body: String,
+    },
+    ReviewResolve {
+        comment_id: String,
+        reply: Option<String>,
+        reopen: bool,
+    },
     ReviewCommentAdd {
         path: String,
         start_line: u64,
@@ -138,17 +166,38 @@ pub enum Command {
         body: String,
         session_id: Option<String>,
     },
-    ReviewFinish { session_id: Option<String>, verdict: Option<String>, summary: Option<String> },
+    ReviewFinish {
+        session_id: Option<String>,
+        verdict: Option<String>,
+        summary: Option<String>,
+    },
     Resolve,
 }
 
 /// Build the wire request for a command, attaching whichever addressing the
 /// caller resolved (`session_id` inside Alas, else `cwd`).
-pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<String>) -> Request {
+pub fn build_request(
+    command: &Command,
+    session_id: Option<String>,
+    cwd: Option<String>,
+) -> Request {
     let mut req = match command {
         Command::Open { paths } => {
             let mut r = Request::new("open");
             r.paths = Some(paths.clone());
+            r
+        }
+        Command::Notify { body, title, level } => {
+            let mut r = Request::new("notify");
+            let mut params = serde_json::Map::new();
+            params.insert("body".into(), serde_json::Value::String(body.clone()));
+            if let Some(title) = title {
+                params.insert("title".into(), serde_json::Value::String(title.clone()));
+            }
+            if let Some(level) = level {
+                params.insert("level".into(), serde_json::Value::String(level.clone()));
+            }
+            r.params = Some(serde_json::Value::Object(params));
             r
         }
         Command::WtList => {
@@ -169,7 +218,11 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             r.base = base.clone();
             r
         }
-        Command::WtDelete { target, force, keep_branch } => {
+        Command::WtDelete {
+            target,
+            force,
+            keep_branch,
+        } => {
             let mut r = Request::new("wt");
             r.subcommand = Some("delete".into());
             r.target = Some(target.clone());
@@ -186,7 +239,10 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             let mut r = Request::new("review_comments");
             let mut params = serde_json::Map::new();
             if let Some(session_id) = session_id {
-                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+                params.insert(
+                    "session_id".into(),
+                    serde_json::Value::String(session_id.clone()),
+                );
             }
             if let Some(state) = state {
                 params.insert("state".into(), serde_json::Value::String(state.clone()));
@@ -199,10 +255,17 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             r.params = Some(serde_json::json!({ "comment_id": comment_id, "body": body }));
             r
         }
-        Command::ReviewResolve { comment_id, reply, reopen } => {
+        Command::ReviewResolve {
+            comment_id,
+            reply,
+            reopen,
+        } => {
             let mut r = Request::new("review_resolve");
             let mut params = serde_json::Map::new();
-            params.insert("comment_id".into(), serde_json::Value::String(comment_id.clone()));
+            params.insert(
+                "comment_id".into(),
+                serde_json::Value::String(comment_id.clone()),
+            );
             if let Some(reply) = reply {
                 params.insert("reply".into(), serde_json::Value::String(reply.clone()));
             }
@@ -212,7 +275,14 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             r.params = Some(serde_json::Value::Object(params));
             r
         }
-        Command::ReviewCommentAdd { path, start_line, end_line, side, body, session_id } => {
+        Command::ReviewCommentAdd {
+            path,
+            start_line,
+            end_line,
+            side,
+            body,
+            session_id,
+        } => {
             let mut r = Request::new("review_comment_add");
             let mut params = serde_json::Map::new();
             params.insert("path".into(), serde_json::Value::String(path.clone()));
@@ -225,16 +295,26 @@ pub fn build_request(command: &Command, session_id: Option<String>, cwd: Option<
             }
             params.insert("body".into(), serde_json::Value::String(body.clone()));
             if let Some(session_id) = session_id {
-                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+                params.insert(
+                    "session_id".into(),
+                    serde_json::Value::String(session_id.clone()),
+                );
             }
             r.params = Some(serde_json::Value::Object(params));
             r
         }
-        Command::ReviewFinish { session_id, verdict, summary } => {
+        Command::ReviewFinish {
+            session_id,
+            verdict,
+            summary,
+        } => {
             let mut r = Request::new("review_finish");
             let mut params = serde_json::Map::new();
             if let Some(session_id) = session_id {
-                params.insert("session_id".into(), serde_json::Value::String(session_id.clone()));
+                params.insert(
+                    "session_id".into(),
+                    serde_json::Value::String(session_id.clone()),
+                );
             }
             if let Some(verdict) = verdict {
                 params.insert("verdict".into(), serde_json::Value::String(verdict.clone()));
@@ -348,7 +428,11 @@ pub fn send(socket: &Path, req: &Request) -> Result<Response, TransportError> {
 
 /// `send`, parameterized on the read timeout so tests can exercise the
 /// timeout behavior without waiting on the real [`READ_TIMEOUT`].
-fn send_with_timeout(socket: &Path, req: &Request, read_timeout: Duration) -> Result<Response, TransportError> {
+fn send_with_timeout(
+    socket: &Path,
+    req: &Request,
+    read_timeout: Duration,
+) -> Result<Response, TransportError> {
     let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
     let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
     stream
@@ -357,7 +441,9 @@ fn send_with_timeout(socket: &Path, req: &Request, read_timeout: Duration) -> Re
     stream.write_all(&payload).map_err(|_| TransportError::Io)?;
     stream.flush().map_err(|_| TransportError::Io)?;
     let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).map_err(|_| TransportError::Io)?;
+    stream
+        .read_to_end(&mut buf)
+        .map_err(|_| TransportError::Io)?;
     serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed)
 }
 
@@ -372,8 +458,12 @@ pub enum Target {
 /// Resolve the target from the environment. Inside Alas both vars are set and
 /// we address the exact session; otherwise we address the logical directory.
 pub fn resolve_target() -> Target {
-    let socket = std::env::var("ALAS_SOCKET_PATH").ok().filter(|s| !s.is_empty());
-    let session = std::env::var("ALAS_SESSION_ID").ok().filter(|s| !s.is_empty());
+    let socket = std::env::var("ALAS_SOCKET_PATH")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let session = std::env::var("ALAS_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
     if let (Some(socket), Some(session_id)) = (socket, session) {
         return Target::Session { socket, session_id };
     }
@@ -461,7 +551,6 @@ pub fn dispatch_to_sockets(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,7 +616,10 @@ mod tests {
 
     #[test]
     fn builds_wt_new_with_base() {
-        let cmd = Command::WtNew { branch: "feature".into(), base: Some("main".into()) };
+        let cmd = Command::WtNew {
+            branch: "feature".into(),
+            base: Some("main".into()),
+        };
         let req = build_request(&cmd, Some("s1".into()), None);
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(
@@ -538,7 +630,11 @@ mod tests {
 
     #[test]
     fn builds_wt_delete_flags_and_cwd() {
-        let cmd = Command::WtDelete { target: "feature".into(), force: true, keep_branch: false };
+        let cmd = Command::WtDelete {
+            target: "feature".into(),
+            force: true,
+            keep_branch: false,
+        };
         let req = build_request(&cmd, None, Some("/repo".into()));
         assert_eq!(req.command, "wt");
         assert_eq!(req.subcommand.as_deref(), Some("delete"));
@@ -552,47 +648,102 @@ mod tests {
         let local = build_request(&Command::Review { target: None }, Some("s1".into()), None);
         assert_eq!(local.command, "review");
         assert!(local.target.is_none());
-        let provider = build_request(&Command::Review { target: Some("123".into()) }, Some("s1".into()), None);
+        let provider = build_request(
+            &Command::Review {
+                target: Some("123".into()),
+            },
+            Some("s1".into()),
+            None,
+        );
         assert_eq!(provider.target.as_deref(), Some("123"));
     }
 
     #[test]
+    fn builds_notify_params() {
+        let cmd = Command::Notify {
+            body: "Blocked on input".into(),
+            title: Some("Need input".into()),
+            level: Some("attention".into()),
+        };
+        let req = build_request(&cmd, Some("s1".into()), None);
+        assert_eq!(req.command, "notify");
+        assert_eq!(
+            req.params,
+            Some(serde_json::json!({
+                "body": "Blocked on input",
+                "title": "Need input",
+                "level": "attention"
+            }))
+        );
+    }
+
+    #[test]
     fn builds_review_comments_with_params_envelope() {
-        let cmd = Command::ReviewComments { session_id: Some("sid".into()), state: Some("all".into()) };
+        let cmd = Command::ReviewComments {
+            session_id: Some("sid".into()),
+            state: Some("all".into()),
+        };
         let req = build_request(&cmd, None, Some("/wt".into()));
         assert_eq!(req.command, "review_comments");
         let params = req.params.expect("params must be set");
         assert_eq!(params["session_id"], serde_json::json!("sid"));
         assert_eq!(params["state"], serde_json::json!("all"));
 
-        let bare = build_request(&Command::ReviewComments { session_id: None, state: None }, None, Some("/wt".into()));
+        let bare = build_request(
+            &Command::ReviewComments {
+                session_id: None,
+                state: None,
+            },
+            None,
+            Some("/wt".into()),
+        );
         assert_eq!(bare.params, Some(serde_json::json!({})));
     }
 
     #[test]
     fn builds_review_reply_and_resolve_params() {
         let reply = build_request(
-            &Command::ReviewReply { comment_id: "c1".into(), body: "done".into() },
+            &Command::ReviewReply {
+                comment_id: "c1".into(),
+                body: "done".into(),
+            },
             None,
             Some("/wt".into()),
         );
         assert_eq!(reply.command, "review_reply");
-        assert_eq!(reply.params, Some(serde_json::json!({"comment_id": "c1", "body": "done"})));
+        assert_eq!(
+            reply.params,
+            Some(serde_json::json!({"comment_id": "c1", "body": "done"}))
+        );
 
         let resolve = build_request(
-            &Command::ReviewResolve { comment_id: "c1".into(), reply: Some("fixed".into()), reopen: false },
+            &Command::ReviewResolve {
+                comment_id: "c1".into(),
+                reply: Some("fixed".into()),
+                reopen: false,
+            },
             None,
             Some("/wt".into()),
         );
         assert_eq!(resolve.command, "review_resolve");
-        assert_eq!(resolve.params, Some(serde_json::json!({"comment_id": "c1", "reply": "fixed"})));
+        assert_eq!(
+            resolve.params,
+            Some(serde_json::json!({"comment_id": "c1", "reply": "fixed"}))
+        );
 
         let reopen = build_request(
-            &Command::ReviewResolve { comment_id: "c1".into(), reply: None, reopen: true },
+            &Command::ReviewResolve {
+                comment_id: "c1".into(),
+                reply: None,
+                reopen: true,
+            },
             None,
             Some("/wt".into()),
         );
-        assert_eq!(reopen.params, Some(serde_json::json!({"comment_id": "c1", "reopen": true})));
+        assert_eq!(
+            reopen.params,
+            Some(serde_json::json!({"comment_id": "c1", "reopen": true}))
+        );
     }
 
     #[test]
@@ -655,7 +806,10 @@ mod tests {
 
         // A second live process we actually own, to exercise multi-entry sort
         // order (string-sorted paths, not numeric pid order).
-        let mut child = std::process::Command::new("sleep").arg("5").spawn().unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
 
         // Live: our own pid and the spawned child. Dead: pid 999999999 (out of
         // range, guaranteed absent). Junk: non-`pid-` entry and a non-numeric
@@ -683,7 +837,8 @@ mod tests {
 
     #[test]
     fn discover_live_sockets_in_skips_non_positive_pids() {
-        let root = std::env::temp_dir().join(format!("alas-cli-disc-pidguard-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("alas-cli-disc-pidguard-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();

@@ -86,6 +86,30 @@ struct AlasCLIRequestTests {
         #expect(request.command == .open(paths: ["/repo/a.txt"]))
     }
 
+    @Test func decodesNotifyRequestWithDefaults() throws {
+        let json = #"{"v":1,"kind":"cli","command":"notify","session_id":"s1","params":{"body":"Done, take a look"}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.command == .notify(body: "Done, take a look", title: nil, level: .attention))
+    }
+
+    @Test func decodesNotifyRequestWithTitleAndInfoLevel() throws {
+        let json = #"{"v":1,"kind":"cli","command":"notify","session_id":"s1","params":{"body":"Background task finished","title":"Done","level":"info"}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.command == .notify(body: "Background task finished", title: "Done", level: .info))
+    }
+
+    @Test func rejectsInvalidNotifyRequests() throws {
+        for bad in [
+            #"{"v":1,"kind":"cli","command":"notify","session_id":"s1"}"#,
+            #"{"v":1,"kind":"cli","command":"notify","session_id":"s1","params":{"body":"   "}}"#,
+            #"{"v":1,"kind":"cli","command":"notify","session_id":"s1","params":{"body":"Done","level":"urgent"}}"#,
+        ] {
+            #expect(throws: AlasCLIRequestError.self, "should reject: \(bad)") {
+                try AlasCLIRequest.decode(from: Data(bad.utf8))
+            }
+        }
+    }
+
     @Test func decodesResolveRequest() throws {
         let json = #"{"v":1,"kind":"cli","command":"resolve","cwd":"/repo"}"#
         let request = try AlasCLIRequest.decode(from: Data(json.utf8))

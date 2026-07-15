@@ -1774,9 +1774,18 @@ final class AppState {
             // Fall back to persisted-tab scan so `alas open` etc.
             // still resolve a worktree for zmx-persisted leaves
             // whose `TerminalSession` hasn't been restored yet.
-            return self?.persistedLeafLocation(leafId: sessionId)?.worktreeId
+            if let worktreeId = self?.persistedLeafLocation(leafId: sessionId)?.worktreeId {
+                return worktreeId
+            }
+            return self?.worktreeIdForLiveACPSession(sessionId)
         }
         return await router.handle(request)
+    }
+
+    private func worktreeIdForLiveACPSession(_ sessionId: String) -> String? {
+        acpManagers.first { _, manager in
+            manager.liveSession(for: sessionId) != nil
+        }?.key
     }
 
     /// Linear scan of persisted terminal tabs for the (projectId, worktreeId)
@@ -1880,10 +1889,62 @@ final class AppState {
             providerReviewOriginalPath: { [weak self] sessionID, relativePath in
                 await self?.reviewRequestOriginalPath(forDraftSessionID: sessionID, relativePath: relativePath) ?? nil
             },
+            notifySession: { [weak self] sessionId, origin, body, title, level in
+                guard let self else { return .error("Alas is not available.") }
+                return self.cliNotify(
+                    sessionId: sessionId,
+                    origin: origin,
+                    body: body,
+                    title: title,
+                    level: level
+                )
+            },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
             }
         )
+    }
+
+    private func cliNotify(
+        sessionId: String?,
+        origin: Worktree,
+        body: String,
+        title: String?,
+        level: AlasCLINotifyLevel
+    ) -> AlasCLIResponse {
+        guard let resolved = projectAndWorktree(withWorktreeId: origin.id) else {
+            return .error("Unknown worktree.")
+        }
+        let notificationSessionId = sessionId ?? origin.id
+        let agent = agentKindForNotifySession(sessionId) ?? .codex
+        harness.notifications.notifyAlas(
+            body: body,
+            title: title,
+            agent: agent,
+            projectId: resolved.project.id,
+            worktreeId: resolved.worktree.id,
+            sessionId: notificationSessionId
+        )
+        if level == .attention, let sessionId {
+            harness.setExternalActivity(sessionId: sessionId, agent: agent, state: .awaitingInput)
+        }
+        return .ok
+    }
+
+    private func agentKindForNotifySession(_ sessionId: String?) -> AgentKind? {
+        guard let sessionId else { return nil }
+        if let activity = harness.activityBySession[sessionId] {
+            return activity.agent
+        }
+        if let harnessKind = harness.activeHarnessBySession[sessionId] ?? harness.harnessBySession[sessionId] {
+            return harnessKind.asAgentKind
+        }
+        for manager in acpManagers.values {
+            if let session = manager.liveSession(for: sessionId) {
+                return ACPHarnessBridge.agentKind(for: session.agentId)
+            }
+        }
+        return nil
     }
 
     /// Activate a specific harness session: bring the app to front, select
@@ -4173,7 +4234,7 @@ final class AppState {
                     configuredServers: project.mcpServers
                 )
             },
-            builtInMCPProvider: { [weak self] worktreePath in
+            builtInMCPProvider: { [weak self] worktreePath, sessionId in
                 guard let self else { return nil }
                 // installExecutables is idempotent (byte-compares before
                 // writing); a nil binaryPath (no bundle, e.g. tests) means
@@ -4185,7 +4246,8 @@ final class AppState {
                     configuredServers: self.projects.first(where: { $0.id == worktree.projectId })?.mcpServers ?? [],
                     binaryPath: binaryPath,
                     socketPath: self.harness.socketServer.socketPath,
-                    worktreePath: worktreePath
+                    worktreePath: worktreePath,
+                    sessionId: sessionId
                 )
             }
         )

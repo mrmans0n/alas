@@ -46,10 +46,11 @@ final class ACPSessionManager: ObservableObject {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
-    /// Builds the app-provided "alas" MCP server entry for a worktree path,
+    /// Builds the app-provided "alas" MCP server entry for a worktree path
+    /// and local ACP session id,
     /// or nil when injection is disabled/unavailable. Fetched per attach so
     /// the settings toggle applies to the next (re)connect.
-    private let builtInMCPProvider: ((String) -> BuiltInAlasMCP.Injection?)?
+    private let builtInMCPProvider: ((String, ACPSession.ID) -> BuiltInAlasMCP.Injection?)?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
@@ -303,7 +304,7 @@ final class ACPSessionManager: ObservableObject {
          remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
          mcpProjectContextProvider: MCPProjectContextProvider? = nil,
-         builtInMCPProvider: ((String) -> BuiltInAlasMCP.Injection?)? = nil)
+         builtInMCPProvider: ((String, ACPSession.ID) -> BuiltInAlasMCP.Injection?)? = nil)
     {
         precondition(store != nil || persistence != nil, "ACPSessionManager requires persistence")
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
@@ -2251,7 +2252,7 @@ extension ACPSessionManager {
             // skip it entirely instead of reporting it unavailable on every
             // connect.
             let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
-            let builtInMCP = remoteHost == nil ? builtInMCPProvider?(worktreePath) : nil
+            let builtInMCP = remoteHost == nil ? builtInMCPProvider?(worktreePath, sessionId) : nil
             var plannedWireServers = mcpPlan.wireServers
             var plannedStatuses = mcpPlan.statuses
             if let builtInMCP {

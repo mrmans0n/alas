@@ -81,6 +81,24 @@ final class NotificationService {
         notificationAdder(req)
     }
 
+    func notifyAlas(body: String, title: String?, agent: AgentKind,
+                    projectId: String, worktreeId: String, sessionId: String) {
+        let content = buildContent(
+            agent: agent,
+            body: body,
+            title: title ?? "Alas",
+            projectId: projectId,
+            worktreeId: worktreeId,
+            sessionId: sessionId
+        )
+        let req = UNNotificationRequest(
+            identifier: "\(sessionId)-notify-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        notificationAdder(req)
+    }
+
     // MARK: - Private helpers
 
     private func questionBody(_ body: String?) -> String {

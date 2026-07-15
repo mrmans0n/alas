@@ -26,6 +26,9 @@ struct AlasCLICommandRouter {
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
+    var notifySession: (String?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
+        .error("Notifications from the terminal are not available yet.")
+    }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -44,6 +47,7 @@ struct AlasCLICommandRouter {
             now: now,
             gitStatus: gitStatus,
             providerReviewOriginalPath: providerReviewOriginalPath,
+            notifySession: notifySession,
             activateApp: activateApp
         )
     }
@@ -70,6 +74,14 @@ struct AlasCLICommandRouter {
             return .ok
         case .open(let paths):
             return service.open(paths: paths, fallbackWorktreeId: origin.id)
+        case .notify(let body, let title, let level):
+            return service.notify(
+                sessionId: request.sessionId,
+                origin: origin,
+                body: body,
+                title: title,
+                level: level
+            )
         case .worktree(.list):
             return service.list(origin: origin, projectWorktrees: projectWorktrees)
         case .worktree(.switch(let target)):
