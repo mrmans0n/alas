@@ -165,6 +165,9 @@ enum ReviewDraftWorkspaceActions {
         worktreeID: String? = nil,
         now: @escaping () -> Date = Date.init,
         sessionStore: @escaping () -> ReviewSessionStore = { ReviewSessionStore() },
+        notifyExternalChange: @escaping () -> Void = {
+            NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
+        },
         pasteboard: @escaping (String) -> Void = { prompt in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -199,6 +202,11 @@ enum ReviewDraftWorkspaceActions {
                     isResolved: { id in controller.persistedComment(withID: id)?.state == .resolved },
                     now: now()
                 )
+                // Mirror the CLI/MCP resolve path: notify open review panes so a
+                // tab whose in-memory record was just recomputed on disk reloads
+                // it, instead of later persisting a stale record and clobbering
+                // the freshly written addressed status back to sent.
+                notifyExternalChange()
             },
             dismiss: { comment in
                 try? controller?.dismiss(commentID: comment.id)

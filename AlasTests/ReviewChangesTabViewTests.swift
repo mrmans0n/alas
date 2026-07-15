@@ -364,6 +364,100 @@ struct ReviewChangesTabViewTests {
         #expect(record.updatedAt == Date(timeIntervalSince1970: 200))
     }
 
+    @Test func draftWorkspaceActionsResolveNotifiesOpenPanesAfterRecompute() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let sessionStore = ReviewSessionStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-sessions.json")
+        )
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: target.draftSessionID,
+            store: draftStore,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        try controller.load()
+        try controller.add(
+            anchor: DiffReviewLineAnchor(path: "Sources/App.swift", side: .new, line: 4, rowIndex: 0, selectedText: ""),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let comment = try #require(controller.comments.first)
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, _ in Issue.record("send should not be called") }
+        )
+        var notifyCount = 0
+        let actions = ReviewDraftWorkspaceActions.make(
+            controller: controller,
+            sender: sender,
+            worktreeID: "wt-1",
+            now: { Date(timeIntervalSince1970: 200) },
+            sessionStore: { sessionStore },
+            notifyExternalChange: { notifyCount += 1 }
+        )
+
+        actions.resolve(comment)
+
+        // Open review panes must be told to reload after the UI recompute, so a
+        // stale in-memory record can't later clobber the persisted addressed
+        // status — the same signal the CLI/MCP resolve path emits.
+        #expect(notifyCount == 1)
+    }
+
+    @Test func draftWorkspaceActionsResolveWithoutWorktreeDoesNotNotify() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: target.draftSessionID,
+            store: draftStore,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        try controller.load()
+        try controller.add(
+            anchor: DiffReviewLineAnchor(path: "Sources/App.swift", side: .new, line: 4, rowIndex: 0, selectedText: ""),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let comment = try #require(controller.comments.first)
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, _ in Issue.record("send should not be called") }
+        )
+        var notifyCount = 0
+        let actions = ReviewDraftWorkspaceActions.make(
+            controller: controller,
+            sender: sender,
+            now: { Date(timeIntervalSince1970: 200) },
+            notifyExternalChange: { notifyCount += 1 }
+        )
+
+        actions.resolve(comment)
+
+        // No worktree means no recompute ran, so there is nothing to reload and
+        // no notification should be emitted.
+        #expect(controller.comments.first?.state == .resolved)
+        #expect(notifyCount == 0)
+    }
+
     @Test func draftWorkspaceActionsResolveDoesNotDemoteAnotherSessionInTheSameWorktree() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
