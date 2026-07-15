@@ -14,6 +14,21 @@ struct ReviewDraftCommentStore {
         return (snapshot.commentsBySessionID[sessionID.rawValue] ?? []).sorted(by: sortComments)
     }
 
+    func loadAll() throws -> [ReviewDraftComment] {
+        let snapshot = try readSnapshot()
+        return snapshot.commentsBySessionID.values.flatMap { $0 }.sorted(by: sortComments)
+    }
+
+    func find(commentID: String) throws -> ReviewDraftComment? {
+        let snapshot = try readSnapshot()
+        for comments in snapshot.commentsBySessionID.values {
+            if let match = comments.first(where: { $0.id == commentID }) {
+                return match
+            }
+        }
+        return nil
+    }
+
     func save(_ comment: ReviewDraftComment) throws {
         var snapshot = try readSnapshot()
         var comments = snapshot.commentsBySessionID[comment.sessionID.rawValue] ?? []

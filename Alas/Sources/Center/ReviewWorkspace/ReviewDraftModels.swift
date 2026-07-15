@@ -68,6 +68,14 @@ struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresen
         make(.draftReviewRequest, [worktreeID, repositoryPath.standardizedFileURL.path, base, head])
     }
 
+    /// Every factory puts the worktree ID in field 1, so a session ID can be
+    /// scoped to a worktree without decoding the rest of its fields.
+    func isFor(worktreeID: String) -> Bool {
+        let parts = rawValue.split(separator: Self.separator, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 2 else { return false }
+        return parts[1] == Self.escape(worktreeID)
+    }
+
     private static let separator: Character = "\u{1f}"
 
     private static func make(_ kind: ReviewDraftSourceKind, _ fields: [String]) -> Self {
@@ -86,6 +94,34 @@ enum ReviewDraftCommentState: String, Codable, Equatable, Hashable, Sendable {
     case active
     case resolved
     case dismissed
+}
+
+/// Who wrote a review comment or reply. Legacy comments (no author on
+/// disk) decode as nil and are treated as `.user`.
+enum ReviewDraftCommentAuthor: Codable, Equatable, Hashable, Sendable {
+    case user
+    case agent(name: String)
+
+    var isAgent: Bool {
+        if case .agent = self { return true }
+        return false
+    }
+
+    var displayName: String {
+        switch self {
+        case .user:
+            return "You"
+        case .agent(let name):
+            return name.isEmpty ? "Agent" : name
+        }
+    }
+}
+
+struct ReviewCommentReply: Codable, Equatable, Identifiable, Sendable {
+    let id: String
+    let author: ReviewDraftCommentAuthor
+    let bodyMarkdown: String
+    let createdAt: Date
 }
 
 struct ReviewDraftProviderPublish: Codable, Equatable, Sendable {
@@ -121,6 +157,9 @@ struct ReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
     var updatedAt: Date
     var providerPublish: ReviewDraftProviderPublish? = nil
     var providerError: ReviewDraftProviderError? = nil
+    var author: ReviewDraftCommentAuthor? = nil
+    var replies: [ReviewCommentReply]? = nil
+    var resolvedBy: ReviewDraftCommentAuthor? = nil
 
     var normalizedLineRange: ClosedRange<Int> {
         let end = endLine ?? startLine
@@ -128,4 +167,6 @@ struct ReviewDraftComment: Codable, Equatable, Identifiable, Sendable {
     }
 
     var isActive: Bool { state == .active }
+    var effectiveAuthor: ReviewDraftCommentAuthor { author ?? .user }
+    var allReplies: [ReviewCommentReply] { replies ?? [] }
 }
