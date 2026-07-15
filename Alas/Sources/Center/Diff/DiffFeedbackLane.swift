@@ -46,6 +46,7 @@ enum DiffFeedbackLaneResolver {
     }
 }
 
+@MainActor
 enum DiffPaneLineNumberGutterGeometry {
     static let minimumThickness: CGFloat = 42
     static let horizontalPadding: CGFloat = 8
@@ -61,6 +62,30 @@ enum DiffPaneLineNumberGutterGeometry {
         let sample = String(repeating: "8", count: max(maxDigits, 1)) as NSString
         let width = ceil(sample.size(withAttributes: [.font: labelFont]).width)
         return max(minimumThickness, width + horizontalPadding * 2)
+    }
+}
+
+struct DiffPaneSplitFrames: Equatable {
+    let oldPane: CGRect
+    let divider: CGRect
+    let newPane: CGRect
+}
+
+enum DiffPaneSplitGeometry {
+    static let dividerWidth: CGFloat = 1
+
+    static func frames(containerWidth: CGFloat) -> DiffPaneSplitFrames {
+        let width = max(containerWidth, 0)
+        let dividerExtent = min(dividerWidth, width)
+        let oldWidth = floor(max(width - dividerExtent, 0) / 2)
+        let newOrigin = oldWidth + dividerExtent
+        let newWidth = max(width - newOrigin, 0)
+
+        return DiffPaneSplitFrames(
+            oldPane: CGRect(x: 0, y: 0, width: oldWidth, height: 0),
+            divider: CGRect(x: oldWidth, y: 0, width: dividerExtent, height: 0),
+            newPane: CGRect(x: newOrigin, y: 0, width: newWidth, height: 0)
+        )
     }
 }
 
@@ -87,7 +112,7 @@ enum DiffFeedbackLineLabels {
 }
 
 enum DiffFeedbackLaneGeometry {
-    static let dividerWidth: CGFloat = 1
+    static let dividerWidth = DiffPaneSplitGeometry.dividerWidth
 
     static func contentFrame(
         containerWidth: CGFloat,
@@ -101,16 +126,39 @@ enum DiffFeedbackLaneGeometry {
             return CGRect(x: inset, y: 0, width: width - inset, height: 0)
         }
 
-        let oldWidth = floor(max(width - dividerWidth, 0) / 2)
-        let newOrigin = oldWidth + min(dividerWidth, width)
-        let newWidth = max(width - newOrigin, 0)
+        let splitFrames = DiffPaneSplitGeometry.frames(containerWidth: width)
         if lane == .left {
-            let inset = min(max(gutterWidth, 0), oldWidth)
-            return CGRect(x: inset, y: 0, width: oldWidth - inset, height: 0)
+            let inset = min(max(gutterWidth, 0), splitFrames.oldPane.width)
+            return CGRect(
+                x: splitFrames.oldPane.minX + inset,
+                y: 0,
+                width: splitFrames.oldPane.width - inset,
+                height: 0
+            )
         }
 
-        let inset = min(max(gutterWidth, 0), newWidth)
-        return CGRect(x: newOrigin + inset, y: 0, width: newWidth - inset, height: 0)
+        let inset = min(max(gutterWidth, 0), splitFrames.newPane.width)
+        return CGRect(
+            x: splitFrames.newPane.minX + inset,
+            y: 0,
+            width: splitFrames.newPane.width - inset,
+            height: 0
+        )
+    }
+
+    static func idealContainerWidth(
+        contentWidth: CGFloat,
+        layoutMode: DiffLayoutMode,
+        gutterWidth: CGFloat
+    ) -> CGFloat {
+        let contentWidth = max(contentWidth, 0)
+        let gutterWidth = max(gutterWidth, 0)
+        switch layoutMode {
+        case .split:
+            return (contentWidth + gutterWidth) * 2 + dividerWidth
+        case .stacked:
+            return contentWidth + gutterWidth
+        }
     }
 }
 
@@ -124,8 +172,14 @@ private struct DiffFeedbackLaneLayout: Layout {
         subviews: Subviews,
         cache: inout ()
     ) -> CGSize {
-        guard let subview = subviews.first else { return .zero }
-        let width = proposal.width ?? 0
+        guard let subview = subviews.first else {
+            return CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+        }
+        let width = proposal.width.map { max($0, 0) } ?? DiffFeedbackLaneGeometry.idealContainerWidth(
+            contentWidth: subview.sizeThatFits(.unspecified).width,
+            layoutMode: layoutMode,
+            gutterWidth: gutterWidth
+        )
         let frame = DiffFeedbackLaneGeometry.contentFrame(
             containerWidth: width,
             layoutMode: layoutMode,
@@ -190,30 +244,45 @@ struct DiffFeedbackLaneView<Content: View>: View {
             lane: effectiveLane,
             gutterWidth: gutterWidth
         ) {
-            content
-        }
-        .frame(maxWidth: .infinity)
-        .overlay {
-            if layoutMode == .split {
-                Rectangle()
-                    .fill(theme.color("line"))
-                    .frame(width: DiffFeedbackLaneGeometry.dividerWidth)
+            VStack(spacing: 0) {
+                content
             }
         }
-        .background(DiffFeedbackLaneAccessibilityMarker(lane: effectiveLane))
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topLeading) {
+            if layoutMode == .split {
+                GeometryReader { geometry in
+                    let divider = DiffPaneSplitGeometry.frames(
+                        containerWidth: geometry.size.width
+                    ).divider
+
+                    Rectangle()
+                        .fill(theme.color("line"))
+                        .frame(width: divider.width, height: geometry.size.height)
+                        .background(DiffFeedbackAccessibilityMarker(
+                            identifier: "diff-feedback-divider"
+                        ))
+                        .offset(x: divider.minX)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .background(DiffFeedbackAccessibilityMarker(
+            identifier: "diff-feedback-lane-\(effectiveLane.rawValue)"
+        ))
     }
 }
 
-private struct DiffFeedbackLaneAccessibilityMarker: NSViewRepresentable {
-    let lane: DiffFeedbackLane
+private struct DiffFeedbackAccessibilityMarker: NSViewRepresentable {
+    let identifier: String
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
-        view.setAccessibilityIdentifier("diff-feedback-lane-\(lane.rawValue)")
+        view.setAccessibilityIdentifier(identifier)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        nsView.setAccessibilityIdentifier("diff-feedback-lane-\(lane.rawValue)")
+        nsView.setAccessibilityIdentifier(identifier)
     }
 }

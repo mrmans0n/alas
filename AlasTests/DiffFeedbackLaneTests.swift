@@ -3,6 +3,7 @@ import Testing
 @testable import Alas
 
 @Suite("Diff feedback lane resolver")
+@MainActor
 struct DiffFeedbackLaneTests {
     @Test func deletedChangedLinesResolveLeft() {
         let anchor = makeAnchor(
@@ -203,6 +204,23 @@ struct DiffFeedbackLaneTests {
                 }
             }
         }
+    }
+
+    @Test func sharedSplitFramesMatchRendererMathAtEvenAndFractionalWidths() {
+        let even = DiffPaneSplitGeometry.frames(containerWidth: 900)
+        #expect(even.oldPane == CGRect(x: 0, y: 0, width: 449, height: 0))
+        #expect(even.divider == CGRect(x: 449, y: 0, width: 1, height: 0))
+        #expect(even.newPane == CGRect(x: 450, y: 0, width: 450, height: 0))
+
+        let fractional = DiffPaneSplitGeometry.frames(containerWidth: 0.5)
+        #expect(fractional.oldPane == .zero)
+        #expect(fractional.divider == CGRect(x: 0, y: 0, width: 0.5, height: 0))
+        #expect(fractional.newPane == CGRect(x: 0.5, y: 0, width: 0, height: 0))
+
+        let zero = DiffPaneSplitGeometry.frames(containerWidth: 0)
+        #expect(zero.oldPane == .zero)
+        #expect(zero.divider == .zero)
+        #expect(zero.newPane == .zero)
     }
 
     private func makeAnchor(

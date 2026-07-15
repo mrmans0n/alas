@@ -229,8 +229,6 @@ final class DiffPaneTextDocumentContainerView: NSView {
     private var lastRowsUpdateSignature: RowsUpdateSignature?
     private var pendingIntrinsicContentSizeInvalidation = false
 
-    private let dividerWidth: CGFloat = 1
-
     override var isFlipped: Bool { true }
 
     override var intrinsicContentSize: NSSize {
@@ -388,11 +386,26 @@ final class DiffPaneTextDocumentContainerView: NSView {
     }
 
     private func layoutSplit() {
-        let width = max(bounds.width, 1)
-        let paneWidth = floor((width - dividerWidth) / 2)
-        oldPane.frame = NSRect(x: 0, y: 0, width: paneWidth, height: max(bounds.height, measuredHeight))
-        dividerView.frame = NSRect(x: paneWidth, y: 0, width: dividerWidth, height: max(bounds.height, measuredHeight))
-        newPane.frame = NSRect(x: paneWidth + dividerWidth, y: 0, width: width - paneWidth - dividerWidth, height: max(bounds.height, measuredHeight))
+        let splitFrames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
+        let height = max(bounds.height, measuredHeight)
+        oldPane.frame = NSRect(
+            x: splitFrames.oldPane.minX,
+            y: 0,
+            width: splitFrames.oldPane.width,
+            height: height
+        )
+        dividerView.frame = NSRect(
+            x: splitFrames.divider.minX,
+            y: 0,
+            width: splitFrames.divider.width,
+            height: height
+        )
+        newPane.frame = NSRect(
+            x: splitFrames.newPane.minX,
+            y: 0,
+            width: splitFrames.newPane.width,
+            height: height
+        )
 
         oldPane.layoutSubtreeIfNeeded()
         newPane.layoutSubtreeIfNeeded()

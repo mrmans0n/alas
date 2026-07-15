@@ -1320,21 +1320,54 @@ let second = true
         #expect(scrollView.contentView.frame.minX >= rulerWidth - 0.5)
     }
 
-    @Test func feedbackLaneWrapperExposesItsEffectiveLaneForAccessibility() throws {
+    @Test func feedbackLaneWrapperRetainsFullWidthAndHostsMultipleChildren() throws {
         let rows = try #require(model().groups.first?.rows)
         let splitController = NSHostingController(rootView:
             DiffFeedbackLaneView(lane: .left, layoutMode: .split, rows: rows) {
-                Color.clear.frame(height: 20)
+                FrameProbe(identifier: "feedback-child-first")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 10)
+                FrameProbe(identifier: "feedback-child-second")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 20)
             }
             .environment(\.theme, theme())
         )
-        splitController.view.frame = NSRect(x: 0, y: 0, width: 901, height: 20)
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 60)
         splitController.view.layoutSubtreeIfNeeded()
 
-        #expect(subview(
+        let laneMarker = try #require(subview(
             withAccessibilityIdentifier: "diff-feedback-lane-left",
             in: splitController.view
-        ) != nil)
+        ))
+        let dividerMarker = try #require(subview(
+            withAccessibilityIdentifier: "diff-feedback-divider",
+            in: splitController.view
+        ))
+        let firstChild = try #require(subview(
+            withAccessibilityIdentifier: "feedback-child-first",
+            in: splitController.view
+        ))
+        let secondChild = try #require(subview(
+            withAccessibilityIdentifier: "feedback-child-second",
+            in: splitController.view
+        ))
+        let laneFrame = laneMarker.convert(laneMarker.bounds, to: splitController.view)
+        let dividerFrame = dividerMarker.convert(dividerMarker.bounds, to: splitController.view)
+        let firstFrame = firstChild.convert(firstChild.bounds, to: splitController.view)
+        let secondFrame = secondChild.convert(secondChild.bounds, to: splitController.view)
+
+        #expect(abs(laneFrame.minX) < 0.01)
+        #expect(abs(laneFrame.width - 900) < 0.01)
+        #expect(abs(dividerFrame.minX - 449) < 0.01)
+        #expect(abs(dividerFrame.width - 1) < 0.01)
+        #expect(abs(firstFrame.minX - 42) < 0.01)
+        #expect(abs(firstFrame.width - 407) < 0.01)
+        #expect(abs(firstFrame.height - 10) < 0.01)
+        #expect(abs(secondFrame.minX - 42) < 0.01)
+        #expect(abs(secondFrame.width - 407) < 0.01)
+        #expect(abs(secondFrame.height - 20) < 0.01)
+        #expect(abs(secondFrame.minY - firstFrame.maxY) < 0.01)
 
         let stackedController = NSHostingController(rootView:
             DiffFeedbackLaneView(lane: .right, layoutMode: .stacked, rows: rows) {
@@ -2661,6 +2694,31 @@ let second = true
         #expect(nsView.intrinsicContentSize.height > 0)
     }
 
+    @Test func containerViewUsesSharedSplitFramesAtEvenAndSubDividerWidths() throws {
+        let nsView = DiffPaneTextDocumentContainerView()
+
+        nsView.setFrameSize(NSSize(width: 900, height: 20))
+        nsView.layout()
+        let oldPane = try #require(nsView.subviews.first)
+        let newPane = try #require(nsView.subviews.dropFirst().first)
+        let divider = try #require(nsView.subviews.last)
+        #expect(oldPane.frame.minX == 0)
+        #expect(oldPane.frame.width == 449)
+        #expect(divider.frame.minX == 449)
+        #expect(divider.frame.width == 1)
+        #expect(newPane.frame.minX == 450)
+        #expect(newPane.frame.width == 450)
+
+        nsView.setFrameSize(NSSize(width: 0.5, height: 20))
+        nsView.layout()
+        #expect(oldPane.frame.minX == 0)
+        #expect(oldPane.frame.width == 0)
+        #expect(divider.frame.minX == 0)
+        #expect(divider.frame.width == 0.5)
+        #expect(newPane.frame.minX == 0.5)
+        #expect(newPane.frame.width == 0)
+    }
+
     @Test func containerViewUpdateRowsProducesPositiveHeightForThreeRows() throws {
         let group = try #require(model().groups.first)
         let rows = Array(group.rows.prefix(3))
@@ -3033,6 +3091,20 @@ let second = true
                 guard needsUpdateConstraints else { return }
                 constraintInvalidationCount += 1
             }
+        }
+    }
+
+    private struct FrameProbe: NSViewRepresentable {
+        let identifier: String
+
+        func makeNSView(context: Context) -> NSView {
+            let view = NSView(frame: .zero)
+            view.setAccessibilityIdentifier(identifier)
+            return view
+        }
+
+        func updateNSView(_ nsView: NSView, context: Context) {
+            nsView.setAccessibilityIdentifier(identifier)
         }
     }
 
