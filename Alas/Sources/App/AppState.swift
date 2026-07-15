@@ -1840,6 +1840,19 @@ final class AppState {
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
             sessionWorktreeId: sessionWorktreeLookup,
+            resolveACPSessionOrigin: { [weak self] sessionId in
+                guard let self,
+                      let (worktreeId, manager) = self.acpManagers.first(where: { _, manager in
+                          manager.liveSession(for: sessionId) != nil
+                      }),
+                      let worktree = self.worktree(withId: worktreeId)
+                else { return nil }
+                return ACPOrchestrationSessionOrigin(
+                    sessionId: sessionId,
+                    projectId: worktree.projectId,
+                    worktreeId: worktree.id
+                )
+            },
             originatingWorktree: { [weak self] worktreeId in
                 self?.worktree(withId: worktreeId)
             },

@@ -20,11 +20,14 @@ struct ACPSessionOrchestrationPolicyTests {
 
     @Test("root sessions may create children but delegated children may not")
     func createAuthorization() {
-        #expect(ACPSessionOrchestrationPolicy.authorizeCreate(parent: nil) == .success(()))
-        #expect(
-            ACPSessionOrchestrationPolicy.authorizeCreate(parent: child)
-                == .failure(.delegatedSessionCannotCreateChild)
-        )
+        guard case .success = ACPSessionOrchestrationPolicy.authorizeCreate(parent: nil) else {
+            Issue.record("Expected root session creation to succeed")
+            return
+        }
+        guard case .failure(.delegatedSessionCannotCreateChild) = ACPSessionOrchestrationPolicy.authorizeCreate(parent: child) else {
+            Issue.record("Expected delegated child creation to be rejected")
+            return
+        }
     }
 
     @Test("only direct parent-child edges may send prompts")
@@ -122,18 +125,19 @@ struct ACPSessionOrchestrationPolicyTests {
     }
 
     @Test("agent resolution inherits parent and rejects unavailable choices")
-    func resolvesAgent() {
+    func resolvesAgent() throws {
         let agents = [
             ACPOrchestrationAgent(id: "codex", isEnabled: true, isACPCapable: true),
             ACPOrchestrationAgent(id: "claude", isEnabled: false, isACPCapable: true),
             ACPOrchestrationAgent(id: "terminal", isEnabled: true, isACPCapable: false),
         ]
 
-        #expect(try ACPSessionOrchestrationPolicy.resolveAgent(
+        let inherited = try ACPSessionOrchestrationPolicy.resolveAgent(
             requestedId: nil,
             parentAgentId: "codex",
             available: agents
-        ) == "codex")
+        )
+        #expect(inherited == "codex")
         #expect(throws: ACPSessionOrchestrationPolicy.Error.agentUnavailable("claude")) {
             _ = try ACPSessionOrchestrationPolicy.resolveAgent(
                 requestedId: "claude",
@@ -151,8 +155,9 @@ struct ACPSessionOrchestrationPolicyTests {
     }
 
     @Test("prompt validation rejects blank text")
-    func promptValidation() {
-        #expect(try ACPSessionOrchestrationPolicy.validatedPrompt("  Task\n") == "Task")
+    func promptValidation() throws {
+        let prompt = try ACPSessionOrchestrationPolicy.validatedPrompt("  Task\n")
+        #expect(prompt == "Task")
         #expect(throws: ACPSessionOrchestrationPolicy.Error.blankPrompt) {
             _ = try ACPSessionOrchestrationPolicy.validatedPrompt(" \n\t ")
         }

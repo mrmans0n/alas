@@ -37,6 +37,15 @@ struct AlasActionService {
     var notifySession: (String?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
+    var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
+        .error("Session orchestration is not available yet.")
+    }
+    var createDelegatedSession: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionNewRequest) async -> AlasCLIResponse = { _, _ in
+        .error("Session orchestration is not available yet.")
+    }
+    var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
+        .error("Session orchestration is not available yet.")
+    }
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -137,6 +146,24 @@ struct AlasActionService {
         level: AlasCLINotifyLevel
     ) -> AlasCLIResponse {
         notifySession(sessionId, origin, body, title, level)
+    }
+
+    func sessionList(origin: ACPOrchestrationSessionOrigin) async -> AlasCLIResponse {
+        await listDelegatedSessions(origin)
+    }
+
+    func sessionNew(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionNewRequest
+    ) async -> AlasCLIResponse {
+        await createDelegatedSession(origin, request)
+    }
+
+    func sessionSend(
+        origin: ACPOrchestrationSessionOrigin,
+        request: ACPDelegatedSessionMessageRequest
+    ) async -> AlasCLIResponse {
+        await sendDelegatedSessionMessage(origin, request)
     }
 
     func new(origin: Worktree, branch: String, base: String?) async -> AlasCLIResponse {

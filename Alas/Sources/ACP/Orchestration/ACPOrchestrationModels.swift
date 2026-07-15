@@ -1,5 +1,28 @@
 import Foundation
 
+struct ACPOrchestrationSessionOrigin: Equatable, Sendable {
+    let sessionId: String
+    let projectId: String
+    let worktreeId: String
+}
+
+enum ACPDelegatedSessionWorktreeTarget: Equatable, Sendable {
+    case current
+    case existing(worktreeId: String)
+    case new(branch: String, base: String?)
+}
+
+struct ACPDelegatedSessionNewRequest: Equatable, Sendable {
+    let prompt: String
+    let agentId: String?
+    let worktree: ACPDelegatedSessionWorktreeTarget
+}
+
+struct ACPDelegatedSessionMessageRequest: Equatable, Sendable {
+    let targetSessionId: String
+    let prompt: String
+}
+
 enum ACPDelegatedWorktreeRequest: Codable, Equatable, Sendable {
     case current(worktreeId: String)
     case existing(worktreeId: String)

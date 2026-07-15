@@ -99,7 +99,7 @@ struct ACPOrchestrationStoreTests {
         )
         try store.clearPendingInitialPrompt(childSessionId: "child", updatedAt: 130)
 
-        let record = try #require(store.delegation(childSessionId: "child"))
+        let record = try #require(try store.delegation(childSessionId: "child"))
         #expect(record.childWorktreeId == "real-worktree")
         #expect(record.phase == .failed)
         #expect(record.failureMessage == "Could not create worktree.")
@@ -170,7 +170,7 @@ struct ACPOrchestrationStoreTests {
             staleAfter: 10
         )
 
-        let claim = try #require(store.claimMessage(
+        let claim = try #require(try store.claimMessage(
             id: "message",
             instanceId: "new-instance",
             token: "new-token",

@@ -3,6 +3,7 @@ import Foundation
 @MainActor
 struct AlasCLICommandRouter {
     var sessionWorktreeId: (String) -> String?
+    var resolveACPSessionOrigin: (String) -> ACPOrchestrationSessionOrigin? = { _ in nil }
     var originatingWorktree: (String) -> Worktree?
     var visibleWorktrees: () -> [Worktree]
     var openRelativeFile: (String, String) -> Void
@@ -31,6 +32,15 @@ struct AlasCLICommandRouter {
     var notifySession: (String?, Worktree, String, String?, AlasCLINotifyLevel) -> AlasCLIResponse = { _, _, _, _, _ in
         .error("Notifications from the terminal are not available yet.")
     }
+    var listDelegatedSessions: (ACPOrchestrationSessionOrigin) async -> AlasCLIResponse = { _ in
+        .error("Session orchestration is not available yet.")
+    }
+    var createDelegatedSession: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionNewRequest) async -> AlasCLIResponse = { _, _ in
+        .error("Session orchestration is not available yet.")
+    }
+    var sendDelegatedSessionMessage: (ACPOrchestrationSessionOrigin, ACPDelegatedSessionMessageRequest) async -> AlasCLIResponse = { _, _ in
+        .error("Session orchestration is not available yet.")
+    }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -52,12 +62,58 @@ struct AlasCLICommandRouter {
             gitStatus: gitStatus,
             providerReviewOriginalPath: providerReviewOriginalPath,
             notifySession: notifySession,
+            listDelegatedSessions: listDelegatedSessions,
+            createDelegatedSession: createDelegatedSession,
+            sendDelegatedSessionMessage: sendDelegatedSessionMessage,
             activateApp: activateApp
         )
     }
 
     func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
+        switch request.command {
+        case .sessionList, .sessionNew, .sessionSend:
+            guard let sessionId = request.sessionId,
+                  let acpOrigin = resolveACPSessionOrigin(sessionId) else {
+                return .error("session commands require an originating ACP session")
+            }
+
+            switch request.command {
+            case .sessionList:
+                return await service.sessionList(origin: acpOrigin)
+            case .sessionNew(let prompt, let agentID, let worktree):
+                let target: ACPDelegatedSessionWorktreeTarget
+                switch worktree {
+                case .current:
+                    target = .current
+                case .existing(let worktreeID):
+                    target = .existing(worktreeId: worktreeID)
+                case .new(let branch, let base):
+                    target = .new(branch: branch, base: base)
+                }
+                return await service.sessionNew(
+                    origin: acpOrigin,
+                    request: ACPDelegatedSessionNewRequest(
+                        prompt: prompt,
+                        agentId: agentID,
+                        worktree: target
+                    )
+                )
+            case .sessionSend(let sessionID, let prompt):
+                return await service.sessionSend(
+                    origin: acpOrigin,
+                    request: ACPDelegatedSessionMessageRequest(
+                        targetSessionId: sessionID,
+                        prompt: prompt
+                    )
+                )
+            default:
+                preconditionFailure("Session command switch must be exhaustive")
+            }
+        default:
+            break
+        }
+
         // Resolve the origin worktree: exact session first, else cwd.
         let origin: Worktree
         if let sessionId = request.sessionId,
@@ -120,6 +176,8 @@ struct AlasCLICommandRouter {
             return service.reviewFinish(
                 origin: origin, sessionID: sessionID, verdict: verdict, summary: summary
             )
+        case .sessionList, .sessionNew, .sessionSend:
+            preconditionFailure("Session commands are handled before generic origin resolution")
         }
     }
 }

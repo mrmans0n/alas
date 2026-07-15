@@ -94,14 +94,14 @@ enum ACPSessionOrchestrationPolicy {
     }
 
     static func resolveAgent(
-        requestedAgentId: String?,
+        requestedId: String?,
         parentAgentId: String,
-        availableAgents: [ACPOrchestrationAgent]
+        available: [ACPOrchestrationAgent]
     ) throws -> String {
-        let requestedId = requestedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedId = requestedId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let agentId = requestedId?.isEmpty == false ? requestedId! : parentAgentId
 
-        guard availableAgents.contains(where: {
+        guard available.contains(where: {
             $0.id == agentId && $0.isEnabled && $0.isACPCapable
         }) else {
             throw Error.agentUnavailable(agentId)
