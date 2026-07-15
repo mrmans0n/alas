@@ -229,24 +229,45 @@ struct AlasActionService {
     }
 
     /// Worktree-relative form of `path`: absolute paths under the worktree
-    /// root are relativized; already-relative paths pass through unchanged
-    /// (treated as already worktree-relative). Tries the path as given
-    /// first, then with symlinks resolved on both sides — the CLI
-    /// absolutizes against the caller's logical `$PWD`, which preserves a
-    /// symlinked checkout path, while `worktreeRoot` may be the resolved
-    /// real path Alas tracks (same two-step pattern `relativePathAndDepth`
-    /// already uses for `open`). Returns nil when an absolute path is
-    /// outside the worktree root even after symlink resolution, so callers
-    /// don't file a comment against a path that can never match a file in
-    /// the review.
+    /// root are relativized; already-relative paths are lexically
+    /// normalized (collapsing `.`/`..`/repeated separators) and treated as
+    /// already worktree-relative — MCP callers may send `./Sources/App.swift`
+    /// or `Sources/../Sources/App.swift`, and an unnormalized form would
+    /// miss the exact-match `gitStatus`/`DiffReviewFileID` lookups downstream.
+    /// Absolute paths try the path as given first, then with symlinks
+    /// resolved on both sides — the CLI absolutizes against the caller's
+    /// logical `$PWD`, which preserves a symlinked checkout path, while
+    /// `worktreeRoot` may be the resolved real path Alas tracks (same
+    /// two-step pattern `relativePathAndDepth` already uses for `open`).
+    /// Returns nil when an absolute path is outside the worktree root even
+    /// after symlink resolution, so callers don't file a comment against a
+    /// path that can never match a file in the review.
     static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String? {
-        guard path.hasPrefix("/") else { return path }
+        guard path.hasPrefix("/") else { return normalizedRelativePath(path) }
         if let relative = relativePath(path, against: worktreeRoot.standardizedFileURL.path) {
             return relative
         }
         let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL.path
         let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
         return relativePath(resolvedPath, against: resolvedRoot)
+    }
+
+    /// Collapses `.`/`..`/repeated separators in a relative path purely
+    /// lexically (no filesystem access, no process cwd involved). A leading
+    /// `..` that would climb above the path's own root is dropped rather
+    /// than followed, since this path is already meant to be worktree-root
+    /// relative.
+    private static func normalizedRelativePath(_ path: String) -> String {
+        var components: [String] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if component == "." { continue }
+            if component == ".." {
+                if !components.isEmpty { components.removeLast() }
+                continue
+            }
+            components.append(String(component))
+        }
+        return components.joined(separator: "/")
     }
 
     private static func relativePath(_ path: String, against rootPath: String) -> String? {

@@ -803,6 +803,50 @@ struct AlasCLICommandRouterTests {
         #expect(try store.load(sessionID: target.draftSessionID).isEmpty)
     }
 
+    @Test func worktreeRelativePathNormalizesAlreadyRelativePaths() {
+        #expect(AlasActionService.worktreeRelativePath("./Sources/App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
+        #expect(AlasActionService.worktreeRelativePath("Sources/../Sources/App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
+        #expect(AlasActionService.worktreeRelativePath("Sources//App.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "Sources/App.swift")
+        #expect(AlasActionService.worktreeRelativePath("a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
+        // A leading `..` can't climb above the (already worktree-relative)
+        // root — it's dropped rather than followed.
+        #expect(AlasActionService.worktreeRelativePath("../a.swift", worktreeRoot: URL(fileURLWithPath: "/repo")) == "a.swift")
+    }
+
+    @Test func commentAddFilesAgentCommentAtNormalizedPathForDotSlashInput() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            }
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "./a.swift", startLine: 1, endLine: nil, side: nil, body: "add a guard", sessionID: nil
+            ))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected .text response, got \(response)")
+            return
+        }
+        let expectedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
+        let saved = try store.load(sessionID: expectedSession)
+        #expect(saved.count == 1)
+        #expect(saved[0].path == "a.swift")
+    }
+
     @Test func worktreeRelativePathResolvesSymlinkedRootAgainstTheRealWorktreePath() throws {
         // resolvingSymlinksInPath() needs the file to actually exist to
         // resolve the intermediate symlink, matching the real scenario:
