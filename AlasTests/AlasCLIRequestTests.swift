@@ -132,6 +132,23 @@ struct AlasCLIRequestTests {
         #expect(encoded.contains(#""lines":["a","b"]"#))
     }
 
+    @Test func decodesReviewCommentsWithAndWithoutParams() throws {
+        let bare = #"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1"}"#
+        let bareRequest = try AlasCLIRequest.decode(from: Data(bare.utf8))
+        #expect(bareRequest.command == .review(.comments(sessionID: nil, state: .active)))
+
+        let full = #"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1","params":{"session_id":"rsid","state":"all"}}"#
+        let fullRequest = try AlasCLIRequest.decode(from: Data(full.utf8))
+        #expect(fullRequest.command == .review(.comments(sessionID: "rsid", state: .all)))
+    }
+
+    @Test func rejectsUnknownReviewCommentsState() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_comments","session_id":"s1","params":{"state":"bogus"}}"#
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(json.utf8))
+        }
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

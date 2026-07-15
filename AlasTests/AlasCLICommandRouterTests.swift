@@ -539,6 +539,90 @@ struct AlasCLICommandRouterTests {
         #expect(opened?.target == "123")
     }
 
+    private func makeDraftComment(
+        id: String,
+        worktreeID: String,
+        state: ReviewDraftCommentState = .active
+    ) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: id,
+            sessionID: .localChanges(
+                worktreeID: worktreeID,
+                worktreePath: URL(fileURLWithPath: "/repo"),
+                scope: .all
+            ),
+            fileID: DiffReviewFileID(namespace: "review", path: "a.swift"),
+            path: "a.swift",
+            originalPath: nil,
+            side: .new,
+            startLine: 5,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: "look at this",
+            state: state,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+    }
+
+    private func makeReviewRouter(
+        worktree: Worktree,
+        store: ReviewDraftCommentStore
+    ) -> AlasCLICommandRouter {
+        AlasCLICommandRouter(
+            sessionWorktreeId: { $0 == "s1" ? worktree.id : nil },
+            originatingWorktree: { _ in worktree },
+            visibleWorktrees: { [worktree] },
+            openRelativeFile: { _, _ in },
+            openExternalFile: { _, _ in },
+            draftCommentStore: { store },
+            activateApp: {}
+        )
+    }
+
+    @Test func listsActiveReviewCommentsForTheOriginWorktree() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        try store.save(makeDraftComment(id: "mine", worktreeID: "wt1"))
+        try store.save(makeDraftComment(id: "resolved", worktreeID: "wt1", state: .resolved))
+        try store.save(makeDraftComment(id: "other", worktreeID: "wt2"))
+
+        let router = makeReviewRouter(worktree: worktree, store: store)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.comments(sessionID: nil, state: .active))
+        ))
+
+        guard case .text(let lines) = response, let line = lines.first else {
+            Issue.record("expected .text response, got \(response)")
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(line.utf8))
+        #expect(decoded.map(\.id) == ["mine"])
+        #expect(decoded[0].author.kind == "user")
+        #expect(decoded[0].state == "active")
+
+        let all = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.comments(sessionID: nil, state: .all))
+        ))
+        guard case .text(let allLines) = all, let allLine = allLines.first else {
+            Issue.record("expected .text response")
+            return
+        }
+        let allDecoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(allLine.utf8))
+        #expect(Set(allDecoded.map(\.id)) == ["mine", "resolved"])
+    }
+
     private static func router(
         origin: Worktree,
         visibleWorktrees: [Worktree],

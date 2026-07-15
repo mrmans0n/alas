@@ -24,6 +24,7 @@ struct AlasActionService {
     var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
+    var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -114,6 +115,30 @@ struct AlasActionService {
 
     func reviewProvider(origin: Worktree, target: String) async -> AlasCLIResponse {
         await openProviderReview(origin, target)
+    }
+
+    func reviewComments(origin: Worktree, sessionID: String?, filter: ReviewCommentWireFilter) -> AlasCLIResponse {
+        let all: [ReviewDraftComment]
+        do {
+            all = try draftCommentStore().loadAll()
+        } catch {
+            return .error("could not read review comments: \(error.localizedDescription)")
+        }
+        let scoped = all.filter { comment in
+            if let sessionID {
+                return comment.sessionID.rawValue == sessionID
+            }
+            return comment.sessionID.isFor(worktreeID: origin.id)
+        }
+        let filtered = scoped.filter { comment in
+            switch filter {
+            case .all: return true
+            case .active: return comment.state == .active
+            case .resolved: return comment.state == .resolved
+            case .dismissed: return comment.state == .dismissed
+            }
+        }
+        return .text([ReviewCommentWireDTO.jsonLine(filtered.map(ReviewCommentWireDTO.init))])
     }
 
     // MARK: - Worktree matching (moved verbatim from AlasCLICommandRouter)

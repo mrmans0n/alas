@@ -18,6 +18,7 @@ struct AlasCLICommandRouter {
     var openProviderReview: (Worktree, String) async -> AlasCLIResponse = { _, _ in
         .error("Opening provider reviews from the terminal is not available yet.")
     }
+    var draftCommentStore: () -> ReviewDraftCommentStore = { ReviewDraftCommentStore() }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -30,6 +31,7 @@ struct AlasCLICommandRouter {
             deleteWorktreeAction: deleteWorktree,
             openReviewChanges: openReviewChanges,
             openProviderReview: openProviderReview,
+            draftCommentStore: draftCommentStore,
             activateApp: activateApp
         )
     }
@@ -68,6 +70,8 @@ struct AlasCLICommandRouter {
             return service.reviewLocal(origin: origin)
         case .review(.provider(let target)):
             return await service.reviewProvider(origin: origin, target: target)
+        case .review(.comments(let sessionID, let state)):
+            return service.reviewComments(origin: origin, sessionID: sessionID, filter: state)
         }
     }
 }

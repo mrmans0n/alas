@@ -9,6 +9,13 @@ enum AlasCLIRequestError: Error, Equatable {
     case missingPaths
 }
 
+enum ReviewCommentWireFilter: String, Equatable {
+    case active
+    case resolved
+    case dismissed
+    case all
+}
+
 struct AlasCLIRequest: Equatable {
     enum Command: Equatable {
         case open(paths: [String])
@@ -27,6 +34,7 @@ struct AlasCLIRequest: Equatable {
     enum ReviewCommand: Equatable {
         case localChanges
         case provider(target: String)
+        case comments(sessionID: String?, state: ReviewCommentWireFilter)
     }
 
     let version: Int
@@ -56,6 +64,11 @@ struct AlasCLIRequest: Equatable {
 
     private struct ParamsEnvelope<P: Decodable>: Decodable {
         var params: P?
+    }
+
+    private struct ReviewCommentsParams: Decodable {
+        var session_id: String?
+        var state: String?
     }
 
     /// Typed access to the `params` object new-style commands carry.
@@ -151,6 +164,18 @@ struct AlasCLIRequest: Equatable {
             } else {
                 command = .review(.localChanges)
             }
+        case "review_comments":
+            let params = try Self.decodeParamsIfPresent(ReviewCommentsParams.self, from: data)
+            let filter: ReviewCommentWireFilter
+            if let rawState = params?.state?.nilIfBlank {
+                guard let parsed = ReviewCommentWireFilter(rawValue: rawState) else {
+                    throw AlasCLIRequestError.malformed
+                }
+                filter = parsed
+            } else {
+                filter = .active
+            }
+            command = .review(.comments(sessionID: params?.session_id?.nilIfBlank, state: filter))
         case "resolve":
             command = .resolve
         default:
