@@ -84,6 +84,11 @@ struct AlasCLICommandRouter {
             return service.reviewReply(origin: origin, commentID: commentID, body: body)
         case .review(.resolve(let commentID, let reply, let reopen)):
             return service.reviewResolve(origin: origin, commentID: commentID, reply: reply, reopen: reopen)
+        case .review(.commentAdd(let path, let startLine, let endLine, let side, let body, let sessionID)):
+            return service.reviewCommentAdd(
+                origin: origin, path: path, startLine: startLine, endLine: endLine,
+                side: side, body: body, sessionID: sessionID
+            )
         }
     }
 }

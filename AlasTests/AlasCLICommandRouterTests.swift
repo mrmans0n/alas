@@ -515,7 +515,15 @@ struct AlasCLICommandRouterTests {
 
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
 
-        #expect(response == .ok)
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        let expectedSession = ReviewDraftSessionID.localChanges(
+            worktreeID: current.id, worktreePath: current.path, scope: .all
+        )
+        let object = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: String]
+        #expect(object?["session_id"] == expectedSession.rawValue)
         #expect(opened == current.id)
         #expect(activationCount == 1)
     }
@@ -625,6 +633,71 @@ struct AlasCLICommandRouterTests {
         }
         let allDecoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(allLine.utf8))
         #expect(Set(allDecoded.map(\.id)) == ["mine", "resolved"])
+    }
+
+    @Test func commentAddFilesAgentCommentIntoLocalChangesSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+
+        let router = makeReviewRouter(worktree: worktree, store: store)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "a.swift", startLine: 4, endLine: nil, side: nil, body: "add a guard", sessionID: nil
+            ))
+        ))
+
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        #expect(lines[1].contains("comment_id"))
+        let expectedSession = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt1", worktreePath: root, scope: .all
+        )
+        let saved = try store.load(sessionID: expectedSession)
+        #expect(saved.count == 1)
+        #expect(saved[0].effectiveAuthor.isAgent)
+        #expect(saved[0].path == "a.swift")
+        #expect(saved[0].side == .new)
+        #expect(saved[0].startLine == 4)
+    }
+
+    @Test func reviewLocalReturnsItsSessionID() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        var openedReview = false
+        var router = makeReviewRouter(
+            worktree: worktree,
+            store: ReviewDraftCommentStore(
+                url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")
+            )
+        )
+        router.openReviewChanges = { _ in openedReview = true }
+
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)
+        ))
+
+        #expect(openedReview)
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        let expected = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
+        #expect(lines[1].contains(#""session_id":"#))
+        let object = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: String]
+        #expect(object?["session_id"] == expected.rawValue)
     }
 
     @Test func replyAppendsAgentReplyAndNotifies() async throws {

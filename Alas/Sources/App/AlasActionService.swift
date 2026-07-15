@@ -115,7 +115,15 @@ struct AlasActionService {
     func reviewLocal(origin: Worktree) -> AlasCLIResponse {
         openReviewChanges(origin)
         activateApp()
-        return .ok
+        let sessionID = ReviewDraftSessionID.localChanges(
+            worktreeID: origin.id,
+            worktreePath: origin.path,
+            scope: .all
+        )
+        return .text([
+            "Opened review of local changes in Alas.",
+            Self.jsonLine(["session_id": sessionID.rawValue]),
+        ])
     }
 
     func reviewProvider(origin: Worktree, target: String) async -> AlasCLIResponse {
@@ -149,6 +157,79 @@ struct AlasActionService {
     /// The author identity CLI/MCP mutations write. Phase 2+ can thread a
     /// real agent name through the wire; the enum already supports it.
     static let cliAgentAuthor = ReviewDraftCommentAuthor.agent(name: "Agent")
+
+    /// One deterministic JSON line for machine-readable CLI/MCP output.
+    static func jsonLine(_ object: [String: String]) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
+    }
+
+    func reviewCommentAdd(
+        origin: Worktree,
+        path: String,
+        startLine: Int,
+        endLine: Int?,
+        side: String?,
+        body: String,
+        sessionID: String?
+    ) -> AlasCLIResponse {
+        let targetSessionID: ReviewDraftSessionID
+        if let sessionID {
+            guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
+                  parsed.isFor(worktreeID: origin.id) else {
+                return .error("unknown review session id")
+            }
+            targetSessionID = parsed
+        } else {
+            targetSessionID = .localChanges(worktreeID: origin.id, worktreePath: origin.path, scope: .all)
+        }
+        let relativePath = Self.worktreeRelativePath(path, worktreeRoot: origin.path)
+        guard !relativePath.isEmpty else {
+            return .error("review comment path must point at a file")
+        }
+        let timestamp = now()
+        let comment = ReviewDraftComment(
+            id: UUID().uuidString,
+            sessionID: targetSessionID,
+            fileID: DiffReviewFileID(namespace: "review", path: relativePath),
+            path: relativePath,
+            originalPath: nil,
+            side: side == "old" ? .old : .new,
+            startLine: startLine,
+            endLine: endLine,
+            selectedText: nil,
+            bodyMarkdown: body,
+            state: .active,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            author: Self.cliAgentAuthor
+        )
+        do {
+            try draftCommentStore().save(comment)
+        } catch {
+            return .error("could not save review comment: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .text([
+            "Filed review comment.",
+            Self.jsonLine(["comment_id": comment.id]),
+        ])
+    }
+
+    /// Worktree-relative form of `path`: absolute paths under the worktree
+    /// root are relativized; already-relative paths pass through.
+    static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String {
+        guard path.hasPrefix("/") else { return path }
+        let rootPath = worktreeRoot.standardizedFileURL.path
+        if path == rootPath { return "" }
+        if path.hasPrefix(rootPath + "/") {
+            return String(path.dropFirst(rootPath.count + 1))
+        }
+        return path
+    }
 
     func reviewReply(origin: Worktree, commentID: String, body: String) -> AlasCLIResponse {
         let store = draftCommentStore()

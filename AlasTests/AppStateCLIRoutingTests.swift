@@ -481,7 +481,15 @@ struct AppStateCLIRoutingTests {
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in worktree.id })
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
 
-        #expect(response == .ok)
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        let expectedSession = ReviewDraftSessionID.localChanges(
+            worktreeID: worktree.id, worktreePath: worktree.path, scope: .all
+        )
+        let object = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: String]
+        #expect(object?["session_id"] == expectedSession.rawValue)
         #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
             if case .reviewChanges = $0 { return true }
             return false
@@ -503,7 +511,15 @@ struct AppStateCLIRoutingTests {
         let router = state.makeCLICommandRouter(sessionWorktreeLookup: { _ in main.id })
         let response = await router.handle(.init(version: 1, sessionId: "s1", cwd: nil, command: .review(.localChanges)))
 
-        #expect(response == .ok)
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        let expectedSession = ReviewDraftSessionID.localChanges(
+            worktreeID: main.id, worktreePath: main.path, scope: .all
+        )
+        let object = try JSONSerialization.jsonObject(with: Data(lines[1].utf8)) as? [String: String]
+        #expect(object?["session_id"] == expectedSession.rawValue)
         #expect(state.selectedWorktreeId == main.id)
         #expect(state.tabs.tabs(forWorktree: main.id).contains {
             if case .reviewChanges = $0 { return true }

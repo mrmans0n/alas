@@ -167,6 +167,27 @@ struct AlasCLIRequestTests {
         }
     }
 
+    @Test func decodesReviewCommentAdd() throws {
+        let json = #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":3,"end_line":5,"side":"new","body":"tighten"}}"#
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+        #expect(request.command == .review(.commentAdd(
+            path: "a.swift", startLine: 3, endLine: 5, side: "new", body: "tighten", sessionID: nil
+        )))
+    }
+
+    @Test func rejectsInvalidReviewCommentAdd() throws {
+        for bad in [
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":0,"body":"x"}}"#,
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":5,"end_line":3,"body":"x"}}"#,
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1","params":{"path":"a.swift","start_line":3,"side":"sideways","body":"x"}}"#,
+            #"{"v":1,"kind":"cli","command":"review_comment_add","session_id":"s1"}"#,
+        ] {
+            #expect(throws: AlasCLIRequestError.self, "should reject: \(bad)") {
+                try AlasCLIRequest.decode(from: Data(bad.utf8))
+            }
+        }
+    }
+
     private struct ProbeParams: Decodable, Equatable {
         var name: String
         var count: Int?

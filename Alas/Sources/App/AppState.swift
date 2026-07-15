@@ -3633,7 +3633,10 @@ final class AppState {
             }
             focusGlobalWorktree(id: worktree.id, projectId: worktree.projectId)
             NSApp.activate(ignoringOtherApps: true)
-            return .ok
+            return .text([
+                "Opened review for '\(target)' in Alas.",
+                AlasActionService.jsonLine(["session_id": reviewTarget.draftSessionID.rawValue]),
+            ])
         } catch {
             return .error(Self.describeCLIError(error))
         }
