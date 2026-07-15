@@ -299,6 +299,166 @@ struct ReviewChangesTabViewTests {
         #expect(savedComments.first?.bodyMarkdown == "Updated body")
     }
 
+    @Test func draftWorkspaceActionsResolveRecomputesHandoffProgress() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let sessionStore = ReviewSessionStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-sessions.json")
+        )
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: target.draftSessionID,
+            store: draftStore,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        try controller.load()
+        try controller.add(
+            anchor: DiffReviewLineAnchor(path: "Sources/App.swift", side: .new, line: 4, rowIndex: 0, selectedText: ""),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let comment = try #require(controller.comments.first)
+        try sessionStore.save(ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            status: .sent,
+            handoffs: [ReviewFeedbackHandoff(
+                id: "h1",
+                sessionID: target.id,
+                commentIDs: [comment.id],
+                target: .newChat(agentID: "claude", title: "New chat"),
+                createdAt: Date(timeIntervalSince1970: 1),
+                promptRevision: "rev",
+                status: .sent
+            )],
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        ))
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, _ in Issue.record("send should not be called") }
+        )
+        let actions = ReviewDraftWorkspaceActions.make(
+            controller: controller,
+            sender: sender,
+            worktreeID: "wt-1",
+            now: { Date(timeIntervalSince1970: 200) },
+            sessionStore: { sessionStore }
+        )
+
+        actions.resolve(comment)
+
+        #expect(controller.comments.first?.state == .resolved)
+        let record = try #require(try sessionStore.load(id: target.id))
+        #expect(record.status == .addressed)
+        #expect(record.handoffs.map(\.status) == [.addressed])
+        #expect(record.updatedAt == Date(timeIntervalSince1970: 200))
+    }
+
+    @Test func draftWorkspaceActionsDismissDoesNotRecomputeHandoffProgress() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let sessionStore = ReviewSessionStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-sessions.json")
+        )
+        let target = ReviewSessionTarget.localChanges(
+            worktreeID: "wt-1",
+            repositoryPath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(
+            sessionID: target.draftSessionID,
+            store: draftStore,
+            now: { Date(timeIntervalSince1970: 100) }
+        )
+        try controller.load()
+        try controller.add(
+            anchor: DiffReviewLineAnchor(path: "Sources/App.swift", side: .new, line: 4, rowIndex: 0, selectedText: ""),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let comment = try #require(controller.comments.first)
+        let originalRecord = ReviewSessionRecord(
+            id: target.id,
+            target: target,
+            status: .sent,
+            handoffs: [ReviewFeedbackHandoff(
+                id: "h1",
+                sessionID: target.id,
+                commentIDs: [comment.id],
+                target: .newChat(agentID: "claude", title: "New chat"),
+                createdAt: Date(timeIntervalSince1970: 1),
+                promptRevision: "rev",
+                status: .sent
+            )],
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        try sessionStore.save(originalRecord)
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, _ in Issue.record("send should not be called") }
+        )
+        let actions = ReviewDraftWorkspaceActions.make(
+            controller: controller,
+            sender: sender,
+            worktreeID: "wt-1",
+            now: { Date(timeIntervalSince1970: 200) },
+            sessionStore: { sessionStore }
+        )
+
+        actions.dismiss(comment)
+
+        #expect(controller.comments.first?.state == .dismissed)
+        let record = try #require(try sessionStore.load(id: target.id))
+        #expect(record == originalRecord)
+    }
+
+    @Test func draftWorkspaceActionsResolveSkipsRecomputeWhenWorktreeIDIsNil() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let draftStore = ReviewDraftCommentStore(
+            store: PersistenceStore(),
+            url: directory.appendingPathComponent("review-draft-comments.json")
+        )
+        let session = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt-1",
+            worktreePath: URL(fileURLWithPath: "/repo"),
+            scope: .all
+        )
+        let controller = ReviewDraftCommentController(sessionID: session, store: draftStore)
+        try controller.load()
+        try controller.add(
+            anchor: DiffReviewLineAnchor(path: "Sources/App.swift", side: .new, line: 4, rowIndex: 0, selectedText: ""),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            bodyMarkdown: "Please fix this."
+        )
+        let comment = try #require(controller.comments.first)
+        let sender = ReviewFeedbackAgentSender(
+            availableTargets: { [] },
+            send: { _, _, _ in Issue.record("send should not be called") }
+        )
+        let actions = ReviewDraftWorkspaceActions.make(controller: controller, sender: sender)
+
+        actions.resolve(comment)
+
+        #expect(controller.comments.first?.state == .resolved)
+    }
+
     @Test func draftWorkspaceActionsSendToExplicitTargetOnly() {
         let codex = ReviewFeedbackAgentTarget.newChat(agentID: "codex", title: "Codex")
         let claude = ReviewFeedbackAgentTarget.newChat(agentID: "claude", title: "Claude")

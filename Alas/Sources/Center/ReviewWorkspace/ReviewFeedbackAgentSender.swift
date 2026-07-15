@@ -162,6 +162,9 @@ enum ReviewDraftWorkspaceActions {
         sessionID: ReviewSessionID? = nil,
         recordHandoff: ((ReviewFeedbackHandoff) -> Void)? = nil,
         recordSendFailure: ((Error) -> Void)? = nil,
+        worktreeID: String? = nil,
+        now: @escaping () -> Date = Date.init,
+        sessionStore: @escaping () -> ReviewSessionStore = { ReviewSessionStore() },
         pasteboard: @escaping (String) -> Void = { prompt in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
@@ -189,6 +192,13 @@ enum ReviewDraftWorkspaceActions {
             },
             resolve: { comment in
                 try? controller?.resolve(commentID: comment.id)
+                guard let worktreeID, let controller else { return }
+                try? ReviewHandoffProgress.recomputeAndPersist(
+                    worktreeID: worktreeID,
+                    sessionStore: sessionStore(),
+                    isResolved: { id in controller.comments.first(where: { $0.id == id })?.state == .resolved },
+                    now: now()
+                )
             },
             dismiss: { comment in
                 try? controller?.dismiss(commentID: comment.id)
