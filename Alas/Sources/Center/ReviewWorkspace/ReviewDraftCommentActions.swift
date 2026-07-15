@@ -50,6 +50,7 @@ struct ReviewDraftCommentActions {
     var copyPrompt: (ReviewFeedbackBundle) -> Void
     var publishProvider: (ReviewDraftComment) -> Void
     var publishReview: () -> Void
+    var agent: (ReviewFeedbackAgentTarget) -> AgentDefinition?
     var agentTargets: () -> [ReviewFeedbackAgentTarget]
     var sendToAgent: (ReviewFeedbackBundle, ReviewFeedbackAgentTarget) -> Void
 
@@ -63,6 +64,7 @@ struct ReviewDraftCommentActions {
         copyPrompt: @escaping (ReviewFeedbackBundle) -> Void = { _ in },
         publishProvider: @escaping (ReviewDraftComment) -> Void = { _ in },
         publishReview: @escaping () -> Void = {},
+        agent: @escaping (ReviewFeedbackAgentTarget) -> AgentDefinition? = { _ in nil },
         agentTargets: @escaping () -> [ReviewFeedbackAgentTarget] = { [] },
         sendToAgent: @escaping (ReviewFeedbackBundle, ReviewFeedbackAgentTarget) -> Void = { _, _ in }
     ) {
@@ -75,6 +77,7 @@ struct ReviewDraftCommentActions {
         self.copyPrompt = copyPrompt
         self.publishProvider = publishProvider
         self.publishReview = publishReview
+        self.agent = agent
         self.agentTargets = agentTargets
         self.sendToAgent = sendToAgent
     }

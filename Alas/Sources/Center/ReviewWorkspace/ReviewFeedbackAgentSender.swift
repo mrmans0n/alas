@@ -37,6 +37,7 @@ enum ReviewFeedbackAgentTarget: Codable, Equatable, Hashable, Identifiable, Send
 struct ReviewFeedbackAgentSender {
     var availableTargets: () -> [ReviewFeedbackAgentTarget]
     var send: (String, ReviewFeedbackAgentTarget, @escaping @MainActor (Result<Void, Error>) -> Void) -> Void
+    var agent: (ReviewFeedbackAgentTarget) -> AgentDefinition? = { _ in nil }
 
     static func production(appState: AppState, worktreeID: String) -> ReviewFeedbackAgentSender {
         ReviewFeedbackAgentSender(
@@ -45,13 +46,13 @@ struct ReviewFeedbackAgentSender {
 
                 let sessionTargets = appState.tabs.tabs(forWorktree: worktreeID).compactMap { tab -> ReviewFeedbackAgentTarget? in
                     guard case .acpSession(let state) = tab,
-                          appState.session(for: state.sessionId) != nil,
+                          let session = appState.session(for: state.sessionId),
                           appState.isWriter(for: state.sessionId)
                     else { return nil }
                     return .existingSession(
                         worktreeID: worktreeID,
                         sessionID: state.sessionId,
-                        title: state.title.isEmpty ? "Existing chat" : state.title
+                        title: state.title.isEmpty ? appState.agent(id: session.agentId)?.displayName ?? "Existing chat" : state.title
                     )
                 }
                 targets.append(contentsOf: sessionTargets)
@@ -65,17 +66,48 @@ struct ReviewFeedbackAgentSender {
             send: { prompt, target, completion in
                 switch target {
                 case .newChat(let agentID, _):
+                    if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: worktreeID) {
+                        appState.focusGlobalWorktree(id: resolved.worktree.id, projectId: resolved.project.id)
+                    }
                     appState.openNewACPSession(agentID: agentID, initialPrompt: prompt)
                     completion(.success(()))
-                case .existingSession(_, let sessionID, _):
+                case .existingSession(let targetWorktreeID, let sessionID, _):
+                    if let resolved = Self.projectAndWorktree(appState: appState, worktreeID: targetWorktreeID) {
+                        appState.activateHarnessSession(
+                            projectId: resolved.project.id,
+                            worktreeId: targetWorktreeID,
+                            sessionId: sessionID
+                        )
+                    }
                     Task { @MainActor in
                         await appState.sendPrompt(for: sessionID, text: prompt, attachments: []) { accepted in
                             completion(accepted ? .success(()) : .failure(ReviewFeedbackAgentSendError.rejected))
                         }
                     }
                 }
+            },
+            agent: { target in
+                switch target {
+                case .newChat(let agentID, _):
+                    return appState.agent(id: agentID)
+                case .existingSession(_, let sessionID, _):
+                    guard let session = appState.session(for: sessionID) else { return nil }
+                    return appState.agent(id: session.agentId)
+                }
             }
         )
+    }
+
+    private static func projectAndWorktree(
+        appState: AppState,
+        worktreeID: String
+    ) -> (project: ProjectConfig, worktree: Worktree)? {
+        for project in appState.projectsManager.projects {
+            if let worktree = appState.projectsManager.worktrees(projectId: project.id).first(where: { $0.id == worktreeID }) {
+                return (project, worktree)
+            }
+        }
+        return nil
     }
 }
 
@@ -195,6 +227,9 @@ enum ReviewDraftWorkspaceActions {
             },
             copyPrompt: { bundle in
                 ReviewFeedbackPromptActions.copyPrompt(bundle, pasteboard: pasteboard)
+            },
+            agent: { target in
+                sender.agent(target)
             },
             agentTargets: {
                 sender.availableTargets()

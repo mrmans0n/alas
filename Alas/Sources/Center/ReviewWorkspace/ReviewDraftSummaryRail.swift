@@ -350,16 +350,20 @@ struct ReviewDraftSummaryRail: View {
                 let existingTargets = agentTargets.filter { !$0.isNewChat }
                 let newChatTargets = agentTargets.filter { $0.isNewChat }
                 ForEach(existingTargets) { target in
-                    Button(target.title) {
+                    Button {
                         draftCommentActions.sendToAgent(bundle, target)
+                    } label: {
+                        sendToAgentTargetLabel(target)
                     }
                 }
                 if !existingTargets.isEmpty, !newChatTargets.isEmpty {
                     Divider()
                 }
                 ForEach(newChatTargets) { target in
-                    Button(target.title) {
+                    Button {
                         draftCommentActions.sendToAgent(bundle, target)
+                    } label: {
+                        sendToAgentTargetLabel(target)
                     }
                 }
             } label: {
@@ -390,16 +394,20 @@ struct ReviewDraftSummaryRail: View {
                 let existingTargets = agentTargets.filter { !$0.isNewChat }
                 let newChatTargets = agentTargets.filter { $0.isNewChat }
                 ForEach(existingTargets) { target in
-                    Button(target.title) {
+                    Button {
                         draftCommentActions.sendToAgent(bundle, target)
+                    } label: {
+                        sendToAgentTargetLabel(target)
                     }
                 }
                 if !existingTargets.isEmpty, !newChatTargets.isEmpty {
                     Divider()
                 }
                 ForEach(newChatTargets) { target in
-                    Button(target.title) {
+                    Button {
                         draftCommentActions.sendToAgent(bundle, target)
+                    } label: {
+                        sendToAgentTargetLabel(target)
                     }
                 }
             } label: {
@@ -432,6 +440,18 @@ struct ReviewDraftSummaryRail: View {
                     draftCommentActions.sendToAgent(bundle, target)
                 }
             )
+        }
+    }
+
+    private func sendToAgentTargetLabel(_ target: ReviewFeedbackAgentTarget) -> some View {
+        Label {
+            Text(target.title)
+        } icon: {
+            if let agent = draftCommentActions.agent(target) {
+                Image(nsImage: AgentLogoView.menuImage(for: agent, size: 14))
+            } else {
+                Image(systemName: "sparkle")
+            }
         }
     }
 

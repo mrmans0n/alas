@@ -205,6 +205,28 @@ struct ReviewLoopHandoffRoutingTests {
         #expect(sessionFor(tab: newTab, in: state)?.composerDraft == ACPComposerDraft(segments: [.text("Review feedback")]))
     }
 
+    @Test func reviewFeedbackSendActivatesSelectedExistingACPChat() throws {
+        let state = makeState()
+        state.openNewACPSession(agentID: "test-agent")
+        let first = try #require(acpTabs(in: state).first)
+        state.openNewACPSession(agentID: "other-agent")
+        let second = try #require(acpTabs(in: state).last)
+        let worktreeId = try #require(state.selectedWorktreeId)
+        state.tabs.activate(worktreeId: worktreeId, tabId: first.id)
+
+        let sender = ReviewFeedbackAgentSender.production(appState: state, worktreeID: worktreeId)
+        let target = ReviewFeedbackAgentTarget.existingSession(
+            worktreeID: worktreeId,
+            sessionID: second.sessionId,
+            title: "Other Agent"
+        )
+
+        sender.send("Review feedback", target) { _ in }
+
+        #expect(state.tabs.activeTabId(forWorktree: worktreeId) == second.id)
+        #expect(sender.agent(target)?.id == "other-agent")
+    }
+
     private func makeState() -> AppState {
         let project = ProjectConfig(
             id: UUID().uuidString,
