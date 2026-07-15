@@ -139,6 +139,72 @@ struct DiffFeedbackLaneTests {
         #expect(DiffFeedbackLane.full.rawValue == "full")
     }
 
+    @Test func laneFramesMatchTheDiffPaneDividerMath() {
+        #expect(DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 901,
+            layoutMode: .split,
+            lane: .left,
+            gutterWidth: 42
+        ) == CGRect(x: 42, y: 0, width: 408, height: 0))
+        #expect(DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 901,
+            layoutMode: .split,
+            lane: .right,
+            gutterWidth: 42
+        ) == CGRect(x: 493, y: 0, width: 408, height: 0))
+        #expect(DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 901,
+            layoutMode: .stacked,
+            lane: .right,
+            gutterWidth: 42
+        ) == CGRect(x: 42, y: 0, width: 859, height: 0))
+    }
+
+    @Test func gutterThicknessUsesExistingMinimumAndExpandsForWideLabels() {
+        #expect(DiffPaneLineNumberGutterGeometry.thickness(labels: ["1", "22"]) == 42)
+        #expect(DiffPaneLineNumberGutterGeometry.thickness(labels: ["1234567890"]) > 42)
+    }
+
+    @Test func labelProjectionUsesTheActivePane() throws {
+        let model = DiffDisplayModelBuilder.build(
+            diff: ParsedDiff(hunks: [.init(
+                header: "@@ -9,1 +99,1 @@",
+                oldStart: 9,
+                newStart: 99,
+                lines: [
+                    .init(kind: .delete, text: "old", oldNumber: 9, newNumber: nil),
+                    .init(kind: .add, text: "new", oldNumber: nil, newNumber: 99),
+                ]
+            )]),
+            filePath: "Sources/App.swift"
+        )
+        let rows = try #require(model.groups.first?.rows)
+
+        #expect(DiffFeedbackLineLabels.labels(for: rows, layoutMode: .split, lane: .left) == ["9"])
+        #expect(DiffFeedbackLineLabels.labels(for: rows, layoutMode: .split, lane: .right) == ["99"])
+        #expect(DiffFeedbackLineLabels.labels(for: rows, layoutMode: .split, lane: .full) == ["99"])
+        #expect(DiffFeedbackLineLabels.labels(for: rows, layoutMode: .stacked, lane: .right) == ["9", "99"])
+    }
+
+    @Test func laneFramesRemainNonnegativeAtNarrowAndZeroWidths() {
+        for width: CGFloat in [0, 0.5, 1, 41, 42, 84] {
+            for layoutMode in DiffLayoutMode.allCases {
+                for lane in [DiffFeedbackLane.left, .right, .full] {
+                    let frame = DiffFeedbackLaneGeometry.contentFrame(
+                        containerWidth: width,
+                        layoutMode: layoutMode,
+                        lane: lane,
+                        gutterWidth: 42
+                    )
+
+                    #expect(frame.minX >= 0)
+                    #expect(frame.width >= 0)
+                    #expect(frame.maxX <= max(width, 0))
+                }
+            }
+        }
+    }
+
     private func makeAnchor(
         side: DiffReviewInlineFeedbackSide,
         selectedLines: [DiffReviewLineAnchor.SelectedLine]

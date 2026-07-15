@@ -1320,6 +1320,37 @@ let second = true
         #expect(scrollView.contentView.frame.minX >= rulerWidth - 0.5)
     }
 
+    @Test func feedbackLaneWrapperExposesItsEffectiveLaneForAccessibility() throws {
+        let rows = try #require(model().groups.first?.rows)
+        let splitController = NSHostingController(rootView:
+            DiffFeedbackLaneView(lane: .left, layoutMode: .split, rows: rows) {
+                Color.clear.frame(height: 20)
+            }
+            .environment(\.theme, theme())
+        )
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 901, height: 20)
+        splitController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-left",
+            in: splitController.view
+        ) != nil)
+
+        let stackedController = NSHostingController(rootView:
+            DiffFeedbackLaneView(lane: .right, layoutMode: .stacked, rows: rows) {
+                Color.clear.frame(height: 20)
+            }
+            .environment(\.theme, theme())
+        )
+        stackedController.view.frame = NSRect(x: 0, y: 0, width: 901, height: 20)
+        stackedController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-full",
+            in: stackedController.view
+        ) != nil)
+    }
+
     @Test func diffPreferenceBindingsPersistLayoutAndWrapButKeepWhitespaceLocal() {
         let appState = AppState()
         appState.config.changes.diffLayoutMode = .split
