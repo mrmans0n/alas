@@ -35,6 +35,16 @@ final class ReviewDraftCommentController {
         }
     }
 
+    /// Looks up a comment by id across ALL sessions in the backing store,
+    /// not just this controller's loaded `comments`. Cross-session logic —
+    /// handoff-progress recomputation spans every review session in the
+    /// worktree — must read persisted state this way, or it would treat a
+    /// comment from another session as unresolved merely because it isn't in
+    /// this controller's single-session view.
+    func persistedComment(withID id: String) -> ReviewDraftComment? {
+        try? store.find(commentID: id)
+    }
+
     func add(
         anchor: DiffReviewLineAnchor,
         fileID: DiffReviewFileID,

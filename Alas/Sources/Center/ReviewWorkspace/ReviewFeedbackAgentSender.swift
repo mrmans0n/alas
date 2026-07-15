@@ -196,7 +196,7 @@ enum ReviewDraftWorkspaceActions {
                 try? ReviewHandoffProgress.recomputeAndPersist(
                     worktreeID: worktreeID,
                     sessionStore: sessionStore(),
-                    isResolved: { id in controller.comments.first(where: { $0.id == id })?.state == .resolved },
+                    isResolved: { id in controller.persistedComment(withID: id)?.state == .resolved },
                     now: now()
                 )
             },
