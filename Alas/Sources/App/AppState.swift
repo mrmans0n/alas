@@ -3680,8 +3680,12 @@ final class AppState {
         }
         do {
             // Find the persisted review session record for this draft session.
+            // Scan all worktrees, not just visible ones: the CLI resolves its
+            // origin worktree via `worktree(withId:)`, which includes hidden
+            // worktrees, so a comment filed from a hidden worktree must still
+            // find its session record here.
             let sessionStore = ReviewSessionStore()
-            let allWorktrees = projects.flatMap { projectsManager.visibleWorktrees(projectId: $0.id) }
+            let allWorktrees = projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
             var record: ReviewSessionRecord?
             for worktree in allWorktrees where sessionID.isFor(worktreeID: worktree.id) {
                 record = try sessionStore.list(worktreeID: worktree.id)
