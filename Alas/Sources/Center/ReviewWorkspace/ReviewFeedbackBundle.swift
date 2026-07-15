@@ -62,9 +62,9 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
                 let bodyLines = markdownBodyLines(comment.bodyMarkdown)
                 if bodyLines.count <= 1 {
                     let suffix = bodyLines.first.map { " — \($0)" } ?? ""
-                    lines.append("- `\(reference)`\(suffix)")
+                    lines.append("- `\(reference)` [comment-id: \(comment.id)]\(suffix)")
                 } else {
-                    lines.append("- `\(reference)`")
+                    lines.append("- `\(reference)` [comment-id: \(comment.id)]")
                     lines.append(contentsOf: bodyLines)
                 }
 
@@ -78,6 +78,11 @@ struct ReviewFeedbackBundle: Equatable, Sendable {
                 }
             }
         }
+
+        lines.append("")
+        lines.append(
+            "When you have addressed a comment, call the alas MCP tool `review_resolve` with its comment-id and a short `reply` summarizing the change. Use `review_reply` to discuss a comment without resolving it. If the alas review tools are unavailable, report what you changed instead."
+        )
 
         return lines.joined(separator: "\n")
     }
