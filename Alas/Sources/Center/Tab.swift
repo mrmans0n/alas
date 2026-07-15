@@ -383,6 +383,7 @@ struct EditorTabState: Codable, Equatable, Identifiable {
     var title: String
     var relativePath: String   // relative to worktree root; empty when external
     var revealLine: Int? = nil       // 0-based, optional reveal hint set by go-to-definition
+    var revealEndLine: Int? = nil    // 0-based, optional inclusive range end
     var revealCharacter: Int? = nil  // 0-based UTF-16
     var revealRevision: Int? = nil   // increments for each explicit reveal request
     var externalAbsolutePath: String? = nil  // set when navigating to a file outside the worktree

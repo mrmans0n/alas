@@ -42,6 +42,7 @@ struct EditorTabView: View {
     let worktreeId: String
     let tabId: TabID
     let revealLine: Int?
+    var revealEndLine: Int? = nil
     let revealCharacter: Int?
     let revealRevision: Int?
     let appState: AppState
@@ -101,6 +102,7 @@ struct EditorTabView: View {
                 relativePath: relativePath,
                 tabId: tabId,
                 revealLine: revealLine,
+                revealEndLine: revealEndLine,
                 revealCharacter: revealCharacter,
                 revealRevision: revealRevision,
                 appState: appState,

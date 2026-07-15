@@ -38,6 +38,7 @@ enum AlasCLINotifyLevel: String, Equatable {
 struct AlasCLIRequest: Equatable {
     enum Command: Equatable {
         case open(paths: [String])
+        case openAt(path: String, line: Int, endLine: Int?)
         case notify(body: String, title: String?, level: AlasCLINotifyLevel)
         case worktree(WorktreeCommand)
         case review(ReviewCommand)
@@ -67,8 +68,14 @@ struct AlasCLIRequest: Equatable {
     let command: Command
 
     var paths: [String] {
-        guard case .open(let paths) = command else { return [] }
-        return paths
+        switch command {
+        case .open(let paths):
+            return paths
+        case .openAt(let path, _, _):
+            return [path]
+        default:
+            return []
+        }
     }
 
     private struct Raw: Decodable {
@@ -88,6 +95,11 @@ struct AlasCLIRequest: Equatable {
 
     private struct ParamsEnvelope<P: Decodable>: Decodable {
         var params: P?
+    }
+
+    private struct OpenParams: Decodable {
+        var line: Int?
+        var end_line: Int?
     }
 
     private struct ReviewCommentsParams: Decodable {
@@ -196,7 +208,19 @@ struct AlasCLIRequest: Equatable {
         let command: Command
         switch raw.command {
         case "open":
-            command = .open(paths: try validatedAbsolutePaths(raw.paths))
+            let paths = try validatedAbsolutePaths(raw.paths)
+            let params = try Self.decodeParamsIfPresent(OpenParams.self, from: data)
+            if let line = params?.line {
+                guard paths.count == 1,
+                      line >= 1,
+                      params?.end_line.map({ $0 >= line }) ?? true else {
+                    throw AlasCLIRequestError.malformed
+                }
+                command = .openAt(path: paths[0], line: line, endLine: params?.end_line)
+            } else {
+                guard params?.end_line == nil else { throw AlasCLIRequestError.malformed }
+                command = .open(paths: paths)
+            }
         case "notify":
             let params = try Self.decodeParams(NotifyParams.self, from: data)
             let level: AlasCLINotifyLevel

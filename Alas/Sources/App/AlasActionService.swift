@@ -13,6 +13,8 @@ struct AlasActionService {
     var visibleWorktrees: () -> [Worktree]
     var openRelativeFile: (String, String) -> Void
     var openExternalFile: (URL, String) -> Void
+    var openRelativeFileAtLines: (String, String, ClosedRange<Int>) -> Void = { _, _, _ in }
+    var openExternalFileAtLines: (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in }
     var focusWorktree: (Worktree) -> Void = { _ in }
     var createWorktree: (Worktree, String, String?) async -> AlasCLIResponse = { _, _, _ in
         .error("Creating worktrees from the terminal is not available yet.")
@@ -62,6 +64,23 @@ struct AlasActionService {
     }
 
     func open(paths: [String], fallbackWorktreeId: String) -> AlasCLIResponse {
+        open(paths: paths, fallbackWorktreeId: fallbackWorktreeId, lineRange: nil)
+    }
+
+    func openAt(path: String, line: Int, endLine: Int?, fallbackWorktreeId: String) -> AlasCLIResponse {
+        let start = line - 1
+        return open(
+            paths: [path],
+            fallbackWorktreeId: fallbackWorktreeId,
+            lineRange: start ... ((endLine ?? line) - 1)
+        )
+    }
+
+    private func open(
+        paths: [String],
+        fallbackWorktreeId: String,
+        lineRange: ClosedRange<Int>?
+    ) -> AlasCLIResponse {
         var errors: [String] = []
         var openedAny = false
         for rawPath in paths {
@@ -75,9 +94,17 @@ struct AlasActionService {
                 continue
             }
             if let match = containingWorktree(for: url) {
-                openRelativeFile(match.relativePath, match.worktree.id)
+                if let lineRange {
+                    openRelativeFileAtLines(match.relativePath, match.worktree.id, lineRange)
+                } else {
+                    openRelativeFile(match.relativePath, match.worktree.id)
+                }
             } else {
-                openExternalFile(url, fallbackWorktreeId)
+                if let lineRange {
+                    openExternalFileAtLines(url, fallbackWorktreeId, lineRange)
+                } else {
+                    openExternalFile(url, fallbackWorktreeId)
+                }
             }
             openedAny = true
         }

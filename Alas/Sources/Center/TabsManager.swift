@@ -434,7 +434,8 @@ final class TabsManager {
         worktreeId: String,
         relativePath: String,
         revealLine: Int?,
-        revealCharacter: Int?
+        revealCharacter: Int?,
+        revealEndLine: Int? = nil
     ) -> Tab {
         let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
             && MarkdownFileType.isMarkdown(relativePath: relativePath)
@@ -445,6 +446,7 @@ final class TabsManager {
            }) {
             if case .editor(var s) = file.tabs[idx] {
                 s.revealLine = revealLine
+                s.revealEndLine = revealEndLine
                 s.revealCharacter = revealCharacter
                 if revealLine != nil || revealCharacter != nil {
                     s.revealRevision = (s.revealRevision ?? 0) &+ 1
@@ -465,6 +467,7 @@ final class TabsManager {
             title: title,
             relativePath: relativePath,
             revealLine: revealLine,
+            revealEndLine: revealEndLine,
             revealCharacter: revealCharacter
         )
         if shouldRevealInMarkdownEditor {
@@ -494,11 +497,14 @@ final class TabsManager {
         absoluteURL: URL,
         revealLine: Int?,
         revealCharacter: Int?,
+        revealEndLine: Int? = nil,
         originatingRelativePath: String? = nil,
         originatingWorktreeRoot: URL? = nil,
         language: String? = nil
     ) -> Tab {
         let absPath = absoluteURL.path
+        let shouldRevealInMarkdownEditor = (revealLine != nil || revealCharacter != nil)
+            && MarkdownFileType.isMarkdown(relativePath: absPath)
         if var file = byWorktree[worktreeId],
            let idx = file.tabs.firstIndex(where: {
                if case .editor(let s) = $0 { return s.externalAbsolutePath == absPath }
@@ -507,9 +513,13 @@ final class TabsManager {
             if case .editor(var s) = file.tabs[idx] {
                 let originChanged = (s.originatingRelativePath != originatingRelativePath)
                 s.revealLine = revealLine
+                s.revealEndLine = revealEndLine
                 s.revealCharacter = revealCharacter
                 if revealLine != nil || revealCharacter != nil {
                     s.revealRevision = (s.revealRevision ?? 0) &+ 1
+                }
+                if shouldRevealInMarkdownEditor {
+                    s.markdownViewMode = .editor
                 }
                 s.originatingRelativePath = originatingRelativePath   // refresh the origin
                 file.tabs[idx] = .editor(s)
@@ -540,15 +550,19 @@ final class TabsManager {
             }
         }
         let title = absoluteURL.lastPathComponent
-        let state = EditorTabState(
+        var state = EditorTabState(
             id: UUID().uuidString,
             title: title,
             relativePath: "",
             revealLine: revealLine,
+            revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
             externalAbsolutePath: absPath,
             originatingRelativePath: originatingRelativePath
         )
+        if shouldRevealInMarkdownEditor {
+            state.markdownViewMode = .editor
+        }
         let tab = Tab.editor(state)
         append(tab, to: worktreeId)
         return tab
@@ -1007,7 +1021,7 @@ final class TabsManager {
         return tab
     }
 
-    /// Clears the `revealLine`/`revealCharacter` hints on an editor tab.
+    /// Clears the reveal hints on an editor tab.
     /// Called by the editor coordinator once it has scrolled to the target,
     /// so the hint isn't replayed on the next view re-render or app
     /// relaunch.
@@ -1015,8 +1029,9 @@ final class TabsManager {
         guard var file = byWorktree[worktreeId],
               let idx = file.tabs.firstIndex(where: { $0.id == tabId }),
               case .editor(var s) = file.tabs[idx],
-              s.revealLine != nil || s.revealCharacter != nil else { return }
+              s.revealLine != nil || s.revealEndLine != nil || s.revealCharacter != nil else { return }
         s.revealLine = nil
+        s.revealEndLine = nil
         s.revealCharacter = nil
         file.tabs[idx] = .editor(s)
         byWorktree[worktreeId] = file
@@ -1557,6 +1572,7 @@ final class TabsManager {
         state.relativePath = relativePath
         state.title = (relativePath as NSString).lastPathComponent
         state.revealLine = nil
+        state.revealEndLine = nil
         state.revealCharacter = nil
         file.tabs[idx] = .editor(state)
         byWorktree[worktreeId] = file

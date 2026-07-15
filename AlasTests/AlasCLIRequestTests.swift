@@ -11,6 +11,38 @@ struct AlasCLIRequestTests {
         #expect(request == AlasCLIRequest(version: 1, sessionId: "s1", cwd: nil, command: .open(paths: ["/tmp/a.txt", "/tmp/b.txt"])))
     }
 
+    @Test func decodesOpenLineRangeRequest() throws {
+        let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"],"params":{"line":12,"end_line":15}}"#
+
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.command == .openAt(path: "/tmp/a.txt", line: 12, endLine: 15))
+    }
+
+    @Test func decodesOpenSingleLineRequest() throws {
+        let json = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"],"params":{"line":12}}"#
+
+        let request = try AlasCLIRequest.decode(from: Data(json.utf8))
+
+        #expect(request.command == .openAt(path: "/tmp/a.txt", line: 12, endLine: nil))
+    }
+
+    @Test func rejectsInvalidOpenLineRanges() throws {
+        let missingStart = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"],"params":{"end_line":15}}"#
+        let reversed = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"],"params":{"line":15,"end_line":12}}"#
+        let multiple = #"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt","/tmp/b.txt"],"params":{"line":12}}"#
+
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(missingStart.utf8))
+        }
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(reversed.utf8))
+        }
+        #expect(throws: AlasCLIRequestError.self) {
+            try AlasCLIRequest.decode(from: Data(multiple.utf8))
+        }
+    }
+
     @Test func decodesWorktreeListRequest() throws {
         let json = #"{"v":1,"kind":"cli","command":"wt","subcommand":"list","session_id":"s1"}"#
         let request = try AlasCLIRequest.decode(from: Data(json.utf8))

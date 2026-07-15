@@ -124,6 +124,11 @@ pub enum Command {
     Open {
         paths: Vec<String>,
     },
+    OpenAt {
+        path: String,
+        line: u64,
+        end_line: Option<u64>,
+    },
     Notify {
         body: String,
         title: Option<String>,
@@ -185,6 +190,17 @@ pub fn build_request(
         Command::Open { paths } => {
             let mut r = Request::new("open");
             r.paths = Some(paths.clone());
+            r
+        }
+        Command::OpenAt { path, line, end_line } => {
+            let mut r = Request::new("open");
+            r.paths = Some(vec![path.clone()]);
+            let mut params = serde_json::Map::new();
+            params.insert("line".into(), serde_json::Value::from(*line));
+            if let Some(end_line) = end_line {
+                params.insert("end_line".into(), serde_json::Value::from(*end_line));
+            }
+            r.params = Some(serde_json::Value::Object(params));
             r
         }
         Command::Notify { body, title, level } => {
@@ -588,6 +604,36 @@ mod tests {
         assert_eq!(
             json,
             r#"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"]}"#
+        );
+    }
+
+    #[test]
+    fn open_line_range_uses_params_with_legacy_paths() {
+        let command = Command::OpenAt {
+            path: "/tmp/a.txt".into(),
+            line: 12,
+            end_line: Some(15),
+        };
+        let request = build_request(&command, Some("s1".into()), None);
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":1,"kind":"cli","command":"open","session_id":"s1","paths":["/tmp/a.txt"],"params":{"end_line":15,"line":12}}"#
+        );
+    }
+
+    #[test]
+    fn open_line_target_omits_absent_end_line() {
+        let command = Command::OpenAt {
+            path: "/tmp/a.txt".into(),
+            line: 12,
+            end_line: None,
+        };
+        let request = build_request(&command, None, None);
+        let json = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            json,
+            r#"{"v":1,"kind":"cli","command":"open","paths":["/tmp/a.txt"],"params":{"line":12}}"#
         );
     }
 

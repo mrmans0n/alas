@@ -98,18 +98,20 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "open",
-            "description": "Open one or more files in the Alas UI for the user to look at. Paths may be relative to the worktree root or absolute.",
+            "description": "Open one or more files in Alas. Use path with line/end_line to reveal source; use paths for multiple files.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "path": { "type": "string", "description": "One file to open, relative to the worktree root or absolute." },
                     "paths": {
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1,
                         "description": "Files to open in Alas."
-                    }
-                },
-                "required": ["paths"]
+                    },
+                    "line": { "type": "integer", "minimum": 1, "description": "First line to reveal (1-based)." },
+                    "end_line": { "type": "integer", "minimum": 1, "description": "Last line to reveal (1-based). Requires line." }
+                }
             }
         }),
         json!({
@@ -253,21 +255,61 @@ pub fn tool_definitions() -> Vec<Value> {
 pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<Command, String> {
     match name {
         "open" => {
-            let paths = args
-                .get("paths")
-                .and_then(Value::as_array)
-                .ok_or("open requires a 'paths' array")?;
-            if paths.is_empty() {
-                return Err("open requires at least one path".into());
+            let singular = match args.get("path") {
+                None => None,
+                Some(Value::String(path)) if !path.trim().is_empty() => Some(path.as_str()),
+                Some(Value::String(_)) => return Err("open path must be non-empty".into()),
+                Some(_) => return Err("open path must be a string".into()),
+            };
+            if singular.is_some() && args.get("paths").is_some() {
+                return Err("open accepts either 'path' or 'paths', not both".into());
             }
             let base = std::path::Path::new(worktree_dir);
-            let mut resolved = Vec::new();
-            for path in paths {
-                let path = path.as_str().ok_or("open paths must be strings")?;
-                if path.trim().is_empty() {
-                    return Err("open paths must be non-empty".into());
+            let resolved = if let Some(path) = singular {
+                vec![alas_client::absolutize(base, path)]
+            } else {
+                let paths = args
+                    .get("paths")
+                    .and_then(Value::as_array)
+                    .ok_or("open requires 'path' or a 'paths' array")?;
+                if paths.is_empty() {
+                    return Err("open requires at least one path".into());
                 }
-                resolved.push(alas_client::absolutize(base, path));
+                paths
+                    .iter()
+                    .map(|path| {
+                        let path = path.as_str().ok_or("open paths must be strings")?;
+                        if path.trim().is_empty() {
+                            return Err("open paths must be non-empty".into());
+                        }
+                        Ok(alas_client::absolutize(base, path))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+            };
+            let line = args.get("line").and_then(Value::as_u64);
+            let end_line = args.get("end_line").and_then(Value::as_u64);
+            if args.get("line").is_some_and(|_| line.is_none())
+                || args.get("end_line").is_some_and(|_| end_line.is_none())
+                || line == Some(0)
+                || end_line == Some(0)
+            {
+                return Err("open line targets must be positive integers".into());
+            }
+            if let Some(line) = line {
+                if resolved.len() != 1 {
+                    return Err("open line targets require exactly one path".into());
+                }
+                if end_line.is_some_and(|end| end < line) {
+                    return Err("open 'end_line' must be greater than or equal to 'line'".into());
+                }
+                return Ok(Command::OpenAt {
+                    path: resolved.into_iter().next().ok_or("open requires a path")?,
+                    line,
+                    end_line,
+                });
+            }
+            if end_line.is_some() {
+                return Err("open 'end_line' requires 'line'".into());
             }
             Ok(Command::Open { paths: resolved })
         }
@@ -466,6 +508,7 @@ fn tool_result(command: &Command, resp: Response) -> Value {
 fn success_message(command: &Command) -> String {
     match command {
         Command::Open { paths } => format!("Opened {} file(s) in Alas.", paths.len()),
+        Command::OpenAt { .. } => "Opened file at the requested lines in Alas.".into(),
         Command::Notify { .. } => "Notification sent.".into(),
         Command::WtSwitch { target } => format!("Switched Alas to worktree '{target}'."),
         Command::WtNew { branch, .. } => format!("Created worktree for branch '{branch}' in Alas."),
@@ -698,6 +741,9 @@ mod tests {
             assert!(tool["description"].as_str().unwrap().len() > 20);
             assert_eq!(tool["inputSchema"]["type"], json!("object"));
         }
+        let open_schema = &reply["result"]["tools"][0]["inputSchema"];
+        assert!(open_schema.get("oneOf").is_none());
+        assert!(open_schema.get("anyOf").is_none());
     }
 
     #[test]
@@ -713,11 +759,56 @@ mod tests {
     }
 
     #[test]
+    fn open_maps_a_line_range_target() {
+        let cmd = command_for_tool(
+            "open",
+            &json!({"path": "a.txt", "line": 12, "end_line": 15}),
+            "/wt",
+        )
+        .unwrap();
+        assert_eq!(
+            cmd,
+            alas_client::Command::OpenAt {
+                path: "/wt/a.txt".into(),
+                line: 12,
+                end_line: Some(15),
+            }
+        );
+    }
+
+    #[test]
     fn open_rejects_missing_empty_or_non_string_paths() {
         assert!(command_for_tool("open", &json!({}), "/wt").is_err());
+        assert!(command_for_tool("open", &json!({"path": null}), "/wt").is_err());
+        assert!(command_for_tool("open", &json!({"path": 1}), "/wt").is_err());
+        assert!(command_for_tool("open", &json!({"path": "  "}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"paths": []}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"paths": [1]}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"paths": ["  "]}), "/wt").is_err());
+    }
+
+    #[test]
+    fn open_rejects_invalid_line_targets() {
+        assert!(command_for_tool("open", &json!({"path": "a", "line": 0}), "/wt").is_err());
+        assert!(command_for_tool("open", &json!({"path": "a", "end_line": 2}), "/wt").is_err());
+        assert!(command_for_tool(
+            "open",
+            &json!({"path": "a", "line": 3, "end_line": 2}),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "open",
+            &json!({"paths": ["a", "b"], "line": 2}),
+            "/wt"
+        )
+        .is_err());
+        assert!(command_for_tool(
+            "open",
+            &json!({"path": "a", "paths": ["a"]}),
+            "/wt"
+        )
+        .is_err());
     }
 
     #[test]

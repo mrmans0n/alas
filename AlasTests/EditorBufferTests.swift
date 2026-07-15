@@ -1369,6 +1369,152 @@ struct EditorBufferTests {
         #expect(preservedBackground == findHighlightColor)
     }
 
+    @Test func coordinatorRevealHighlightsThroughTheEndLine() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "line one\nline two\nline three\nline four\n")
+        let appState = AppState()
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: "tab-a",
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        await buffer.awaitLoadForTesting()
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600),
+            textContainer: textContainer
+        )
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: "tab-a",
+            revealLine: 0,
+            revealEndLine: 2,
+            revealCharacter: 0,
+            theme: theme
+        )
+
+        let text = buffer.storage.string as NSString
+        let firstLineStart = text.range(of: "line one").location
+        let secondLineStart = text.range(of: "line two").location
+        let thirdLineStart = text.range(of: "line three").location
+        let fourthLineStart = text.range(of: "line four").location
+        #expect(layoutManager.temporaryAttribute(
+            .underlineStyle,
+            atCharacterIndex: firstLineStart,
+            effectiveRange: nil
+        ) != nil)
+        #expect(layoutManager.temporaryAttribute(
+            .underlineStyle,
+            atCharacterIndex: secondLineStart,
+            effectiveRange: nil
+        ) != nil)
+        #expect(layoutManager.temporaryAttribute(
+            .underlineStyle,
+            atCharacterIndex: thirdLineStart,
+            effectiveRange: nil
+        ) != nil)
+        #expect(layoutManager.temporaryAttribute(
+            .underlineStyle,
+            atCharacterIndex: fourthLineStart,
+            effectiveRange: nil
+        ) == nil)
+
+        coordinator.updateIfNeeded(
+            worktreeId: "wt",
+            worktreeRoot: root,
+            relativePath: "a.swift",
+            tabId: "tab-a",
+            revealLine: 0,
+            revealEndLine: 99,
+            revealCharacter: 0,
+            revealRevision: 1,
+            theme: theme
+        )
+        #expect(layoutManager.temporaryAttribute(
+            .underlineStyle,
+            atCharacterIndex: fourthLineStart,
+            effectiveRange: nil
+        ) != nil)
+    }
+
+    @Test func coordinatorAppliesPendingRevealAfterLoadAndConsumesOutOfRangeTarget() async throws {
+        let root = tempWorktree()
+        _ = try writeFile(root, "a.swift", "line one\nline two\n")
+        let gate = AsyncLoadGate()
+        EditorBuffer.loadGateForTesting = { await gate.wait() }
+        defer { EditorBuffer.loadGateForTesting = nil }
+        let appState = AppState()
+        let tab = appState.tabs.openEditor(
+            worktreeId: "wt",
+            relativePath: "a.swift",
+            revealLine: 99,
+            revealCharacter: 0,
+            revealEndLine: 120
+        )
+        let buffer = appState.tabs.buffer(
+            worktreeId: "wt",
+            tabId: tab.id,
+            worktreeRoot: root,
+            relativePath: "a.swift"
+        )
+        let layoutManager = NSLayoutManager()
+        let textContainer = NSTextContainer(size: NSSize(width: 800, height: 600))
+        layoutManager.addTextContainer(textContainer)
+        let textView = CodeTextView(
+            frame: NSRect(x: 0, y: 0, width: 800, height: 600),
+            textContainer: textContainer
+        )
+        let coordinator = CodeEditorCoordinator(appState: appState)
+        let theme = try ThemeStore().current
+
+        coordinator.attach(
+            textView: textView,
+            buffer: buffer,
+            layoutManager: layoutManager,
+            worktreeId: "wt",
+            worktreeRoot: root,
+            tabId: tab.id,
+            revealLine: 99,
+            revealEndLine: 120,
+            revealCharacter: 0,
+            theme: theme
+        )
+        await gate.open()
+        await buffer.awaitLoadForTesting()
+
+        let deadline = Date().addingTimeInterval(2)
+        let tabId = tab.id
+        while Date() < deadline {
+            let consumed = appState.tabs.tabs(forWorktree: "wt").contains { candidate in
+                guard case .editor(let state) = candidate, state.id == tabId else { return false }
+                return state.revealLine == nil
+                    && state.revealEndLine == nil
+                    && state.revealCharacter == nil
+            }
+            if consumed { break }
+            await Task.yield()
+        }
+        #expect(textView.selectedRange().location == (buffer.storage.string as NSString).length)
+        if let updated = appState.tabs.tabs(forWorktree: "wt").first(where: { $0.id == tabId }),
+           case .editor(let state) = updated {
+            #expect(state.revealLine == nil)
+            #expect(state.revealEndLine == nil)
+            #expect(state.revealCharacter == nil)
+        } else {
+            Issue.record("expected editor tab")
+        }
+    }
+
     @Test func coordinatorRevealKeepsEditorHorizontallyAtLeadingEdge() async throws {
         let root = tempWorktree()
         let prefix = String(repeating: "0123456789 ", count: 40)

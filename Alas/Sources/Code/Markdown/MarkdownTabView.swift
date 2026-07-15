@@ -9,6 +9,7 @@ struct MarkdownTabView: View {
     let externalAbsolutePath: String?
     let originatingRelativePath: String?
     let revealLine: Int?
+    var revealEndLine: Int? = nil
     let revealCharacter: Int?
     let revealRevision: Int?
     @Bindable var appState: AppState
@@ -169,6 +170,7 @@ struct MarkdownTabView: View {
             relativePath: relativePath,
             tabId: tabId,
             revealLine: revealLine,
+            revealEndLine: revealEndLine,
             revealCharacter: revealCharacter,
             revealRevision: revealRevision,
             appState: appState,

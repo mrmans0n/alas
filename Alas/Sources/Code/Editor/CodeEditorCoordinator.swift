@@ -28,7 +28,8 @@ final class CodeEditorCoordinator {
     private var currentTheme: Theme?
     private var currentFontFamily: String?
     private var currentFontSize: CGFloat?
-    private var lastAppliedReveal: (tabId: TabID, line: Int, character: Int, revision: Int)?
+    private var lastAppliedReveal: (tabId: TabID, line: Int, endLine: Int?, character: Int, revision: Int)?
+    private var pendingReveal: (tabId: TabID, line: Int, endLine: Int?, character: Int, revision: Int)?
     private var revealHighlightTask: Task<Void, Never>?
     private var revealHighlightRange: NSRange?
     private var currentExternalAbsolutePath: String?
@@ -76,7 +77,7 @@ final class CodeEditorCoordinator {
         self.appState = appState
     }
 
-    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+    func attach(textView: CodeTextView, buffer: EditorBuffer, layoutManager: NSLayoutManager, worktreeId: String, worktreeRoot: URL, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         self.textView = textView
         self.layoutManager = layoutManager
         self.currentWorktreeId = worktreeId
@@ -268,7 +269,13 @@ final class CodeEditorCoordinator {
             appState.tabs.ensureExternalLSPOpen(tabId: tabId)
         }
 
-        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter, revision: revealRevision)
+        applyRevealIfNeeded(
+            tabId: tabId,
+            line: revealLine,
+            endLine: revealEndLine,
+            character: revealCharacter,
+            revision: revealRevision
+        )
 
         NotificationCenter.default.post(
             name: .codeEditorDidAttach,
@@ -278,7 +285,7 @@ final class CodeEditorCoordinator {
         onTextViewAttached?(textView, tabId)
     }
 
-    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
+    func updateIfNeeded(worktreeId: String, worktreeRoot: URL, relativePath: String, tabId: TabID, revealLine: Int?, revealEndLine: Int? = nil, revealCharacter: Int?, revealRevision: Int? = nil, theme: Theme, externalAbsolutePath: String? = nil, originatingRelativePath: String? = nil) {
         // Re-query the registry every time so a registry change (e.g. a
         // server gets installed) still flips this comparison and triggers a
         // rebind. When the same tab is being re-evaluated and has an
@@ -405,7 +412,13 @@ final class CodeEditorCoordinator {
             runHighlight(theme: theme)
         }
 
-        applyRevealIfNeeded(tabId: tabId, line: revealLine, character: revealCharacter, revision: revealRevision)
+        applyRevealIfNeeded(
+            tabId: tabId,
+            line: revealLine,
+            endLine: revealEndLine,
+            character: revealCharacter,
+            revision: revealRevision
+        )
     }
 
     /// Wire the coordinator and the text view to `buffer`. If a previous
@@ -624,6 +637,15 @@ final class CodeEditorCoordinator {
             guard let self, !Task.isCancelled, let theme = self.currentTheme else { return }
             await MainActor.run {
                 self.runHighlight(theme: theme)
+                if let reveal = self.pendingReveal {
+                    self.applyRevealIfNeeded(
+                        tabId: reveal.tabId,
+                        line: reveal.line,
+                        endLine: reveal.endLine,
+                        character: reveal.character,
+                        revision: reveal.revision
+                    )
+                }
                 self.hasPendingDidChange = false
                 let edits = self.pendingTextEdits
                 self.pendingTextEdits.removeAll()
@@ -876,41 +898,76 @@ final class CodeEditorCoordinator {
 
     // MARK: - Reveal (go-to-definition scroll target)
 
-    /// Scrolls the text view so the (line, character) target is visible and
-    /// places the selection there. De-duplicates by `(tabId, line, character)`
-    /// so SwiftUI re-renders that re-pass the same hints don't keep stealing
+    /// Scrolls the text view so the line target is visible and
+    /// places the selection there. De-duplicates by tab, line range, character,
+    /// and revision so SwiftUI re-renders that re-pass the same hints don't keep stealing
     /// the user's scroll position. After applying, asks the TabsManager to
     /// clear the hint so it isn't replayed on relaunch.
-    private func applyRevealIfNeeded(tabId: TabID, line: Int?, character: Int?, revision: Int?) {
+    private func applyRevealIfNeeded(
+        tabId: TabID,
+        line: Int?,
+        endLine: Int?,
+        character: Int?,
+        revision: Int?
+    ) {
         guard let line, let character else {
+            pendingReveal = nil
             lastAppliedReveal = nil
             return
         }
         let revision = revision ?? 0
         if let last = lastAppliedReveal,
-           last.tabId == tabId, last.line == line, last.character == character, last.revision == revision {
+           last.tabId == tabId,
+           last.line == line,
+           last.endLine == endLine,
+           last.character == character,
+           last.revision == revision {
             return
         }
+        pendingReveal = (
+            tabId: tabId,
+            line: line,
+            endLine: endLine,
+            character: character,
+            revision: revision
+        )
         guard let textView, let buffer else { return }
+        guard buffer.initialLoadFinished else { return }
         let nsString = buffer.storage.string as NSString
-        // Walk to the requested line, then add the UTF-16 character offset.
-        var charIndex = 0
-        var currentLine = 0
-        while currentLine < line {
-            let r = nsString.range(of: "\n", options: [], range: NSRange(location: charIndex, length: nsString.length - charIndex))
-            if r.location == NSNotFound { return }
-            charIndex = r.location + 1
-            currentLine += 1
-        }
+        let charIndex = characterIndex(atLine: line, in: nsString) ?? nsString.length
         let target = min(charIndex + character, nsString.length)
         let range = NSRange(location: target, length: 0)
         textView.setSelectedRange(range)
         scrollRangeToVisiblePreservingHorizontalOffset(range, in: textView)
-        highlightRevealLine(containing: target, in: nsString, textView: textView)
-        lastAppliedReveal = (tabId: tabId, line: line, character: character, revision: revision)
+        let endTarget = endLine.map { characterIndex(atLine: $0, in: nsString) ?? nsString.length }
+        highlightRevealLines(from: target, through: endTarget, in: nsString, textView: textView)
+        pendingReveal = nil
+        lastAppliedReveal = (
+            tabId: tabId,
+            line: line,
+            endLine: endLine,
+            character: character,
+            revision: revision
+        )
         if let wid = currentWorktreeId {
             appState.tabs.consumeReveal(worktreeId: wid, tabId: tabId)
         }
+    }
+
+    private func characterIndex(atLine line: Int, in nsString: NSString) -> Int? {
+        var charIndex = 0
+        var currentLine = 0
+        while currentLine < line {
+            let range = nsString.range(
+                of: "\n",
+                options: [],
+                range: NSRange(location: charIndex, length: nsString.length - charIndex)
+            )
+            guard range.location != NSNotFound else { return nil }
+            charIndex = range.location + 1
+            currentLine += 1
+        }
+        return charIndex
     }
 
     private func scrollRangeToVisiblePreservingHorizontalOffset(_ range: NSRange, in textView: CodeTextView) {
@@ -928,13 +985,22 @@ final class CodeEditorCoordinator {
         scrollView.reflectScrolledClipView(clipView)
     }
 
-    private func highlightRevealLine(containing target: Int, in nsString: NSString, textView: CodeTextView) {
+    private func highlightRevealLines(
+        from target: Int,
+        through endTarget: Int?,
+        in nsString: NSString,
+        textView: CodeTextView
+    ) {
         guard nsString.length > 0,
               let layoutManager = textView.layoutManager else { return }
         clearRevealHighlight()
 
         let clampedTarget = min(max(0, target), max(0, nsString.length - 1))
-        let lineRange = nsString.lineRange(for: NSRange(location: clampedTarget, length: 0))
+        let clampedEnd = min(max(clampedTarget, endTarget ?? clampedTarget), max(0, nsString.length - 1))
+        let lineRange = nsString.lineRange(for: NSRange(
+            location: clampedTarget,
+            length: clampedEnd - clampedTarget + 1
+        ))
         guard lineRange.location != NSNotFound, lineRange.length > 0 else { return }
 
         let color = NSColor.systemYellow.withAlphaComponent(0.9)
