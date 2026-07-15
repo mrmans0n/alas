@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-07-15
+
+### ✨ Features
+
+- Add MCP tools for agent-facing review comments and review completion (#797, #806).
+- Add MCP support for opening files at line targets and notifying the app from agent sessions (#807, #808).
+- Activate selected review feedback targets in the diff UI (#800).
+
+### 🐛 Fixes
+
+- Improve Cmd-P search filtering reliability (#796).
+- Align split diff feedback lanes and recompute handoff progress after resolving comments (#801, #802).
+- Fill original paths for review comments on renamed provider-review files (#803).
+- Remove transcript target visibility tracking from ACP sessions (#809).
+
+### 🏗️ Internal
+
+- Use the rustup toolchain when building `fff` (#805).
+
 ## [0.11.0] - 2026-07-15
 
 ### ✨ Features
