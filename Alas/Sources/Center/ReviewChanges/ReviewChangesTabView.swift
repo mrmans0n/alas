@@ -109,6 +109,9 @@ struct ReviewChangesTabView: View {
         .task(id: reviewDraftSessionID.rawValue) {
             loadDraftCommentController()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
+            try? draftCommentController?.load()
+        }
         .sheet(isPresented: $showScopePicker) {
             ReviewScopePicker(
                 commits: scopeCommits,

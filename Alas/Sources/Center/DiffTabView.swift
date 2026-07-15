@@ -152,6 +152,9 @@ struct DiffTabView: View {
             Task { @MainActor in draftComposerFocused = true }
         }
         .task(id: loadKey) { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
+            try? draftCommentController?.load()
+        }
         .alert(
             "Discard this hunk in \u{201C}\((relativePath as NSString).lastPathComponent)\u{201D}?",
             isPresented: Binding(

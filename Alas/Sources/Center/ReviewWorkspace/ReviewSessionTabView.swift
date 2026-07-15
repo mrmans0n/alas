@@ -195,6 +195,9 @@ struct ReviewSessionTabView: View {
             let token = beginLoadReviewSession()
             await loadReviewSession(token: token)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .alasReviewDraftCommentsDidChangeExternally)) { _ in
+            try? draftCommentController?.load()
+        }
     }
 
     private var loadTaskID: String {

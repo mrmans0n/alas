@@ -1786,7 +1786,7 @@ struct ReviewDraftCommentCard: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text("Local draft")
+                    Text(draftLabel)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(statusColor)
 
@@ -1795,7 +1795,7 @@ struct ReviewDraftCommentCard: View {
                         .foregroundColor(theme.color("fg-faint"))
 
                     if comment.state == .resolved {
-                        Text("resolved")
+                        Text(resolvedLabel)
                             .font(.system(size: 10))
                             .foregroundColor(theme.color("fg-faint"))
                     }
@@ -1827,7 +1827,25 @@ struct ReviewDraftCommentCard: View {
                     )
                     .accessibilityIdentifier("diff-review-draft-comment-editor-\(comment.id)")
                 } else {
-                    DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
+                    VStack(alignment: .leading, spacing: 6) {
+                        DiffReviewInlineFeedbackMarkdown.view(comment.bodyMarkdown)
+
+                        ForEach(comment.allReplies) { reply in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(reply.author.displayName)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(theme.color("fg-faint"))
+                                DiffReviewInlineFeedbackMarkdown.view(reply.bodyMarkdown)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(.leading, 8)
+                            .overlay(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(theme.color("line"))
+                                    .frame(width: 2)
+                            }
+                        }
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -2009,6 +2027,18 @@ struct ReviewDraftCommentCard: View {
             return "line \(range.lowerBound)"
         }
         return "lines \(range.lowerBound)-\(range.upperBound)"
+    }
+
+    private var draftLabel: String {
+        let author = comment.effectiveAuthor
+        return author.isAgent ? "\(author.displayName) draft" : "Local draft"
+    }
+
+    private var resolvedLabel: String {
+        if let resolvedBy = comment.resolvedBy, resolvedBy.isAgent {
+            return "resolved by \(resolvedBy.displayName)"
+        }
+        return "resolved"
     }
 
     private var accessibilityLabel: String {
