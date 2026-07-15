@@ -19,7 +19,8 @@ usage: alas review [pr-number-or-url]
 usage: alas review comments [--state <active|resolved|dismissed|all>] [--session <id>]
 usage: alas review reply <comment-id> <body>
 usage: alas review resolve <comment-id> [--reply <body>] [--reopen]
-usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]";
+usage: alas review comment <path> <line> <body> [--end-line <n>] [--side <old|new>] [--session <id>]
+usage: alas review finish [--session <id>] [--verdict <approve|request-changes|comment>] [--summary <body>]";
 
 /// Parse arguments (excluding argv0) into a Command. `base` is the directory
 /// `open` paths resolve against. On misuse, returns the usage string to print.
@@ -61,11 +62,45 @@ fn parse_review(args: &[&str], base: &std::path::Path) -> Result<Command, String
             Ok(Command::ReviewReply { comment_id: args[1].to_string(), body: args[2].to_string() })
         }
         Some("resolve") => parse_review_resolve(&args[1..]),
+        Some("finish") => parse_review_finish(&args[1..]),
         Some(target) if args.len() == 1 && !target.starts_with("--") => {
             Ok(Command::Review { target: Some(target.to_string()) })
         }
         _ => Err(USAGE_ALL.into()),
     }
+}
+
+fn parse_review_finish(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas review finish [--session <id>] [--verdict <approve|request-changes|comment>] [--summary <body>]";
+    let mut session_id: Option<String> = None;
+    let mut verdict: Option<String> = None;
+    let mut summary: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--session" => {
+                i += 1;
+                session_id = Some(flag_value(args, i).ok_or(USAGE)?.to_string());
+            }
+            "--verdict" => {
+                i += 1;
+                let value = flag_value(args, i).ok_or(USAGE)?;
+                let wire_value = match value {
+                    "approve" | "comment" => value,
+                    "request-changes" => "request_changes",
+                    _ => return Err(USAGE.into()),
+                };
+                verdict = Some(wire_value.to_string());
+            }
+            "--summary" => {
+                i += 1;
+                summary = Some(flag_value(args, i).ok_or(USAGE)?.to_string());
+            }
+            _ => return Err(USAGE.into()),
+        }
+        i += 1;
+    }
+    Ok(Command::ReviewFinish { session_id, verdict, summary })
 }
 
 fn parse_review_resolve(args: &[&str]) -> Result<Command, String> {
@@ -365,6 +400,28 @@ mod tests {
         assert!(parse(&s(&["review", "resolve"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "resolve", "--reopen"]), Path::new("/b")).is_err());
         assert!(parse(&s(&["review", "resolve", "c1", "--reply"]), Path::new("/b")).is_err());
+    }
+
+    #[test]
+    fn review_finish_parses_flags_and_normalizes_request_changes() {
+        assert_eq!(
+            parse(&s(&["review", "finish"]), Path::new("/b")).unwrap(),
+            Command::ReviewFinish { session_id: None, verdict: None, summary: None }
+        );
+        assert_eq!(
+            parse(
+                &s(&["review", "finish", "--session", "sid", "--verdict", "request-changes", "--summary", "Fix it"]),
+                Path::new("/b")
+            )
+            .unwrap(),
+            Command::ReviewFinish {
+                session_id: Some("sid".into()),
+                verdict: Some("request_changes".into()),
+                summary: Some("Fix it".into()),
+            }
+        );
+        assert!(parse(&s(&["review", "finish", "--verdict", "reject"]), Path::new("/b")).is_err());
+        assert!(parse(&s(&["review", "finish", "summary"]), Path::new("/b")).is_err());
     }
 
     #[test]

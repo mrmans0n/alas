@@ -241,6 +241,67 @@ struct AlasActionService {
         ])
     }
 
+    func reviewFinish(
+        origin: Worktree,
+        sessionID: String?,
+        verdict: ReviewVerdict,
+        summary: String
+    ) -> AlasCLIResponse {
+        let defaultSessionID = ReviewDraftSessionID.localChanges(
+            worktreeID: origin.id,
+            worktreePath: origin.path,
+            scope: .all
+        )
+        let draftSessionID: ReviewDraftSessionID
+        if let sessionID {
+            guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
+                  parsed.isFor(worktreeID: origin.id) else {
+                return .error("unknown review session id")
+            }
+            draftSessionID = parsed
+        } else {
+            draftSessionID = defaultSessionID
+        }
+        guard verdict != .requestChanges
+            || !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .error("request_changes requires a non-empty summary")
+        }
+
+        let sessions = reviewSessionStore()
+        do {
+            let record: ReviewSessionRecord
+            if let existing = try sessions.list(worktreeID: origin.id).first(where: {
+                $0.target.draftSessionID == draftSessionID
+            }) {
+                record = existing
+            } else {
+                // `review` opens local changes in the dedicated changes tab,
+                // which does not create a ReviewSessionRecord. Materialize its
+                // canonical session only when finishing that default review.
+                guard draftSessionID == defaultSessionID else {
+                    return .error("unknown review session id")
+                }
+                let target = ReviewSessionTarget.localChanges(
+                    worktreeID: origin.id,
+                    repositoryPath: origin.path,
+                    scope: .all
+                )
+                let timestamp = now()
+                record = ReviewSessionRecord(
+                    id: target.id,
+                    target: target,
+                    createdAt: timestamp,
+                    updatedAt: timestamp
+                )
+            }
+            try sessions.save(record.markedReviewed(verdict: verdict, summary: summary, now: now()))
+        } catch {
+            return .error("could not finish review: \(error.localizedDescription)")
+        }
+        notifyReviewCommentsChanged()
+        return .ok
+    }
+
     /// Worktree-relative form of `path`: absolute paths under the worktree
     /// root are relativized; already-relative paths are lexically
     /// normalized (collapsing `.`/`..`/repeated separators) and treated as

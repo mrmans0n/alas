@@ -16,6 +16,20 @@ enum ReviewCommentWireFilter: String, Equatable {
     case all
 }
 
+enum ReviewVerdictWire: String, Equatable {
+    case approve
+    case requestChanges = "request_changes"
+    case comment
+
+    var reviewVerdict: ReviewVerdict {
+        switch self {
+        case .approve: .approve
+        case .requestChanges: .requestChanges
+        case .comment: .comment
+        }
+    }
+}
+
 struct AlasCLIRequest: Equatable {
     enum Command: Equatable {
         case open(paths: [String])
@@ -38,6 +52,7 @@ struct AlasCLIRequest: Equatable {
         case reply(commentID: String, body: String)
         case resolve(commentID: String, reply: String?, reopen: Bool)
         case commentAdd(path: String, startLine: Int, endLine: Int?, side: String?, body: String, sessionID: String?)
+        case finish(sessionID: String?, verdict: ReviewVerdict, summary: String)
     }
 
     let version: Int
@@ -92,6 +107,12 @@ struct AlasCLIRequest: Equatable {
         var side: String?
         var body: String
         var session_id: String?
+    }
+
+    private struct ReviewFinishParams: Decodable {
+        var session_id: String?
+        var verdict: String?
+        var summary: String?
     }
 
     /// Typed access to the `params` object new-style commands carry.
@@ -229,6 +250,22 @@ struct AlasCLIRequest: Equatable {
                 side: side,
                 body: try requiredNonEmpty(params.body),
                 sessionID: params.session_id?.nilIfBlank
+            ))
+        case "review_finish":
+            let params = try Self.decodeParamsIfPresent(ReviewFinishParams.self, from: data)
+            let verdict: ReviewVerdict
+            if let rawVerdict = params?.verdict?.nilIfBlank {
+                guard let parsed = ReviewVerdictWire(rawValue: rawVerdict) else {
+                    throw AlasCLIRequestError.malformed
+                }
+                verdict = parsed.reviewVerdict
+            } else {
+                verdict = .comment
+            }
+            command = .review(.finish(
+                sessionID: params?.session_id?.nilIfBlank,
+                verdict: verdict,
+                summary: params?.summary ?? ""
             ))
         case "resolve":
             command = .resolve

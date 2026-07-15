@@ -24,7 +24,7 @@ struct ReviewSessionStore {
     func findActive(targetID: ReviewSessionID) throws -> ReviewSessionRecord? {
         let snapshot = try readSnapshot()
         return snapshot.recordsByID.values
-            .filter { $0.target.id == targetID && $0.status != .archived }
+            .filter { $0.target.id == targetID && $0.status != .archived && $0.status != .reviewed }
             .sorted(by: sortSessions)
             .first
     }

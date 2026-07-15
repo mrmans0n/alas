@@ -93,6 +93,10 @@ struct AlasCLICommandRouter {
                 origin: origin, path: path, startLine: startLine, endLine: endLine,
                 side: side, body: body, sessionID: sessionID
             )
+        case .review(.finish(let sessionID, let verdict, let summary)):
+            return service.reviewFinish(
+                origin: origin, sessionID: sessionID, verdict: verdict, summary: summary
+            )
         }
     }
 }
