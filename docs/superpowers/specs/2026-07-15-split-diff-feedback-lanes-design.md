@@ -103,13 +103,13 @@ width.
 `DiffPaneLineNumberRulerView` currently calculates its thickness from a
 42-point minimum, the maximum visible label width, and horizontal padding.
 Extract that calculation into a small shared geometry helper that accepts the
-line labels and resolved code font.
+line labels and uses the ruler's existing 10-point monospaced label font.
 
 Both the AppKit ruler and `DiffFeedbackLaneView` use this helper. Feedback
 therefore remains aligned with source text for ordinary and high line numbers,
-and when the configured code font changes. The geometry helper also exposes a
-pure lane-frame calculation so its split and stacked output can be tested
-without rendering a window.
+without relying on a duplicated width constant. The geometry helper also
+exposes a pure lane-frame calculation so its split and stacked output can be
+tested without rendering a window.
 
 The relevant display group or row segment supplies old/new line labels to the
 lane wrapper. Left feedback uses old-side gutter metrics, right feedback uses
@@ -172,7 +172,7 @@ Use Swift Testing for focused coverage:
   unknown metadata.
 - Geometry tests cover left, right, and full frames; the one-point split
   divider; code-gutter insets; narrow widths; and ruler expansion for wide line
-  numbers and different code fonts.
+  numbers.
 - Render-context tests verify that composers and persisted feedback receive the
   same lane data without changing their row segment.
 - Regression tests retain one pending composer, range-end insertion, mixed-side
