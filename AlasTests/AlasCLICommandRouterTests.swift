@@ -768,6 +768,41 @@ struct AlasCLICommandRouterTests {
         #expect(try store.load(sessionID: .localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)).isEmpty)
     }
 
+    @Test func commentAddRejectsAnAbsolutePathOutsideTheWorktree() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        // A session kind that doesn't need a git-status lookup to resolve
+        // its namespace, so an out-of-worktree path can't slip through by
+        // virtue of the local-changes git-status check happening to reject
+        // it for an unrelated reason.
+        let target = ReviewSessionTarget.commit(
+            worktreeID: "wt1", repositoryPath: root, sha: "abc123", title: "Review abc123"
+        )
+
+        let router = makeReviewRouter(worktree: worktree, store: store)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "/tmp/some-other-repo/foo.swift", startLine: 1, endLine: nil, side: nil,
+                body: "add a guard", sessionID: target.draftSessionID.rawValue
+            ))
+        ))
+
+        guard case .error(let message) = response else {
+            Issue.record("expected error, got \(response)")
+            return
+        }
+        #expect(message.contains("inside the worktree"))
+        #expect(try store.load(sessionID: target.draftSessionID).isEmpty)
+    }
+
     @Test func worktreeRelativePathResolvesSymlinkedRootAgainstTheRealWorktreePath() throws {
         // resolvingSymlinksInPath() needs the file to actually exist to
         // resolve the intermediate symlink, matching the real scenario:

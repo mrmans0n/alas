@@ -188,9 +188,9 @@ struct AlasActionService {
         } else {
             targetSessionID = .localChanges(worktreeID: origin.id, worktreePath: origin.path, scope: .all)
         }
-        let relativePath = Self.worktreeRelativePath(path, worktreeRoot: origin.path)
-        guard !relativePath.isEmpty else {
-            return .error("review comment path must point at a file")
+        guard let relativePath = Self.worktreeRelativePath(path, worktreeRoot: origin.path),
+              !relativePath.isEmpty else {
+            return .error("review comment path must point at a file inside the worktree")
         }
         let namespace: String
         switch await fileIDNamespace(for: targetSessionID, path: relativePath, worktreePath: origin.path) {
@@ -229,23 +229,24 @@ struct AlasActionService {
     }
 
     /// Worktree-relative form of `path`: absolute paths under the worktree
-    /// root are relativized; already-relative paths pass through. Tries the
-    /// path as given first, then with symlinks resolved on both sides — the
-    /// CLI absolutizes against the caller's logical `$PWD`, which preserves
-    /// a symlinked checkout path, while `worktreeRoot` may be the resolved
+    /// root are relativized; already-relative paths pass through unchanged
+    /// (treated as already worktree-relative). Tries the path as given
+    /// first, then with symlinks resolved on both sides — the CLI
+    /// absolutizes against the caller's logical `$PWD`, which preserves a
+    /// symlinked checkout path, while `worktreeRoot` may be the resolved
     /// real path Alas tracks (same two-step pattern `relativePathAndDepth`
-    /// already uses for `open`).
-    static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String {
+    /// already uses for `open`). Returns nil when an absolute path is
+    /// outside the worktree root even after symlink resolution, so callers
+    /// don't file a comment against a path that can never match a file in
+    /// the review.
+    static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String? {
         guard path.hasPrefix("/") else { return path }
         if let relative = relativePath(path, against: worktreeRoot.standardizedFileURL.path) {
             return relative
         }
         let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL.path
         let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        if let relative = relativePath(resolvedPath, against: resolvedRoot) {
-            return relative
-        }
-        return path
+        return relativePath(resolvedPath, against: resolvedRoot)
     }
 
     private static func relativePath(_ path: String, against rootPath: String) -> String? {
