@@ -132,6 +132,45 @@ pub fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "session_list",
+            "description": "List this ACP session and its direct parent or children only. Returns structured state summaries without transcript content.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "session_new",
+            "description": "Asynchronously ask Alas to create a direct child ACP session. The child may use the current worktree, an existing project worktree, or a new linked worktree. The prompt is text-only and Alas does not automatically focus the child.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": { "type": "string", "description": "Initial text-only task for the child session." },
+                    "agent": { "type": "string", "description": "Optional enabled ACP-capable agent id. Defaults to this session's agent." },
+                    "worktree": { "type": "string", "description": "Existing project worktree name or branch. Mutually exclusive with new_worktree." },
+                    "new_worktree": {
+                        "type": "object",
+                        "description": "New linked worktree selector. Mutually exclusive with worktree.",
+                        "properties": {
+                            "branch": { "type": "string", "description": "Branch for the new linked worktree." },
+                            "base": { "type": "string", "description": "Optional base ref." }
+                        },
+                        "required": ["branch"]
+                    }
+                },
+                "required": ["prompt"]
+            }
+        }),
+        json!({
+            "name": "session_send",
+            "description": "Queue a text-only prompt for this session's direct parent or child. Delivery is asynchronous and does not automatically focus either session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Direct parent or child session id." },
+                    "prompt": { "type": "string", "description": "Text-only prompt to queue." }
+                },
+                "required": ["session_id", "prompt"]
+            }
+        }),
+        json!({
             "name": "worktree_list",
             "description": "List this project's worktrees in Alas. The current worktree is marked with an asterisk.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -326,6 +365,42 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 level,
             })
         }
+        "session_list" => Ok(Command::SessionList),
+        "session_new" => {
+            let worktree = optional_non_blank_string(args, "worktree")?;
+            let agent = optional_non_blank_string(args, "agent")?;
+            let new_worktree = match args.get("new_worktree") {
+                None => None,
+                Some(Value::Object(new_worktree)) => {
+                    let branch = required_object_string(new_worktree, "branch", "new_worktree")?;
+                    let base = optional_object_string(new_worktree, "base", "new_worktree")?;
+                    Some((branch, base))
+                }
+                Some(_) => return Err("session_new 'new_worktree' must be an object".into()),
+            };
+            if worktree.is_some() && new_worktree.is_some() {
+                return Err(
+                    "session_new accepts either 'worktree' or 'new_worktree', not both".into(),
+                );
+            }
+            let worktree = match (worktree, new_worktree) {
+                (Some(worktree), None) => alas_client::SessionWorktreeTarget::Existing { worktree },
+                (None, Some((branch, base))) => {
+                    alas_client::SessionWorktreeTarget::New { branch, base }
+                }
+                (None, None) => alas_client::SessionWorktreeTarget::Current,
+                (Some(_), Some(_)) => unreachable!("mutual exclusion checked above"),
+            };
+            Ok(Command::SessionNew {
+                prompt: required_string(args, "prompt")?,
+                agent,
+                worktree,
+            })
+        }
+        "session_send" => Ok(Command::SessionSend {
+            session_id: required_string(args, "session_id")?,
+            prompt: required_string(args, "prompt")?,
+        }),
         "worktree_list" => Ok(Command::WtList),
         "worktree_switch" => Ok(Command::WtSwitch {
             target: required_string(args, "target")?,
@@ -459,6 +534,53 @@ fn optional_string(args: &Value, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+fn optional_non_blank_string(args: &Value, key: &str) -> Result<Option<String>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => {
+            Ok(Some(value.trim().to_string()))
+        }
+        Some(Value::String(_)) => Err(format!("{key} must be non-empty")),
+        Some(_) => Err(format!("{key} must be a string")),
+    }
+}
+
+fn required_object_string(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<String, String> {
+    match object.get(key) {
+        Some(Value::String(value)) if !value.trim().is_empty() => Ok(value.trim().to_string()),
+        Some(Value::String(_)) => Err(format!(
+            "session_new '{object_name}.{key}' must be non-empty"
+        )),
+        Some(_) => Err(format!(
+            "session_new '{object_name}.{key}' must be a string"
+        )),
+        None => Err(format!("session_new requires '{object_name}.{key}'")),
+    }
+}
+
+fn optional_object_string(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    object_name: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() => {
+            Ok(Some(value.trim().to_string()))
+        }
+        Some(Value::String(_)) => Err(format!(
+            "session_new '{object_name}.{key}' must be non-empty"
+        )),
+        Some(_) => Err(format!(
+            "session_new '{object_name}.{key}' must be a string"
+        )),
+    }
+}
+
 /// Send one command to the owning app instance, addressed by worktree
 /// directory (never session id — the MCP server has no terminal session).
 pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportError> {
@@ -523,6 +645,9 @@ fn success_message(command: &Command) -> String {
         Command::ReviewResolve { reopen: true, .. } => "Comment reopened.".into(),
         Command::ReviewCommentAdd { path, .. } => format!("Filed review comment on {path}."),
         Command::ReviewFinish { .. } => "Review finished.".into(),
+        Command::SessionList => "No delegated sessions found.".into(),
+        Command::SessionNew { .. } => "Delegated session creation accepted.".into(),
+        Command::SessionSend { .. } => "Delegated prompt queued.".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -725,6 +850,9 @@ mod tests {
             [
                 "open",
                 "notify",
+                "session_list",
+                "session_new",
+                "session_send",
                 "worktree_list",
                 "worktree_switch",
                 "worktree_new",
@@ -755,6 +883,60 @@ mod tests {
             alas_client::Command::Open {
                 paths: vec!["/wt/a.txt".into(), "/abs/b.txt".into()]
             }
+        );
+    }
+
+    #[test]
+    fn session_tools_validate_and_map_arguments() {
+        assert_eq!(
+            command_for_tool("session_list", &json!({}), "/wt").unwrap(),
+            alas_client::Command::SessionList
+        );
+        assert_eq!(
+            command_for_tool(
+                "session_new",
+                &json!({
+                    "prompt": "Task",
+                    "agent": "codex",
+                    "new_worktree": { "branch": "child", "base": "origin/main" }
+                }),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::SessionNew {
+                prompt: "Task".into(),
+                agent: Some("codex".into()),
+                worktree: alas_client::SessionWorktreeTarget::New {
+                    branch: "child".into(),
+                    base: Some("origin/main".into())
+                }
+            }
+        );
+        assert_eq!(
+            command_for_tool(
+                "session_send",
+                &json!({ "session_id": "child", "prompt": "Follow up" }),
+                "/wt"
+            )
+            .unwrap(),
+            alas_client::Command::SessionSend {
+                session_id: "child".into(),
+                prompt: "Follow up".into()
+            }
+        );
+        assert!(command_for_tool(
+            "session_new",
+            &json!({ "prompt": "Task", "worktree": "main", "new_worktree": { "branch": "child" } }),
+            "/wt"
+        )
+        .is_err());
+        assert!(
+            command_for_tool(
+                "session_send",
+                &json!({ "session_id": "child", "prompt": "  " }),
+                "/wt"
+            )
+            .is_err()
         );
     }
 
@@ -791,24 +973,16 @@ mod tests {
     fn open_rejects_invalid_line_targets() {
         assert!(command_for_tool("open", &json!({"path": "a", "line": 0}), "/wt").is_err());
         assert!(command_for_tool("open", &json!({"path": "a", "end_line": 2}), "/wt").is_err());
-        assert!(command_for_tool(
-            "open",
-            &json!({"path": "a", "line": 3, "end_line": 2}),
-            "/wt"
-        )
-        .is_err());
-        assert!(command_for_tool(
-            "open",
-            &json!({"paths": ["a", "b"], "line": 2}),
-            "/wt"
-        )
-        .is_err());
-        assert!(command_for_tool(
-            "open",
-            &json!({"path": "a", "paths": ["a"]}),
-            "/wt"
-        )
-        .is_err());
+        assert!(
+            command_for_tool(
+                "open",
+                &json!({"path": "a", "line": 3, "end_line": 2}),
+                "/wt"
+            )
+            .is_err()
+        );
+        assert!(command_for_tool("open", &json!({"paths": ["a", "b"], "line": 2}), "/wt").is_err());
+        assert!(command_for_tool("open", &json!({"path": "a", "paths": ["a"]}), "/wt").is_err());
     }
 
     #[test]
