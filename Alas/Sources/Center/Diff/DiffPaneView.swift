@@ -358,25 +358,37 @@ struct DiffPaneView: View {
                     )
                     .fixedSize(horizontal: false, vertical: true)
                 case .thread(let t):
-                    DiffInlineCommentCard(
-                        thread: t,
-                        onReply: { body in onReply(t, body) },
-                        onStageReply: { body in onStageReply(t, body) },
-                        onResolve: { onResolve(t) },
-                        onUnresolve: { onUnresolve(t) },
-                        onEdit: { comment, newBody in onEdit(t, comment, newBody) },
-                        onDelete: { comment in onDelete(t, comment) },
-                        canReply: canReply && t.viewerCanReply,
-                        canResolve: canResolve && (t.viewerCanResolve || t.viewerCanUnresolve),
-                        canAddToReview: canAddToReview,
-                        onActiveChange: { active in
-                            activeThreadID = active ? t.id : (activeThreadID == t.id ? nil : activeThreadID)
-                        }
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                case .annotation(let a):
-                    DiffInlineAnnotationCard(annotation: a)
+                    DiffFeedbackLaneView(
+                        lane: DiffFeedbackLaneResolver.lane(for: t),
+                        layoutMode: layoutMode,
+                        rows: visibleRows
+                    ) {
+                        DiffInlineCommentCard(
+                            thread: t,
+                            onReply: { body in onReply(t, body) },
+                            onStageReply: { body in onStageReply(t, body) },
+                            onResolve: { onResolve(t) },
+                            onUnresolve: { onUnresolve(t) },
+                            onEdit: { comment, newBody in onEdit(t, comment, newBody) },
+                            onDelete: { comment in onDelete(t, comment) },
+                            canReply: canReply && t.viewerCanReply,
+                            canResolve: canResolve && (t.viewerCanResolve || t.viewerCanUnresolve),
+                            canAddToReview: canAddToReview,
+                            onActiveChange: { active in
+                                activeThreadID = active ? t.id : (activeThreadID == t.id ? nil : activeThreadID)
+                            }
+                        )
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                case .annotation(let a):
+                    DiffFeedbackLaneView(
+                        lane: DiffFeedbackLaneResolver.lane(for: a),
+                        layoutMode: layoutMode,
+                        rows: visibleRows
+                    ) {
+                        DiffInlineAnnotationCard(annotation: a)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }

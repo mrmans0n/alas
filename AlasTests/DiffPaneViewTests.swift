@@ -162,6 +162,107 @@ struct DiffPaneViewTests {
         #expect(context.group(id: group.id)?.segments == expectedSegments.items)
     }
 
+    @Test func diffTabDraftAccessoriesResolveSemanticLanesAndSegmentGeometry() throws {
+        let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
+        let group = try #require(model.groups.first)
+        let fileID = DiffReviewFileID(namespace: "diff-tab", path: "Sources/App.swift")
+        let comment = reviewDraftComment(id: "draft-new-lane", fileID: fileID)
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .old,
+            line: 2,
+            rowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 2, isChange: true),
+            ],
+            selectedText: "let b = 2"
+        )
+        let context = DiffTabRenderContextBuilder.build(
+            model: model,
+            comments: [comment],
+            pendingDraftAnchor: pendingAnchor
+        )
+        let segment = try #require(context.group(id: group.id)?.segments.first {
+            !$0.draftComments.isEmpty || $0.showsComposer
+        })
+
+        #expect(DiffFeedbackLaneResolver.lane(for: comment) == .right)
+        #expect(DiffFeedbackLaneResolver.lane(for: pendingAnchor) == .left)
+        #expect(segment.rows.isEmpty == false)
+
+        let splitFrame = DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 900,
+            layoutMode: .split,
+            lane: .left,
+            gutterWidth: 42
+        )
+        let stackedFrame = DiffFeedbackLaneGeometry.contentFrame(
+            containerWidth: 900,
+            layoutMode: .stacked,
+            lane: .left,
+            gutterWidth: 42
+        )
+        #expect(splitFrame.width == 407)
+        #expect(stackedFrame.width == 858)
+    }
+
+    @Test func pendingDraftComposerLaneUsesAnchorResolverInSplitAndStackedLayouts() throws {
+        let rows = try #require(model().groups.first?.rows)
+        let pendingAnchor = DiffReviewLineAnchor(
+            path: "Sources/App.swift",
+            side: .old,
+            line: 2,
+            rowIndex: 1,
+            selectedLines: [
+                DiffReviewLineAnchor.SelectedLine(side: .old, line: 2, isChange: true),
+            ],
+            selectedText: "let b = 2"
+        )
+        let splitController = NSHostingController(rootView:
+            DiffFeedbackLaneView(
+                lane: DiffFeedbackLaneResolver.lane(for: pendingAnchor),
+                layoutMode: .split,
+                rows: rows
+            ) {
+                FrameProbe(identifier: "diff-review-draft-composer")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 64)
+            }
+            .environment(\.theme, theme())
+        )
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 80)
+        splitController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-left",
+            in: splitController.view
+        ) != nil)
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-review-draft-composer",
+            in: splitController.view
+        ) != nil)
+
+        let stackedController = NSHostingController(rootView:
+            DiffFeedbackLaneView(
+                lane: DiffFeedbackLaneResolver.lane(for: pendingAnchor),
+                layoutMode: .stacked,
+                rows: rows
+            ) {
+                FrameProbe(identifier: "diff-review-draft-composer")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 64)
+            }
+            .environment(\.theme, theme())
+        )
+        stackedController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 80)
+        stackedController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-full",
+            in: stackedController.view
+        ) != nil)
+    }
+
     @MainActor
     @Test func diffTabRenderContextCacheReusesMatchingKeyAndEvictsPastLimit() throws {
         let model = DiffDisplayModelBuilder.build(diff: parsedDiff(), filePath: "Sources/App.swift")
@@ -318,6 +419,85 @@ struct DiffPaneViewTests {
         controller.view.frame = NSRect(x: 0, y: 0, width: 520, height: 400)
         controller.view.layoutSubtreeIfNeeded()
         #expect(controller.view.subviews.isEmpty == false)
+    }
+
+    @Test func providerAccessoriesUseSemanticLanesAndStackedFullWidth() throws {
+        let thread = DiffInlineCommentThread(
+            id: "thread-old",
+            filePath: "a.swift",
+            newLine: 2,
+            isOldSide: true,
+            isResolved: false,
+            isOutdated: false,
+            comments: [
+                DiffInlineComment(id: "comment-old", author: "reviewer", body: "Old-side feedback"),
+            ]
+        )
+        let annotation = DiffInlineAnnotation(
+            id: "annotation-new",
+            checkName: "SwiftLint",
+            newLine: 2,
+            level: .warning,
+            message: "New-side annotation",
+            rawDetails: nil
+        )
+        var splitLayout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let splitView = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { splitLayout }, set: { splitLayout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            threads: [thread],
+            annotations: [annotation],
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let splitController = NSHostingController(rootView: splitView)
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        splitController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-left",
+            in: splitController.view
+        ) != nil)
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-right",
+            in: splitController.view
+        ) != nil)
+
+        var stackedLayout = DiffLayoutMode.stacked
+        let stackedView = DiffPaneView(
+            model: model(),
+            fileExtension: "swift",
+            layoutMode: Binding(get: { stackedLayout }, set: { stackedLayout = $0 }),
+            wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+            showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+            codeFontFamily: "",
+            codeFontSize: 13,
+            showsToolbar: false,
+            verticalScrollMode: .staticHeight,
+            threads: [thread],
+            annotations: [annotation],
+            hunkActions: { _ in DiffPaneHunkActions() }
+        )
+        .environment(\.theme, theme())
+
+        let stackedController = NSHostingController(rootView: stackedView)
+        stackedController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        stackedController.view.layoutSubtreeIfNeeded()
+
+        let fullLaneMarkers = allSubviews(of: stackedController.view).filter {
+            $0.accessibilityIdentifier() == "diff-feedback-lane-full"
+        }
+        #expect(fullLaneMarkers.count == 2)
     }
 
     @Test func defaultModeShowsDiffToolbar() {
@@ -1318,6 +1498,70 @@ let second = true
 
         let rulerWidth = try #require(scrollView.verticalRulerView?.ruleThickness)
         #expect(scrollView.contentView.frame.minX >= rulerWidth - 0.5)
+    }
+
+    @Test func feedbackLaneWrapperRetainsFullWidthAndHostsMultipleChildren() throws {
+        let rows = try #require(model().groups.first?.rows)
+        let splitController = NSHostingController(rootView:
+            DiffFeedbackLaneView(lane: .left, layoutMode: .split, rows: rows) {
+                FrameProbe(identifier: "feedback-child-first")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 10)
+                FrameProbe(identifier: "feedback-child-second")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 20)
+            }
+            .environment(\.theme, theme())
+        )
+        splitController.view.frame = NSRect(x: 0, y: 0, width: 900, height: 60)
+        splitController.view.layoutSubtreeIfNeeded()
+
+        let laneMarker = try #require(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-left",
+            in: splitController.view
+        ))
+        let dividerMarker = try #require(subview(
+            withAccessibilityIdentifier: "diff-feedback-divider",
+            in: splitController.view
+        ))
+        let firstChild = try #require(subview(
+            withAccessibilityIdentifier: "feedback-child-first",
+            in: splitController.view
+        ))
+        let secondChild = try #require(subview(
+            withAccessibilityIdentifier: "feedback-child-second",
+            in: splitController.view
+        ))
+        let laneFrame = laneMarker.convert(laneMarker.bounds, to: splitController.view)
+        let dividerFrame = dividerMarker.convert(dividerMarker.bounds, to: splitController.view)
+        let firstFrame = firstChild.convert(firstChild.bounds, to: splitController.view)
+        let secondFrame = secondChild.convert(secondChild.bounds, to: splitController.view)
+
+        #expect(abs(laneFrame.minX) < 0.01)
+        #expect(abs(laneFrame.width - 900) < 0.01)
+        #expect(abs(dividerFrame.minX - 449) < 0.01)
+        #expect(abs(dividerFrame.width - 1) < 0.01)
+        #expect(abs(firstFrame.minX - 42) < 0.01)
+        #expect(abs(firstFrame.width - 407) < 0.01)
+        #expect(abs(firstFrame.height - 10) < 0.01)
+        #expect(abs(secondFrame.minX - 42) < 0.01)
+        #expect(abs(secondFrame.width - 407) < 0.01)
+        #expect(abs(secondFrame.height - 20) < 0.01)
+        #expect(abs(secondFrame.minY - firstFrame.maxY) < 0.01)
+
+        let stackedController = NSHostingController(rootView:
+            DiffFeedbackLaneView(lane: .right, layoutMode: .stacked, rows: rows) {
+                Color.clear.frame(height: 20)
+            }
+            .environment(\.theme, theme())
+        )
+        stackedController.view.frame = NSRect(x: 0, y: 0, width: 901, height: 20)
+        stackedController.view.layoutSubtreeIfNeeded()
+
+        #expect(subview(
+            withAccessibilityIdentifier: "diff-feedback-lane-full",
+            in: stackedController.view
+        ) != nil)
     }
 
     @Test func diffPreferenceBindingsPersistLayoutAndWrapButKeepWhitespaceLocal() {
@@ -2630,6 +2874,31 @@ let second = true
         #expect(nsView.intrinsicContentSize.height > 0)
     }
 
+    @Test func containerViewUsesSharedSplitFramesAtEvenAndSubDividerWidths() throws {
+        let nsView = DiffPaneTextDocumentContainerView()
+
+        nsView.setFrameSize(NSSize(width: 900, height: 20))
+        nsView.layout()
+        let oldPane = try #require(nsView.subviews.first)
+        let newPane = try #require(nsView.subviews.dropFirst().first)
+        let divider = try #require(nsView.subviews.last)
+        #expect(oldPane.frame.minX == 0)
+        #expect(oldPane.frame.width == 449)
+        #expect(divider.frame.minX == 449)
+        #expect(divider.frame.width == 1)
+        #expect(newPane.frame.minX == 450)
+        #expect(newPane.frame.width == 450)
+
+        nsView.setFrameSize(NSSize(width: 0.5, height: 20))
+        nsView.layout()
+        #expect(oldPane.frame.minX == 0)
+        #expect(oldPane.frame.width == 0)
+        #expect(divider.frame.minX == 0)
+        #expect(divider.frame.width == 0.5)
+        #expect(newPane.frame.minX == 0.5)
+        #expect(newPane.frame.width == 0)
+    }
+
     @Test func containerViewUpdateRowsProducesPositiveHeightForThreeRows() throws {
         let group = try #require(model().groups.first)
         let rows = Array(group.rows.prefix(3))
@@ -3002,6 +3271,20 @@ let second = true
                 guard needsUpdateConstraints else { return }
                 constraintInvalidationCount += 1
             }
+        }
+    }
+
+    private struct FrameProbe: NSViewRepresentable {
+        let identifier: String
+
+        func makeNSView(context: Context) -> NSView {
+            let view = NSView(frame: .zero)
+            view.setAccessibilityIdentifier(identifier)
+            return view
+        }
+
+        func updateNSView(_ nsView: NSView, context: Context) {
+            nsView.setAccessibilityIdentifier(identifier)
         }
     }
 

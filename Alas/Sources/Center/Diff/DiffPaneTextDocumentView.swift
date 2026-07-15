@@ -229,8 +229,6 @@ final class DiffPaneTextDocumentContainerView: NSView {
     private var lastRowsUpdateSignature: RowsUpdateSignature?
     private var pendingIntrinsicContentSizeInvalidation = false
 
-    private let dividerWidth: CGFloat = 1
-
     override var isFlipped: Bool { true }
 
     override var intrinsicContentSize: NSSize {
@@ -388,11 +386,26 @@ final class DiffPaneTextDocumentContainerView: NSView {
     }
 
     private func layoutSplit() {
-        let width = max(bounds.width, 1)
-        let paneWidth = floor((width - dividerWidth) / 2)
-        oldPane.frame = NSRect(x: 0, y: 0, width: paneWidth, height: max(bounds.height, measuredHeight))
-        dividerView.frame = NSRect(x: paneWidth, y: 0, width: dividerWidth, height: max(bounds.height, measuredHeight))
-        newPane.frame = NSRect(x: paneWidth + dividerWidth, y: 0, width: width - paneWidth - dividerWidth, height: max(bounds.height, measuredHeight))
+        let splitFrames = DiffPaneSplitGeometry.frames(containerWidth: bounds.width)
+        let height = max(bounds.height, measuredHeight)
+        oldPane.frame = NSRect(
+            x: splitFrames.oldPane.minX,
+            y: 0,
+            width: splitFrames.oldPane.width,
+            height: height
+        )
+        dividerView.frame = NSRect(
+            x: splitFrames.divider.minX,
+            y: 0,
+            width: splitFrames.divider.width,
+            height: height
+        )
+        newPane.frame = NSRect(
+            x: splitFrames.newPane.minX,
+            y: 0,
+            width: splitFrames.newPane.width,
+            height: height
+        )
 
         oldPane.layoutSubtreeIfNeeded()
         newPane.layoutSubtreeIfNeeded()
@@ -1814,16 +1827,13 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     private var cachedGeometry: RulerGeometry?
     private var rowGeometryComputationCount = 0
 
-    private let minimumThickness: CGFloat = 42
-    private let horizontalPadding: CGFloat = 8
-
     var rowGeometryComputationCountForTesting: Int {
         rowGeometryComputationCount
     }
 
     init(scrollView: NSScrollView) {
         super.init(scrollView: scrollView, orientation: .verticalRuler)
-        ruleThickness = minimumThickness
+        ruleThickness = DiffPaneLineNumberGutterGeometry.minimumThickness
         reservedThicknessForMarkers = 0
         reservedThicknessForAccessoryView = 0
         observe(scrollView: scrollView)
@@ -1988,11 +1998,16 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             guard !label.isEmpty else { continue }
             let sourceLabelRect = labelRects.indices.contains(index)
                 ? labelRects[index]
-                : NSRect(x: 0, y: sourceRowRect.minY, width: ruleThickness - horizontalPadding, height: textHeight)
+                : NSRect(
+                    x: 0,
+                    y: sourceRowRect.minY,
+                    width: ruleThickness - DiffPaneLineNumberGutterGeometry.horizontalPadding,
+                    height: textHeight
+                )
             let drawRect = NSRect(
                 x: sourceLabelRect.minX,
                 y: sourceLabelRect.minY - visible.minY,
-                width: ruleThickness - horizontalPadding,
+                width: ruleThickness - DiffPaneLineNumberGutterGeometry.horizontalPadding,
                 height: textHeight
             )
             NSString(string: label).draw(in: drawRect, withAttributes: labelAttributes(for: label, row: index))
@@ -2077,7 +2092,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             return NSRect(
                 x: 0,
                 y: lineRect.midY - textHeight / 2,
-                width: ruleThickness - horizontalPadding,
+                width: ruleThickness - DiffPaneLineNumberGutterGeometry.horizontalPadding,
                 height: textHeight
             )
         }
@@ -2213,13 +2228,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
     }
 
     private func updateThickness() {
-        let maxDigits = labels
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "+- ")) }
-            .map(\.count)
-            .max() ?? 1
-        let sample = String(repeating: "8", count: max(maxDigits, 1)) as NSString
-        let width = ceil(sample.size(withAttributes: labelAttributes(for: "", row: nil)).width)
-        ruleThickness = max(minimumThickness, width + horizontalPadding * 2)
+        ruleThickness = DiffPaneLineNumberGutterGeometry.thickness(labels: labels)
     }
 
     private func labelAttributes(for label: String, row: Int?) -> [NSAttributedString.Key: Any] {
@@ -2239,7 +2248,7 @@ final class DiffPaneLineNumberRulerView: NSRulerView {
             color = .secondaryLabelColor
         }
         return [
-            .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+            .font: DiffPaneLineNumberGutterGeometry.labelFont,
             .foregroundColor: color,
             .paragraphStyle: paragraph,
         ]

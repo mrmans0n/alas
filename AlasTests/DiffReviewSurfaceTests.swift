@@ -1687,6 +1687,61 @@ struct DiffReviewSurfaceTests {
         #expect(subview(withAccessibilityIdentifier: "diff-review-draft-comment-draft-cached-inline", in: controller.view) != nil)
     }
 
+    @Test func reviewSurfaceUsesLanesForActionableFeedbackAndDrafts() {
+        let file = DiffReviewFileSectionModel(
+            summary: summary(path: "Sources/App/AlphaView.swift"),
+            parsedDiff: parsedDiff(),
+            displayModel: displayModel(),
+            placeholderMessage: nil,
+            openFile: nil,
+            contextProvider: nil
+        )
+        let feedback = DiffReviewInlineFeedback(
+            id: "old-feedback",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Old-side feedback",
+            status: .actionable,
+            providerURL: nil,
+            anchor: .init(path: file.summary.path, line: 2, side: .old),
+            evidenceItemID: "old-feedback"
+        )
+        let comment = draftComment(
+            id: "new-draft",
+            fileID: file.id,
+            path: file.summary.path,
+            side: .new,
+            startLine: 2
+        )
+        var layout = DiffLayoutMode.split
+        var wrap = false
+        var whitespace = false
+        let makeView = {
+            DiffReviewFileSection(
+                file: file,
+                inlineFeedback: [feedback],
+                draftComments: [comment],
+                layoutMode: Binding(get: { layout }, set: { layout = $0 }),
+                wrapLines: Binding(get: { wrap }, set: { wrap = $0 }),
+                showWhitespace: Binding(get: { whitespace }, set: { whitespace = $0 }),
+                codeFontFamily: "",
+                codeFontSize: 13,
+                showsSourceBadge: false
+            )
+            .environment(\.theme, theme())
+        }
+
+        let splitController = host(makeView(), width: 900, height: 620)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-feedback-lane-left", in: splitController.view) != nil)
+        #expect(subview(withAccessibilityIdentifier: "diff-feedback-lane-right", in: splitController.view) != nil)
+
+        layout = .stacked
+        let stackedController = host(makeView(), width: 900, height: 620)
+
+        #expect(subview(withAccessibilityIdentifier: "diff-feedback-lane-full", in: stackedController.view) != nil)
+    }
+
     @Test func fileSectionDraftCommentCardShowsProviderPublishAndErrorState() {
         let file = DiffReviewFileSectionModel(
             summary: summary(path: "Sources/App.swift"),
