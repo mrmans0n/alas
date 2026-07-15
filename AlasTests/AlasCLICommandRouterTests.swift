@@ -768,6 +768,64 @@ struct AlasCLICommandRouterTests {
         #expect(try store.load(sessionID: .localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)).isEmpty)
     }
 
+    @Test func worktreeRelativePathResolvesSymlinkedRootAgainstTheRealWorktreePath() throws {
+        // resolvingSymlinksInPath() needs the file to actually exist to
+        // resolve the intermediate symlink, matching the real scenario:
+        // agents comment on files that exist in the working tree.
+        let realRoot = try makeFile("repo/Sources/App.swift").deletingLastPathComponent().deletingLastPathComponent()
+        let logicalRoot = realRoot.deletingLastPathComponent().appendingPathComponent("logical-repo")
+        try FileManager.default.createSymbolicLink(at: logicalRoot, withDestinationURL: realRoot)
+
+        // The CLI absolutizes against the caller's logical $PWD, which
+        // preserves the symlink the user cd'd through.
+        let pathUnderSymlink = logicalRoot.appendingPathComponent("Sources/App.swift").path
+
+        #expect(
+            AlasActionService.worktreeRelativePath(pathUnderSymlink, worktreeRoot: realRoot)
+                == "Sources/App.swift"
+        )
+    }
+
+    @Test func commentAddFilesIntoTheCorrectSessionWhenRunFromASymlinkedWorktree() async throws {
+        let realRoot = try makeFile("repo/Sources/App.swift").deletingLastPathComponent().deletingLastPathComponent()
+        let logicalRoot = realRoot.deletingLastPathComponent().appendingPathComponent("logical-repo")
+        try FileManager.default.createSymbolicLink(at: logicalRoot, withDestinationURL: realRoot)
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: realRoot, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "Sources/App.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            }
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: logicalRoot.appendingPathComponent("Sources/App.swift").path,
+                startLine: 1, endLine: nil, side: nil, body: "add a guard", sessionID: nil
+            ))
+        ))
+
+        guard case .text(let lines) = response, lines.count == 2 else {
+            Issue.record("expected two-line text response, got \(response)")
+            return
+        }
+        let expectedSession = ReviewDraftSessionID.localChanges(
+            worktreeID: "wt1", worktreePath: realRoot, scope: .all
+        )
+        let saved = try store.load(sessionID: expectedSession)
+        #expect(saved.count == 1)
+        #expect(saved[0].path == "Sources/App.swift")
+        #expect(saved[0].fileID == DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"))
+    }
+
     @Test func commentAddRejectsSessionIDFromAnotherWorktree() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(

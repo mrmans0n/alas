@@ -229,15 +229,31 @@ struct AlasActionService {
     }
 
     /// Worktree-relative form of `path`: absolute paths under the worktree
-    /// root are relativized; already-relative paths pass through.
+    /// root are relativized; already-relative paths pass through. Tries the
+    /// path as given first, then with symlinks resolved on both sides — the
+    /// CLI absolutizes against the caller's logical `$PWD`, which preserves
+    /// a symlinked checkout path, while `worktreeRoot` may be the resolved
+    /// real path Alas tracks (same two-step pattern `relativePathAndDepth`
+    /// already uses for `open`).
     static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String {
         guard path.hasPrefix("/") else { return path }
-        let rootPath = worktreeRoot.standardizedFileURL.path
+        if let relative = relativePath(path, against: worktreeRoot.standardizedFileURL.path) {
+            return relative
+        }
+        let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        if let relative = relativePath(resolvedPath, against: resolvedRoot) {
+            return relative
+        }
+        return path
+    }
+
+    private static func relativePath(_ path: String, against rootPath: String) -> String? {
         if path == rootPath { return "" }
         if path.hasPrefix(rootPath + "/") {
             return String(path.dropFirst(rootPath.count + 1))
         }
-        return path
+        return nil
     }
 
     /// The `DiffReviewFileID` namespace matching how each review surface
