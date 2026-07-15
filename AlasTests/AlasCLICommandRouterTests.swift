@@ -578,7 +578,8 @@ struct AlasCLICommandRouterTests {
         store: ReviewDraftCommentStore,
         sessionStore: ReviewSessionStore? = nil,
         onChange: @escaping () -> Void = {},
-        gitStatus: @escaping (URL) async throws -> [ChangedFile] = { _ in [] }
+        gitStatus: @escaping (URL) async throws -> [ChangedFile] = { _ in [] },
+        providerReviewOriginalPath: @escaping (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
     ) -> AlasCLICommandRouter {
         AlasCLICommandRouter(
             sessionWorktreeId: { $0 == "s1" ? worktree.id : nil },
@@ -590,6 +591,7 @@ struct AlasCLICommandRouterTests {
             reviewSessionStore: { sessionStore ?? ReviewSessionStore(url: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json")) },
             notifyReviewCommentsChanged: onChange,
             gitStatus: gitStatus,
+            providerReviewOriginalPath: providerReviewOriginalPath,
             activateApp: {}
         )
     }
@@ -705,6 +707,114 @@ struct AlasCLICommandRouterTests {
         #expect(saved[0].side == .new)
         #expect(saved[0].startLine == 4)
         #expect(saved[0].fileID == DiffReviewFileID(namespace: "unstaged", path: "a.swift"))
+    }
+
+    @Test func commentAddStampsOriginalPathForProviderReviewRenamedFile() async throws {
+        let root = try makeFile("repo/Sources/New.swift").deletingLastPathComponent().deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt1", provider: .gitlab, host: "gitlab.com", repositorySlug: "group/repo", number: 42
+        )
+        var resolverCalls: [(ReviewDraftSessionID, String)] = []
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            providerReviewOriginalPath: { sessionID, path in
+                resolverCalls.append((sessionID, path))
+                return path == "Sources/New.swift" ? "Sources/Old.swift" : nil
+            }
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "Sources/New.swift", startLine: 3, endLine: nil, side: nil,
+                body: "renamed file comment", sessionID: session.rawValue
+            ))
+        ))
+
+        guard case .text = response else {
+            Issue.record("expected .text response, got \(response)")
+            return
+        }
+        #expect(resolverCalls.count == 1)
+        #expect(resolverCalls.first?.1 == "Sources/New.swift")
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].originalPath == "Sources/Old.swift")
+    }
+
+    @Test func commentAddLeavesOriginalPathNilWhenResolverReturnsNil() async throws {
+        let root = try makeFile("repo/Sources/New.swift").deletingLastPathComponent().deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let session = ReviewDraftSessionID.reviewRequest(
+            worktreeID: "wt1", provider: .github, host: "github.com", repositorySlug: "org/repo", number: 7
+        )
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            providerReviewOriginalPath: { _, _ in nil }
+        )
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "Sources/New.swift", startLine: 3, endLine: nil, side: nil,
+                body: "unmatched", sessionID: session.rawValue
+            ))
+        ))
+
+        let saved = try store.load(sessionID: session)
+        #expect(saved.count == 1)
+        #expect(saved[0].originalPath == nil)
+    }
+
+    @Test func commentAddDoesNotResolveOriginalPathForLocalChangesSession() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        var resolverCalled = false
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            },
+            providerReviewOriginalPath: { _, _ in
+                resolverCalled = true
+                return "Sources/Old.swift"
+            }
+        )
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "a.swift", startLine: 1, endLine: nil, side: nil, body: "local", sessionID: nil
+            ))
+        ))
+
+        #expect(!resolverCalled)
+        let expectedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .all)
+        let saved = try store.load(sessionID: expectedSession)
+        #expect(saved.count == 1)
+        #expect(saved[0].originalPath == nil)
     }
 
     @Test func commentAddPrefersUnstagedWhenPathIsBothStagedAndUnstaged() async throws {

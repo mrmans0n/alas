@@ -31,6 +31,7 @@ struct AlasActionService {
     }
     var now: () -> Date = Date.init
     var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
+    var providerReviewOriginalPath: (ReviewDraftSessionID, String) async -> String? = { _, _ in nil }
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -199,13 +200,19 @@ struct AlasActionService {
         case .failed(let message):
             return .error(message)
         }
+        let originalPath: String?
+        if targetSessionID.sourceKind == .reviewRequest {
+            originalPath = await providerReviewOriginalPath(targetSessionID, relativePath)
+        } else {
+            originalPath = nil
+        }
         let timestamp = now()
         let comment = ReviewDraftComment(
             id: UUID().uuidString,
             sessionID: targetSessionID,
             fileID: DiffReviewFileID(namespace: namespace, path: relativePath),
             path: relativePath,
-            originalPath: nil,
+            originalPath: originalPath,
             side: side == "old" ? .old : .new,
             startLine: startLine,
             endLine: endLine,
