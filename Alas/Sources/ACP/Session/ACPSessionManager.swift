@@ -46,6 +46,10 @@ final class ACPSessionManager: ObservableObject {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onInputAwaiting: ((ACPSession, ACPUserInputRequest) -> Void)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?
+    /// Builds the app-provided "alas" MCP server entry for a worktree path,
+    /// or nil when injection is disabled/unavailable. Fetched per attach so
+    /// the settings toggle applies to the next (re)connect.
+    private let builtInMCPProvider: ((String) -> BuiltInAlasMCP.Injection?)?
     @Published private(set) var sessions: [ACPSession.ID: ACPSession] = [:]
     @Published private(set) var recent: [ACPSessionRow] = []
     @Published private(set) var persistenceError: String?
@@ -298,7 +302,8 @@ final class ACPSessionManager: ObservableObject {
          setupEvaluator: ACPSetupEvaluator? = nil,
          remoteAdapterResolver: ACPRemoteAdapterResolver? = nil,
          connectionFactory: ACPConnectionFactory? = nil,
-         mcpProjectContextProvider: MCPProjectContextProvider? = nil)
+         mcpProjectContextProvider: MCPProjectContextProvider? = nil,
+         builtInMCPProvider: ((String) -> BuiltInAlasMCP.Injection?)? = nil)
     {
         precondition(store != nil || persistence != nil, "ACPSessionManager requires persistence")
         let resolvedPersistence = persistence ?? ACPSessionPersistence(path: store!.path)
@@ -312,6 +317,7 @@ final class ACPSessionManager: ObservableObject {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onInputAwaiting = onInputAwaiting
         self.mcpProjectContextProvider = mcpProjectContextProvider
+        self.builtInMCPProvider = builtInMCPProvider
         self.changeNotifier = changeNotifier ?? DarwinChangeNotifier(worktreeId: worktreeId)
         _ = hydratorPath
         self.setupEvaluator = setupEvaluator ?? { spec in
@@ -2239,11 +2245,27 @@ extension ACPSessionManager {
                 environment: agentEnvironment,
                 capabilities: initialized.mcpCapabilities
             ))
-            session.mcpAttachmentSummary = .init(plan: mcpPlan)
-            let mcpSplit = RemoteHostRegistry.shared.host(forPath: worktreePath).map { _ in
-                ACPRemoteMCPFilter.split(mcpPlan.wireServers)
+            // The built-in alas server composes after planning (it is not
+            // user configuration). It is local-only by construction — its
+            // command and socket live on this machine — so remote sessions
+            // skip it entirely instead of reporting it unavailable on every
+            // connect.
+            let remoteHost = RemoteHostRegistry.shared.host(forPath: worktreePath)
+            let builtInMCP = remoteHost == nil ? builtInMCPProvider?(worktreePath) : nil
+            var plannedWireServers = mcpPlan.wireServers
+            var plannedStatuses = mcpPlan.statuses
+            if let builtInMCP {
+                plannedWireServers.append(builtInMCP.server)
+                plannedStatuses.append(builtInMCP.status)
             }
-            let wireMCPServers = mcpSplit?.kept ?? mcpPlan.wireServers
+            session.mcpAttachmentSummary = .init(
+                statuses: plannedStatuses,
+                configurationFingerprint: mcpPlan.configurationFingerprint
+            )
+            let mcpSplit = remoteHost.map { _ in
+                ACPRemoteMCPFilter.split(plannedWireServers)
+            }
+            let wireMCPServers = mcpSplit?.kept ?? plannedWireServers
             let remoteMCPNotice: String?
             if let mcpSplit, !mcpSplit.droppedStdio.isEmpty {
                 remoteMCPNotice = "MCP servers unavailable on remote host: \(mcpSplit.droppedStdio.joined(separator: ", "))"

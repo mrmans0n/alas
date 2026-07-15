@@ -7,6 +7,7 @@ name = "alas"
 version = "0.1.0"
 dependencies = [
  "alas-client",
+ "serde_json",
 ]
 
 [[package]]

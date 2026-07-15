@@ -1,0 +1,60 @@
+import Testing
+@testable import Alas
+
+@Suite("Built-in alas MCP injection")
+struct BuiltInAlasMCPTests {
+    private func make(
+        enabled: Bool = true,
+        configuredServers: [ProjectMCPServer] = [],
+        binaryPath: String? = "/support/bin/alas",
+        socketPath: String? = "/tmp/alas-501/pid-42",
+        worktreePath: String = "/repos/proj/wt"
+    ) -> BuiltInAlasMCP.Injection? {
+        BuiltInAlasMCP.injection(
+            enabled: enabled,
+            configuredServers: configuredServers,
+            binaryPath: binaryPath,
+            socketPath: socketPath,
+            worktreePath: worktreePath
+        )
+    }
+
+    @Test("builds the stdio entry with session-scoped env")
+    func buildsWireEntry() {
+        let injection = make()
+        #expect(injection?.server == .stdio(
+            name: "alas",
+            command: "/support/bin/alas",
+            args: ["mcp"],
+            env: [
+                .init(name: "ALAS_SOCKET_PATH", value: "/tmp/alas-501/pid-42"),
+                .init(name: "ALAS_WORKTREE_DIR", value: "/repos/proj/wt"),
+            ]
+        ))
+        #expect(injection?.status == .init(
+            id: "builtin-alas", name: "alas", transport: .stdio, disposition: .requested
+        ))
+    }
+
+    @Test("skips when disabled or prerequisites are missing")
+    func skipsWhenUnavailable() {
+        #expect(make(enabled: false) == nil)
+        #expect(make(binaryPath: nil) == nil)
+        #expect(make(socketPath: nil) == nil)
+    }
+
+    @Test("a project server named alas suppresses the built-in")
+    func userOverrideWins() {
+        #expect(make(configuredServers: [.stdio(name: "alas", command: "/dev/alas")]) == nil)
+        #expect(make(configuredServers: [.stdio(name: "  alas  ", command: "/dev/alas")]) == nil)
+        #expect(make(configuredServers: [.stdio(name: "other", command: "npx")]) != nil)
+    }
+
+    @Test("is dropped for remote sessions like any stdio server")
+    func remoteFilterDropsIt() {
+        let injection = make()!
+        let split = ACPRemoteMCPFilter.split([injection.server])
+        #expect(split.kept.isEmpty)
+        #expect(split.droppedStdio == ["alas"])
+    }
+}

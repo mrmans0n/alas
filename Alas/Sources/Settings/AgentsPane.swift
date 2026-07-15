@@ -60,6 +60,10 @@ struct AgentsPane: View {
                 }
 
                 SettingsGroup(title: "Harness") {
+                    SettingsRow(name: "Expose Alas tools to agents",
+                                desc: "Give chat agents an MCP server with Alas actions: open files, manage worktrees, and open reviews. Applies to newly connected sessions.") {
+                        AlasToggle(on: state.bind(\.harness.exposeAlasMCP))
+                    }
                     SettingsRow(
                         name: "Terminal / Harness",
                         desc: "Configure harness notifications and install hooks."

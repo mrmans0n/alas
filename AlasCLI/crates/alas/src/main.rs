@@ -1,4 +1,5 @@
 mod parse;
+mod mcp;
 
 use alas_client::{dispatch, logical_base, resolve_target, DispatchError, TransportError};
 use parse::{is_ao, parse};
@@ -14,6 +15,10 @@ fn main() -> ExitCode {
         let mut rewritten = vec!["open".to_string()];
         rewritten.append(&mut args);
         args = rewritten;
+    }
+
+    if is_mcp_invocation(&args) {
+        return run_mcp();
     }
 
     let base = logical_base();
@@ -67,6 +72,29 @@ fn describe(err: &DispatchError) -> (String, u8) {
     }
 }
 
+/// `alas mcp` takes no further arguments; anything else falls through to
+/// the normal parser, which rejects it with usage text.
+fn is_mcp_invocation(args: &[String]) -> bool {
+    args.len() == 1 && args[0] == "mcp"
+}
+
+fn run_mcp() -> ExitCode {
+    let env = match mcp::env_from(|key| std::env::var(key).ok()) {
+        Ok(env) => env,
+        Err(message) => {
+            eprintln!("alas: {message}");
+            return ExitCode::from(2);
+        }
+    };
+    match mcp::serve(&env) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("alas: mcp io error: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +137,13 @@ mod tests {
 
         // The two must stay distinguishable from the malformed-reply case.
         assert_ne!(connect_msg, "malformed response from Alas");
+    }
+
+    #[test]
+    fn mcp_mode_is_detected_only_as_sole_argument() {
+        assert!(is_mcp_invocation(&["mcp".to_string()]));
+        assert!(!is_mcp_invocation(&["mcp".to_string(), "extra".to_string()]));
+        assert!(!is_mcp_invocation(&["open".to_string(), "mcp".to_string()]));
+        assert!(!is_mcp_invocation(&[]));
     }
 }
