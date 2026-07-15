@@ -914,6 +914,23 @@ struct AlasCLICommandRouterTests {
         #expect(saved[0].path == "a.swift")
     }
 
+    @Test func worktreeRelativePathResolvesCaseVariantRootOnACaseInsensitiveVolume() throws {
+        // On the default case-insensitive-but-case-preserving macOS volume,
+        // a case-variant of the tracked root's name (e.g. the shell's $PWD
+        // differs only in casing) refers to the identical directory. A
+        // string-prefix check can't see that; file identity can.
+        let realRoot = try makeFile("case-repo/Sources/App.swift")
+            .deletingLastPathComponent().deletingLastPathComponent()
+        let variantRoot = realRoot.deletingLastPathComponent()
+            .appendingPathComponent(realRoot.lastPathComponent.uppercased())
+        let variantPath = variantRoot.appendingPathComponent("Sources/App.swift").path
+
+        #expect(
+            AlasActionService.worktreeRelativePath(variantPath, worktreeRoot: realRoot)
+                == "Sources/App.swift"
+        )
+    }
+
     @Test func worktreeRelativePathResolvesSymlinkedRootAgainstTheRealWorktreePath() throws {
         // resolvingSymlinksInPath() needs the file to actually exist to
         // resolve the intermediate symlink, matching the real scenario:

@@ -48,9 +48,9 @@ struct AlasActionService {
         // symlinks on both sides before comparing file identities, otherwise a
         // command run from a symlinked checkout root reports "not inside an
         // Alas worktree".
-        if let directoryIdentity = fileIdentity(at: url.resolvingSymlinksInPath().path),
+        if let directoryIdentity = Self.fileIdentity(at: url.resolvingSymlinksInPath().path),
            let exactMatch = visibleWorktrees().first(where: { worktree in
-               fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
+               Self.fileIdentity(at: worktree.path.resolvingSymlinksInPath().path) == directoryIdentity
            }) {
             return exactMatch
         }
@@ -240,8 +240,9 @@ struct AlasActionService {
     /// `worktreeRoot` may be the resolved real path Alas tracks (same
     /// two-step pattern `relativePathAndDepth` already uses for `open`).
     /// Returns nil when an absolute path is outside the worktree root even
-    /// after symlink resolution, so callers don't file a comment against a
-    /// path that can never match a file in the review.
+    /// after symlink resolution and a file-identity walk-up, so callers
+    /// don't file a comment against a path that can never match a file in
+    /// the review.
     static func worktreeRelativePath(_ path: String, worktreeRoot: URL) -> String? {
         guard path.hasPrefix("/") else { return normalizedRelativePath(path) }
         if let relative = relativePath(path, against: worktreeRoot.standardizedFileURL.path) {
@@ -249,7 +250,31 @@ struct AlasActionService {
         }
         let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL.path
         let resolvedPath = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        return relativePath(resolvedPath, against: resolvedRoot)
+        if let relative = relativePath(resolvedPath, against: resolvedRoot) {
+            return relative
+        }
+        // Falls back to comparing filesystem identity (inode + device)
+        // instead of path strings — the default case-insensitive-but-
+        // case-preserving macOS volume can give the CLI's cwd and the
+        // tracked worktree root different casing for the same directory,
+        // which a string prefix check would reject as "outside the
+        // worktree" even though it's the identical file. Mirrors the
+        // `open` command's `fileSystemRelativePathAndDepth` fallback.
+        return fileSystemRelativePath(URL(fileURLWithPath: path), worktreeRoot: worktreeRoot)
+    }
+
+    private static func fileSystemRelativePath(_ url: URL, worktreeRoot: URL) -> String? {
+        guard let rootIdentity = fileIdentity(at: worktreeRoot.path) else { return nil }
+        var ancestor = url.deletingLastPathComponent()
+        var relativeComponents = [url.lastPathComponent]
+        while ancestor.path != "/" {
+            if fileIdentity(at: ancestor.path) == rootIdentity {
+                return relativeComponents.reversed().joined(separator: "/")
+            }
+            relativeComponents.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        return nil
     }
 
     /// Collapses `.`/`..`/repeated separators in a relative path purely
@@ -457,12 +482,12 @@ struct AlasActionService {
     }
 
     private func fileSystemRelativePathAndDepth(for url: URL, in rootURL: URL) -> (relativePath: String, rootComponentCount: Int)? {
-        guard let rootIdentity = fileIdentity(at: rootURL.path) else { return nil }
+        guard let rootIdentity = Self.fileIdentity(at: rootURL.path) else { return nil }
         var ancestor = url.deletingLastPathComponent()
         var relativeComponents = [url.lastPathComponent]
 
         while ancestor.path != "/" {
-            if fileIdentity(at: ancestor.path) == rootIdentity {
+            if Self.fileIdentity(at: ancestor.path) == rootIdentity {
                 return (relativeComponents.reversed().joined(separator: "/"), rootURL.pathComponents.count)
             }
             relativeComponents.append(ancestor.lastPathComponent)
@@ -471,7 +496,7 @@ struct AlasActionService {
         return nil
     }
 
-    private func fileIdentity(at path: String) -> FileIdentity? {
+    private static func fileIdentity(at path: String) -> FileIdentity? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let systemNumber = attributes[.systemNumber] as? NSNumber,
               let fileNumber = attributes[.systemFileNumber] as? NSNumber else { return nil }
