@@ -24,6 +24,7 @@ struct AlasCLICommandRouter {
         NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
     }
     var now: () -> Date = Date.init
+    var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var activateApp: () -> Void
 
     private var service: AlasActionService {
@@ -40,6 +41,7 @@ struct AlasCLICommandRouter {
             reviewSessionStore: reviewSessionStore,
             notifyReviewCommentsChanged: notifyReviewCommentsChanged,
             now: now,
+            gitStatus: gitStatus,
             activateApp: activateApp
         )
     }
@@ -85,7 +87,7 @@ struct AlasCLICommandRouter {
         case .review(.resolve(let commentID, let reply, let reopen)):
             return service.reviewResolve(origin: origin, commentID: commentID, reply: reply, reopen: reopen)
         case .review(.commentAdd(let path, let startLine, let endLine, let side, let body, let sessionID)):
-            return service.reviewCommentAdd(
+            return await service.reviewCommentAdd(
                 origin: origin, path: path, startLine: startLine, endLine: endLine,
                 side: side, body: body, sessionID: sessionID
             )

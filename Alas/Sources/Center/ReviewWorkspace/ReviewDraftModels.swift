@@ -76,6 +76,16 @@ struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresen
         return parts[1] == Self.escape(worktreeID)
     }
 
+    /// The code host for a `.reviewRequest` session id, decoded from its raw
+    /// fields (`reviewRequest`'s second field is always `provider.rawValue`).
+    /// nil for any other `sourceKind`.
+    var reviewRequestProvider: CodeHostKind? {
+        guard sourceKind == .reviewRequest else { return nil }
+        let parts = rawValue.split(separator: Self.separator, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 3 else { return nil }
+        return CodeHostKind(rawValue: parts[2])
+    }
+
     private static let separator: Character = "\u{1f}"
 
     private static func make(_ kind: ReviewDraftSourceKind, _ fields: [String]) -> Self {

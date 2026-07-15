@@ -30,6 +30,7 @@ struct AlasActionService {
         NotificationCenter.default.post(name: .alasReviewDraftCommentsDidChangeExternally, object: nil)
     }
     var now: () -> Date = Date.init
+    var gitStatus: (URL) async throws -> [ChangedFile] = { try await GitService().status(worktreePath: $0) }
     var activateApp: () -> Void
 
     /// Worktree owning `directory`: the worktree rooted exactly at
@@ -176,7 +177,7 @@ struct AlasActionService {
         side: String?,
         body: String,
         sessionID: String?
-    ) -> AlasCLIResponse {
+    ) async -> AlasCLIResponse {
         let targetSessionID: ReviewDraftSessionID
         if let sessionID {
             guard let parsed = ReviewDraftSessionID(rawValue: sessionID),
@@ -191,11 +192,18 @@ struct AlasActionService {
         guard !relativePath.isEmpty else {
             return .error("review comment path must point at a file")
         }
+        let namespace: String
+        switch await fileIDNamespace(for: targetSessionID, path: relativePath, worktreePath: origin.path) {
+        case .resolved(let resolved):
+            namespace = resolved
+        case .failed(let message):
+            return .error(message)
+        }
         let timestamp = now()
         let comment = ReviewDraftComment(
             id: UUID().uuidString,
             sessionID: targetSessionID,
-            fileID: DiffReviewFileID(namespace: "review", path: relativePath),
+            fileID: DiffReviewFileID(namespace: namespace, path: relativePath),
             path: relativePath,
             originalPath: nil,
             side: side == "old" ? .old : .new,
@@ -230,6 +238,58 @@ struct AlasActionService {
             return String(path.dropFirst(rootPath.count + 1))
         }
         return path
+    }
+
+    /// The `DiffReviewFileID` namespace matching how each review surface
+    /// loads files for a session, so an agent-filed comment lands in the
+    /// same file bucket the UI reads from instead of becoming an orphan
+    /// (`DiffReviewSurface` matches on the exact namespace+path). Every
+    /// session kind except `.localChanges` carries enough in its own
+    /// `sourceKind` (and, for `.reviewRequest`, its encoded provider) to
+    /// resolve without touching the filesystem; local changes need a live
+    /// git-status lookup because the same path can be staged and unstaged
+    /// at once (partial staging) — unstaged wins when both are present,
+    /// since it reflects the more current working-tree state.
+    private enum FileIDNamespaceResolution {
+        case resolved(String)
+        case failed(String)
+    }
+
+    private func fileIDNamespace(
+        for sessionID: ReviewDraftSessionID,
+        path: String,
+        worktreePath: URL
+    ) async -> FileIDNamespaceResolution {
+        switch sessionID.sourceKind {
+        case .commit:
+            return .resolved("commit")
+        case .commitRange, .branch:
+            return .resolved("range")
+        case .draftCommit:
+            return .resolved(ChangeStage.staged.rawValue)
+        case .draftReviewRequest:
+            return .resolved("draft-review-request")
+        case .reviewRequest:
+            switch sessionID.reviewRequestProvider {
+            case .github: return .resolved("github-pr")
+            case .gitlab: return .resolved("gitlab-mr")
+            case nil: return .failed("could not resolve the code host for that review session")
+            }
+        case .localChanges:
+            do {
+                let files = try await gitStatus(worktreePath)
+                let stages = Set(files.filter { $0.path == path }.map(\.stage))
+                if stages.contains(.unstaged) {
+                    return .resolved(ChangeStage.unstaged.rawValue)
+                }
+                if stages.contains(.staged) {
+                    return .resolved(ChangeStage.staged.rawValue)
+                }
+                return .failed("no local changes found for \"\(path)\"")
+            } catch {
+                return .failed("could not read git status: \(error.localizedDescription)")
+            }
+        }
     }
 
     func reviewReply(origin: Worktree, commentID: String, body: String) -> AlasCLIResponse {
