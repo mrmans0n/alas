@@ -61,6 +61,7 @@ struct SearchModelTests {
         worktrees: [SearchWorktree] = [],
         files: [String: [FileIndex.Entry]] = [:],
         statuses: [String: [String: GitStatusBadge]] = [:],
+        entries: (@Sendable (SearchWorktree) async throws -> [FileIndex.Entry])? = nil,
         fileSearch: (@Sendable (String, SearchWorktree) async throws -> [FileSearchBackendResult]?)? = nil,
         rankFiles: (@Sendable (String, [FileSearchRankingSource]) async throws -> [FileSearchResult])? = nil,
         contentSearch: (@Sendable (String, SearchContentOptions, [SearchWorktree]) -> AsyncThrowingStream<ContentSearchHit, Error>)? = nil
@@ -69,7 +70,7 @@ struct SearchModelTests {
         return SearchEnvironment(
             currentWorktreeId: { worktrees.first?.id },
             allWorktrees: { worktrees },
-            entries: { wt in files[wt.id] ?? [] },
+            entries: entries ?? { wt in files[wt.id] ?? [] },
             statuses: { wt in statuses[wt.id] ?? [:] },
             fileSearch: fileSearch ?? { _, _ in nil },
             rankFiles: rankFiles ?? { query, sources in
@@ -174,6 +175,27 @@ struct SearchModelTests {
         #expect(model.results.fileResults.first?.statusBadge == .modified)
         #expect(model.results.fileResults.first?.score == 44)
         #expect(model.results.fileResults.first?.matchIndices == [4, 5, 6])
+    }
+
+    @Test func fileSearchPreservesBackendResultsWhenEntryEnumerationFails() async {
+        let env = makeEnv(
+            worktrees: [wt("a")],
+            entries: { _ in throw CocoaError(.fileReadUnknown) },
+            fileSearch: { _, _ in
+                [FileSearchBackendResult(
+                    relativePath: "src/backend_result.swift",
+                    score: 42,
+                    matchIndices: [4, 5, 6]
+                )]
+            }
+        )
+        let model = SearchModel(environment: env)
+        model.open()
+        model.query = "backend"
+        await model.waitForIdle()
+
+        #expect(model.results.fileResults.map(\.relativePath) == ["src/backend_result.swift"])
+        #expect(model.results.partialFailureMessage == "Couldn't read files for wt-a")
     }
 
     @Test func fileSearchMergesDeletedFallbackRowsWithBackendResults() async {

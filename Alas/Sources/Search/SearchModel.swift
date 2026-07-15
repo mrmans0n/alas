@@ -225,27 +225,29 @@ final class SearchModel {
         var sources: [FileSearchRankingSource] = []
         var failures: [String] = []
         for wt in targets {
+            async let statusTask = env.statuses(wt)
+            async let entriesTask = env.entries(wt)
+            let backendResults: [FileSearchBackendResult]?
+            if Self.canUseFileSearchBackend(query: query) {
+                backendResults = try? await env.fileSearch(query, wt)
+            } else {
+                backendResults = nil
+            }
+            let entries: [FileIndex.Entry]
             do {
-                async let statusTask = env.statuses(wt)
-                async let entriesTask = env.entries(wt)
-                let backendResults: [FileSearchBackendResult]?
-                if Self.canUseFileSearchBackend(query: query) {
-                    backendResults = try? await env.fileSearch(query, wt)
-                } else {
-                    backendResults = nil
-                }
-                let entries = try await entriesTask
-                let statuses = (try? await statusTask) ?? [:]
-                sources.append(FileSearchRankingSource(
-                    worktreeId: wt.id,
-                    projectId: wt.projectId,
-                    entries: entries,
-                    backendResults: backendResults,
-                    statuses: statuses
-                ))
+                entries = try await entriesTask
             } catch {
                 failures.append(wt.displayName)
+                entries = []
             }
+            let statuses = (try? await statusTask) ?? [:]
+            sources.append(FileSearchRankingSource(
+                worktreeId: wt.id,
+                projectId: wt.projectId,
+                entries: entries,
+                backendResults: backendResults,
+                statuses: statuses
+            ))
         }
 
         guard let rows = try? await env.rankFiles(query, sources) else { return }
