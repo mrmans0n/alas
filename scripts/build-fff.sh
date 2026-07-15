@@ -99,6 +99,7 @@ esac
 
 mkdir -p "${lib_dir}" "${include_root}"
 
+"${rustup_bin}" toolchain install "${rust_toolchain}" --profile minimal
 installed_targets="$("${rustup_bin}" target list --installed --toolchain "${rust_toolchain}")"
 if ! printf '%s\n' "${installed_targets}" | grep -qx "${cargo_target}"; then
     "${rustup_bin}" target add --toolchain "${rust_toolchain}" "${cargo_target}"

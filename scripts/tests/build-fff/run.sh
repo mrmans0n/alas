@@ -24,6 +24,7 @@ cat > "${sandbox}/rustup" <<EOF
 set -euo pipefail
 echo "rustup \$*" >> "${invocations}"
 case "\$1 \$2" in
+    "toolchain install") exit 0 ;;
     "target list") exit 0 ;;
     "target add") exit 0 ;;
     "which --toolchain")
@@ -72,6 +73,7 @@ SRCROOT="${srcroot}" \
     PATH="${sandbox}/bin:${PATH}" \
     bash "${srcroot}/scripts/build-fff.sh"
 
+grep -qx 'rustup toolchain install stable --profile minimal' "${invocations}"
 grep -qx 'rustup target list --installed --toolchain stable' "${invocations}"
 grep -qx 'rustup target add --toolchain stable x86_64-apple-darwin' "${invocations}"
 grep -qx 'rustup which --toolchain stable rustc' "${invocations}"
