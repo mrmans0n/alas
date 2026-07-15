@@ -741,6 +741,73 @@ struct AlasCLICommandRouterTests {
         #expect(saved.first?.fileID == DiffReviewFileID(namespace: "unstaged", path: "a.swift"))
     }
 
+    @Test func commentAddHonorsAStagedOnlySessionScopeOverUnstagedGitStatus() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let stagedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .staged)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [
+                    ChangedFile(path: "a.swift", status: "M", stage: .staged, add: 1, del: 0, renameFrom: nil),
+                    ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil),
+                ]
+            }
+        )
+        _ = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "a.swift", startLine: 4, endLine: nil, side: nil, body: "add a guard",
+                sessionID: stagedSession.rawValue
+            ))
+        ))
+
+        let saved = try store.load(sessionID: stagedSession)
+        #expect(saved.first?.fileID == DiffReviewFileID(namespace: "staged", path: "a.swift"))
+    }
+
+    @Test func commentAddRejectsPathOutsideAStagedOnlySessionScope() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let stagedSession = ReviewDraftSessionID.localChanges(worktreeID: "wt1", worktreePath: root, scope: .staged)
+
+        let router = makeReviewRouter(
+            worktree: worktree, store: store,
+            gitStatus: { _ in
+                [ChangedFile(path: "a.swift", status: "M", stage: .unstaged, add: 1, del: 0, renameFrom: nil)]
+            }
+        )
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.commentAdd(
+                path: "a.swift", startLine: 4, endLine: nil, side: nil, body: "add a guard",
+                sessionID: stagedSession.rawValue
+            ))
+        ))
+
+        guard case .error(let message) = response else {
+            Issue.record("expected error, got \(response)")
+            return
+        }
+        #expect(message.contains("no staged changes found"))
+        #expect(try store.load(sessionID: stagedSession).isEmpty)
+    }
+
     @Test func commentAddRejectsPathWithNoLocalChanges() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(

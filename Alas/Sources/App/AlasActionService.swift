@@ -317,13 +317,26 @@ struct AlasActionService {
             do {
                 let files = try await gitStatus(worktreePath)
                 let stages = Set(files.filter { $0.path == path }.map(\.stage))
-                if stages.contains(.unstaged) {
-                    return .resolved(ChangeStage.unstaged.rawValue)
-                }
-                if stages.contains(.staged) {
+                switch sessionID.localChangesScope {
+                case .staged:
+                    guard stages.contains(.staged) else {
+                        return .failed("no staged changes found for \"\(path)\"")
+                    }
                     return .resolved(ChangeStage.staged.rawValue)
+                case .unstaged:
+                    guard stages.contains(.unstaged) else {
+                        return .failed("no unstaged changes found for \"\(path)\"")
+                    }
+                    return .resolved(ChangeStage.unstaged.rawValue)
+                case .all, nil:
+                    if stages.contains(.unstaged) {
+                        return .resolved(ChangeStage.unstaged.rawValue)
+                    }
+                    if stages.contains(.staged) {
+                        return .resolved(ChangeStage.staged.rawValue)
+                    }
+                    return .failed("no local changes found for \"\(path)\"")
                 }
-                return .failed("no local changes found for \"\(path)\"")
             } catch {
                 return .failed("could not read git status: \(error.localizedDescription)")
             }

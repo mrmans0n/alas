@@ -86,6 +86,16 @@ struct ReviewDraftSessionID: Codable, Equatable, Hashable, Sendable, RawRepresen
         return CodeHostKind(rawValue: parts[2])
     }
 
+    /// The scope for a `.localChanges` session id, decoded from its raw
+    /// fields (`localChanges`'s third field is always `scope.rawValue`).
+    /// nil for any other `sourceKind`.
+    var localChangesScope: ReviewDraftLocalChangesScope? {
+        guard sourceKind == .localChanges else { return nil }
+        let parts = rawValue.split(separator: Self.separator, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count >= 4 else { return nil }
+        return ReviewDraftLocalChangesScope(rawValue: parts[3])
+    }
+
     private static let separator: Character = "\u{1f}"
 
     private static func make(_ kind: ReviewDraftSourceKind, _ fields: [String]) -> Self {
