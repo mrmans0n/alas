@@ -635,6 +635,35 @@ struct AlasCLICommandRouterTests {
         #expect(Set(allDecoded.map(\.id)) == ["mine", "resolved"])
     }
 
+    @Test func reviewCommentsIgnoresAnExplicitSessionIDFromAnotherWorktree() async throws {
+        let root = try makeFile("repo/a.swift").deletingLastPathComponent()
+        let worktree = Worktree(
+            id: "wt1", projectId: "p1", name: "main", branch: "main",
+            path: root, status: .clean, lastActivity: Date()
+        )
+        let storeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("drafts.json")
+        let store = ReviewDraftCommentStore(url: storeURL)
+        let foreignComment = makeDraftComment(id: "foreign", worktreeID: "wt2")
+        try store.save(foreignComment)
+
+        let router = makeReviewRouter(worktree: worktree, store: store)
+        let response = await router.handle(.init(
+            version: 1, sessionId: "s1", cwd: nil,
+            command: .review(.comments(sessionID: foreignComment.sessionID.rawValue, state: .all))
+        ))
+
+        guard case .text(let lines) = response, let line = lines.first else {
+            Issue.record("expected .text response, got \(response)")
+            return
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode([ReviewCommentWireDTO].self, from: Data(line.utf8))
+        #expect(decoded.isEmpty)
+    }
+
     @Test func commentAddFilesAgentCommentIntoLocalChangesSession() async throws {
         let root = try makeFile("repo/a.swift").deletingLastPathComponent()
         let worktree = Worktree(

@@ -138,10 +138,11 @@ struct AlasActionService {
             return .error("could not read review comments: \(error.localizedDescription)")
         }
         let scoped = all.filter { comment in
+            guard comment.sessionID.isFor(worktreeID: origin.id) else { return false }
             if let sessionID {
                 return comment.sessionID.rawValue == sessionID
             }
-            return comment.sessionID.isFor(worktreeID: origin.id)
+            return true
         }
         let filtered = scoped.filter { comment in
             switch filter {
