@@ -24,7 +24,7 @@ struct DiffFeedbackLaneTests {
 
     @Test func contextAndDeletedChangedLinesResolveLeft() {
         let anchor = makeAnchor(
-            side: .old,
+            side: .unknown,
             selectedLines: [
                 selectedLine(side: .unknown, line: 11, isChange: false),
                 selectedLine(side: .old, line: 12, isChange: true),
@@ -36,7 +36,7 @@ struct DiffFeedbackLaneTests {
 
     @Test func contextAndAddedChangedLinesResolveRight() {
         let anchor = makeAnchor(
-            side: .new,
+            side: .unknown,
             selectedLines: [
                 selectedLine(side: .unknown, line: 11, isChange: false),
                 selectedLine(side: .new, line: 12, isChange: true),
@@ -91,47 +91,16 @@ struct DiffFeedbackLaneTests {
         #expect(DiffFeedbackLaneResolver.lane(for: DiffReviewInlineFeedbackSide.unknown) == .right)
     }
 
-    @Test func savedDraftUsesItsSemanticSide() {
-        let draft = ReviewDraftComment(
-            id: "draft-1",
-            sessionID: .localChanges(
-                worktreeID: "wt-1",
-                worktreePath: URL(fileURLWithPath: "/repo"),
-                scope: .all
-            ),
-            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
-            path: "Sources/App.swift",
-            originalPath: nil,
-            side: .old,
-            startLine: 12,
-            endLine: nil,
-            selectedText: nil,
-            bodyMarkdown: "Please revisit this.",
-            state: .active,
-            createdAt: Date(timeIntervalSince1970: 1),
-            updatedAt: Date(timeIntervalSince1970: 1)
-        )
-
-        #expect(DiffFeedbackLaneResolver.lane(for: draft) == .left)
+    @Test func savedDraftUsesItsSemanticSideAndDefaultsUnknownRight() {
+        #expect(DiffFeedbackLaneResolver.lane(for: makeDraft(side: .old)) == .left)
+        #expect(DiffFeedbackLaneResolver.lane(for: makeDraft(side: .new)) == .right)
+        #expect(DiffFeedbackLaneResolver.lane(for: makeDraft(side: .unknown)) == .right)
     }
 
-    @Test func actionableFeedbackUsesItsAnchorSide() {
-        let feedback = DiffReviewInlineFeedback(
-            id: "feedback-1",
-            providerName: "GitHub",
-            author: "reviewer",
-            bodyPreview: "Please revisit this.",
-            status: .actionable,
-            providerURL: nil,
-            anchor: DiffReviewInlineFeedbackAnchor(
-                path: "Sources/App.swift",
-                line: 12,
-                side: .new
-            ),
-            evidenceItemID: "evidence-1"
-        )
-
-        #expect(DiffFeedbackLaneResolver.lane(for: feedback) == .right)
+    @Test func actionableFeedbackUsesItsAnchorSideAndDefaultsUnknownRight() {
+        #expect(DiffFeedbackLaneResolver.lane(for: makeFeedback(side: .old)) == .left)
+        #expect(DiffFeedbackLaneResolver.lane(for: makeFeedback(side: .new)) == .right)
+        #expect(DiffFeedbackLaneResolver.lane(for: makeFeedback(side: .unknown)) == .right)
     }
 
     @Test func inlineThreadUsesItsProviderSide() {
@@ -161,6 +130,15 @@ struct DiffFeedbackLaneTests {
         #expect(lane == .full)
     }
 
+    @Test func lanesProvideStableRawValuesAndHashabilityForLayoutMarkers() {
+        let lanes: Set<DiffFeedbackLane> = [.left, .right, .full]
+
+        #expect(lanes.count == 3)
+        #expect(DiffFeedbackLane.left.rawValue == "left")
+        #expect(DiffFeedbackLane.right.rawValue == "right")
+        #expect(DiffFeedbackLane.full.rawValue == "full")
+    }
+
     private func makeAnchor(
         side: DiffReviewInlineFeedbackSide,
         selectedLines: [DiffReviewLineAnchor.SelectedLine]
@@ -181,6 +159,45 @@ struct DiffFeedbackLaneTests {
         isChange: Bool
     ) -> DiffReviewLineAnchor.SelectedLine {
         DiffReviewLineAnchor.SelectedLine(side: side, line: line, isChange: isChange)
+    }
+
+    private func makeDraft(side: DiffReviewInlineFeedbackSide) -> ReviewDraftComment {
+        ReviewDraftComment(
+            id: "draft-\(side.rawValue)",
+            sessionID: .localChanges(
+                worktreeID: "wt-1",
+                worktreePath: URL(fileURLWithPath: "/repo"),
+                scope: .all
+            ),
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "Sources/App.swift"),
+            path: "Sources/App.swift",
+            originalPath: nil,
+            side: side,
+            startLine: 12,
+            endLine: nil,
+            selectedText: nil,
+            bodyMarkdown: "Please revisit this.",
+            state: .active,
+            createdAt: Date(timeIntervalSince1970: 1),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+    }
+
+    private func makeFeedback(side: DiffReviewInlineFeedbackSide) -> DiffReviewInlineFeedback {
+        DiffReviewInlineFeedback(
+            id: "feedback-\(side.rawValue)",
+            providerName: "GitHub",
+            author: "reviewer",
+            bodyPreview: "Please revisit this.",
+            status: .actionable,
+            providerURL: nil,
+            anchor: DiffReviewInlineFeedbackAnchor(
+                path: "Sources/App.swift",
+                line: 12,
+                side: side
+            ),
+            evidenceItemID: "evidence-\(side.rawValue)"
+        )
     }
 
     private func makeThread(id: String, isOldSide: Bool) -> DiffInlineCommentThread {

@@ -1,4 +1,4 @@
-enum DiffFeedbackLane: Equatable, Sendable {
+enum DiffFeedbackLane: String, Equatable, Hashable, Sendable {
     case left
     case right
     case full
